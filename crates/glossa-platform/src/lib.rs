@@ -1,6 +1,6 @@
 //! Operating-system integration: clipboard, selection capture, synthetic
 //! input, screen capture, global hotkeys, autostart, audio playback and the
-//! keyboard-layout fix.
+//! keyboard-layout fix; window backdrops and the system's accent colour.
 //!
 //! Everything here compiles on Windows, Linux and macOS. A feature the
 //! platform cannot provide returns `Err(glossa_core::Error::Platform(..))` or
@@ -22,6 +22,8 @@
 //! | Autostart ([`autostart`])       | `HKCU\…\Run`                    | XDG autostart `.desktop`| XDG autostart `.desktop`                        | LaunchAgent plist              |
 //! | Audio ([`audio`])               | rodio                           | rodio (ALSA)            | rodio (ALSA)                                    | rodio                          |
 //! | Layout conversion ([`layout`])  | pure + switch foreground layout | pure                    | pure                                            | pure                           |
+//! | Window backdrops ([`backdrop`]) | Mica / Acrylic / blur (DWM)     | KWin blur-behind        | none                                            | `NSVisualEffectView`           |
+//! | Accent, dark mode ([`appearance`]) | registry                     | `gsettings` (dark only) | `gsettings` (dark only)                         | `NSColor`, `AppleInterfaceStyle` |
 //!
 //! Threading: [`hotkeys::HotkeyService`] must be created on the thread that
 //! runs the event loop on Windows (the hotkeys are bound to that thread's
@@ -29,8 +31,10 @@
 //! capture and screen capture block for tens to hundreds of milliseconds and
 //! belong on a worker thread, not the UI thread.
 
+pub mod appearance;
 pub mod audio;
 pub mod autostart;
+pub mod backdrop;
 pub mod capture;
 pub mod clipboard;
 pub mod hotkeys;
@@ -49,6 +53,7 @@ mod uia;
 
 pub use audio::AudioPlayer;
 pub use autostart::{is_autostart_enabled, set_autostart};
+pub use backdrop::{find_own_window, Applied, Backdrop};
 pub use capture::{capture_all, capture_rect, capture_virtual_desktop, encode_png, images_differ, MonitorShot};
 pub use clipboard::{Clipboard, ClipboardSnapshot};
 pub use hotkeys::{HotkeyError, HotkeyService};

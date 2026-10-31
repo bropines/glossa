@@ -35,7 +35,7 @@ fourth without touching the rest.
 | `glossa-ocr` | OCR providers: Google Lens through `chrome-lens-py` (warm daemon, else its CLI), and any external command. |
 | `glossa-dict` | Offline dictionaries (StarDict with dictzip, DSL, XDXF, tab-separated) and the HTML simplifier for dictionary articles. |
 | `glossa-engine` | The front ends' shared core: the translation pipeline (direction detection, fail-over, back translation, input limits), async jobs with cancellation, history, the theme and locale catalogues, exports, the classic import, and the control API (HTTP on localhost with a token). |
-| `glossa-platform` | Everything OS-specific: clipboard, reading the selection (UI Automation, then a synthetic copy), synthetic input, screen capture, global hotkeys, autostart, audio playback, window placement, the idle message pump. |
+| `glossa-platform` | Everything OS-specific: clipboard, reading the selection (UI Automation, then a synthetic copy), synthetic input, screen capture, global hotkeys, autostart, audio playback, window placement, window backdrops (Mica, Acrylic, vibrancy), the system accent colour and dark-mode preference, the idle message pump. |
 | `glossa-ui-egui` | The desktop app (binary `glossa`): main window, selection popup, OCR overlay, dictionary, history, options, tray. |
 | `glossa-cli` | The command line (binary `glossa-cli`). |
 

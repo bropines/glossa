@@ -14,11 +14,17 @@
 //!
 //! The toolkit layer maps a [`Theme`] onto its own style system; nothing here
 //! knows which toolkit that is.
+//!
+//! Two things a theme can ask for depend on the machine, and stay data here
+//! so this module remains pure: `accent = "system"` (the UI reads the system
+//! accent and calls [`Theme::resolve_system_accent`]) and the fills used
+//! while a system backdrop such as Mica is active ([`Theme::backdrop_fill`]).
 
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 
 use crate::color::Color;
+use crate::config::Backdrop;
 use crate::jsonc;
 
 /// A fully resolved theme: every field has a value.
@@ -45,7 +51,13 @@ pub struct Theme {
     pub icon: States<GlyphStyle>,
 
     /// The accent: selection, focus ring, the active service tab, links.
+    /// With [`Theme::accent_system`] this is the fallback for a system that
+    /// has no accent colour.
     pub accent: Color,
+    /// Follow the system accent colour. A file says `accent = "system"`;
+    /// the UI resolves it with [`Theme::resolve_system_accent`].
+    #[serde(skip_serializing_if = "is_false")]
+    pub accent_system: bool,
     /// Text drawn on top of the accent.
     pub accent_text: Color,
     pub link: Color,
@@ -57,6 +69,13 @@ pub struct Theme {
     pub popup: PopupStyle,
     pub metrics: Metrics,
     pub fonts: Fonts,
+    /// How see-through the window's own fills are while a system backdrop
+    /// (Mica, Acrylic, blur) is behind it.
+    pub backdrop: BackdropStyle,
+}
+
+fn is_false(b: &bool) -> bool {
+    !*b
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -311,6 +330,125 @@ impl Default for Fonts {
     }
 }
 
+impl Fonts {
+    /// The UI faces to try, in order: `family`, then `fallbacks`. Empty
+    /// names are skipped, so an empty list means the toolkit default.
+    pub fn candidates(&self) -> impl Iterator<Item = &str> {
+        std::iter::once(self.family.as_str())
+            .chain(self.fallbacks.iter().map(String::as_str))
+            .filter(|f| !f.trim().is_empty())
+    }
+}
+
+/// The fills a window uses while a system backdrop shows through it.
+///
+/// A material only shows where the window draws nothing, or something
+/// translucent, so with a backdrop active each surface is drawn with less
+/// alpha than usual. For each surface a theme gives either a colour (`window`,
+/// `client`, `edit`, `popup`, alpha included: the Fluent tokens are
+/// translucent by design) or, when it leaves the colour out, a factor applied
+/// to the surface's ordinary colour's alpha (`window_alpha`, …). Without a
+/// backdrop none of this applies.
+///
+/// A plain blur ([`Backdrop::Blur`]) has no tint of its own, so there every
+/// surface keeps its ordinary colour at no less than `untinted_min` opacity.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct BackdropStyle {
+    /// The window body (`window.back`).
+    pub window: Option<Color>,
+    /// Panes and lists (`window.client_back`).
+    pub client: Option<Color>,
+    /// Text fields (`edit.normal.back`).
+    pub edit: Option<Color>,
+    /// The selection popup (`popup.back`).
+    pub popup: Option<Color>,
+    pub window_alpha: f32,
+    pub client_alpha: f32,
+    pub edit_alpha: f32,
+    pub popup_alpha: f32,
+    /// Opacity floor, 0.0 to 1.0, under an untinted blur.
+    pub untinted_min: f32,
+}
+
+impl Default for BackdropStyle {
+    fn default() -> Self {
+        Self {
+            window: None,
+            client: None,
+            edit: None,
+            popup: None,
+            // The body vanishes so the material is the background, as WinUI
+            // draws on Mica; panes and fields keep enough fill to read as
+            // layers on top of it.
+            window_alpha: 0.0,
+            client_alpha: 0.4,
+            edit_alpha: 0.7,
+            popup_alpha: 0.35,
+            untinted_min: 0.6,
+        }
+    }
+}
+
+/// A surface [`Theme::backdrop_fill`] knows how to fill.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Surface {
+    Window,
+    Client,
+    Edit,
+    Popup,
+}
+
+/// The system accent colour and its shades, as Windows publishes them
+/// (`AccentPalette`): three lighter, the base, three darker. WinUI fills
+/// accent controls with `light2` on dark themes and `dark1` on light ones,
+/// and colours accent text with `light3` / `dark2`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SystemAccent {
+    pub base: Color,
+    pub light1: Color,
+    pub light2: Color,
+    pub light3: Color,
+    pub dark1: Color,
+    pub dark2: Color,
+    pub dark3: Color,
+}
+
+impl SystemAccent {
+    /// Shades derived from the base alone, for systems that publish only
+    /// one colour (macOS). Close to, not equal to, the Windows palette.
+    pub fn from_base(base: Color) -> Self {
+        let base = base.with_alpha(255);
+        Self {
+            base,
+            light1: base.lerp(Color::WHITE, 0.25),
+            light2: base.lerp(Color::WHITE, 0.45),
+            light3: base.lerp(Color::WHITE, 0.65),
+            dark1: base.lerp(Color::BLACK, 0.15),
+            dark2: base.lerp(Color::BLACK, 0.35),
+            dark3: base.lerp(Color::BLACK, 0.55),
+        }
+    }
+
+    /// The shade WinUI fills accent controls with on a dark or light theme.
+    pub fn fill(&self, dark: bool) -> Color {
+        if dark {
+            self.light2
+        } else {
+            self.dark1
+        }
+    }
+
+    /// The shade for accent-coloured text (links).
+    pub fn text(&self, dark: bool) -> Color {
+        if dark {
+            self.light3
+        } else {
+            self.dark2
+        }
+    }
+}
+
 impl Default for Theme {
     fn default() -> Self {
         builtin::glossa_dark()
@@ -382,6 +520,19 @@ impl Theme {
         let mut merged = base_value;
         if let Some(obj) = value.as_object_mut() {
             obj.remove("extends");
+            // `accent = "system"` keeps the parent's accent as the fallback
+            // and sets the flag; an explicit colour turns an inherited flag
+            // off, since the file evidently wants that colour.
+            match obj.get("accent").and_then(Value::as_str) {
+                Some(s) if s.trim().eq_ignore_ascii_case("system") => {
+                    obj.remove("accent");
+                    obj.insert("accent_system".into(), Value::Bool(true));
+                }
+                Some(_) if !obj.contains_key("accent_system") => {
+                    obj.insert("accent_system".into(), Value::Bool(false));
+                }
+                _ => {}
+            }
         }
         merge(&mut merged, value);
         let mut theme: Theme = serde_json::from_value(merged).map_err(|e| ThemeError::Parse(e.to_string()))?;
@@ -516,6 +667,7 @@ impl Theme {
             window_button,
             icon,
             accent,
+            accent_system: false,
             accent_text: if accent.is_dark() { Color::WHITE } else { Color::BLACK },
             link: if dark { Color::rgb(0x6f, 0xb5, 0xf1) } else { Color::rgb(0x00, 0x55, 0xad) },
             selection: accent.with_alpha(0x80),
@@ -538,6 +690,7 @@ impl Theme {
                 ..Metrics::default()
             },
             fonts: Fonts::default(),
+            backdrop: BackdropStyle::default(),
         };
         if let Some(name) = v.get("Name").and_then(Value::as_str) {
             theme.name = name.to_owned();
@@ -548,6 +701,106 @@ impl Theme {
     /// Serialise in the native format.
     pub fn to_toml(&self) -> String {
         toml::to_string_pretty(self).unwrap_or_default()
+    }
+
+    /// Put the system accent in place of the theme's own, if the theme asked
+    /// for it (`accent = "system"`) and the system has one; otherwise leave
+    /// the theme alone.
+    ///
+    /// Every colour slot written with the theme's accent (whatever its
+    /// alpha: a focus border, a frame) takes the system shade WinUI uses for
+    /// fills, slots written with the theme's link colour take the text
+    /// shade, the selection takes the base colour at the selection's alpha,
+    /// and the text on the accent is re-picked for contrast.
+    pub fn resolve_system_accent(&mut self, system: Option<&SystemAccent>) {
+        let Some(sys) = system.filter(|_| self.accent_system) else { return };
+        let (old_accent, old_link) = (self.accent.with_alpha(255), self.link.with_alpha(255));
+        let (new_accent, new_link) = (sys.fill(self.dark), sys.text(self.dark));
+        let selection_alpha = self.selection.a;
+        let Ok(mut value) = serde_json::to_value(&*self) else { return };
+        recolour(&mut value, &|c| {
+            let opaque = c.with_alpha(255);
+            if opaque == old_accent {
+                Some(new_accent.with_alpha(c.a))
+            } else if opaque == old_link {
+                Some(new_link.with_alpha(c.a))
+            } else {
+                None
+            }
+        });
+        if let Ok(theme) = serde_json::from_value::<Theme>(value) {
+            *self = theme;
+        }
+        self.accent = new_accent;
+        self.link = new_link;
+        self.selection = sys.base.with_alpha(selection_alpha);
+        self.accent_text = if new_accent.contrast(Color::WHITE) >= new_accent.contrast(Color::BLACK) {
+            Color::WHITE
+        } else {
+            Color::BLACK
+        };
+    }
+
+    /// The fill for `surface` with the backdrop `kind` behind the window;
+    /// see [`BackdropStyle`]. With [`Backdrop::None`] it is the surface's
+    /// ordinary colour.
+    pub fn backdrop_fill(&self, surface: Surface, kind: Backdrop) -> Color {
+        let b = &self.backdrop;
+        let (base, own, factor) = match surface {
+            Surface::Window => (self.window.back, b.window, b.window_alpha),
+            Surface::Client => (self.window.client_back, b.client, b.client_alpha),
+            Surface::Edit => (self.edit.normal.back, b.edit, b.edit_alpha),
+            Surface::Popup => (self.popup.back, b.popup, b.popup_alpha),
+        };
+        if !kind.is_some() {
+            return base;
+        }
+        let scaled = |alpha: f32| base.with_alpha((base.a as f32 * alpha.clamp(0.0, 1.0)).round() as u8);
+        let fill = own.unwrap_or_else(|| scaled(factor));
+        if kind.is_tinted() {
+            return fill;
+        }
+        let floor = b.untinted_min.clamp(0.0, 1.0);
+        if (fill.a as f32) < base.a as f32 * floor {
+            scaled(floor)
+        } else {
+            fill
+        }
+    }
+
+    /// The accent ("primary") button WinUI uses for a dialog's default
+    /// action, derived from the accent so it follows a system accent too:
+    /// the accent fill, slightly see-through on hover and more on press, as
+    /// the `AccentFillColorSecondary` / `Tertiary` tokens are.
+    pub fn primary_button(&self, state: WidgetState) -> ButtonStyle {
+        let flat = |back: Color, text: Color| ButtonStyle {
+            back_top: back,
+            back_bottom: back,
+            border: back,
+            text,
+            ..ButtonStyle::default()
+        };
+        let accent = self.accent.with_alpha(255);
+        match state {
+            WidgetState::Normal | WidgetState::Focused => flat(accent, self.accent_text),
+            WidgetState::Hover => flat(accent.lerp(self.window.back, 0.1), self.accent_text),
+            WidgetState::Pressed => flat(accent.lerp(self.window.back, 0.2), self.accent_text.lerp(accent, 0.2)),
+            WidgetState::Disabled => self.button.get(WidgetState::Disabled).clone(),
+        }
+    }
+}
+
+/// Apply `map` to every colour string in a serialised theme.
+fn recolour(value: &mut Value, map: &dyn Fn(Color) -> Option<Color>) {
+    match value {
+        Value::String(s) if s.starts_with('#') => {
+            if let Some(new) = s.parse::<Color>().ok().and_then(map) {
+                *s = new.to_string();
+            }
+        }
+        Value::Object(obj) => obj.values_mut().for_each(|v| recolour(v, map)),
+        Value::Array(items) => items.iter_mut().for_each(|v| recolour(v, map)),
+        _ => {}
     }
 }
 
@@ -591,19 +844,21 @@ fn stem(path: &str) -> String {
 pub mod builtin {
     use super::*;
 
-    pub const NAMES: &[&str] = &["Glossa Dark", "Glossa Light", "Glossa Midnight"];
+    pub const NAMES: &[&str] = &["Glossa Dark", "Glossa Light", "Glossa Midnight", "Fluent Dark", "Fluent Light"];
 
     pub fn by_name(name: &str) -> Option<Theme> {
         match name.to_ascii_lowercase().replace(['-', '_'], " ").as_str() {
             "glossa dark" | "dark" => Some(glossa_dark()),
             "glossa light" | "light" => Some(glossa_light()),
             "glossa midnight" | "midnight" => Some(glossa_midnight()),
+            "fluent dark" | "winui dark" => Some(fluent_dark()),
+            "fluent light" | "winui light" => Some(fluent_light()),
             _ => None,
         }
     }
 
     pub fn all() -> Vec<Theme> {
-        vec![glossa_dark(), glossa_light(), glossa_midnight()]
+        vec![glossa_dark(), glossa_light(), glossa_midnight(), fluent_dark(), fluent_light()]
     }
 
     /// Close to the classic "Flat Dark" — the look most people had.
@@ -684,6 +939,7 @@ pub mod builtin {
                 focused: None,
             },
             accent,
+            accent_system: false,
             accent_text: Color::WHITE,
             link: Color::rgb(0x6f, 0xb5, 0xf1),
             selection: accent.with_alpha(0x70),
@@ -692,6 +948,7 @@ pub mod builtin {
             popup: PopupStyle::default(),
             metrics: Metrics::default(),
             fonts: Fonts::default(),
+            backdrop: BackdropStyle::default(),
         }
     }
 
@@ -805,6 +1062,224 @@ pub mod builtin {
         t.metrics.button_radius = 4.0;
         t.metrics.window_radius = 8.0;
         t.metrics.window_radius_corners = RadiusCorners::All;
+        t
+    }
+
+    /// The default Windows 11 blue accent palette, the fallback the Fluent
+    /// themes carry for a system that reports none.
+    pub const WINDOWS_BLUE: SystemAccent = SystemAccent {
+        base: Color::rgb(0x00, 0x78, 0xd4),
+        light1: Color::rgb(0x00, 0x91, 0xf8),
+        light2: Color::rgb(0x4c, 0xc2, 0xff),
+        light3: Color::rgb(0x99, 0xeb, 0xff),
+        dark1: Color::rgb(0x00, 0x67, 0xc0),
+        dark2: Color::rgb(0x00, 0x3e, 0x92),
+        dark3: Color::rgb(0x00, 0x1a, 0x68),
+    };
+
+    /// WinUI 3 metrics shared by both Fluent themes: 4 px controls, 8 px
+    /// windows, 1 px strokes, Segoe UI Variable at the 14 px body size.
+    fn fluent_common(t: &mut Theme) {
+        t.accent_system = true;
+        t.metrics = Metrics {
+            button_radius: 4.0,
+            window_radius: 8.0,
+            window_radius_corners: RadiusCorners::All,
+            spacing: 8.0,
+            padding: 8.0,
+            border_width: 1.0,
+            service_tab_height: 32.0,
+            icon_size: 16.0,
+        };
+        t.fonts = Fonts {
+            family: "Segoe UI Variable".into(),
+            // The UI's font lookup goes by file name on Windows, and Segoe
+            // UI Variable's file is `SegUIVar.ttf`; before Windows 11 only
+            // Segoe UI exists.
+            fallbacks: vec!["SegUIVar".into(), "Segoe UI".into()],
+            // Body text is 14 px; the UI draws `size * 1.33` px.
+            size: 10.5,
+            text_family: String::new(),
+            text_size: 11.0,
+        };
+    }
+
+    /// WinUI 3 dark. The colours are the Fluent 2 neutral tokens
+    /// (`SolidBackgroundFillColorBase`, `ControlFillColorDefault`,
+    /// `ControlStrokeColorDefault`…) composited over the #202020 base, so
+    /// they are right without a backdrop; with one, `[backdrop]` uses the
+    /// translucent tokens themselves.
+    pub fn fluent_dark() -> Theme {
+        let base = Color::grey(0x20);
+        let text = Color::WHITE;
+        let secondary = Color::grey(0xcc); // TextFillColorSecondary #C5FFFFFF
+        let disabled = Color::grey(0x71); // TextFillColorDisabled #5DFFFFFF
+        let control = Color::grey(0x2d); // ControlFillColorDefault #0FFFFFFF
+        let control_hover = Color::grey(0x32); // ControlFillColorSecondary #15FFFFFF
+        let control_pressed = Color::grey(0x27); // ControlFillColorTertiary #08FFFFFF
+        let control_disabled = Color::grey(0x2a); // ControlFillColorDisabled #0BFFFFFF
+        let stroke = Color::grey(0x3a); // ControlStrokeColorDefault #12FFFFFF, over a control
+        let surface_stroke = Color::grey(0x42); // SurfaceStrokeColorDefault #66757575
+        let accent = WINDOWS_BLUE.fill(true);
+        let button = |back: Color, text: Color| ButtonStyle {
+            back_top: back,
+            back_bottom: back,
+            border: stroke,
+            text,
+            ..ButtonStyle::default()
+        };
+        let mut t = glossa_dark();
+        t.name = "Fluent Dark".into();
+        t.dark = true;
+        t.window = WindowStyle {
+            back: base,
+            text,
+            text_disabled: disabled,
+            border: surface_stroke,
+            border_inner: None,
+            caption: None,
+            client_back: Color::grey(0x28), // LayerFillColorDefault #4C3A3A3A
+            group_box: Color::grey(0x32),   // DividerStrokeColorDefault #15FFFFFF
+            classic_focus: false,
+        };
+        t.button = States {
+            normal: button(control, text),
+            hover: Some(button(control_hover, text)),
+            pressed: Some(button(control_pressed, secondary)),
+            disabled: Some(button(control_disabled, disabled)),
+            focused: None,
+        };
+        let edit = |back: Color, border: Color| EditStyle { back, border, text, shadow_top: None, shadow_bottom: None };
+        t.edit = States {
+            normal: edit(control, stroke),
+            hover: Some(edit(control_hover, stroke)),
+            pressed: None,
+            // ControlFillColorInputActive #B31E1E1E, with the accent line.
+            focused: Some(edit(Color::grey(0x1f), accent)),
+            disabled: Some(EditStyle { text: disabled, ..edit(control_disabled, stroke) }),
+        };
+        t.window_button = States {
+            normal: GlyphStyle { main: text, ..GlyphStyle::default() },
+            // SubtleFillColorSecondary / Tertiary.
+            hover: Some(GlyphStyle { main: text, back: Some(control), ..GlyphStyle::default() }),
+            pressed: Some(GlyphStyle { main: secondary, back: Some(Color::grey(0x29)), ..GlyphStyle::default() }),
+            disabled: Some(GlyphStyle { main: disabled, ..GlyphStyle::default() }),
+            focused: None,
+        };
+        t.icon = States {
+            normal: GlyphStyle { main: secondary, ..GlyphStyle::default() },
+            hover: Some(GlyphStyle { main: text, ..GlyphStyle::default() }),
+            pressed: None,
+            disabled: Some(GlyphStyle { main: disabled, ..GlyphStyle::default() }),
+            focused: None,
+        };
+        t.accent = accent;
+        t.accent_text = Color::BLACK; // TextOnAccentFillColorPrimary
+        t.link = WINDOWS_BLUE.text(true); // AccentTextFillColorPrimary
+        t.selection = WINDOWS_BLUE.base.with_alpha(0xb0);
+        t.error = Color::rgb(0xff, 0x99, 0xa4); // SystemFillColorCritical
+        t.warning = Color::rgb(0xfc, 0xe1, 0x00); // SystemFillColorCaution
+        t.popup = PopupStyle {
+            back: Color::grey(0x2c), // AcrylicInAppFillColorDefault tint
+            text,
+            frame: surface_stroke,
+            frame_thickness: 1.0,
+            opacity: 1.0,
+        };
+        fluent_common(&mut t);
+        t.backdrop = BackdropStyle {
+            window: Some(Color::TRANSPARENT),
+            client: Some(Color::rgba(0x3a, 0x3a, 0x3a, 0x4c)), // LayerFillColorDefault
+            edit: Some(Color::rgba(0xff, 0xff, 0xff, 0x0f)),   // ControlFillColorDefault
+            popup: Some(Color::rgba(0x2c, 0x2c, 0x2c, 0x60)),
+            ..BackdropStyle::default()
+        };
+        t
+    }
+
+    /// WinUI 3 light, from the same tokens over the #F3F3F3 base.
+    pub fn fluent_light() -> Theme {
+        let base = Color::grey(0xf3);
+        let text = Color::grey(0x1a); // TextFillColorPrimary #E4000000
+        let secondary = Color::grey(0x5c); // TextFillColorSecondary #9E000000
+        let disabled = Color::grey(0x9b); // TextFillColorDisabled #5C000000
+        let control = Color::grey(0xfb); // ControlFillColorDefault #B3FFFFFF
+        let control_hover = Color::grey(0xf6); // ControlFillColorSecondary #80F9F9F9
+        let control_pressed = Color::grey(0xf5); // ControlFillColorTertiary #4DF9F9F9
+        let stroke = Color::grey(0xe0); // ControlStrokeColorDefault, with a little of the bottom stroke
+        let surface_stroke = Color::grey(0xc1); // SurfaceStrokeColorDefault #66757575
+        let accent = WINDOWS_BLUE.fill(false);
+        let button = |back: Color, text: Color| ButtonStyle {
+            back_top: back,
+            back_bottom: back,
+            border: stroke,
+            text,
+            ..ButtonStyle::default()
+        };
+        let mut t = fluent_dark();
+        t.name = "Fluent Light".into();
+        t.dark = false;
+        t.window = WindowStyle {
+            back: base,
+            text,
+            text_disabled: disabled,
+            border: surface_stroke,
+            border_inner: None,
+            caption: None,
+            client_back: Color::grey(0xf9), // LayerFillColorDefault #80FFFFFF
+            group_box: Color::grey(0xe0),   // DividerStrokeColorDefault
+            classic_focus: false,
+        };
+        t.button = States {
+            normal: button(control, text),
+            hover: Some(button(control_hover, text)),
+            pressed: Some(button(control_pressed, secondary)),
+            disabled: Some(button(control_pressed, disabled)),
+            focused: None,
+        };
+        let edit = |back: Color, border: Color| EditStyle { back, border, text, shadow_top: None, shadow_bottom: None };
+        t.edit = States {
+            normal: edit(control, stroke),
+            hover: Some(edit(control_hover, stroke)),
+            pressed: None,
+            focused: Some(edit(Color::WHITE, accent)), // ControlFillColorInputActive
+            disabled: Some(EditStyle { text: disabled, ..edit(control_pressed, stroke) }),
+        };
+        t.window_button = States {
+            normal: GlyphStyle { main: text, ..GlyphStyle::default() },
+            hover: Some(GlyphStyle { main: text, back: Some(Color::grey(0xea)), ..GlyphStyle::default() }),
+            pressed: Some(GlyphStyle { main: secondary, back: Some(Color::grey(0xed)), ..GlyphStyle::default() }),
+            disabled: Some(GlyphStyle { main: disabled, ..GlyphStyle::default() }),
+            focused: None,
+        };
+        t.icon = States {
+            normal: GlyphStyle { main: secondary, ..GlyphStyle::default() },
+            hover: Some(GlyphStyle { main: text, ..GlyphStyle::default() }),
+            pressed: None,
+            disabled: Some(GlyphStyle { main: disabled, ..GlyphStyle::default() }),
+            focused: None,
+        };
+        t.accent = accent;
+        t.accent_text = Color::WHITE;
+        t.link = WINDOWS_BLUE.text(false);
+        t.selection = WINDOWS_BLUE.base.with_alpha(0x60);
+        t.error = Color::rgb(0xc4, 0x2b, 0x1c);
+        t.warning = Color::rgb(0x9d, 0x5d, 0x00);
+        t.popup = PopupStyle {
+            back: Color::grey(0xfc), // AcrylicInAppFillColorDefault tint
+            text,
+            frame: surface_stroke,
+            frame_thickness: 1.0,
+            opacity: 1.0,
+        };
+        fluent_common(&mut t);
+        t.backdrop = BackdropStyle {
+            window: Some(Color::TRANSPARENT),
+            client: Some(Color::rgba(0xff, 0xff, 0xff, 0x80)), // LayerFillColorDefault
+            edit: Some(Color::rgba(0xff, 0xff, 0xff, 0xb3)),   // ControlFillColorDefault
+            popup: Some(Color::rgba(0xfc, 0xfc, 0xfc, 0x80)),
+            ..BackdropStyle::default()
+        };
         t
     }
 }
@@ -936,7 +1411,118 @@ mod tests {
             assert_eq!(back.window, theme.window, "{} window", theme.name);
             assert_eq!(back.accent, theme.accent, "{} accent", theme.name);
             assert_eq!(back.button, theme.button, "{} button", theme.name);
+            assert_eq!(back.backdrop, theme.backdrop, "{} backdrop", theme.name);
+            assert_eq!(back.accent_system, theme.accent_system, "{} accent_system", theme.name);
+            assert_eq!(back.fonts, theme.fonts, "{} fonts", theme.name);
         }
+    }
+
+    #[test]
+    fn fluent_themes_are_builtin_and_follow_the_system_accent() {
+        for name in ["Fluent Dark", "fluent-light", "WinUI Dark"] {
+            let t = builtin::by_name(name).unwrap_or_else(|| panic!("{name}"));
+            assert!(t.accent_system, "{name}");
+            assert_eq!(t.metrics.button_radius, 4.0);
+            assert_eq!(t.metrics.window_radius, 8.0);
+            assert_eq!(t.fonts.candidates().collect::<Vec<_>>(), ["Segoe UI Variable", "SegUIVar", "Segoe UI"]);
+        }
+        let dark = builtin::fluent_dark();
+        assert_eq!(dark.window.back, Color::grey(0x20));
+        assert_eq!(dark.accent, builtin::WINDOWS_BLUE.light2);
+        assert_eq!(builtin::fluent_light().accent, builtin::WINDOWS_BLUE.dark1);
+        assert!(builtin::NAMES.iter().all(|n| builtin::by_name(n).is_some_and(|t| t.name == *n)));
+    }
+
+    #[test]
+    fn accent_system_is_a_flag_and_survives_a_round_trip() {
+        let t = Theme::load("extends = \"Glossa Dark\"\naccent = \"system\"\n", "sys.toml", &no_resolver).unwrap();
+        assert!(t.accent_system);
+        // The parent's accent stays as the fallback.
+        assert_eq!(t.accent, builtin::glossa_dark().accent);
+        let back = Theme::load(&t.to_toml(), "x.toml", &no_resolver).unwrap();
+        assert!(back.accent_system);
+        assert_eq!(back.accent, t.accent);
+        // JSON spells it the same way, in any case.
+        let t = Theme::load(r#"{ "extends": "Glossa Light", "accent": "System" }"#, "s.json", &no_resolver).unwrap();
+        assert!(t.accent_system);
+        // An explicit colour over a parent that follows the system wins.
+        let t = Theme::load("extends = \"Fluent Dark\"\naccent = \"#ff8800\"\n", "o.toml", &no_resolver).unwrap();
+        assert!(!t.accent_system);
+        assert_eq!(t.accent, Color::rgb(0xff, 0x88, 0x00));
+        // Built-ins and classic themes do not follow it unless asked.
+        assert!(!builtin::glossa_dark().accent_system);
+        assert!(!Theme::load(FLAT_DARK, "Flat Dark.json", &no_resolver).unwrap().accent_system);
+        assert!(!builtin::glossa_dark().to_toml().contains("accent_system"));
+    }
+
+    #[test]
+    fn resolving_the_system_accent_recolours_every_accent_slot() {
+        let green = SystemAccent::from_base(Color::rgb(0x10, 0x89, 0x3e));
+        let mut dark = builtin::fluent_dark();
+        dark.resolve_system_accent(Some(&green));
+        assert_eq!(dark.accent, green.light2);
+        assert_eq!(dark.link, green.light3);
+        assert_eq!(dark.edit.focused.as_ref().unwrap().border, green.light2, "the focus line follows");
+        assert_eq!(dark.selection, green.base.with_alpha(0xb0), "the selection keeps its alpha");
+        assert_eq!(dark.accent_text, Color::BLACK);
+        let mut light = builtin::fluent_light();
+        light.resolve_system_accent(Some(&green));
+        assert_eq!(light.accent, green.dark1);
+        assert!(light.accent.contrast(light.accent_text) >= 3.0);
+
+        // No system accent, or a theme that did not ask: unchanged.
+        let mut t = builtin::fluent_dark();
+        t.resolve_system_accent(None);
+        assert_eq!(t, builtin::fluent_dark());
+        let mut t = builtin::glossa_dark();
+        t.resolve_system_accent(Some(&green));
+        assert_eq!(t, builtin::glossa_dark());
+        // Resolving twice is the same as once.
+        let mut twice = builtin::fluent_dark();
+        twice.resolve_system_accent(Some(&green));
+        twice.resolve_system_accent(Some(&green));
+        assert_eq!(twice.accent, green.light2);
+    }
+
+    #[test]
+    fn primary_button_is_accent_coloured() {
+        let t = builtin::fluent_light();
+        assert_eq!(t.primary_button(WidgetState::Normal).back(), t.accent);
+        assert_eq!(t.primary_button(WidgetState::Normal).text, t.accent_text);
+        assert_ne!(t.primary_button(WidgetState::Hover).back(), t.accent);
+        assert_eq!(t.primary_button(WidgetState::Disabled), *t.button.get(WidgetState::Disabled));
+    }
+
+    #[test]
+    fn backdrop_fills_are_translucent_only_with_a_backdrop() {
+        let t = builtin::glossa_dark();
+        assert_eq!(t.backdrop_fill(Surface::Window, Backdrop::None), t.window.back);
+        assert_eq!(t.backdrop_fill(Surface::Window, Backdrop::Mica).a, 0, "the body lets Mica through");
+        assert_eq!(t.backdrop_fill(Surface::Client, Backdrop::Acrylic), t.window.client_back.with_alpha(102));
+        // An untinted blur keeps at least the floor.
+        let blur = t.backdrop_fill(Surface::Window, Backdrop::Blur);
+        assert_eq!(blur, t.window.back.with_alpha(153));
+        // A theme's own colours are used as given under a tinted material.
+        let f = builtin::fluent_dark();
+        assert_eq!(f.backdrop_fill(Surface::Client, Backdrop::Mica), Color::rgba(0x3a, 0x3a, 0x3a, 0x4c));
+        assert_eq!(f.backdrop_fill(Surface::Window, Backdrop::Blur), f.window.back.with_alpha(153));
+        // And a native file can tune them.
+        let mine = Theme::load(
+            "extends = \"Glossa Light\"\n[backdrop]\nwindow_alpha = 0.5\npopup = \"#ffffff40\"\n",
+            "m.toml",
+            &no_resolver,
+        )
+        .unwrap();
+        assert_eq!(mine.backdrop_fill(Surface::Window, Backdrop::MicaAlt), mine.window.back.with_alpha(128));
+        assert_eq!(mine.backdrop_fill(Surface::Popup, Backdrop::Acrylic), Color::rgba(255, 255, 255, 0x40));
+    }
+
+    #[test]
+    fn system_accent_shades_from_a_base() {
+        let a = SystemAccent::from_base(Color::rgba(0x00, 0x78, 0xd4, 0x10));
+        assert_eq!(a.base.a, 255);
+        assert!(a.light2.luminance() > a.base.luminance() && a.dark1.luminance() < a.base.luminance());
+        assert!(a.light3.luminance() > a.light2.luminance());
     }
 
     #[test]

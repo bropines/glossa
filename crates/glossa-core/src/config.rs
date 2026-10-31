@@ -510,7 +510,84 @@ pub struct Appearance {
     /// unloaded and only the tray, hotkeys and engine stay resident (a few MB
     /// instead of tens). 0 keeps them loaded.
     pub unload_graphics_after_secs: u32,
+    /// The system material behind the main window and the other windows
+    /// (options, dictionary, history). See [`Backdrop`].
+    #[serde(default)]
+    pub backdrop: Backdrop,
     pub popup: PopupConfig,
+}
+
+/// A material the window system draws behind a window: what WinUI calls a
+/// system backdrop, and macOS a visual-effect (vibrancy) view.
+///
+/// Only the request lives here; `glossa-platform::backdrop` applies it, and
+/// does nothing where the system has no such material (Linux, older
+/// Windows). The theme decides how translucent the window's own fills are
+/// while one is active ([`crate::theme::Theme::backdrop_fill`]).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Backdrop {
+    /// An ordinary opaque window.
+    #[default]
+    None,
+    /// Windows 11 Mica: the desktop wallpaper, heavily blurred and tinted,
+    /// for long-lived windows. On macOS the window-background material.
+    Mica,
+    /// Mica Alt, the stronger tint WinUI uses behind tabbed windows.
+    #[serde(alias = "mica_alt", alias = "mica-alt")]
+    MicaAlt,
+    /// Acrylic: what is behind the window, blurred and tinted, as WinUI
+    /// draws flyouts. On macOS the popover material.
+    Acrylic,
+    /// A plain blur of what is behind the window, with no tint of its own.
+    Blur,
+}
+
+impl Backdrop {
+    pub const ALL: [Backdrop; 5] =
+        [Backdrop::None, Backdrop::Mica, Backdrop::MicaAlt, Backdrop::Acrylic, Backdrop::Blur];
+
+    /// The name used in `config.toml`.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Backdrop::None => "none",
+            Backdrop::Mica => "mica",
+            Backdrop::MicaAlt => "micaalt",
+            Backdrop::Acrylic => "acrylic",
+            Backdrop::Blur => "blur",
+        }
+    }
+
+    /// Whether any material is asked for at all.
+    pub fn is_some(self) -> bool {
+        self != Backdrop::None
+    }
+
+    /// Whether the system tints the material itself (Mica, Acrylic). A plain
+    /// blur shows the colours behind the window unchanged, so the window's
+    /// own fill has to supply the contrast.
+    pub fn is_tinted(self) -> bool {
+        matches!(self, Backdrop::Mica | Backdrop::MicaAlt | Backdrop::Acrylic)
+    }
+}
+
+impl std::fmt::Display for Backdrop {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
+impl std::str::FromStr for Backdrop {
+    type Err = String;
+
+    /// Lenient: case, spaces, `-` and `_` are ignored (`"Mica Alt"`).
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        let key: String = s.trim().to_ascii_lowercase().chars().filter(|c| !matches!(c, '_' | '-' | ' ')).collect();
+        Backdrop::ALL
+            .into_iter()
+            .find(|b| b.as_str() == key)
+            .ok_or_else(|| format!("unknown backdrop {s:?} (none, mica, micaalt, acrylic, blur)"))
+    }
 }
 
 /// The graphics back end.
@@ -548,6 +625,7 @@ impl Default for Appearance {
             window_transparency: 0,
             renderer: Renderer::OpenGl,
             unload_graphics_after_secs: 45,
+            backdrop: Backdrop::None,
             popup: PopupConfig::default(),
         }
     }
@@ -581,6 +659,16 @@ pub struct PopupConfig {
     pub min_width: f32,
     pub max_width: f32,
     pub max_height: f32,
+    /// The system material behind the popup. Acrylic suits it best: unlike
+    /// Mica it shows what is under the popup rather than the wallpaper.
+    #[serde(default)]
+    pub backdrop: Backdrop,
+    /// 0 to 90 percent: how strongly a translucent popup is shaded toward
+    /// black when nothing blurs what is behind it (no backdrop asked for, or
+    /// the system could not apply one), so its text stays readable over a
+    /// busy page. 0 leaves the fill as the theme and transparency make it.
+    #[serde(default)]
+    pub shade: u8,
 }
 
 impl Default for PopupConfig {
@@ -601,6 +689,8 @@ impl Default for PopupConfig {
             min_width: 350.0,
             max_width: 600.0,
             max_height: 480.0,
+            backdrop: Backdrop::None,
+            shade: 0,
         }
     }
 }
@@ -609,6 +699,20 @@ impl PopupConfig {
     /// Opacity as the toolkit wants it, 0.1 to 1.0.
     pub fn opacity(&self) -> f32 {
         1.0 - (self.transparency.min(90) as f32 / 100.0)
+    }
+
+    /// The popup's fill once the shade is applied: `back` darkened toward
+    /// black by `shade` percent and made more opaque by the same share of
+    /// what it lacks. `blurred` says a real backdrop is in effect, which
+    /// needs no shade, so `back` comes back unchanged.
+    pub fn shaded(&self, back: Color, blurred: bool) -> Color {
+        if blurred || self.shade == 0 {
+            return back;
+        }
+        let t = self.shade.min(90) as f32 / 100.0;
+        let darker = back.lerp(Color::BLACK.with_alpha(back.a), t);
+        let alpha = back.a as f32 + (255.0 - back.a as f32) * t;
+        darker.with_alpha(alpha.round().clamp(0.0, 255.0) as u8)
     }
 }
 
@@ -1039,6 +1143,7 @@ impl Config {
         self.network.max_retries = self.network.max_retries.min(5);
         let p = &mut self.appearance.popup;
         p.transparency = p.transparency.min(90);
+        p.shade = p.shade.min(90);
         p.frame_thickness = p.frame_thickness.clamp(0.0, 10.0);
         p.auto_hide_secs = p.auto_hide_secs.min(600);
         p.max_width = p.max_width.clamp(160.0, 4000.0);
@@ -1263,6 +1368,54 @@ mod tests {
         let before = c.general.recent_pairs.clone();
         c.remember_pair(LangPair::new(LangId::AUTO, LangId::ENGLISH));
         assert_eq!(c.general.recent_pairs, before);
+    }
+
+    #[test]
+    fn backdrops_default_to_none_and_read_their_names() {
+        let c = Config::from_toml("").unwrap();
+        assert_eq!(c.appearance.backdrop, Backdrop::None);
+        assert_eq!(c.appearance.popup.backdrop, Backdrop::None);
+        assert_eq!(c.appearance.popup.shade, 0);
+
+        let c = Config::from_toml(
+            "[appearance]\nbackdrop = \"mica\"\n[appearance.popup]\nbackdrop = \"acrylic\"\nshade = 200\n",
+        )
+        .unwrap();
+        assert_eq!(c.appearance.backdrop, Backdrop::Mica);
+        assert_eq!(c.appearance.popup.backdrop, Backdrop::Acrylic);
+        assert_eq!(c.appearance.popup.shade, 90, "clamped like the transparency");
+
+        for (text, want) in [("micaalt", Backdrop::MicaAlt), ("mica_alt", Backdrop::MicaAlt), ("blur", Backdrop::Blur)]
+        {
+            let c = Config::from_toml(&format!("[appearance]\nbackdrop = \"{text}\"")).unwrap();
+            assert_eq!(c.appearance.backdrop, want, "{text}");
+        }
+        assert!(Config::from_toml("[appearance]\nbackdrop = \"glass\"").is_err());
+    }
+
+    #[test]
+    fn backdrop_names_round_trip() {
+        for b in Backdrop::ALL {
+            assert_eq!(b.as_str().parse::<Backdrop>().unwrap(), b);
+            let mut c = Config::default();
+            c.appearance.backdrop = b;
+            c.appearance.popup.backdrop = b;
+            let back = Config::from_toml(&c.to_toml()).unwrap();
+            assert_eq!(back.appearance.backdrop, b);
+            assert_eq!(back.appearance.popup.backdrop, b);
+        }
+        assert_eq!("Mica Alt".parse::<Backdrop>().unwrap(), Backdrop::MicaAlt);
+        assert!(Backdrop::Acrylic.is_tinted() && !Backdrop::Blur.is_tinted() && !Backdrop::None.is_some());
+    }
+
+    #[test]
+    fn popup_shade_darkens_only_without_a_backdrop() {
+        let back = Color::rgba(0xf0, 0xf0, 0xf0, 0x80);
+        let mut p = PopupConfig::default();
+        assert_eq!(p.shaded(back, false), back, "no shade by default");
+        p.shade = 50;
+        assert_eq!(p.shaded(back, true), back, "a real blur needs no shade");
+        assert_eq!(p.shaded(back, false), Color::rgba(0x78, 0x78, 0x78, 0xc0));
     }
 
     #[test]

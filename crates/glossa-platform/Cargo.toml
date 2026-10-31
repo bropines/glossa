@@ -18,6 +18,13 @@ global-hotkey = { workspace = true }
 # Playback only, and only the codecs TTS services actually return: MP3,
 # WAV (PCM) and Ogg Vorbis. Every other symphonia codec is dead weight.
 rodio = { version = "0.23", default-features = false, features = ["playback", "mp3", "wav", "vorbis"] }
+# The handle type every windowing crate hands out (eframe, winit); no
+# dependencies of its own.
+raw-window-handle = "0.6"
+
+[dev-dependencies]
+# Only for `examples/backdrop.rs`, which shows the backdrops on a real window.
+eframe = { workspace = true, features = ["glow", "wgpu", "default_fonts", "x11"] }
 
 [features]
 default = []
@@ -39,13 +46,31 @@ xcap-linux = { package = "xcap", version = "0.9", optional = true }
 
 [target.'cfg(target_os = "macos")'.dependencies]
 enigo = { version = "0.6", default-features = false }
+# Vibrancy (NSVisualEffectView) and the accent colour; already in the tree
+# through the clipboard and file dialogs.
+objc2 = "0.6"
+objc2-foundation = { version = "0.3", default-features = false, features = ["std", "NSString", "NSUserDefaults", "NSArray", "NSGeometry"] }
+objc2-app-kit = { version = "0.3", default-features = false, features = [
+    "std",
+    "NSAppearance",
+    "NSColor",
+    "NSColorSpace",
+    "NSGraphics",
+    "NSResponder",
+    "NSUserInterfaceItemIdentification",
+    "NSView",
+    "NSVisualEffectView",
+    "objc2-core-foundation",
+] }
 
 [target.'cfg(windows)'.dependencies]
 windows = { workspace = true, features = [
     "Win32_Foundation",
+    "Win32_Graphics_Dwm",
     "Win32_Graphics_Gdi",
     "Win32_System_Com",
     "Win32_System_DataExchange",
+    "Win32_System_LibraryLoader",
     "Win32_System_Memory",
     "Win32_System_Ole",
     "Win32_System_Registry",
