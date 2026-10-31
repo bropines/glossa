@@ -3,7 +3,7 @@
 //! the `/api/v1/{from}/{to}/{text}` REST route.
 
 use glossa_core::translate::{PartOfSpeechEntry, Sense};
-use glossa_core::{Capabilities, LangId, ProviderInfo, Result, TranslateRequest, Translation};
+use glossa_core::{Capabilities, Error, LangId, ProviderInfo, Result, TranslateRequest, Translation};
 use glossa_modules::{Host, OptionSpec, Provider};
 use glossa_net::{url_encode, HttpRequest};
 use serde_json::Value;
@@ -23,6 +23,15 @@ fn code(lang: LangId) -> &'static str {
         "zh-TW" => "zh_HANT",
         other => other,
     }
+}
+
+/// Whether a "translation" is just the input handed back. Only text of
+/// several words counts: a name or a single word can legitimately come back
+/// unchanged.
+fn echoes_source(source: &str, translation: &str) -> bool {
+    let source = source.trim();
+    source == translation.trim()
+        && source.split_whitespace().filter(|w| w.chars().any(char::is_alphabetic)).count() >= 3
 }
 
 /// `info.extraTranslations` as part-of-speech entries.
@@ -104,6 +113,19 @@ impl Provider for Lingva {
         let v = json_body(host.http.send(HttpRequest::get(url).provider(self.name()))?, self.name())?;
         let text = require_str(&v["translation"], "translation", self.name())?;
         let info = &v["info"];
+        let detected_from = info["detectedSource"].as_str().and_then(detected);
+        if echoes_source(&req.text, text)
+            && detected_from.or(Some(req.from)).filter(|l| l.is_language()) != Some(req.to)
+        {
+            // An instance that lost its access to Google hands the input
+            // back as the "translation" (lingva.ml did so in 2026). Showing
+            // it would look like a successful translation.
+            return Err(Error::bad_response(
+                self.name(),
+                "the instance returned the text untranslated; public Lingva instances often stop working, \
+                 so try another one in the service's options",
+            ));
+        }
         let pron = &info["pronunciation"];
         let romanisation = [&pron["query"], &pron["translation"]]
             .into_iter()
@@ -111,7 +133,7 @@ impl Provider for Lingva {
             .map(str::to_owned);
         Ok(Translation {
             text: text.to_owned(),
-            detected_from: info["detectedSource"].as_str().and_then(detected),
+            detected_from,
             romanisation,
             parts_of_speech: extra_translations(&info["extraTranslations"]),
             ..Default::default()
@@ -147,6 +169,24 @@ mod tests {
         assert_eq!(out.parts_of_speech[0].senses.len(), 2);
         assert_eq!(out.parts_of_speech[0].senses[0].back_translations[2], "Good afternoon!");
         assert_eq!(http.requests()[0].url, "https://lingva.example/api/v1/auto/ja/hello%20%2F%20hi");
+    }
+
+    #[test]
+    fn the_source_handed_back_is_an_error_not_a_translation() {
+        let echo = r#"{"translation":"The weather is nice today.","info":{"detectedSource":"en"}}"#;
+        let run = |text: &str, to: LangId| {
+            let http = MockHttp::new().on(Method::Get, DEFAULT_URL, 200, echo);
+            with_test_host(&http, &OptionValues::new(), |h| {
+                Lingva::new().translate(h, &TranslateRequest::new(text, LangPair::new(LangId::AUTO, to)))
+            })
+        };
+        let msg = run("The weather is nice today.", LangId::RUSSIAN).unwrap_err().to_string();
+        assert!(msg.contains("untranslated"), "{msg}");
+        // Into the language it already is in, the same text is the answer.
+        assert!(run("The weather is nice today.", LangId::ENGLISH).is_ok());
+        // A short phrase or a name may well come back unchanged.
+        assert!(!echoes_source("Tom Hanks", "Tom Hanks"));
+        assert!(!echoes_source("one two three", "раз два три"));
     }
 
     #[test]
