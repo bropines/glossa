@@ -31,6 +31,8 @@ pub struct Look {
     pub text_size: f32,
     /// Alpha for window and pane backgrounds (1.0 = opaque).
     pub window_alpha: f32,
+    /// Multiplier for icon buttons (Options → Appearance).
+    pub icon_scale: f32,
 }
 
 impl Look {
@@ -49,6 +51,7 @@ impl Look {
             popup_opacity: p.opacity().min(theme.popup.opacity.max(0.1)).max(0.1),
             text_size: cfg.appearance.text_size,
             window_alpha: 1.0 - cfg.appearance.window_transparency.min(90) as f32 / 100.0,
+            icon_scale: cfg.appearance.icon_scale.clamp(0.75, 3.0),
             theme,
         }
     }

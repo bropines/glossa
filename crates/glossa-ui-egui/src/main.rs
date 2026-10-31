@@ -74,6 +74,9 @@ pub struct Shell {
     /// What woke the GUI up, for it to act on when it starts.
     pub pending: Vec<tray::Pending>,
     pub quit: bool,
+    /// Start a fresh copy of the program once this one has shut down (a
+    /// setting that only applies at start-up changed).
+    pub restart: bool,
 }
 
 /// Wakes whichever loop is running: the egui loop when the GUI is loaded,
@@ -214,11 +217,23 @@ fn main() -> eframe::Result<()> {
         launch_once_only(&mut start_visible);
     }
 
+    let mut restart = false;
     if let Some(shell) = slot.borrow_mut().take() {
+        restart = shell.restart;
         if let Some(server) = shell.server {
             server.stop();
         }
         shell.engine.shutdown();
+        // Dropping the rest releases the hotkeys and the tray icon.
+    }
+    if restart {
+        // Only now: the new copy finds the control port free and starts for
+        // real instead of handing over to this one.
+        let args: Vec<String> = std::env::args().skip(1).filter(|a| a != "--hidden").collect();
+        match std::env::current_exe().map(|exe| std::process::Command::new(exe).args(&args).spawn()) {
+            Ok(Ok(_)) => tracing::info!("restarting"),
+            Ok(Err(e)) | Err(e) => tracing::error!("could not restart: {e}"),
+        }
     }
     Ok(())
 }
@@ -275,6 +290,7 @@ fn build_shell(engine: Engine, wake: Arc<Wake>) -> Shell {
         wake,
         pending: Vec::new(),
         quit: false,
+        restart: false,
     };
     register_hotkeys(&mut shell);
     shell

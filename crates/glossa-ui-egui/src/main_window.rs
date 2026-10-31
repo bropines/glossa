@@ -62,7 +62,7 @@ pub fn show(app: &mut GlossaApp, ui: &mut egui::Ui) {
     egui::CentralPanel::no_frame().frame(frame).show(ui, |ui| {
         if custom {
             title_bar(app, ui);
-            resize_edges(ui);
+            resize_edges(ui, "main");
         }
         let inner = egui::Frame::new().inner_margin(egui::Margin::symmetric(8, 6));
         inner.show(ui, |ui| {
@@ -167,7 +167,8 @@ fn title_bar(app: &mut GlossaApp, ui: &mut egui::Ui) {
 }
 
 /// Invisible handles along the edges of an undecorated window.
-fn resize_edges(ui: &mut egui::Ui) {
+/// Edges and a corner that resize an undecorated window when dragged.
+pub(crate) fn resize_edges(ui: &mut egui::Ui, salt: &str) -> bool {
     use egui::viewport::ResizeDirection as R;
     let screen = ui.ctx().content_rect();
     let t = 5.0;
@@ -198,15 +199,18 @@ fn resize_edges(ui: &mut egui::Ui) {
             egui::CursorIcon::ResizeNwSe,
         ),
     ];
+    let mut started = false;
     for (i, (rect, dir, cursor)) in zones.into_iter().enumerate() {
-        let r = ui.interact(rect, egui::Id::unique(("resize-edge", i)), Sense::drag());
+        let r = ui.interact(rect, egui::Id::unique(("resize-edge", salt, i)), Sense::drag());
         if r.hovered() {
             ui.ctx().set_cursor_icon(cursor);
         }
         if r.drag_started() {
             ui.ctx().send_viewport_cmd(egui::ViewportCommand::BeginResize(dir));
+            started = true;
         }
     }
+    started
 }
 
 fn top_pane(app: &mut GlossaApp, ui: &mut egui::Ui) {

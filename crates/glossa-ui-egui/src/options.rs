@@ -75,6 +75,8 @@ pub struct OptionsState {
     autostart_initial: bool,
     message: Option<(String, bool)>,
     show_secrets: bool,
+    /// A setting that applies at start-up changed: offer to restart.
+    ask_restart: bool,
     /// The AI endpoint builder: the preset and name for the next endpoint.
     new_ai_preset: String,
     new_ai_name: String,
@@ -104,6 +106,7 @@ pub fn open(app: &mut GlossaApp) {
             autostart_initial: autostart,
             message: None,
             show_secrets: false,
+            ask_restart: false,
             new_ai_preset: "openrouter".into(),
             new_ai_name: String::new(),
             ai_models: Default::default(),
@@ -126,6 +129,7 @@ pub fn show(app: &mut GlossaApp, ctx: &egui::Context) {
         if ui.input(|i| i.viewport().close_requested()) {
             open = false;
         }
+        app.zoom_input(ui);
         open &= body(app, ui, &mut st);
     });
     if open {
@@ -135,6 +139,9 @@ pub fn show(app: &mut GlossaApp, ctx: &egui::Context) {
 
 fn apply(app: &mut GlossaApp, st: &mut OptionsState) {
     let draft = st.draft.clone();
+    if draft.appearance.renderer != app.engine.config().appearance.renderer {
+        st.ask_restart = true;
+    }
     let result = app.engine.update_config(move |c| {
         // The window keeps track of geometry and pane contents itself.
         let windows = std::mem::take(&mut c.windows);
@@ -162,6 +169,18 @@ fn body(app: &mut GlossaApp, ui: &mut egui::Ui, st: &mut OptionsState) -> bool {
     let look = app.look.clone();
     egui::Panel::bottom("opt-buttons").show(ui, |ui| {
         ui.add_space(6.0);
+        if st.ask_restart {
+            ui.horizontal(|ui| {
+                ui.label(RichText::new(app.t("options.restart_needed")).strong());
+                if ui.button(app.t("options.restart_now")).clicked() {
+                    app.restart();
+                }
+                if ui.button(app.t("options.restart_later")).clicked() {
+                    st.ask_restart = false;
+                }
+            });
+            ui.add_space(4.0);
+        }
         ui.horizontal(|ui| {
             if let Some((m, err)) = &st.message {
                 ui.label(RichText::new(m).color(if *err { look.error() } else { look.weak_text() }));
@@ -195,6 +214,11 @@ fn body(app: &mut GlossaApp, ui: &mut egui::Ui, st: &mut OptionsState) -> bool {
         });
     });
     egui::CentralPanel::default().show(ui, |ui| {
+        if st.page == Page::Services {
+            // Two panes with their own scrolling.
+            services(app, ui, st);
+            return;
+        }
         egui::ScrollArea::vertical().id_salt(("opt-page", st.page as u8)).show(ui, |ui| {
             ui.set_width(ui.available_width() - 8.0);
             match st.page {
@@ -409,7 +433,6 @@ fn internet(app: &mut GlossaApp, ui: &mut egui::Ui, st: &mut OptionsState) {
 }
 
 fn services(app: &mut GlossaApp, ui: &mut egui::Ui, st: &mut OptionsState) {
-    let look = app.look.clone();
     ui.horizontal(|ui| {
         for (cap, key) in [
             (Capabilities::TRANSLATE, "options.services.translation"),
@@ -424,8 +447,31 @@ fn services(app: &mut GlossaApp, ui: &mut egui::Ui, st: &mut OptionsState) {
         }
     });
     ui.separator();
+    poll_ai_task(app, st);
+    let providers = app.engine.providers(st.service_group);
+    // Two panes that use the whole window: the list on the left (its width
+    // dragged by the divider), the selected service's settings on the right.
+    egui::Panel::left("svc-list-pane").resizable(true).default_size(320.0).show(ui, |ui| {
+        service_list(app, ui, st, &providers);
+    });
+    egui::CentralPanel::default().show(ui, |ui| {
+        egui::ScrollArea::vertical().id_salt(("svc-detail", st.service_group.0)).show(ui, |ui| {
+            ui.set_width(ui.available_width() - 8.0);
+            service_details(app, ui, st, &providers);
+        });
+    });
+}
+
+/// The providers with the current capability: switch them on, reorder them,
+/// pick one to configure.
+fn service_list(
+    app: &mut GlossaApp,
+    ui: &mut egui::Ui,
+    st: &mut OptionsState,
+    providers: &[glossa_engine::ProviderSummary],
+) {
+    let look = app.look.clone();
     let cap = st.service_group;
-    let providers = app.engine.providers(cap);
     let d = &mut st.draft;
     let (order, enabled): (&mut Vec<String>, &mut Vec<String>) = if cap == Capabilities::DICTIONARY {
         (&mut d.services.dictionary_order, &mut d.services.dictionary_enabled)
@@ -433,58 +479,21 @@ fn services(app: &mut GlossaApp, ui: &mut egui::Ui, st: &mut OptionsState) {
         (&mut d.services.order, &mut d.services.enabled)
     };
     // Show providers in the draft's order.
-    let mut list: Vec<_> = providers.clone();
+    let mut list: Vec<_> = providers.to_vec();
     list.sort_by_key(|p| order.iter().position(|o| *o == p.info.id).unwrap_or(usize::MAX));
     let selectable_tabs = cap == Capabilities::TRANSLATE || cap == Capabilities::DICTIONARY;
-    egui::ScrollArea::vertical().id_salt("svc-list").max_height(250.0).show(ui, |ui| {
-        for p in &list {
-            ui.horizontal(|ui| {
-                if selectable_tabs {
-                    let mut on = enabled.contains(&p.info.id);
-                    if ui.checkbox(&mut on, "").changed() {
-                        if on {
-                            enabled.push(p.info.id.clone());
-                        } else {
-                            enabled.retain(|e| *e != p.info.id);
-                        }
-                    }
-                }
-                crate::widgets::service_badge(ui, &p.info.id, &p.info.name, 18.0);
-                let sel = st.selected_service.as_deref() == Some(p.info.id.as_str());
-                if ui.selectable_label(sel, &p.info.name).clicked() {
-                    st.selected_service = Some(p.info.id.clone());
-                }
-                ui.label(RichText::new(&p.origin).small().color(look.weak_text()));
-                if p.info.needs_credentials {
-                    let has = d
-                        .services
-                        .options
-                        .get(&p.info.id)
-                        .is_some_and(|o| o.values().any(|v| v.as_str().is_some_and(|s| !s.is_empty())));
-                    if !has {
-                        ui.label(RichText::new("needs a key").small().color(look.error()));
-                    }
-                }
-                if cap == Capabilities::LISTEN {
-                    let mut tts = d.services.tts == p.info.id;
-                    if ui.radio(tts, "").on_hover_text("Use for listening").clicked() {
-                        tts = true;
-                        d.services.tts = p.info.id.clone();
-                    }
-                    let _ = tts;
-                }
-                if cap == Capabilities::OCR && ui.radio(d.ocr.provider == p.info.id, "").clicked() {
-                    d.ocr.provider = p.info.id.clone();
-                }
-            });
+
+    // Buttons and switches stay at the bottom; the list takes the rest.
+    egui::Panel::bottom("svc-list-buttons").show(ui, |ui| {
+        if !selectable_tabs {
+            return;
         }
-    });
-    if selectable_tabs {
+        ui.add_space(4.0);
         ui.horizontal(|ui| {
             let sel = st.selected_service.clone();
-            let up = crate::icons::sized_button(ui, &look, crate::icons::Icon::Up, "", 26.0, sel.is_some()).clicked();
+            let up = crate::icons::sized_button(ui, &look, crate::icons::Icon::Up, "", 22.0, sel.is_some()).clicked();
             let down =
-                crate::icons::sized_button(ui, &look, crate::icons::Icon::Down, "", 26.0, sel.is_some()).clicked();
+                crate::icons::sized_button(ui, &look, crate::icons::Icon::Down, "", 22.0, sel.is_some()).clicked();
             if let (Some(id), true) = (&sel, up || down) {
                 // Materialise the full order first, so unlisted providers
                 // keep their place.
@@ -517,7 +526,7 @@ fn services(app: &mut GlossaApp, ui: &mut egui::Ui, st: &mut OptionsState) {
                 }
             }
         });
-        if cap == Capabilities::DICTIONARY && !d.dictionary.offline.is_empty() {
+        if cap == Capabilities::DICTIONARY {
             for f in &d.dictionary.offline {
                 ui.label(RichText::new(f.display().to_string()).small().color(look.weak_text()));
             }
@@ -525,46 +534,101 @@ fn services(app: &mut GlossaApp, ui: &mut egui::Ui, st: &mut OptionsState) {
         if cap == Capabilities::TRANSLATE {
             ui.checkbox(&mut d.services.fail_over, app.t("options.services.fail_over"));
         }
-    }
-    if cap == Capabilities::TRANSLATE {
+        ui.add_space(2.0);
+    });
+    egui::CentralPanel::default().show(ui, |ui| {
+        egui::ScrollArea::vertical().id_salt(("svc-list", cap.0)).auto_shrink([false, false]).show(ui, |ui| {
+            for p in &list {
+                ui.horizontal(|ui| {
+                    if selectable_tabs {
+                        let mut on = enabled.contains(&p.info.id);
+                        if ui.checkbox(&mut on, "").changed() {
+                            if on {
+                                enabled.push(p.info.id.clone());
+                            } else {
+                                enabled.retain(|e| *e != p.info.id);
+                            }
+                        }
+                    }
+                    crate::widgets::service_badge(ui, &p.info.id, &p.info.name, 18.0);
+                    let sel = st.selected_service.as_deref() == Some(p.info.id.as_str());
+                    if ui.selectable_label(sel, &p.info.name).clicked() {
+                        st.selected_service = Some(p.info.id.clone());
+                    }
+                    ui.label(RichText::new(&p.origin).small().color(look.weak_text()));
+                    if p.info.needs_credentials {
+                        let has = d
+                            .services
+                            .options
+                            .get(&p.info.id)
+                            .is_some_and(|o| o.values().any(|v| v.as_str().is_some_and(|s| !s.is_empty())));
+                        if !has {
+                            ui.label(RichText::new(app.t("options.services.needs_key")).small().color(look.error()));
+                        }
+                    }
+                    if cap == Capabilities::LISTEN && ui.radio(d.services.tts == p.info.id, "").clicked() {
+                        d.services.tts = p.info.id.clone();
+                    }
+                    if cap == Capabilities::OCR && ui.radio(d.ocr.provider == p.info.id, "").clicked() {
+                        d.ocr.provider = p.info.id.clone();
+                    }
+                });
+            }
+        });
+    });
+}
+
+/// The right pane: the AI endpoint builder (for translators) and the
+/// selected provider's settings, generated from what it declares.
+fn service_details(
+    app: &mut GlossaApp,
+    ui: &mut egui::Ui,
+    st: &mut OptionsState,
+    providers: &[glossa_engine::ProviderSummary],
+) {
+    let look = app.look.clone();
+    if st.service_group == Capabilities::TRANSLATE {
         ai_endpoints(app, ui, st);
     }
-    poll_ai_task(app, st);
-
-    // The selected provider's settings, generated from what it declares.
-    if let Some(id) = st.selected_service.clone() {
-        if let Some(p) = providers.iter().find(|p| p.info.id == id) {
-            ui.add_space(6.0);
-            group(ui, &look, &format!("{} — {}", p.info.name, app.t("options.services.settings")), |ui| {
-                if !p.info.description.is_empty() {
-                    ui.label(RichText::new(&p.info.description).small());
-                }
-                if !p.info.homepage.is_empty() && ui.link(RichText::new(&p.info.homepage).small()).clicked() {
-                    app.open_url(&p.info.homepage);
-                }
-                if let Some(dir) = &p.dir {
-                    ui.label(RichText::new(dir.display().to_string()).small().color(look.weak_text()));
-                }
-                ui.label(
-                    RichText::new(format!("Capabilities: {}", p.info.capabilities.names().join(", ")))
-                        .small()
-                        .color(look.weak_text()),
-                );
-                if p.options.is_empty() {
-                    ui.label(RichText::new("No settings.").color(look.weak_text()));
-                } else {
-                    ui.checkbox(&mut st.show_secrets, "Show keys");
-                    if is_ai_endpoint(&id) {
-                        ai_tools(app, ui, &id, &mut st.draft, &st.ai_models, &mut st.ai_task, &st.ai_status);
-                    }
-                    let values = st.draft.services.options.entry(id.clone()).or_default();
-                    for spec in &p.options {
-                        option_field(ui, spec, values, st.show_secrets);
-                    }
-                }
-            });
+    let Some(id) = st.selected_service.clone() else {
+        ui.add_space(8.0);
+        ui.label(RichText::new(app.t("options.services.pick_one")).color(look.weak_text()));
+        return;
+    };
+    let Some(p) = providers.iter().find(|p| p.info.id == id) else { return };
+    ui.add_space(6.0);
+    group(ui, &look, &format!("{} — {}", p.info.name, app.t("options.services.settings")), |ui| {
+        if !p.info.description.is_empty() {
+            ui.label(RichText::new(&p.info.description).small());
         }
-    }
+        if !p.info.homepage.is_empty() && ui.link(RichText::new(&p.info.homepage).small()).clicked() {
+            app.open_url(&p.info.homepage);
+        }
+        if let Some(dir) = &p.dir {
+            ui.label(RichText::new(dir.display().to_string()).small().color(look.weak_text()));
+        }
+        ui.label(
+            RichText::new(format!(
+                "{} {}",
+                app.t("options.services.capabilities"),
+                p.info.capabilities.names().join(", ")
+            ))
+            .small()
+            .color(look.weak_text()),
+        );
+        if p.options.is_empty() {
+            ui.label(RichText::new(app.t("options.services.no_settings")).color(look.weak_text()));
+        } else {
+            ui.checkbox(&mut st.show_secrets, app.t("options.services.show_keys"));
+            if is_ai_endpoint(&id) {
+                ai_tools(app, ui, &id, &mut st.draft, &st.ai_models, &mut st.ai_task, &st.ai_status);
+            }
+            let values = st.draft.services.options.entry(id.clone()).or_default();
+            for spec in &p.options {
+                option_field(ui, spec, values, st.show_secrets);
+            }
+        }
+    });
 }
 
 fn is_ai_endpoint(id: &str) -> bool {
@@ -903,6 +967,9 @@ fn appearance(app: &mut GlossaApp, ui: &mut egui::Ui, st: &mut OptionsState) {
         row(ui, "Window transparency (0 - 90):", |ui| {
             ui.add(egui::Slider::new(&mut d.appearance.window_transparency, 0..=90));
         });
+        row(ui, &app.t("options.appearance.icon_scale"), |ui| {
+            ui.add(egui::Slider::new(&mut d.appearance.icon_scale, 0.75..=2.5).step_by(0.05));
+        });
         row(ui, "Graphics engine (after restart):", |ui| {
             use glossa_core::config::Renderer;
             let names = [
@@ -928,6 +995,7 @@ fn appearance(app: &mut GlossaApp, ui: &mut egui::Ui, st: &mut OptionsState) {
         ui.checkbox(&mut p.auto_position, app.t("options.appearance.auto_position"));
         ui.checkbox(&mut p.activate_on_open, app.t("options.appearance.activate"));
         ui.checkbox(&mut p.pin_when_dragging, app.t("options.appearance.pin_when_dragging"));
+        ui.checkbox(&mut p.show_border, app.t("options.appearance.show_border"));
         row(ui, &app.t("options.appearance.auto_hide"), |ui| {
             ui.label(app.t("options.appearance.seconds"));
             ui.add(egui::DragValue::new(&mut p.auto_hide_secs).range(0..=600));

@@ -4,9 +4,14 @@
 //! `docs/research/classic-behaviour.md`): it opens at the mouse pointer offset
 //! by 15 px, is 350–600 px wide depending on the text, has a one-line header
 //! "<From> to <To> (<Service>)" with favourite / dictionary / listen / copy /
-//! replace icons, shows only the translation, grows a strip of service tabs
+//! replace icons, shows only the translation, shows a strip of service tabs
 //! while the pointer is over it, and hides itself a few seconds after the
 //! pointer leaves — unless it was dragged, which pins it.
+//!
+//! Beyond the classic one: the space for the service strip is always kept, so
+//! the window does not jump when the pointer enters; it can be dragged by any
+//! empty spot and resized from its edges, and a size the user gave it is
+//! remembered until reset with the button next to the close one.
 
 use std::sync::Arc;
 use std::time::Instant;
@@ -37,6 +42,11 @@ pub struct PopupState {
     pub cursor_px: Option<(i32, i32)>,
     /// The user dragged it: remember where it ends up.
     pub moved: bool,
+    /// A size the user gave it by dragging an edge; replaces automatic sizing
+    /// until reset.
+    pub user_size: Option<egui::Vec2>,
+    /// An edge drag started: adopt whatever size the window takes.
+    pub resizing: bool,
     /// Last time the pointer was over the popup (or it was opened).
     pub last_hover: Instant,
     pub hovered: bool,
@@ -76,6 +86,8 @@ pub fn open(app: &mut GlossaApp, text: String, cursor: Option<(i32, i32)>) {
         pinned: false,
         cursor_px,
         moved: false,
+        user_size: remembered_size(app),
+        resizing: false,
         last_hover: now,
         hovered: false,
         favorite: false,
@@ -109,6 +121,8 @@ pub fn show_text(app: &mut GlossaApp, source: String, outcome: Option<Arc<Transl
         pinned,
         cursor_px,
         moved: false,
+        user_size: remembered_size(app),
+        resizing: false,
         last_hover: now,
         hovered: false,
         favorite: false,
@@ -152,6 +166,12 @@ fn anchor(app: &GlossaApp, cursor: Option<(i32, i32)>) -> (egui::Pos2, Option<(i
 
 /// The key in `config.windows` for where the user last put the popup.
 const REMEMBERED: &str = "popup";
+/// The key for a size the user gave it.
+const REMEMBERED_SIZE: &str = "popup-size";
+
+fn remembered_size(app: &GlossaApp) -> Option<egui::Vec2> {
+    app.cfg.windows.get(REMEMBERED_SIZE).map(|g| vec2(g.width, g.height)).filter(|s| s.x >= 120.0 && s.y >= 40.0)
+}
 
 fn scale_at(x: i32, y: i32) -> f32 {
     glossa_platform::window::monitor_at(x, y).map(|m| m.scale).filter(|s| *s > 0.0).unwrap_or(1.0)
@@ -250,7 +270,8 @@ pub fn show(app: &mut GlossaApp, ctx: &egui::Context) {
     let builder = egui::ViewportBuilder::default()
         .with_title("Glossa")
         .with_decorations(false)
-        .with_resizable(false)
+        .with_resizable(true)
+        .with_min_inner_size([160.0, 48.0])
         .with_taskbar(false)
         .with_window_level(egui::WindowLevel::AlwaysOnTop)
         .with_transparent(true)
@@ -260,12 +281,28 @@ pub fn show(app: &mut GlossaApp, ctx: &egui::Context) {
     let mut close = false;
     let mut desired = state.size;
     let mut outer: Option<egui::Rect> = None;
+    let mut inner: Option<egui::Rect> = None;
     ctx.show_viewport_immediate(viewport_id(), builder, |ui, _class| {
         let (c, r) = body(app, ui, &mut state);
         close = c;
         desired = r;
         outer = ui.input(|i| i.viewport().outer_rect);
+        inner = ui.input(|i| i.viewport().inner_rect);
     });
+    // After an edge drag, the size the window has is the user's: keep it
+    // (and remember it for the next popup).
+    if state.resizing {
+        if let Some(r) = inner.filter(|r| (r.size() - state.size).length() > 1.0) {
+            let size = r.size();
+            state.size = size;
+            state.user_size = Some(size);
+            desired = size;
+            state.cursor_px = None;
+            let g =
+                glossa_core::config::WindowGeometry { x: 0.0, y: 0.0, width: size.x, height: size.y, maximized: false };
+            app.cfg.windows.insert(REMEMBERED_SIZE.into(), g);
+        }
+    }
     // Once dragged, remember where it went (for "auto position" off), and
     // stop placing it automatically.
     if state.moved {
@@ -304,6 +341,7 @@ pub fn show(app: &mut GlossaApp, ctx: &egui::Context) {
 
 /// Draw the popup. Returns (close requested, desired size).
 fn body(app: &mut GlossaApp, ui: &mut egui::Ui, st: &mut PopupState) -> (bool, egui::Vec2) {
+    app.zoom_input(ui);
     let look = app.look.clone();
     let cfg = app.cfg.appearance.popup.clone();
     let mut close = ui.input(|i| i.key_pressed(egui::Key::Escape) || i.viewport().close_requested());
@@ -314,10 +352,32 @@ fn body(app: &mut GlossaApp, ui: &mut egui::Ui, st: &mut PopupState) -> (bool, e
     st.hovered = hovered_now;
 
     let fill = look.popup_back.gamma_multiply(look.popup_opacity);
+    let border = if cfg.show_border { look.popup_frame_width.max(0.0) } else { 0.0 };
     let frame = egui::Frame::new()
         .fill(Color32::from_rgba_unmultiplied(fill.r(), fill.g(), fill.b(), (look.popup_opacity * 255.0) as u8))
-        .stroke(egui::Stroke::new(look.popup_frame_width.max(0.0), look.popup_frame))
+        .stroke(egui::Stroke::new(border, look.popup_frame))
         .inner_margin(egui::Margin::symmetric(6, 4));
+    // Base size of the header icons; `sized_button` applies the icon scale,
+    // `icon` is what they really take, for measuring.
+    let icon_base = 18.0;
+    let icon = (icon_base * look.icon_scale).round();
+    // The service strip's height, kept free even while it is hidden so the
+    // window does not grow when the pointer enters.
+    let strip_providers: Vec<_> = if st.from_ocr {
+        Vec::new()
+    } else {
+        let reg = app.engine.registry();
+        app.cfg
+            .services
+            .enabled
+            .iter()
+            .filter_map(|id| reg.get(id))
+            .filter(|p| p.info().capabilities.contains(Capabilities::TRANSLATE))
+            .collect()
+    };
+    let strip_h =
+        if strip_providers.is_empty() { 0.0 } else { look.theme.metrics.service_tab_height.clamp(20.0, 44.0) + 3.0 };
+    let fixed = st.user_size.is_some() || !cfg.auto_size;
     let text_color = look.popup_text;
     let max_w = cfg.max_width;
     let min_w = cfg.min_width;
@@ -340,96 +400,170 @@ fn body(app: &mut GlossaApp, ui: &mut egui::Ui, st: &mut PopupState) -> (bool, e
         })
         .size()
         .x
-        + 14.0
-        + 5.0 * 19.0
-        + 16.0;
-    // "Auto size" off: a fixed box, the maximum size, scrolling inside.
-    let desired_w = if cfg.auto_size { (text_w.max(title_w) + 16.0).clamp(min_w, max_w) } else { max_w };
+        + 8.0;
+    // The actions sit in the middle, so each side needs room for the wider
+    // of the title and the window buttons.
+    let title_w = 2.0 * title_w.max(3.0 * (icon + 2.0)) + 5.0 * (icon + 1.0) + 24.0;
+    // A size the user gave it wins; "Auto size" off is a fixed box at the
+    // maximum size; otherwise the width follows the content.
+    let desired_w = match st.user_size {
+        Some(s) => s.x,
+        None if cfg.auto_size => (text_w.max(title_w) + 16.0).clamp(min_w, max_w),
+        None => max_w,
+    };
 
     let mut overflow = 0.0f32;
     let resp = egui::CentralPanel::no_frame().show(ui, |ui| {
         frame.show(ui, |ui| {
             ui.set_width(desired_w - 14.0);
-            if !cfg.auto_size {
+            if fixed {
                 // A fixed box: the frame fills the window.
                 ui.set_min_height(ui.available_height());
             }
-            // -- header: drag handle, title, icons --------------------------
-            let header = ui.horizontal(|ui| {
-                let (drag_rect, drag) = ui.allocate_exact_size(vec2(14.0, 14.0), Sense::click_and_drag());
-                icons::paint(
-                    ui.painter(),
-                    drag_rect,
-                    if st.pinned { Icon::Pin } else { Icon::Close },
-                    look.icon(glossa_core::theme::WidgetState::Normal),
-                );
-                if drag.clicked() {
+            // Any spot not taken by a control drags the window. Registered
+            // first, so the controls drawn on top get their clicks.
+            let bg = ui.interact(ui.max_rect(), ui.scope_id().with("popup-drag"), Sense::click_and_drag());
+            if bg.drag_started() {
+                st.moved = true;
+                if cfg.pin_when_dragging {
+                    st.pinned = true;
+                }
+                ui.ctx().send_viewport_cmd(egui::ViewportCommand::StartDrag);
+            }
+            // -- header: title | actions (centred) | window buttons ----------
+            let n_actions = 1 + [cfg.icons.replace, cfg.icons.copy, cfg.icons.listen, cfg.icons.dictionary]
+                .iter()
+                .filter(|on| **on)
+                .count();
+            let small_base = icon_base * 0.85;
+            let small = (small_base * look.icon_scale).round();
+            let n_controls = 2 + usize::from(st.user_size.is_some());
+            let controls_w = n_controls as f32 * (small + 2.0);
+            let actions_w = n_actions as f32 * (icon + 1.0);
+            let row_h = icon.max(small) + 2.0;
+            let (row, _) = ui.allocate_exact_size(vec2(ui.available_width(), row_h), Sense::hover());
+            let centre =
+                ui.ctx().content_rect().center().x.clamp(row.left() + actions_w / 2.0, row.right() - actions_w / 2.0);
+            let actions_rect = egui::Rect::from_center_size(egui::pos2(centre, row.center().y), vec2(actions_w, row_h));
+            let controls_rect =
+                egui::Rect::from_min_max(egui::pos2(row.right() - controls_w, row.top()), row.right_bottom());
+            let title_rect =
+                egui::Rect::from_min_max(row.left_top(), egui::pos2(actions_rect.left() - 6.0, row.bottom()));
+
+            // The direction and service, on the left; dragging it moves the window.
+            let mut title_ui = ui.new_child(
+                egui::UiBuilder::new().max_rect(title_rect).layout(egui::Layout::left_to_right(egui::Align::Center)),
+            );
+            let title_resp = title_ui.add(
+                egui::Label::new(
+                    RichText::new(st.title(app)).size(look.text_size * 1.15).color(text_color.gamma_multiply(0.85)),
+                )
+                .sense(Sense::click_and_drag())
+                .truncate(),
+            );
+            if title_resp.drag_started() {
+                st.moved = true;
+                if cfg.pin_when_dragging {
+                    st.pinned = true;
+                }
+                ui.ctx().send_viewport_cmd(egui::ViewportCommand::StartDrag);
+            }
+
+            // What to do with the translation, in the middle of the window.
+            let mut actions_ui = ui.new_child(
+                egui::UiBuilder::new().max_rect(actions_rect).layout(egui::Layout::left_to_right(egui::Align::Center)),
+            );
+            {
+                let ui = &mut actions_ui;
+                ui.spacing_mut().item_spacing.x = 1.0;
+                let size = icon_base;
+                let translation = st.outcome.as_ref().map(|o| o.translation.text.clone()).unwrap_or_default();
+                let has = !translation.is_empty();
+                let star = if st.favorite { Icon::StarFilled } else { Icon::Star };
+                let tip = if st.favorite { app.t("msg.remove_favorite") } else { app.t("msg.add_favorite") };
+                if icons::sized_button(ui, &look, star, &tip, size, has && !st.from_ocr).clicked() {
+                    st.favorite = !st.favorite;
+                    if let Some(entry) = app.engine.history().into_iter().find(|h| h.source == st.source.trim()) {
+                        app.engine.set_favorite(entry.id, st.favorite);
+                    }
+                }
+                if cfg.icons.dictionary
+                    && icons::sized_button(ui, &look, Icon::Dictionary, &app.t("popup.dictionary"), size, true)
+                        .clicked()
+                {
+                    crate::dictionary::open(app, Some(st.source.clone()));
+                }
+                if cfg.icons.listen
+                    && icons::sized_button(ui, &look, Icon::Listen, &app.t("popup.listen"), size, true).clicked()
+                {
+                    // The classic icon read the selected text aloud.
+                    let lang = st.outcome.as_ref().map(|o| o.pair.from).unwrap_or(LangId::AUTO);
+                    app.speak(&st.source, lang);
+                }
+                if cfg.icons.copy
+                    && icons::sized_button(ui, &look, Icon::Copy, &app.t("popup.copy"), size, has).clicked()
+                {
+                    app.copy_text(&translation);
+                }
+                if cfg.icons.replace
+                    && icons::sized_button(ui, &look, Icon::Replace, &app.t("popup.replace"), size, has).clicked()
+                {
+                    app.perform(Action::ReplaceSelection, Some(st.source.clone()));
                     close = true;
                 }
-                let title = st.title(app);
-                let title_resp = ui.add(
-                    egui::Label::new(
-                        RichText::new(title).size(look.text_size * 1.15).color(text_color.gamma_multiply(0.85)),
-                    )
-                    .sense(Sense::click_and_drag())
-                    .truncate(),
-                );
-                if title_resp.drag_started() || drag.drag_started() {
-                    st.moved = true;
-                    if cfg.pin_when_dragging {
-                        st.pinned = true;
-                    }
-                    ui.ctx().send_viewport_cmd(egui::ViewportCommand::StartDrag);
+            }
+
+            // Window buttons on the right, as Windows puts them.
+            let mut controls_ui = ui.new_child(
+                egui::UiBuilder::new().max_rect(controls_rect).layout(egui::Layout::right_to_left(egui::Align::Center)),
+            );
+            {
+                let ui = &mut controls_ui;
+                ui.spacing_mut().item_spacing.x = 2.0;
+                if icons::sized_button(ui, &look, Icon::Close, &app.t("popup.close"), small_base, true).clicked() {
+                    close = true;
                 }
-                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    ui.spacing_mut().item_spacing.x = 1.0;
-                    let size = 18.0;
-                    let translation = st.outcome.as_ref().map(|o| o.translation.text.clone()).unwrap_or_default();
-                    let has = !translation.is_empty();
-                    if cfg.icons.replace
-                        && icons::sized_button(ui, &look, Icon::Replace, &app.t("popup.replace"), size, has).clicked()
-                    {
-                        app.perform(Action::ReplaceSelection, Some(st.source.clone()));
-                        close = true;
-                    }
-                    if cfg.icons.copy
-                        && icons::sized_button(ui, &look, Icon::Copy, &app.t("popup.copy"), size, has).clicked()
-                    {
-                        app.copy_text(&translation);
-                    }
-                    if cfg.icons.listen
-                        && icons::sized_button(ui, &look, Icon::Listen, &app.t("popup.listen"), size, true).clicked()
-                    {
-                        // The classic icon read the selected text aloud.
-                        let lang = st.outcome.as_ref().map(|o| o.pair.from).unwrap_or(LangId::AUTO);
-                        app.speak(&st.source, lang);
-                    }
-                    if cfg.icons.dictionary
-                        && icons::sized_button(ui, &look, Icon::Dictionary, &app.t("popup.dictionary"), size, true)
-                            .clicked()
-                    {
-                        crate::dictionary::open(app, Some(st.source.clone()));
-                    }
-                    let star = if st.favorite { Icon::StarFilled } else { Icon::Star };
-                    let tip = if st.favorite { app.t("msg.remove_favorite") } else { app.t("msg.add_favorite") };
-                    if icons::sized_button(ui, &look, star, &tip, size, has && !st.from_ocr).clicked() {
-                        st.favorite = !st.favorite;
-                        if let Some(entry) = app.engine.history().into_iter().find(|h| h.source == st.source.trim()) {
-                            app.engine.set_favorite(entry.id, st.favorite);
-                        }
-                    }
-                });
-            });
-            let _ = header;
+                let pin_tip = if st.pinned { app.t("popup.unpin") } else { app.t("popup.pin") };
+                let pin = icons::sized_button(ui, &look, Icon::Pin, &pin_tip, small_base, true);
+                if st.pinned {
+                    ui.painter().rect_stroke(
+                        pin.rect,
+                        3.0,
+                        egui::Stroke::new(1.5, look.accent()),
+                        egui::StrokeKind::Inside,
+                    );
+                }
+                if pin.clicked() {
+                    st.pinned = !st.pinned;
+                    st.last_hover = Instant::now();
+                }
+                if st.user_size.is_some()
+                    && icons::sized_button(ui, &look, Icon::Restore, &app.t("popup.reset_size"), small_base, true)
+                        .clicked()
+                {
+                    st.user_size = None;
+                    st.resizing = false;
+                    app.cfg.windows.remove(REMEMBERED_SIZE);
+                }
+            }
+
+            // A clear line between the header and the text.
+            let separator = egui::Stroke::new(1.0, text_color.gamma_multiply(0.3));
+            ui.add_space(3.0);
+            let y = ui.cursor().top();
+            ui.painter().hline(ui.max_rect().x_range(), y, separator);
+            ui.add_space(4.0);
 
             // -- body ---------------------------------------------------------
+            let scroll_h = if fixed {
+                (ui.available_height() - strip_h - 2.0).max(20.0)
+            } else {
+                cfg.max_height - 40.0 - icon - strip_h
+            };
             if let Some(partial) = st.partial.clone().filter(|_| st.busy) {
-                let out = egui::ScrollArea::vertical().max_height(cfg.max_height - 70.0).stick_to_bottom(true).show(
-                    ui,
-                    |ui| {
-                        ui.add(egui::Label::new(RichText::new(partial).font(font.clone()).color(text_color)).wrap());
-                    },
-                );
+                let out = egui::ScrollArea::vertical().max_height(scroll_h).stick_to_bottom(true).show(ui, |ui| {
+                    ui.add(egui::Label::new(RichText::new(partial).font(font.clone()).color(text_color)).wrap());
+                });
                 overflow = (out.content_size.y - out.inner_rect.height()).max(0.0);
             } else if st.busy {
                 ui.horizontal(|ui| {
@@ -438,16 +572,17 @@ fn body(app: &mut GlossaApp, ui: &mut egui::Ui, st: &mut PopupState) -> (bool, e
                 });
             } else if let Some(e) = &st.error {
                 ui.label(RichText::new(e).color(look.error()).font(font.clone()));
-            } else if let Some(o) = &st.outcome {
-                let shown = display_text(o);
-                let out = egui::ScrollArea::vertical().max_height(cfg.max_height - 70.0).show(ui, |ui| {
-                    let rtl = o.pair.to.is_rtl();
-                    let text = if glossa_core::text::needs_bidi(&shown) {
-                        glossa_core::text::for_display(&shown, rtl)
-                    } else {
-                        shown
-                    };
-                    let label = egui::Label::new(RichText::new(text).font(font.clone()).color(text_color))
+            } else if let Some(o) = st.outcome.clone() {
+                let rtl = o.pair.to.is_rtl();
+                let primary = &o.translation.text;
+                let primary = if glossa_core::text::needs_bidi(primary) {
+                    glossa_core::text::for_display(primary, rtl)
+                } else {
+                    primary.clone()
+                };
+                let secondary = secondary_text(&o.translation);
+                let primary_label = |ui: &mut egui::Ui| {
+                    let label = egui::Label::new(RichText::new(primary.clone()).font(font.clone()).color(text_color))
                         .selectable(true)
                         .wrap();
                     if rtl {
@@ -455,32 +590,83 @@ fn body(app: &mut GlossaApp, ui: &mut egui::Ui, st: &mut PopupState) -> (bool, e
                     } else {
                         ui.add(label);
                     }
-                });
-                // The scroll area is no taller than the window is now, so a
-                // longer text would never make the window grow: add what is
-                // hidden.
-                overflow = (out.content_size.y - out.inner_rect.height()).max(0.0);
+                };
+                let secondary_font = egui::FontId::proportional(font.size * 0.92);
+                let secondary_label = |ui: &mut egui::Ui, text: &str| {
+                    ui.add(
+                        egui::Label::new(
+                            RichText::new(text).font(secondary_font.clone()).color(text_color.gamma_multiply(0.62)),
+                        )
+                        .selectable(true)
+                        .wrap(),
+                    );
+                };
+                match (&secondary, fixed) {
+                    // A fixed window: the translation above, the rest below,
+                    // the line between them in the middle of the window.
+                    (Some(extra), true) => {
+                        let middle = ui.ctx().content_rect().center().y;
+                        let top_h = (middle - ui.cursor().top() - 4.0).clamp(20.0, scroll_h - 24.0);
+                        egui::ScrollArea::vertical()
+                            .id_salt("popup-primary")
+                            .max_height(top_h)
+                            .min_scrolled_height(top_h)
+                            .auto_shrink([false, false])
+                            .show(ui, primary_label);
+                        ui.add_space(3.0);
+                        let y = ui.cursor().top();
+                        ui.painter().hline(ui.max_rect().x_range(), y, separator);
+                        ui.add_space(4.0);
+                        let rest = (ui.available_height() - strip_h - 2.0).max(20.0);
+                        egui::ScrollArea::vertical()
+                            .id_salt("popup-secondary")
+                            .max_height(rest)
+                            .auto_shrink([false, false])
+                            .show(ui, |ui| secondary_label(ui, extra));
+                    }
+                    _ => {
+                        let out = egui::ScrollArea::vertical()
+                            .id_salt("popup-text")
+                            .max_height(scroll_h)
+                            .auto_shrink([false, !fixed])
+                            .show(ui, |ui| {
+                                primary_label(ui);
+                                if let Some(extra) = &secondary {
+                                    ui.add_space(4.0);
+                                    let y = ui.cursor().top();
+                                    ui.painter().hline(ui.max_rect().x_range(), y, separator);
+                                    ui.add_space(5.0);
+                                    secondary_label(ui, extra);
+                                }
+                            });
+                        // The scroll area is no taller than the window is now,
+                        // so a longer text would never make the window grow:
+                        // add what is hidden.
+                        overflow = (out.content_size.y - out.inner_rect.height()).max(0.0);
+                    }
+                }
             }
 
             // -- service strip, while the pointer is over the popup ----------
-            if st.hovered && !st.from_ocr {
+            if fixed {
+                // Keep the strip at the bottom of a fixed box.
+                let spare = ui.available_height() - strip_h;
+                if spare > 0.0 {
+                    ui.add_space(spare);
+                }
+            }
+            if !st.hovered && strip_h > 0.0 {
+                ui.allocate_space(vec2(ui.available_width(), strip_h));
+            } else if !strip_providers.is_empty() {
                 let mut switch_to = None;
                 ui.add_space(2.0);
-                let reg = app.engine.registry();
-                let enabled: Vec<_> = app
-                    .cfg
-                    .services
-                    .enabled
-                    .iter()
-                    .filter_map(|id| reg.get(id))
-                    .filter(|p| p.info().capabilities.contains(Capabilities::TRANSLATE))
-                    .collect();
-                if !enabled.is_empty() {
+                let enabled = &strip_providers;
+                {
                     let avail = ui.available_width();
                     let each = (avail / enabled.len() as f32).max(24.0);
                     ui.horizontal(|ui| {
                         ui.spacing_mut().item_spacing.x = 1.0;
-                        for p in &enabled {
+                        for p in enabled {
                             let info = p.info();
                             let selected = info.id == st.service;
                             if crate::widgets::service_tab(ui, &look, &info.id, &info.name, selected, each - 1.0)
@@ -504,8 +690,17 @@ fn body(app: &mut GlossaApp, ui: &mut egui::Ui, st: &mut PopupState) -> (bool, e
         })
     });
 
+    if crate::main_window::resize_edges(ui, "popup") {
+        st.resizing = true;
+        st.pinned = true;
+    }
+
     let content = resp.inner.response.rect.size();
-    let h = if cfg.auto_size { (content.y + overflow).clamp(36.0, cfg.max_height) } else { cfg.max_height };
+    let h = match st.user_size {
+        Some(s) => s.y,
+        None if cfg.auto_size => (content.y + overflow).clamp(36.0, cfg.max_height),
+        None => cfg.max_height,
+    };
     (close, vec2(desired_w.ceil(), h.ceil()))
 }
 
@@ -513,6 +708,14 @@ fn body(app: &mut GlossaApp, ui: &mut egui::Ui, st: &mut PopupState) -> (bool, e
 /// service returned (the classic popup did the same for single words).
 fn display_text(o: &TranslationOutcome) -> String {
     o.translation.as_display_block()
+}
+
+/// Everything after the translation itself (romanisation, dictionary
+/// block), shown under a line in a quieter colour.
+fn secondary_text(t: &glossa_core::Translation) -> Option<String> {
+    let block = t.as_display_block();
+    let rest = block.strip_prefix(t.text.as_str())?.trim_start_matches(['\n', '\r']);
+    (!rest.trim().is_empty()).then(|| rest.to_owned())
 }
 
 #[cfg(test)]

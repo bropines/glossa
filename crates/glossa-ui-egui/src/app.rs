@@ -114,7 +114,12 @@ pub struct GlossaApp {
     pub main_visible: bool,
     started: bool,
     quitting: bool,
+    /// Quitting to start again (see [`GlossaApp::restart`]).
+    restarting: bool,
     frames: u64,
+    /// The interface scale changed (Ctrl+wheel, Ctrl+plus/minus) and is
+    /// waiting to be saved.
+    zoom_changed: Option<Instant>,
     /// The last OCR region, for "repeat last recognition".
     pub last_region: Option<glossa_core::ocr::Rect>,
 }
@@ -178,7 +183,9 @@ impl GlossaApp {
             main_visible: start_visible,
             started: false,
             quitting: false,
+            restarting: false,
             frames: 0,
+            zoom_changed: None,
             last_region: None,
         }
     }
@@ -275,6 +282,39 @@ impl GlossaApp {
                 },
             );
         }
+    }
+
+    /// Ctrl+wheel scales the whole interface, in any of the windows (each
+    /// calls this with its own input). The scale is shared by all windows.
+    pub fn zoom_input(&mut self, ui: &egui::Ui) {
+        let delta = ui.input(|i| i.zoom_delta());
+        let ctx = ui.ctx();
+        let mut scale = self.cfg.appearance.ui_scale;
+        if (delta - 1.0).abs() > 1e-3 {
+            scale = (scale * delta).clamp(0.5, 3.0);
+            ctx.set_zoom_factor(scale);
+        } else {
+            // Ctrl+plus/minus/0 change egui's zoom directly.
+            scale = ctx.zoom_factor();
+        }
+        if (scale - self.cfg.appearance.ui_scale).abs() > 1e-3 {
+            self.cfg.appearance.ui_scale = scale;
+            self.zoom_changed = Some(Instant::now());
+        }
+    }
+
+    /// Save a changed scale once the wheel has been still for a moment,
+    /// rather than on every notch.
+    fn save_zoom_later(&mut self) {
+        let Some(at) = self.zoom_changed else { return };
+        let wait = std::time::Duration::from_millis(800);
+        if at.elapsed() < wait {
+            self.ctx.request_repaint_after(wait - at.elapsed());
+            return;
+        }
+        self.zoom_changed = None;
+        let scale = self.cfg.appearance.ui_scale;
+        let _ = self.engine.update_config(move |c| c.appearance.ui_scale = scale);
     }
 
     /// Translate what is in the main window's source pane.
@@ -466,6 +506,13 @@ impl GlossaApp {
         self.ctx.send_viewport_cmd_to(egui::ViewportId::ROOT, egui::ViewportCommand::Close);
     }
 
+    /// Quit, and start a fresh copy once everything is shut down: for
+    /// settings that apply at start-up, such as the graphics engine.
+    pub fn restart(&mut self) {
+        self.restarting = true;
+        self.quit();
+    }
+
     /// With nothing on screen for a while, close the GUI so its graphics
     /// are freed; the tray, hotkeys and engine stay up in `main`, which
     /// starts the GUI again when something needs it.
@@ -610,6 +657,8 @@ impl eframe::App for GlossaApp {
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
         self.frames += 1;
         let ctx = ui.ctx().clone();
+        self.zoom_input(ui);
+        self.save_zoom_later();
         if self.main_visible {
             crate::main_window::show(self, ui);
         }
@@ -641,6 +690,7 @@ impl eframe::App for GlossaApp {
             pending: Vec::new(),
             // Unless this was an unload, the window closing means quitting.
             quit: !self.unloading || self.quitting,
+            restart: self.restarting,
         };
         *self.slot.borrow_mut() = Some(shell);
     }

@@ -45,6 +45,7 @@ pub fn show(app: &mut GlossaApp, ctx: &egui::Context) {
         if ui.input(|i| i.viewport().close_requested()) {
             open = false;
         }
+        app.zoom_input(ui);
         body(app, ui, &mut st, &mut open);
     });
     if open {

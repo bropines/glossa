@@ -499,6 +499,8 @@ pub struct Appearance {
     pub ui_scale: f32,
     /// Size of the text in the source and translation panes, in points.
     pub text_size: f32,
+    /// Size of toolbar and popup icons, as a multiple of their base size.
+    pub icon_scale: f32,
     /// 0 (opaque) to 90 percent transparent, for the main window — the same
     /// scale as the popup's.
     pub window_transparency: u8,
@@ -542,6 +544,7 @@ impl Default for Appearance {
             font_family: String::new(),
             ui_scale: 1.0,
             text_size: 11.0,
+            icon_scale: 1.2,
             window_transparency: 0,
             renderer: Renderer::OpenGl,
             unload_graphics_after_secs: 45,
@@ -560,6 +563,8 @@ pub struct PopupConfig {
     pub activate_on_open: bool,
     /// Stop auto-hiding once the user drags it somewhere.
     pub pin_when_dragging: bool,
+    /// Draw the coloured border around it.
+    pub show_border: bool,
     /// Hide after this many seconds without the pointer over it. 0 never
     /// hides.
     pub auto_hide_secs: u32,
@@ -585,6 +590,7 @@ impl Default for PopupConfig {
             auto_position: true,
             activate_on_open: false,
             pin_when_dragging: true,
+            show_border: true,
             auto_hide_secs: 5,
             transparency: 15,
             frame_thickness: 2.0,
@@ -1040,6 +1046,7 @@ impl Config {
         p.max_height = p.max_height.clamp(80.0, 4000.0);
         self.appearance.ui_scale = self.appearance.ui_scale.clamp(0.5, 3.0);
         self.appearance.text_size = self.appearance.text_size.clamp(6.0, 48.0);
+        self.appearance.icon_scale = self.appearance.icon_scale.clamp(0.75, 3.0);
         self.appearance.window_transparency = self.appearance.window_transparency.min(90);
         self.dictionary.zoom = self.dictionary.zoom.clamp(50, 400);
         self.general.instant_delay_ms = self.general.instant_delay_ms.clamp(150, 5000);

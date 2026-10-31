@@ -216,6 +216,7 @@ pub fn paint(painter: &egui::Painter, rect: Rect, icon: Icon, color: Color32) {
 }
 
 pub fn sized_button(ui: &mut Ui, look: &Look, icon: Icon, tooltip: &str, size: f32, enabled: bool) -> Response {
+    let size = (size * look.icon_scale).round();
     let (rect, mut resp) =
         ui.allocate_exact_size(vec2(size, size), if enabled { Sense::click() } else { Sense::hover() });
     if ui.is_rect_visible(rect) {
