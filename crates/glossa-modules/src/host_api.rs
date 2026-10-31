@@ -158,7 +158,18 @@ pub fn to_net_request(req: wire::HttpRequest) -> Result<HttpRequest, ModuleError
 }
 
 pub fn from_net_response(resp: HttpResponse, binary: bool) -> wire::HttpResponse {
-    let headers = resp.headers.iter().map(|(k, v)| (k.to_ascii_lowercase(), v.clone())).collect();
+    // Repeated headers (Set-Cookie above all) are joined with newlines rather
+    // than letting the last one win.
+    let mut headers: std::collections::BTreeMap<String, String> = std::collections::BTreeMap::new();
+    for (k, v) in &resp.headers {
+        headers
+            .entry(k.to_ascii_lowercase())
+            .and_modify(|existing| {
+                existing.push('\n');
+                existing.push_str(v);
+            })
+            .or_insert_with(|| v.clone());
+    }
     if binary {
         wire::HttpResponse {
             status: resp.status,

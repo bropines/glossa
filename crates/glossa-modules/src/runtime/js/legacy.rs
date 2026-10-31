@@ -29,6 +29,10 @@ use crate::provider::{OptionKind, OptionSpec};
 /// installation does not provide its own `Common.js`.
 pub const COMPAT: &str = include_str!("qtranslate_compat.js");
 
+/// Emulations of the Windows Script Host objects classic scripts used
+/// (`ActiveXObject` HTTP components).
+pub const LEGACY_HOST: &str = include_str!("legacy_host.js");
+
 /// The most request/response hops one call may take before we give up on a
 /// script that keeps chaining.
 const MAX_HOPS: usize = 8;
@@ -69,6 +73,7 @@ impl LegacyScript {
     /// `Options` set.
     fn context(&self, options: &serde_json::Value) -> Result<Context, String> {
         let mut ctx = engine::new_context()?;
+        engine::eval(&mut ctx, LEGACY_HOST, "host objects")?;
         engine::eval(&mut ctx, self.common.as_deref().unwrap_or(COMPAT), "Common.js")?;
         engine::set_global_json(&mut ctx, "__hostOptions", options)?;
         // Merge rather than replace, so options a script declared at load
@@ -83,7 +88,23 @@ impl LegacyScript {
         Ok(ctx)
     }
 
+    /// Whether the script reads the Bing session values the classic host
+    /// scraped for it.
+    fn needs_bing_session(&self) -> bool {
+        ["Options.BingToken", "Options.BingKey", "Options.BingCookie", "Options.IG"]
+            .iter()
+            .any(|k| self.service.contains(k))
+    }
+
     pub fn probe(&self) -> Result<LegacyMeta, String> {
+        // Some scripts make requests at the top level (to fetch a cookie).
+        // Probing only needs the header and the language table, so answer
+        // those requests with an empty page instead of touching the network.
+        let fake = |method: &str, _: serde_json::Value| match method {
+            "http" => Reply::ok(serde_json::json!({ "status": 200, "headers": {}, "body": "" })),
+            _ => Reply::ok(serde_json::Value::Null),
+        };
+        let _bridge = Bridge::install(&fake);
         let mut ctx = self.context(&serde_json::json!({ "LanguageCode": "en" }))?;
         let header = engine::call_global(&mut ctx, "serviceHeader", &[])?;
         let header = engine::to_json(&mut ctx, &header)?;
@@ -220,7 +241,13 @@ impl LegacyTransport {
     }
 
     fn run(&self, method: &str, params: &serde_json::Value, host: &dyn Fn(&str, serde_json::Value) -> Reply) -> Result<serde_json::Value, ModuleError> {
-        let user = params.get("options").and_then(|o| o.as_object()).cloned().unwrap_or_default();
+        let mut user = params.get("options").and_then(|o| o.as_object()).cloned().unwrap_or_default();
+        if self.script.needs_bing_session() {
+            match bing_session(host) {
+                Ok(session) => user.extend(session),
+                Err(e) => tracing::debug!("could not fetch the Bing session values: {}", e.message),
+            }
+        }
         let mut ctx = self.script.context(&self.host_options(&user)).map_err(engine::script_error)?;
         let text = params.get("text").and_then(|v| v.as_str()).unwrap_or("").to_owned();
         let slot = |key: &str| -> i32 {
@@ -406,6 +433,53 @@ impl Transport for LegacyTransport {
         let _bridge = Bridge::install(host);
         self.run(method, &params, host)
     }
+}
+
+/// What the classic host scraped from bing.com/translator for the Microsoft
+/// script: the page's `IG` id, the anti-abuse key and token, and the session
+/// cookies. Cached for ten minutes.
+fn bing_session(
+    host: &dyn Fn(&str, serde_json::Value) -> Reply,
+) -> Result<serde_json::Map<String, serde_json::Value>, ModuleError> {
+    const CACHE_KEY: &str = "bing_session";
+    if let Ok(cached) = host("cache_get", serde_json::json!({ "key": CACHE_KEY })).into_result() {
+        if let Some(map) = cached.as_object() {
+            return Ok(map.clone());
+        }
+    }
+    let resp = host("http", serde_json::json!({ "url": "https://www.bing.com/translator" })).into_result()?;
+    let body = resp.get("body").and_then(|v| v.as_str()).unwrap_or("");
+    let ig = between(body, "IG:\"", "\"").ok_or_else(|| ModuleError::new(ErrorKind::BadResponse, "no IG on the Bing page"))?;
+    let helper = between(body, "params_AbusePreventionHelper", "]")
+        .ok_or_else(|| ModuleError::new(ErrorKind::BadResponse, "no anti-abuse parameters on the Bing page"))?;
+    let helper = helper.trim_start_matches([' ', '=', '[']);
+    let mut parts = helper.splitn(3, ',');
+    let key = parts.next().unwrap_or("").trim().to_owned();
+    let token = parts.next().unwrap_or("").trim().trim_matches('"').to_owned();
+    let cookies = resp
+        .get("headers")
+        .and_then(|h| h.get("set-cookie"))
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .lines()
+        .filter_map(|c| c.split(';').next())
+        .map(str::trim)
+        .filter(|c| !c.is_empty())
+        .collect::<Vec<_>>()
+        .join("; ");
+    let mut map = serde_json::Map::new();
+    map.insert("IG".into(), ig.into());
+    map.insert("BingKey".into(), key.into());
+    map.insert("BingToken".into(), token.into());
+    map.insert("BingCookie".into(), cookies.into());
+    let _ = host("cache_set", serde_json::json!({ "key": CACHE_KEY, "value": map, "ttl_secs": 600 }));
+    Ok(map)
+}
+
+fn between<'a>(s: &'a str, start: &str, end: &str) -> Option<&'a str> {
+    let from = s.find(start)? + start.len();
+    let len = s[from..].find(end)?;
+    Some(&s[from..from + len])
 }
 
 fn read_request(ctx: &mut Context, value: &JsValue) -> Result<RequestData, ModuleError> {
@@ -628,6 +702,58 @@ mod tests {
         assert!(cut.as_u64().unwrap() <= 1800);
         assert_eq!(check(&mut ctx, "new RequestData(HttpMethod.GET, '/x').headers.indexOf('Accept: */*') === 0"), true);
         assert_eq!(check(&mut ctx, "parseJSON(\"{a: 'single quotes'}\").a"), "single quotes");
+    }
+
+    #[test]
+    fn top_level_activex_requests_work_at_call_time_and_are_faked_while_probing() {
+        let service = format!(
+            "var x = new ActiveXObject('WinHttp.WinHttpRequest.5.1'); x.open('GET', 'https://cookie.test/', false); x.send(null);\n\
+             var cookie = x.getResponseHeader('Content-Type');\n{}",
+            SERVICE.replace(
+                "return new ResponseData(j.text + Const.NL + \"line2\", src, d);",
+                "return new ResponseData(j.text + '/' + cookie, src, d);"
+            )
+        );
+        // Probing does not touch the network (there is no host to ask).
+        let p = provider(&service);
+        let http = MockHttp::new()
+            .on(Method::Get, "https://cookie.test/", 200, "")
+            .on(Method::Get, "https://svc.test/t?", 200, r#"{"text":"hi","src":"ru"}"#);
+        let opts = OptionValues::new();
+        with_test_host(&http, &opts, |host| {
+            let t = p.translate(host, &TranslateRequest::new("x", LangPair::new(LangId::RUSSIAN, LangId::ENGLISH))).unwrap();
+            assert_eq!(t.text, "hi/application/json; charset=utf-8");
+        });
+        assert_eq!(http.requests()[0].url, "https://cookie.test/");
+    }
+
+    #[test]
+    fn bing_session_values_are_scraped_and_cached() {
+        let page = r#"<script>var x = {IG:"ABC123DEF",x:1}; var params_AbusePreventionHelper = [1712345678901,"tok-en_9",3600000];</script>"#;
+        let calls = std::cell::RefCell::new(0);
+        let cache = std::cell::RefCell::new(None::<serde_json::Value>);
+        let host = |m: &str, p: serde_json::Value| -> Reply {
+            match m {
+                "http" => {
+                    *calls.borrow_mut() += 1;
+                    Reply::ok(serde_json::json!({ "status": 200, "body": page,
+                        "headers": { "set-cookie": "MUID=1; path=/\n_EDGE_S=F=1; HttpOnly" } }))
+                }
+                "cache_get" => Reply::ok(cache.borrow().clone().unwrap_or(serde_json::Value::Null)),
+                "cache_set" => {
+                    *cache.borrow_mut() = p.get("value").cloned();
+                    Reply::ok(serde_json::Value::Null)
+                }
+                _ => Reply::ok(serde_json::Value::Null),
+            }
+        };
+        let s = bing_session(&host).unwrap();
+        assert_eq!(s["IG"], "ABC123DEF");
+        assert_eq!(s["BingKey"], "1712345678901");
+        assert_eq!(s["BingToken"], "tok-en_9");
+        assert_eq!(s["BingCookie"], "MUID=1; _EDGE_S=F=1");
+        bing_session(&host).unwrap();
+        assert_eq!(*calls.borrow(), 1, "second call is served from the cache");
     }
 
     #[test]
