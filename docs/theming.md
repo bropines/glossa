@@ -110,12 +110,19 @@ the fallback `accent`; either spelling loads.
 *Options → Appearance* can put a system material behind the windows and,
 separately, behind the popup:
 
-| setting | Windows 11 22H2+ | Windows 11 21H2 | Windows 10 | macOS | Linux |
+| setting | Windows 11 22H2+ | Windows 11 21H2 | Windows 10 1803+ | macOS | Linux |
 |---|---|---|---|---|---|
-| `mica` | Mica | Mica | acrylic blur | window-background vibrancy | none |
-| `micaalt` | Mica Alt | Mica | acrylic blur | under-window vibrancy | none |
-| `acrylic` | Acrylic | acrylic blur | acrylic blur | popover vibrancy | none |
-| `blur` | plain blur | plain blur | plain blur | HUD vibrancy | none |
+| `mica` | Mica | Mica | acrylic blur | window-background vibrancy | KWin blur (X11) |
+| `micaalt` | Mica Alt | Mica | acrylic blur | under-window vibrancy | KWin blur (X11) |
+| `acrylic` | Acrylic | acrylic blur | acrylic blur | popover vibrancy | KWin blur (X11) |
+| `blur` | plain blur | plain blur | plain blur | full-screen-UI vibrancy | KWin blur (X11) |
+
+Windows draws Mica and Acrylic (the 22H2 kinds) only while the window is
+active, and a solid colour while it is not, as it does for its own apps.
+The popup never takes focus, so there Mica and Acrylic both become the
+older acrylic blur, which does not depend on activation. Windows 10 before
+1803 gets plain blur for every kind. On other Linux desktops and on Wayland
+there is no backdrop; the popup's *shade* is the fallback.
 
 A material only shows where the window paints nothing or something
 translucent, so while one is active the window draws its surfaces with the
@@ -139,8 +146,7 @@ untinted_min = 0.6
 
 Every theme has workable defaults (the `*_alpha` factors), so classic themes
 work with backdrops too; the Fluent themes give the WinUI tokens as colours.
-Mica follows the window's activation: an inactive window shows the solid
-fallback colour instead, which is how Windows draws it.
+The material is tinted dark or light to match the theme's `dark`.
 
 `[appearance.popup] shade` (0 - 90) darkens a translucent popup when no
 backdrop blurs what is behind it, so its text stays readable over a busy
