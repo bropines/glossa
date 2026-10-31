@@ -1,0 +1,83 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/glossa-core",
+    "crates/glossa-net",
+    "crates/glossa-module-sdk",
+    "crates/glossa-modules",
+    "crates/glossa-services",
+    "crates/glossa-dict",
+    "crates/glossa-ocr",
+    "crates/glossa-platform",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.82"
+license = "MIT OR Apache-2.0"
+authors = ["Glossa contributors"]
+repository = "https://github.com/bropines/glossa"
+
+[workspace.dependencies]
+# -- internal ---------------------------------------------------------------
+glossa-core = { path = "crates/glossa-core" }
+glossa-net = { path = "crates/glossa-net" }
+glossa-modules = { path = "crates/glossa-modules", default-features = false }
+glossa-services = { path = "crates/glossa-services" }
+glossa-ocr = { path = "crates/glossa-ocr" }
+glossa-dict = { path = "crates/glossa-dict" }
+glossa-engine = { path = "crates/glossa-engine" }
+glossa-platform = { path = "crates/glossa-platform" }
+glossa-module-sdk = { path = "crates/glossa-module-sdk" }
+
+# -- foundation -------------------------------------------------------------
+anyhow = "1"
+thiserror = "2"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+toml = "0.9"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+parking_lot = "0.12"
+once_cell = "1"
+dirs = "7"
+percent-encoding = "2"
+unicode-bidi = "0.3"
+unicode-segmentation = "1"
+base64 = "0.22"
+time = { version = "0.3", features = ["formatting", "parsing", "macros", "local-offset", "serde"] }
+rand = "0.9"
+regex = "1"
+
+# -- i/o --------------------------------------------------------------------
+ureq = { version = "3", features = ["json", "socks-proxy", "gzip"] }
+image = { version = "0.25", default-features = false, features = ["png", "jpeg", "webp"] }
+
+# -- scripting --------------------------------------------------------------
+boa_engine = "0.22"
+libloading = "0.9"
+
+# -- ui / platform ----------------------------------------------------------
+eframe = { version = "0.37", default-features = false }
+egui = "0.37"
+egui_extras = "0.37"
+arboard = "3"
+global-hotkey = "0.9"
+tray-icon = "0.26"
+xcap = "0.9"
+rfd = "0.17"
+windows = "0.62"
+
+[profile.release]
+opt-level = "z"
+lto = "fat"
+codegen-units = 1
+panic = "abort"
+strip = true
+
+[profile.release-perf]
+inherits = "release"
+opt-level = 3
+panic = "unwind"
+strip = "debuginfo"

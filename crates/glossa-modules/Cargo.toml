@@ -1,0 +1,37 @@
+[package]
+name = "glossa-modules"
+description = "The provider API and the module runtimes: JavaScript (Glossa, classic QTranslate, pot-app), Python, native."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+
+[features]
+default = ["js", "python", "native"]
+js = ["dep:boa_engine", "dep:boa_gc"]
+python = []
+native = ["dep:libloading"]
+
+[dependencies]
+glossa-core = { workspace = true }
+glossa-net = { workspace = true }
+glossa-module-sdk = { path = "../glossa-module-sdk" }
+serde = { workspace = true }
+serde_json = { workspace = true }
+toml = { workspace = true }
+tracing = { workspace = true }
+parking_lot = { workspace = true }
+base64 = { workspace = true }
+thiserror = { workspace = true }
+boa_engine = { workspace = true, optional = true }
+boa_gc = { version = "0.22", optional = true }
+libloading = { workspace = true, optional = true }
+md-5 = "0.10"
+sha1 = "0.10"
+sha2 = "0.10"
+hmac = "0.12"
+zip = { version = "6", default-features = false, features = ["deflate"] }
+
+[dev-dependencies]
+glossa-net = { workspace = true }

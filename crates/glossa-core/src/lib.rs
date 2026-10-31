@@ -1,0 +1,49 @@
+//! The domain model of Glossa.
+//!
+//! Nothing here does I/O beyond reading and writing its own files, knows about
+//! a GUI toolkit, or talks to the network. It is the vocabulary every other
+//! crate shares: languages, capabilities, requests and results, settings,
+//! themes, history, interface strings, and the importer for a classic
+//! installation.
+
+pub mod capability;
+pub mod color;
+pub mod config;
+pub mod dict;
+pub mod error;
+pub mod history;
+pub mod hotkey;
+pub mod jsonc;
+pub mod lang;
+pub mod legacy;
+pub mod locale;
+pub mod ocr;
+pub mod paths;
+pub mod text;
+pub mod theme;
+pub mod translate;
+
+pub use capability::Capabilities;
+pub use color::Color;
+pub use config::Config;
+pub use dict::{Article, Audio, DictRequest, SpeakRequest};
+pub use error::{Error, Result};
+pub use history::History;
+pub use hotkey::{Action, Hotkey};
+pub use lang::{LangId, LangPair};
+pub use locale::Locale;
+pub use ocr::{OcrRequest, OcrResult};
+pub use paths::Paths;
+pub use theme::Theme;
+pub use translate::{Detection, ProviderInfo, TranslateRequest, Translation};
+
+/// The program's version, for the about box and the control API.
+pub const VERSION: &str = env!("CARGO_PKG_VERSION");
+
+/// Seconds since the Unix epoch, for timestamps in history and logs.
+pub fn now_unix() -> i64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs() as i64)
+        .unwrap_or(0)
+}

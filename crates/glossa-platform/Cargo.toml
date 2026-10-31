@@ -1,0 +1,12 @@
+[package]
+name = "glossa-platform"
+description = "Operating-system integration: clipboard, selection capture, synthetic input, screen capture, hotkeys, autostart, audio."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+
+[dependencies]
+glossa-core = { workspace = true }
+tracing = { workspace = true }

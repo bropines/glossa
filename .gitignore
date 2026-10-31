@@ -1,0 +1,9 @@
+/target/
+**/*.rs.bk
+*.pdb
+/dist/
+__pycache__/
+*.pyc
+.venv/
+/data/
+.claude/worktrees/
