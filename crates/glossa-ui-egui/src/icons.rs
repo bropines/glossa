@@ -195,7 +195,7 @@ pub fn paint(painter: &egui::Painter, rect: Rect, icon: Icon, color: Color32) {
         Icon::Translate => {
             let font = egui::FontId::proportional(7.0 * u);
             painter.text(p(5.0, 6.0), egui::Align2::CENTER_CENTER, "A", font.clone(), color);
-            painter.text(p(11.0, 11.0), egui::Align2::CENTER_CENTER, "文", font, color);
+            painter.text(p(11.0, 11.0), egui::Align2::CENTER_CENTER, "Я", font, color);
         }
         Icon::Globe => {
             painter.circle_stroke(p(8.0, 8.0), 6.0 * u, st);

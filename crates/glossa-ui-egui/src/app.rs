@@ -7,7 +7,9 @@
 //! appear while everything is hidden (the popup, after a hotkey), `logic`
 //! asks for a paint while hidden so `ui` runs and can open it.
 
+use std::cell::RefCell;
 use std::collections::HashMap;
+use std::rc::Rc;
 use std::sync::mpsc::{self, Receiver, Sender};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -82,6 +84,15 @@ pub struct GlossaApp {
     tray: Option<crate::tray::Tray>,
     server: Option<glossa_engine::server::ServerHandle>,
     pub server_error: Option<String>,
+    /// Where the long-lived parts go back when the GUI unloads.
+    slot: Rc<RefCell<Option<crate::Shell>>>,
+    wake: Arc<crate::Wake>,
+    /// Events that woke the GUI, acted on in the first frame.
+    pending: Vec<crate::tray::Pending>,
+    /// Closing the window to unload the graphics, not to quit.
+    unloading: bool,
+    /// Since when nothing has been on screen.
+    hidden_since: Option<Instant>,
 
     pub main: MainState,
     pub popup: Option<crate::popup::PopupState>,
@@ -106,61 +117,24 @@ pub struct GlossaApp {
 }
 
 impl GlossaApp {
-    pub fn new(cc: &eframe::CreationContext<'_>, engine: Engine, launch: crate::Launch) -> Self {
+    pub fn new(cc: &eframe::CreationContext<'_>, slot: Rc<RefCell<Option<crate::Shell>>>, launch: crate::Launch) -> Self {
         let ctx = cc.egui_ctx.clone();
+        let shell = slot.borrow_mut().take().expect("the shell is handed to each GUI run");
+        let engine = shell.engine.clone();
         let cfg = engine.config();
         let look = Look::new(engine.current_theme(), &cfg);
         look.apply(&ctx, cfg.appearance.ui_scale);
         let mut fonts = Fonts::default();
         fonts.install_base(&ctx, &cfg.appearance.font_family);
-        egui_extras_install_image_loaders(&ctx);
+        *shell.wake.ctx.lock() = Some(ctx.clone());
 
         let events = engine.subscribe();
-        {
-            let ctx = ctx.clone();
-            engine.set_waker(move || ctx.request_repaint());
-        }
-
-        let session = Session::detect();
         let (tasks_tx, tasks) = mpsc::channel();
-
-        // Hotkeys must be created on this (the event loop's) thread.
-        let mut hotkey_errors = Vec::new();
-        let hotkeys = match HotkeyService::new() {
-            Ok(mut h) => {
-                let c = ctx.clone();
-                h.set_waker(move || c.request_repaint());
-                Some(h)
-            }
-            Err(e) => {
-                hotkey_errors.push(e.to_string());
-                None
-            }
-        };
-
-        let tray = crate::tray::Tray::new(&ctx, &engine.locale()).map_err(|e| tracing::warn!("no tray icon: {e}")).ok();
-
-        let (server, server_error) = if cfg.server.enabled {
-            match glossa_engine::server::start(engine.clone()) {
-                Ok(h) => (Some(h), None),
-                Err(e) => {
-                    tracing::warn!("control API not started: {e}");
-                    (None, Some(e.to_string()))
-                }
-            }
-        } else {
-            (None, None)
-        };
-
-        let start_visible = !launch.hidden
-            && match cfg.general.startup_action {
-                glossa_core::config::StartupAction::ShowWindow => true,
-                glossa_core::config::StartupAction::MinimizeToTray => tray.is_none(),
-                glossa_core::config::StartupAction::RestorePrevious => true,
-            }
-            || launch.screenshot.as_ref().is_some_and(|(w, _)| w != "popup");
-
-        let mut app = GlossaApp {
+        let start_visible = !launch.hidden;
+        if let Some(t) = &shell.tray {
+            t.set_hotkeys_checked(cfg.hotkeys.enabled);
+        }
+        GlossaApp {
             locale: engine.locale(),
             main: MainState::new(&cfg),
             engine,
@@ -170,14 +144,19 @@ impl GlossaApp {
             fonts,
             ctx,
             launch,
-            hotkeys,
-            hotkey_errors,
-            clipboard: Clipboard::new().map_err(|e| tracing::warn!("no clipboard: {e}")).ok(),
-            audio: AudioPlayer::new(),
-            session,
-            tray,
-            server,
-            server_error,
+            hotkeys: shell.hotkeys,
+            hotkey_errors: shell.hotkey_errors,
+            clipboard: shell.clipboard,
+            audio: shell.audio,
+            session: Session::detect(),
+            tray: shell.tray,
+            server: shell.server,
+            server_error: shell.server_error,
+            slot,
+            wake: shell.wake,
+            pending: shell.pending,
+            unloading: false,
+            hidden_since: None,
             popup: None,
             ocr: None,
             watch: None,
@@ -194,9 +173,7 @@ impl GlossaApp {
             quitting: false,
             frames: 0,
             last_region: None,
-        };
-        app.register_hotkeys();
-        app
+        }
     }
 
     /// The translated interface string for `key`.
@@ -468,6 +445,30 @@ impl GlossaApp {
         self.ctx.send_viewport_cmd_to(egui::ViewportId::ROOT, egui::ViewportCommand::Close);
     }
 
+    /// With nothing on screen for a while, close the GUI so its graphics
+    /// are freed; the tray, hotkeys and engine stay up in `main`, which
+    /// starts the GUI again when something needs it.
+    fn maybe_unload(&mut self, needs_ui: bool) {
+        if self.unloading {
+            return;
+        }
+        let delay = self.cfg.appearance.unload_graphics_after_secs;
+        let busy = self.main.busy || self.watch.is_some() || self.toast.is_some();
+        if !glossa_platform::idle::IdlePump::supported() || self.launch.screenshot.is_some() || delay == 0 || self.main_visible || needs_ui || busy {
+            self.hidden_since = None;
+            return;
+        }
+        let since = *self.hidden_since.get_or_insert_with(Instant::now);
+        let wait = Duration::from_secs(delay as u64);
+        if since.elapsed() >= wait {
+            tracing::debug!("nothing on screen for {delay} s; unloading the GUI");
+            self.unloading = true;
+            self.ctx.send_viewport_cmd_to(egui::ViewportId::ROOT, egui::ViewportCommand::Close);
+        } else {
+            self.ctx.request_repaint_after(wait - since.elapsed());
+        }
+    }
+
     fn save_state(&mut self) {
         self.remember_main_geometry();
         let source = self.main.source.clone();
@@ -492,6 +493,12 @@ impl eframe::App for GlossaApp {
             }
             if let Some(text) = self.launch.popup_text.clone() {
                 crate::popup::open(self, text, None);
+            }
+            for p in std::mem::take(&mut self.pending) {
+                match p {
+                    crate::tray::Pending::Action(a, text) => self.perform(a, text),
+                    crate::tray::Pending::Tray(e) => crate::tray::handle(self, e),
+                }
             }
         }
         while let Ok(ev) = self.events.try_recv() {
@@ -531,7 +538,7 @@ impl eframe::App for GlossaApp {
 
         // Closing the main window hides it to the tray, when so configured.
         let close = ctx.input(|i| i.viewport().close_requested());
-        if close && !self.quitting {
+        if close && !self.quitting && !self.unloading {
             if self.cfg.general.minimize_to_tray_on_close && self.tray.is_some() {
                 ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
                 self.hide_main();
@@ -557,6 +564,7 @@ impl eframe::App for GlossaApp {
         if !self.main_visible && needs_ui {
             ctx.send_viewport_cmd_to(egui::ViewportId::ROOT, egui::ViewportCommand::RequestPaintWhileHidden);
         }
+        self.maybe_unload(needs_ui);
         if let Some(t) = &self.toast {
             if t.at.elapsed() > Duration::from_secs(4) {
                 self.toast = None;
@@ -589,16 +597,23 @@ impl eframe::App for GlossaApp {
 
     fn on_exit(&mut self, _gl: Option<&eframe::glow::Context>) {
         self.save_state();
-        if let Some(s) = self.server.take() {
-            s.stop();
-        }
-        self.engine.shutdown();
+        *self.wake.ctx.lock() = None;
+        let shell = crate::Shell {
+            engine: self.engine.clone(),
+            hotkeys: self.hotkeys.take(),
+            hotkey_errors: std::mem::take(&mut self.hotkey_errors),
+            tray: self.tray.take(),
+            server: self.server.take(),
+            server_error: self.server_error.take(),
+            clipboard: self.clipboard.take(),
+            audio: std::mem::replace(&mut self.audio, AudioPlayer::new()),
+            wake: self.wake.clone(),
+            pending: Vec::new(),
+            // Unless this was an unload, the window closing means quitting.
+            quit: !self.unloading || self.quitting,
+        };
+        *self.slot.borrow_mut() = Some(shell);
     }
-}
-
-fn egui_extras_install_image_loaders(_ctx: &egui::Context) {
-    // No image loaders are needed: icons are painted and screenshots are
-    // uploaded as textures directly.
 }
 
 /// Open a URL or file with the system's default handler.

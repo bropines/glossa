@@ -147,7 +147,7 @@ fn body(app: &mut GlossaApp, ui: &mut egui::Ui, st: &mut OptionsState) -> bool {
                 let w = vec2(100.0, 28.0);
                 if ui.add(egui::Button::new(app.t("options.apply")).min_size(w)).clicked() {
                     apply(app, st);
-                    st.message = Some(("✔".into(), false));
+                    st.message = Some(("Saved.".into(), false));
                 }
                 if ui.add(egui::Button::new(app.t("options.cancel")).min_size(w)).clicked() {
                     keep = false;
@@ -162,12 +162,14 @@ fn body(app: &mut GlossaApp, ui: &mut egui::Ui, st: &mut OptionsState) -> bool {
     });
     egui::Panel::left("opt-nav").exact_size(190.0).resizable(false).show(ui, |ui| {
         ui.add_space(6.0);
-        for p in Page::ALL {
-            let sel = st.page == p;
-            if ui.add_sized(vec2(ui.available_width(), 24.0), egui::Button::selectable(sel, app.t(p.key()))).clicked() {
-                st.page = p;
+        ui.with_layout(egui::Layout::top_down_justified(egui::Align::Min), |ui| {
+            for p in Page::ALL {
+                let sel = st.page == p;
+                if ui.selectable_label(sel, app.t(p.key())).clicked() {
+                    st.page = p;
+                }
             }
-        }
+        });
     });
     egui::CentralPanel::default().show(ui, |ui| {
         egui::ScrollArea::vertical().id_salt(("opt-page", st.page as u8)).show(ui, |ui| {
@@ -234,7 +236,7 @@ fn basics(app: &mut GlossaApp, ui: &mut egui::Ui, st: &mut OptionsState) {
         lang_row(app, ui, &app.t("options.basics.first_language"), "first", &mut d.general.first_language, false);
         lang_row(app, ui, &app.t("options.basics.second_language"), "second", &mut d.general.second_language, false);
         lang_row(app, ui, &app.t("options.basics.speech_input"), "speech", &mut d.general.speech_language, false);
-        ui.checkbox(&mut d.general.smart_direction, "Smart direction: first language ⇄ second language");
+        ui.checkbox(&mut d.general.smart_direction, "Smart direction: the first language goes to the second, everything else to the first");
     });
     group(ui, &look, &app.t("options.basics.history_group"), |ui| {
         ui.checkbox(&mut d.history.enabled, app.t("options.basics.enable_history"));
@@ -252,7 +254,7 @@ fn hotkeys(app: &mut GlossaApp, ui: &mut egui::Ui, st: &mut OptionsState) {
         ui.label(RichText::new("Global hotkeys are not available in this session (Wayland). Bind a shortcut in your desktop's keyboard settings to:").color(app.look.weak_text()));
         ui.horizontal(|ui| {
             ui.code(&cmd);
-            if ui.small_button("📋").clicked() {
+            if crate::icons::sized_button(ui, &app.look, crate::icons::Icon::Copy, "Copy", 18.0, true).clicked() {
                 ui.ctx().copy_text(cmd.clone());
             }
         });
@@ -286,7 +288,7 @@ fn hotkeys(app: &mut GlossaApp, ui: &mut egui::Ui, st: &mut OptionsState) {
                 if let Some(hk) = &current {
                     if let Some((_, others)) = conflicts.iter().find(|(k, _)| k == hk) {
                         let names: Vec<String> = others.iter().filter(|a| **a != action).map(|a| a.label().to_owned()).collect();
-                        ui.label(RichText::new("⚠").color(app.look.error())).on_hover_text(app.locale.fmt("options.hotkeys.conflict", &names.join(", ")));
+                        ui.label(RichText::new("!").strong().color(app.look.error())).on_hover_text(app.locale.fmt("options.hotkeys.conflict", &names.join(", ")));
                     }
                 }
             });
@@ -442,7 +444,7 @@ fn services(app: &mut GlossaApp, ui: &mut egui::Ui, st: &mut OptionsState) {
         });
         if cap == Capabilities::DICTIONARY && !d.dictionary.offline.is_empty() {
             for f in &d.dictionary.offline {
-                ui.label(RichText::new(format!("📖 {}", f.display())).small().color(look.weak_text()));
+                ui.label(RichText::new(f.display().to_string()).small().color(look.weak_text()));
             }
         }
         if cap == Capabilities::TRANSLATE {
@@ -617,6 +619,27 @@ fn appearance(app: &mut GlossaApp, ui: &mut egui::Ui, st: &mut OptionsState) {
         row(ui, &app.t("options.appearance.ui_scale"), |ui| {
             ui.add(egui::Slider::new(&mut d.appearance.ui_scale, 0.75..=2.0).step_by(0.05));
         });
+        row(ui, "Window transparency (0 - 90):", |ui| {
+            ui.add(egui::Slider::new(&mut d.appearance.window_transparency, 0..=90));
+        });
+        row(ui, "Graphics engine (after restart):", |ui| {
+            use glossa_core::config::Renderer;
+            let names = [
+                (Renderer::OpenGl, "OpenGL — lightest"),
+                (Renderer::Gpu, "GPU — Direct3D 12 / Vulkan / Metal"),
+                (Renderer::Software, "Software — no GPU (WARP)"),
+            ];
+            let cur = names.iter().find(|(r, _)| *r == d.appearance.renderer).map(|(_, n)| *n).unwrap_or("");
+            egui::ComboBox::from_id_salt("renderer").width(280.0).selected_text(cur).show_ui(ui, |ui| {
+                for (r, n) in names {
+                    ui.selectable_value(&mut d.appearance.renderer, r, n);
+                }
+            });
+        });
+        row(ui, "Unload graphics after hiding, s (0 = never):", |ui| {
+            ui.add(egui::DragValue::new(&mut d.appearance.unload_graphics_after_secs).range(0..=3600));
+        });
+        ui.label(RichText::new("While everything is hidden in the tray, Glossa frees its graphics and keeps only the tray, hotkeys and engine — a few MB. The first window afterwards takes a moment longer to appear.").small().color(look.weak_text()));
     });
     let p = &mut d.appearance.popup;
     group(ui, &look, &app.t("options.appearance.popup_group"), |ui| {
@@ -639,10 +662,11 @@ fn appearance(app: &mut GlossaApp, ui: &mut egui::Ui, st: &mut OptionsState) {
             ui.add(egui::DragValue::new(&mut p.min_width).range(120.0..=1200.0).prefix("min "));
         });
         row(ui, &app.t("options.appearance.icons"), |ui| {
-            ui.toggle_value(&mut p.icons.replace, "b→a").on_hover_text(app.t("options.appearance.icon_replace"));
-            ui.toggle_value(&mut p.icons.copy, "⧉").on_hover_text(app.t("options.appearance.icon_copy"));
-            ui.toggle_value(&mut p.icons.listen, "🎧").on_hover_text(app.t("options.appearance.icon_listen"));
-            ui.toggle_value(&mut p.icons.dictionary, "📖").on_hover_text(app.t("options.appearance.icon_dictionary"));
+            use crate::icons::Icon;
+            crate::widgets::icon_toggle(ui, &look, Icon::Replace, &mut p.icons.replace, &app.t("options.appearance.icon_replace"));
+            crate::widgets::icon_toggle(ui, &look, Icon::Copy, &mut p.icons.copy, &app.t("options.appearance.icon_copy"));
+            crate::widgets::icon_toggle(ui, &look, Icon::Listen, &mut p.icons.listen, &app.t("options.appearance.icon_listen"));
+            crate::widgets::icon_toggle(ui, &look, Icon::Dictionary, &mut p.icons.dictionary, &app.t("options.appearance.icon_dictionary"));
         });
         // As in the classic page: own colours only without window style.
         ui.add_enabled_ui(!d.appearance.custom_frame, |ui| {
@@ -712,13 +736,13 @@ fn exceptions(app: &mut GlossaApp, ui: &mut egui::Ui, st: &mut OptionsState) {
         ui.horizontal(|ui| {
             ui.add(egui::TextEdit::singleline(&mut rule.program).hint_text("program.exe").desired_width(200.0));
             ui.add(egui::TextEdit::singleline(&mut rule.window_class).hint_text("WindowClass").desired_width(200.0));
-            if ui.button("✔").clicked() {
+            if ui.button("OK").clicked() {
                 done = true;
             }
-            if ui.button("✖").clicked() {
+            if ui.button(app.t("options.cancel")).clicked() {
                 cancel = true;
             }
-            if ui.button("⌖ foreground").on_hover_text("Fill from the window that was active before this one").clicked() {
+            if ui.button("From the active window").on_hover_text("Fill from the window that was active before this one").clicked() {
                 if let Some(w) = glossa_platform::window::foreground_window() {
                     rule.program = w.process_name;
                     rule.window_class = w.class_name;
@@ -810,7 +834,7 @@ fn ocr(app: &mut GlossaApp, ui: &mut egui::Ui, st: &mut OptionsState) {
             if ui.button("…").clicked() {
                 d.save_image_dir = rfd::FileDialog::new().pick_folder();
             }
-            if d.save_image_dir.is_some() && ui.button("✖").clicked() {
+            if d.save_image_dir.is_some() && ui.button("Clear").clicked() {
                 d.save_image_dir = None;
             }
         });
@@ -902,7 +926,7 @@ fn modules(app: &mut GlossaApp, ui: &mut egui::Ui, st: &mut OptionsState) {
         for dir in d.modules.dirs.clone() {
             ui.horizontal(|ui| {
                 ui.label(dir.display().to_string());
-                if ui.small_button("✖").clicked() {
+                if ui.small_button("Remove").clicked() {
                     d.modules.dirs.retain(|x| *x != dir);
                 }
             });
@@ -915,7 +939,7 @@ fn modules(app: &mut GlossaApp, ui: &mut egui::Ui, st: &mut OptionsState) {
     });
     group(ui, &look, &format!("Status: {} loaded, {} failed, {} skipped", status.loaded.len(), status.failed.len(), status.skipped.len()), |ui| {
         for (path, why) in &status.failed {
-            ui.label(RichText::new(format!("✖ {}: {why}", path.display())).color(look.error()).small());
+            ui.label(RichText::new(format!("failed  {}: {why}", path.display())).color(look.error()).small());
         }
         for (path, why) in &status.skipped {
             ui.label(RichText::new(format!("– {}: {why}", path.display())).color(look.weak_text()).small());
@@ -987,7 +1011,7 @@ fn api(app: &mut GlossaApp, ui: &mut egui::Ui, st: &mut OptionsState) {
     ] {
         let cmd = format!("curl -s 'http://{}{path}?token={}'", s.bind, s.token);
         ui.horizontal(|ui| {
-            if ui.small_button("📋").clicked() {
+            if crate::icons::sized_button(ui, &app.look, crate::icons::Icon::Copy, "Copy", 18.0, true).clicked() {
                 ui.ctx().copy_text(cmd.clone());
             }
             ui.label(RichText::new(what).small());

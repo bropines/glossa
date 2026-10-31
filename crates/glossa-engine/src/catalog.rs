@@ -211,14 +211,11 @@ pub fn system_language() -> String {
 
 #[cfg(windows)]
 fn windows_language() -> Option<String> {
-    // GetUserDefaultLocaleName without pulling in a bindings crate: the
-    // registry holds the same value.
-    let out = std::process::Command::new("reg")
-        .args(["query", r"HKCU\Control Panel\International", "/v", "LocaleName"])
-        .output()
-        .ok()?;
-    let text = String::from_utf8_lossy(&out.stdout);
-    text.lines().find(|l| l.contains("LocaleName")).and_then(|l| l.split_whitespace().last()).map(str::to_owned)
+    // The registry holds the user's locale name. Read it directly: running
+    // `reg.exe` from a GUI process opens a console window, which steals the
+    // focus from the program whose selection we are about to read.
+    let key = winreg::RegKey::predef(winreg::enums::HKEY_CURRENT_USER).open_subkey(r"Control Panel\International").ok()?;
+    key.get_value::<String, _>("LocaleName").ok().filter(|s| !s.is_empty())
 }
 
 #[cfg(not(windows))]

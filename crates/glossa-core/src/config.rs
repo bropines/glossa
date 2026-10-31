@@ -482,7 +482,39 @@ pub struct Appearance {
     pub ui_scale: f32,
     /// Size of the text in the source and translation panes, in points.
     pub text_size: f32,
+    /// 0 (opaque) to 90 percent transparent, for the main window — the same
+    /// scale as the popup's.
+    pub window_transparency: u8,
+    /// How windows are drawn. Takes effect at the next start.
+    pub renderer: Renderer,
+    /// After this many seconds with every window hidden, the graphics are
+    /// unloaded and only the tray, hotkeys and engine stay resident (a few MB
+    /// instead of tens). 0 keeps them loaded.
+    pub unload_graphics_after_secs: u32,
     pub popup: PopupConfig,
+}
+
+/// The graphics back end.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Renderer {
+    /// OpenGL. The lightest in practice.
+    #[default]
+    OpenGl,
+    /// The GPU through Direct3D 12, Vulkan or Metal.
+    Gpu,
+    /// A software rasteriser (WARP on Windows): no GPU, more CPU and memory.
+    Software,
+}
+
+impl Renderer {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Renderer::OpenGl => "glow",
+            Renderer::Gpu => "gpu",
+            Renderer::Software => "software",
+        }
+    }
 }
 
 impl Default for Appearance {
@@ -493,6 +525,9 @@ impl Default for Appearance {
             font_family: String::new(),
             ui_scale: 1.0,
             text_size: 11.0,
+            window_transparency: 0,
+            renderer: Renderer::OpenGl,
+            unload_graphics_after_secs: 45,
             popup: PopupConfig::default(),
         }
     }
@@ -970,6 +1005,7 @@ impl Config {
         p.max_height = p.max_height.clamp(80.0, 4000.0);
         self.appearance.ui_scale = self.appearance.ui_scale.clamp(0.5, 3.0);
         self.appearance.text_size = self.appearance.text_size.clamp(6.0, 48.0);
+        self.appearance.window_transparency = self.appearance.window_transparency.min(90);
         self.dictionary.zoom = self.dictionary.zoom.clamp(50, 400);
         self.general.instant_delay_ms = self.general.instant_delay_ms.clamp(150, 5000);
         self.general.recent_pairs.dedup();

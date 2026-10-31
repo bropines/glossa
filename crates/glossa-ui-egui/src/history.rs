@@ -52,7 +52,9 @@ fn body(app: &mut GlossaApp, ui: &mut egui::Ui, st: &mut HistoryState, open: &mu
             if r.changed() {
                 st.dirty = true;
             }
-            if ui.toggle_value(&mut st.favorites_only, "★").on_hover_text(app.t("history.favorites_only")).changed() {
+            let star = if st.favorites_only { Icon::StarFilled } else { Icon::Star };
+            if icons::sized_button(ui, &look, star, &app.t("history.favorites_only"), 24.0, true).clicked() {
+                st.favorites_only = !st.favorites_only;
                 st.dirty = true;
             }
             ui.label(RichText::new(format!("{}", st.entries.len())).small().color(look.weak_text()));
@@ -78,12 +80,12 @@ fn body(app: &mut GlossaApp, ui: &mut egui::Ui, st: &mut HistoryState, open: &mu
             }
             if st.confirm_clear {
                 ui.label(RichText::new("Clear all non-favourite entries?").color(look.error()));
-                if ui.button("✔").clicked() {
+                if ui.button("Yes").clicked() {
                     app.engine.clear_history(false);
                     st.confirm_clear = false;
                     st.dirty = true;
                 }
-                if ui.button("✖").clicked() {
+                if ui.button("No").clicked() {
                     st.confirm_clear = false;
                 }
             } else if ui.button(app.t("history.clear")).clicked() {

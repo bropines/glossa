@@ -206,6 +206,7 @@ pub fn show(app: &mut GlossaApp, ctx: &egui::Context) {
     }
     // Fit the window to its content.
     if (desired - state.size).length() > 1.0 {
+        tracing::trace!(?desired, old = ?state.size, "popup resized");
         state.size = desired;
         ctx.send_viewport_cmd_to(viewport_id(), egui::ViewportCommand::InnerSize(desired));
     }

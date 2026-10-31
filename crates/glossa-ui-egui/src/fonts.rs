@@ -43,6 +43,7 @@ impl Script {
     }
 
     /// The fontconfig language to ask for on Unix.
+    #[cfg(not(windows))]
     fn fc_lang(self) -> &'static str {
         match self {
             Script::Han => "zh-cn",
@@ -131,6 +132,7 @@ impl Fonts {
     }
 }
 
+#[cfg(not(windows))]
 fn first_existing(candidates: &[&str]) -> Option<(PathBuf, u32)> {
     candidates.iter().map(PathBuf::from).find(|p| p.is_file()).map(|p| (p, 0))
 }

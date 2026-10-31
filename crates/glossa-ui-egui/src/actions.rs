@@ -112,7 +112,9 @@ pub fn perform(app: &mut GlossaApp, action: Action, text: Option<String>) {
 /// Read the selection in the foreground program on a worker thread.
 fn capture(app: &mut GlossaApp, action: Action) {
     // Exceptions: leave terminals, games and the like alone.
-    if let Some(win) = glossa_platform::window::foreground_window() {
+    let foreground = glossa_platform::window::foreground_window();
+    tracing::debug!(window = ?foreground.as_ref().map(|w| (&w.process_name, &w.class_name)), "capturing the selection");
+    if let Some(win) = foreground {
         if !app.cfg.exceptions.allows(&win.process_name, &win.class_name) {
             tracing::debug!(program = %win.process_name, class = %win.class_name, "skipped: in the exception list");
             return;
@@ -123,10 +125,12 @@ fn capture(app: &mut GlossaApp, action: Action) {
     let ctx = app.ctx.clone();
     std::thread::spawn(move || {
         let cursor = glossa_platform::window::cursor_position();
+        let started = std::time::Instant::now();
         let (text, error) = match glossa_platform::selection::capture_selection(&opts) {
             Ok(t) => (t.filter(|s| !s.trim().is_empty()), None),
             Err(e) => (None, Some(e.to_string())),
         };
+        tracing::debug!(chars = text.as_ref().map(|t| t.chars().count()), ?error, ms = started.elapsed().as_millis() as u64, "selection captured");
         let _ = tx.send(Task::Selection { action, text, cursor, error });
         ctx.request_repaint();
     });

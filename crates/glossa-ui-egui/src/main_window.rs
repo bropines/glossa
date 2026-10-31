@@ -51,7 +51,7 @@ pub fn show(app: &mut GlossaApp, ui: &mut egui::Ui) {
         }
     }
 
-    let frame = egui::Frame::new().fill(c(look.theme.window.back)).inner_margin(egui::Margin::same(if custom { 1 } else { 6 })).stroke(if custom {
+    let frame = egui::Frame::new().fill(look.window_back()).inner_margin(egui::Margin::same(if custom { 1 } else { 6 })).stroke(if custom {
         egui::Stroke::new(look.theme.metrics.border_width, look.border())
     } else {
         egui::Stroke::NONE
@@ -104,7 +104,7 @@ fn title_bar(app: &mut GlossaApp, ui: &mut egui::Ui) {
     let look = app.look.clone();
     let h = 30.0;
     let (rect, resp) = ui.allocate_exact_size(vec2(ui.available_width(), h), Sense::click_and_drag());
-    let caption = look.theme.window.caption.map(c).unwrap_or(c(look.theme.window.back));
+    let caption = look.theme.window.caption.map(c).unwrap_or(c(look.theme.window.back)).gamma_multiply(look.window_alpha);
     ui.painter().rect_filled(rect, 0.0, caption);
     let icon_rect = egui::Rect::from_min_size(rect.min + vec2(10.0, 7.0), vec2(16.0, 16.0));
     crate::icons::paint(ui.painter(), icon_rect, Icon::Translate, look.accent());
@@ -439,7 +439,7 @@ fn result_pane(app: &mut GlossaApp, ui: &mut egui::Ui, height: f32) {
                 if !o.failed.is_empty() {
                     ui.add_space(6.0);
                     let names: Vec<&str> = o.failed.iter().map(|(id, _)| id.as_str()).collect();
-                    ui.label(RichText::new(format!("↷ {}", names.join(", "))).small().color(look.weak_text()))
+                    ui.label(RichText::new(format!("Tried first: {}", names.join(", "))).small().color(look.weak_text()))
                         .on_hover_text(o.failed.iter().map(|(id, e)| format!("{id}: {e}")).collect::<Vec<_>>().join("\n"));
                 }
             }
@@ -467,7 +467,7 @@ fn back_translation_pane(app: &mut GlossaApp, ui: &mut egui::Ui, height: f32) {
     frame.show(ui, |ui| {
         ui.set_min_size(vec2(ui.available_width(), height - 8.0));
         egui::ScrollArea::vertical().id_salt("back").show(ui, |ui| {
-            ui.label(RichText::new("↩").color(look.weak_text()));
+            ui.label(RichText::new(app.t("menu.back_translation")).small().color(look.weak_text()));
             ui.add(egui::Label::new(RichText::new(&back.text).font(look.text_font()).color(look.weak_text())).selectable(true).wrap());
         });
     });
@@ -691,7 +691,7 @@ pub fn show_keyboard(app: &mut GlossaApp, ctx: &egui::Context) {
             ui.horizontal(|ui| {
                 ui.selectable_value(&mut russian, false, "EN");
                 ui.selectable_value(&mut russian, true, "RU");
-                ui.toggle_value(&mut shift, "⇧ Shift");
+                ui.toggle_value(&mut shift, "Shift");
             });
             let rows_en = ["`1234567890-=", "qwertyuiop[]\\", "asdfghjkl;'", "zxcvbnm,./"];
             let rows_ru = ["ё1234567890-=", "йцукенгшщзхъ\\", "фывапролджэ", "ячсмитьбю."];
@@ -711,10 +711,10 @@ pub fn show_keyboard(app: &mut GlossaApp, ctx: &egui::Context) {
                 if ui.add(egui::Button::new("Space").min_size(vec2(260.0, 30.0))).clicked() {
                     app.main.source.push(' ');
                 }
-                if ui.add(egui::Button::new("⌫").min_size(vec2(60.0, 30.0))).clicked() {
+                if ui.add(egui::Button::new("Backspace").min_size(vec2(60.0, 30.0))).clicked() {
                     app.main.source.pop();
                 }
-                if ui.add(egui::Button::new("⏎").min_size(vec2(60.0, 30.0))).clicked() {
+                if ui.add(egui::Button::new("Enter").min_size(vec2(60.0, 30.0))).clicked() {
                     app.main.source.push('\n');
                 }
             });

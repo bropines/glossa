@@ -34,6 +34,7 @@ pub mod autostart;
 pub mod capture;
 pub mod clipboard;
 pub mod hotkeys;
+pub mod idle;
 pub mod input;
 pub mod layout;
 pub mod selection;

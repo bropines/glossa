@@ -20,6 +20,9 @@ mod style;
 mod tray;
 mod widgets;
 
+use std::cell::RefCell;
+use std::rc::Rc;
+use std::sync::Arc;
 use std::time::Duration;
 
 use glossa_core::{Action, Paths};
@@ -56,6 +59,39 @@ fn parse_args() -> Launch {
     l
 }
 
+/// What survives while the graphics are unloaded: the engine and everything
+/// that must keep working from the tray.
+pub struct Shell {
+    pub engine: Engine,
+    pub hotkeys: Option<glossa_platform::HotkeyService>,
+    pub hotkey_errors: Vec<String>,
+    pub tray: Option<tray::Tray>,
+    pub server: Option<glossa_engine::server::ServerHandle>,
+    pub server_error: Option<String>,
+    pub clipboard: Option<glossa_platform::Clipboard>,
+    pub audio: glossa_platform::AudioPlayer,
+    pub wake: Arc<Wake>,
+    /// What woke the GUI up, for it to act on when it starts.
+    pub pending: Vec<tray::Pending>,
+    pub quit: bool,
+}
+
+/// Wakes whichever loop is running: the egui loop when the GUI is loaded,
+/// the bare message loop when it is not.
+pub struct Wake {
+    pub ctx: parking_lot::Mutex<Option<egui::Context>>,
+    pub idle: glossa_platform::idle::Waker,
+}
+
+impl Wake {
+    pub fn wake(&self) {
+        if let Some(ctx) = self.ctx.lock().as_ref() {
+            ctx.request_repaint();
+        }
+        self.idle.wake();
+    }
+}
+
 fn main() -> eframe::Result<()> {
     let launch = parse_args();
     let paths = match &launch.home {
@@ -63,6 +99,12 @@ fn main() -> eframe::Result<()> {
         None => Paths::discover(),
     };
     init_logging(&paths);
+    // Release builds abort on panic; leave a trace in the log first.
+    std::panic::set_hook(Box::new(|info| {
+        let bt = std::backtrace::Backtrace::force_capture();
+        tracing::error!("panic: {info}
+{bt}");
+    }));
 
     // A second launch hands over to the running instance through its control
     // API, then leaves.
@@ -84,33 +126,233 @@ fn main() -> eframe::Result<()> {
         }
     };
 
+    let pump = glossa_platform::idle::IdlePump::for_current_thread();
+    let wake = Arc::new(Wake { ctx: parking_lot::Mutex::new(None), idle: pump.waker() });
+    let shell = build_shell(engine.clone(), wake.clone());
+    let slot: Rc<RefCell<Option<Shell>>> = Rc::new(RefCell::new(Some(shell)));
+    // Engine events seen while no GUI is loaded (the control API asking for
+    // an action).
+    let idle_events = engine.subscribe();
+
     let cfg = engine.config();
-    let geometry = cfg.windows.get("main").copied();
-    let mut viewport = egui::ViewportBuilder::default()
-        .with_title("Glossa")
-        .with_app_id("glossa")
-        .with_inner_size(geometry.map(|g| [g.width, g.height]).unwrap_or([680.0, 470.0]))
-        .with_min_inner_size([420.0, 300.0])
-        .with_decorations(!cfg.appearance.custom_frame)
-        .with_icon(app_icon(64));
-    if let Some(g) = geometry {
-        viewport = viewport.with_position([g.x, g.y]);
-        if g.maximized {
-            viewport = viewport.with_maximized(true);
+    let can_unload = glossa_platform::idle::IdlePump::supported() && launch.screenshot.is_none();
+    let mut start_visible = !launch.hidden
+        && (launch.screenshot.is_some()
+            || match cfg.general.startup_action {
+                glossa_core::config::StartupAction::ShowWindow | glossa_core::config::StartupAction::RestorePrevious => true,
+                glossa_core::config::StartupAction::MinimizeToTray => slot.borrow().as_ref().is_some_and(|s| s.tray.is_none()),
+            });
+    let mut first = true;
+
+    loop {
+        // Start in the tray with nothing loaded, and come back here whenever
+        // the GUI unloads itself.
+        if can_unload && !(first && (start_visible || launch.popup_text.is_some())) {
+            while idle_events.try_recv().is_ok() {}
+            glossa_platform::idle::trim_working_set();
+            tracing::debug!("graphics unloaded; waiting in the tray");
+            let mut asked_to_quit = false;
+            let woke = pump.run_until(|| {
+                let mut guard = slot.borrow_mut();
+                let Some(shell) = guard.as_mut() else { return true };
+                collect_wake_events(shell, &idle_events);
+                asked_to_quit = shell.quit;
+                shell.quit || !shell.pending.is_empty()
+            });
+            if !woke || asked_to_quit {
+                break;
+            }
+            start_visible = slot.borrow().as_ref().is_some_and(|s| s.pending.iter().any(tray::Pending::wants_main_window));
+        }
+        first = false;
+
+        let cfg = engine.config();
+        let geometry = cfg.windows.get("main").copied();
+        let mut viewport = egui::ViewportBuilder::default()
+            .with_title("Glossa")
+            .with_app_id("glossa")
+            .with_inner_size(geometry.map(|g| [g.width, g.height]).unwrap_or([680.0, 470.0]))
+            .with_min_inner_size([420.0, 300.0])
+            .with_decorations(!cfg.appearance.custom_frame)
+            .with_transparent(cfg.appearance.window_transparency > 0)
+            .with_visible(start_visible)
+            .with_icon(app_icon(64));
+        if let Some(g) = geometry {
+            viewport = viewport.with_position([g.x, g.y]);
+            if g.maximized {
+                viewport = viewport.with_maximized(true);
+            }
+        }
+        let mut options = eframe::NativeOptions { viewport, run_and_return: can_unload, persist_window: false, ..Default::default() };
+        choose_renderer(&mut options, cfg.appearance.renderer);
+        let mut this_launch = launch.clone();
+        this_launch.hidden = !start_visible;
+        let app_slot = slot.clone();
+        let result = eframe::run_native(
+            "Glossa",
+            options,
+            Box::new(move |cc| Ok(Box::new(app::GlossaApp::new(cc, app_slot, this_launch)))),
+        );
+        if let Err(e) = result {
+            tracing::error!("the window system failed: {e}");
+            break;
+        }
+        let quit = slot.borrow().as_ref().map_or(true, |s| s.quit);
+        if quit || !can_unload {
+            break;
+        }
+        launch_once_only(&mut start_visible);
+    }
+
+    if let Some(shell) = slot.borrow_mut().take() {
+        if let Some(server) = shell.server {
+            server.stop();
+        }
+        shell.engine.shutdown();
+    }
+    Ok(())
+}
+
+fn launch_once_only(start_visible: &mut bool) {
+    *start_visible = false;
+}
+
+/// The parts that live as long as the process.
+fn build_shell(engine: Engine, wake: Arc<Wake>) -> Shell {
+    {
+        let w = wake.clone();
+        engine.set_waker(move || w.wake());
+    }
+    let cfg = engine.config();
+    let mut hotkey_errors = Vec::new();
+    let hotkeys = match glossa_platform::HotkeyService::new() {
+        Ok(mut h) => {
+            let w = wake.clone();
+            h.set_waker(move || w.wake());
+            Some(h)
+        }
+        Err(e) => {
+            hotkey_errors.push(e.to_string());
+            None
+        }
+    };
+    let tray = {
+        let w = wake.clone();
+        tray::Tray::new(Arc::new(move || w.wake()), &engine.locale()).map_err(|e| tracing::warn!("no tray icon: {e}")).ok()
+    };
+    let (server, server_error) = if cfg.server.enabled {
+        match glossa_engine::server::start(engine.clone()) {
+            Ok(h) => (Some(h), None),
+            Err(e) => {
+                tracing::warn!("control API not started: {e}");
+                (None, Some(e.to_string()))
+            }
+        }
+    } else {
+        (None, None)
+    };
+    let mut shell = Shell {
+        engine,
+        hotkeys,
+        hotkey_errors,
+        tray,
+        server,
+        server_error,
+        clipboard: glossa_platform::Clipboard::new().map_err(|e| tracing::warn!("no clipboard: {e}")).ok(),
+        audio: glossa_platform::AudioPlayer::new(),
+        wake,
+        pending: Vec::new(),
+        quit: false,
+    };
+    register_hotkeys(&mut shell);
+    shell
+}
+
+/// Bind the configured hotkeys; failures are kept for the options page.
+pub fn register_hotkeys(shell: &mut Shell) {
+    let cfg = shell.engine.config();
+    let Some(h) = shell.hotkeys.as_mut() else { return };
+    h.unregister_all();
+    shell.hotkey_errors.clear();
+    if !cfg.hotkeys.enabled {
+        return;
+    }
+    for (action, hotkey) in &cfg.hotkeys.bindings {
+        if let Err(e) = h.register(*action, hotkey) {
+            tracing::warn!("hotkey {hotkey} for {}: {e}", action.id());
+            shell.hotkey_errors.push(format!("{}: {e}", action.label()));
         }
     }
-    let options = eframe::NativeOptions {
-        viewport,
-        renderer: eframe::Renderer::Glow,
-        run_and_return: false,
-        persist_window: false,
-        ..Default::default()
-    };
-    eframe::run_native(
-        "Glossa",
-        options,
-        Box::new(move |cc| Ok(Box::new(app::GlossaApp::new(cc, engine, launch)))),
-    )
+}
+
+/// Gather what should wake the GUI while it is unloaded.
+fn collect_wake_events(shell: &mut Shell, events: &std::sync::mpsc::Receiver<glossa_engine::Event>) {
+    if let Some(h) = shell.hotkeys.as_mut() {
+        while let Some(a) = h.poll() {
+            shell.pending.push(tray::Pending::Action(a, None));
+        }
+    }
+    if let Some(t) = &shell.tray {
+        for e in t.poll() {
+            match e {
+                tray::TrayEvent::Action(Action::Quit) => shell.quit = true,
+                tray::TrayEvent::ToggleHotkeys => {
+                    let on = !shell.engine.config().hotkeys.enabled;
+                    let _ = shell.engine.update_config(move |c| c.hotkeys.enabled = on);
+                    register_hotkeys(shell);
+                    if let Some(t) = &shell.tray {
+                        t.set_hotkeys_checked(on);
+                    }
+                }
+                other => shell.pending.push(tray::Pending::Tray(other)),
+            }
+        }
+    }
+    while let Ok(ev) = events.try_recv() {
+        if let glossa_engine::Event::Action { action, text } = ev {
+            if action == Action::Quit {
+                shell.quit = true;
+            } else {
+                shell.pending.push(tray::Pending::Action(action, text));
+            }
+        }
+    }
+}
+
+/// Pick how windows are drawn.
+///
+/// The settings choose (Appearance → renderer); `GLOSSA_RENDERER` overrides
+/// for one run. Measured on Windows with an NVIDIA card, OpenGL was the
+/// lightest (~75 MB private), the GPU path through wgpu the heaviest
+/// (~385 MB), and WARP software rendering in between in working set but
+/// worse in commit (~340 MB) — which is why OpenGL is the default, and why the
+/// GUI unloads entirely while it sits in the tray.
+fn choose_renderer(options: &mut eframe::NativeOptions, configured: glossa_core::config::Renderer) {
+    use eframe::{egui_wgpu, wgpu};
+    let choice = std::env::var("GLOSSA_RENDERER").unwrap_or_else(|_| configured.as_str().into());
+    match choice.as_str() {
+        "glow" | "opengl" | "gl" => options.renderer = eframe::Renderer::Glow,
+        "gpu" | "wgpu" => options.renderer = eframe::Renderer::Wgpu,
+        _ => {
+            options.renderer = eframe::Renderer::Wgpu;
+            let mut setup = egui_wgpu::WgpuSetupCreateNew::without_display_handle();
+            if cfg!(windows) {
+                // Enumerating adapters through DXGI does not load the GPU's
+                // driver; a Vulkan or GL instance would.
+                setup.instance_descriptor.backends = wgpu::Backends::DX12;
+            }
+            setup.power_preference = wgpu::PowerPreference::LowPower;
+            setup.native_adapter_selector = Some(std::sync::Arc::new(|adapters: &[wgpu::Adapter], _surface: Option<&wgpu::Surface<'_>>| {
+                let pick = |t: wgpu::DeviceType| adapters.iter().find(|a| a.get_info().device_type == t);
+                pick(wgpu::DeviceType::Cpu)
+                    .or_else(|| pick(wgpu::DeviceType::IntegratedGpu))
+                    .or(adapters.first())
+                    .cloned()
+                    .ok_or_else(|| "no graphics adapter".to_owned())
+            }));
+            options.wgpu_options.wgpu_setup = egui_wgpu::WgpuSetup::CreateNew(setup);
+        }
+    }
 }
 
 fn init_logging(paths: &Paths) {
@@ -134,7 +376,15 @@ fn hand_over_to_running_instance(paths: &Paths) -> bool {
         return false;
     }
     let url = format!("http://{}/v1/action/{}?token={}", cfg.server.bind, Action::ShowMainWindow.id(), cfg.server.token);
-    let http = glossa_net::HttpClient::plain();
+    // No retries: when nothing is listening the answer is immediate, and a
+    // retry would only delay a normal start.
+    let settings = glossa_core::config::Network {
+        timeout_secs: 1,
+        max_retries: 0,
+        proxy: glossa_core::config::Proxy { mode: glossa_core::config::ProxyMode::None, ..Default::default() },
+        ..Default::default()
+    };
+    let Ok(http) = glossa_net::HttpClient::new(&settings) else { return false };
     let req = glossa_net::HttpRequest::get(url).timeout(Duration::from_millis(600));
     matches!(glossa_net::Http::send(&http, req), Ok(r) if r.status == 202)
 }

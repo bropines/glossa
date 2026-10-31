@@ -23,6 +23,21 @@ pub enum TrayEvent {
     About,
 }
 
+/// Something that woke the GUI while it was unloaded.
+pub enum Pending {
+    Action(Action, Option<String>),
+    Tray(TrayEvent),
+}
+
+impl Pending {
+    /// Whether the GUI should come up with the main window showing.
+    pub fn wants_main_window(&self) -> bool {
+        matches!(self, Pending::Action(Action::ShowMainWindow, _) | Pending::Tray(TrayEvent::ShowMain))
+    }
+}
+
+pub type WakeFn = std::sync::Arc<dyn Fn() + Send + Sync>;
+
 pub struct Tray {
     events: Receiver<TrayEvent>,
     #[cfg(not(target_os = "linux"))]
@@ -57,9 +72,9 @@ fn icon() -> Option<tray_icon::Icon> {
     tray_icon::Icon::from_rgba(data.rgba, data.width, data.height).ok()
 }
 
-fn install_handlers(ctx: &egui::Context) -> Receiver<TrayEvent> {
+fn install_handlers(wake: WakeFn) -> Receiver<TrayEvent> {
     let (tx, rx) = mpsc::channel();
-    let (tx2, c1, c2) = (tx.clone(), ctx.clone(), ctx.clone());
+    let (tx2, c1, c2) = (tx.clone(), wake.clone(), wake);
     MenuEvent::set_event_handler(Some(move |e: MenuEvent| {
         let ev = match e.id.as_ref() {
             "show" => Some(TrayEvent::ShowMain),
@@ -75,13 +90,13 @@ fn install_handlers(ctx: &egui::Context) -> Receiver<TrayEvent> {
         };
         if let Some(ev) = ev {
             let _ = tx.send(ev);
-            c1.request_repaint();
+            c1();
         }
     }));
     TrayIconEvent::set_event_handler(Some(move |e: TrayIconEvent| {
         if let TrayIconEvent::Click { button: MouseButton::Left, button_state: MouseButtonState::Up, .. } = e {
             let _ = tx2.send(TrayEvent::ShowMain);
-            c2.request_repaint();
+            c2();
         }
     }));
     rx
@@ -89,8 +104,8 @@ fn install_handlers(ctx: &egui::Context) -> Receiver<TrayEvent> {
 
 impl Tray {
     #[cfg(not(target_os = "linux"))]
-    pub fn new(ctx: &egui::Context, locale: &Locale) -> Result<Tray, String> {
-        let events = install_handlers(ctx);
+    pub fn new(wake: WakeFn, locale: &Locale) -> Result<Tray, String> {
+        let events = install_handlers(wake);
         let (menu, hotkeys_item) = build_menu(locale);
         let mut b = TrayIconBuilder::new().with_tooltip("Glossa").with_menu(Box::new(menu)).with_menu_on_left_click(false);
         if let Some(i) = icon() {
@@ -101,8 +116,8 @@ impl Tray {
     }
 
     #[cfg(target_os = "linux")]
-    pub fn new(ctx: &egui::Context, locale: &Locale) -> Result<Tray, String> {
-        let events = install_handlers(ctx);
+    pub fn new(wake: WakeFn, locale: &Locale) -> Result<Tray, String> {
+        let events = install_handlers(wake);
         let locale = locale.clone();
         let (ready_tx, ready_rx) = mpsc::channel::<Result<(), String>>();
         std::thread::Builder::new()

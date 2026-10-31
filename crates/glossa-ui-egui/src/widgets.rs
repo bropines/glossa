@@ -97,7 +97,7 @@ pub fn lang_combo(
     let search_id = ui.make_persistent_id((id_salt, "search"));
     egui::ComboBox::from_id_salt(id_salt).width(width).selected_text(label).height(420.0).show_ui(ui, |ui| {
         let mut search: String = ui.data_mut(|d| d.get_temp::<String>(search_id).unwrap_or_default());
-        let r = ui.add(egui::TextEdit::singleline(&mut search).hint_text("🔍").desired_width(f32::INFINITY));
+        let r = ui.add(egui::TextEdit::singleline(&mut search).hint_text("Search…").desired_width(f32::INFINITY));
         if !r.has_focus() && search.is_empty() {
             r.request_focus();
         }
@@ -128,6 +128,22 @@ pub fn lang_combo(
         ui.data_mut(|d| d.remove::<String>(search_id));
     }
     picked
+}
+
+/// An icon that toggles a setting: drawn pressed while on.
+pub fn icon_toggle(ui: &mut Ui, look: &Look, icon: crate::icons::Icon, value: &mut bool, tooltip: &str) {
+    let size = 26.0;
+    let (rect, resp) = ui.allocate_exact_size(vec2(size, size), Sense::click());
+    let state = if *value { WidgetState::Pressed } else if resp.hovered() { WidgetState::Hover } else { WidgetState::Normal };
+    let b = look.theme.button.get(state);
+    ui.painter().rect_filled(rect, look.theme.metrics.button_radius, c(b.back()));
+    if *value {
+        ui.painter().rect_stroke(rect, look.theme.metrics.button_radius, egui::Stroke::new(1.5, look.accent()), egui::StrokeKind::Inside);
+    }
+    crate::icons::paint(ui.painter(), rect.shrink(5.0), icon, if *value { look.text() } else { look.weak_text() });
+    if resp.on_hover_text(tooltip).clicked() {
+        *value = !*value;
+    }
 }
 
 /// A titled frame, like the classic group boxes.

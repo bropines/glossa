@@ -29,6 +29,8 @@ pub struct Look {
     pub popup_frame_width: f32,
     pub popup_opacity: f32,
     pub text_size: f32,
+    /// Alpha for window and pane backgrounds (1.0 = opaque).
+    pub window_alpha: f32,
 }
 
 impl Look {
@@ -46,6 +48,7 @@ impl Look {
             popup_frame_width: p.frame_thickness,
             popup_opacity: p.opacity().min(theme.popup.opacity.max(0.1)).max(0.1),
             text_size: cfg.appearance.text_size,
+            window_alpha: 1.0 - cfg.appearance.window_transparency.min(90) as f32 / 100.0,
             theme,
         }
     }
@@ -71,7 +74,11 @@ impl Look {
     }
 
     pub fn edit_back(&self) -> Color32 {
-        c(self.theme.edit.normal.back)
+        c(self.theme.edit.normal.back).gamma_multiply(self.window_alpha.max(0.3))
+    }
+
+    pub fn window_back(&self) -> Color32 {
+        c(self.theme.window.back).gamma_multiply(self.window_alpha)
     }
 
     pub fn border(&self) -> Color32 {
@@ -122,6 +129,14 @@ impl Look {
         v.widgets.noninteractive.fg_stroke = Stroke::new(1.0, c(t.window.text));
         v.widgets.noninteractive.corner_radius = radius;
 
+        if self.window_alpha < 1.0 {
+            let a = self.window_alpha;
+            v.panel_fill = v.panel_fill.gamma_multiply(a);
+            v.window_fill = v.window_fill.gamma_multiply(a);
+            v.extreme_bg_color = v.extreme_bg_color.gamma_multiply(a.max(0.3));
+            v.text_edit_bg_color = v.text_edit_bg_color.map(|c| c.gamma_multiply(a.max(0.3)));
+            v.faint_bg_color = v.faint_bg_color.gamma_multiply(a);
+        }
         ctx.set_visuals(v);
         ctx.all_styles_mut(|s| {
             let sp = t.metrics.spacing.clamp(0.0, 24.0);
