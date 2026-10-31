@@ -263,7 +263,6 @@ pub static STRINGS: &[(&str, &str, Option<&str>)] = &[
     ("popup.listen", "Listen to selected text", Some("w:6:10:30")),
     ("popup.copy", "Copy translation to clipboard", Some("w:6:10:40")),
     ("popup.reset_size", "Back to automatic size", None),
-    ("tray.mouse_mode", "Mouse mode", None),
     ("mouse.translate", "Translate the selection", None),
     ("options.appearance.backdrop", "Window backdrop:", None),
     ("options.appearance.popup_backdrop", "Popup backdrop:", None),
