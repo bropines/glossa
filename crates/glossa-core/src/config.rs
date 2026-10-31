@@ -39,6 +39,51 @@ pub struct Config {
     pub contents: Contents,
     /// Window positions and sizes, by window name.
     pub windows: BTreeMap<String, WindowGeometry>,
+    /// A classic installation whose services, themes and interface languages
+    /// are used in place, without copying them.
+    pub classic: ClassicInstall,
+}
+
+/// Where a classic installation lives and which of its parts to use.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct ClassicInstall {
+    /// The folder holding the classic executable and its `Services`,
+    /// `Themes`, `Locales` and `Data` folders.
+    pub path: Option<PathBuf>,
+    pub use_services: bool,
+    pub use_themes: bool,
+    pub use_locales: bool,
+}
+
+impl Default for ClassicInstall {
+    fn default() -> Self {
+        Self { path: None, use_services: true, use_themes: true, use_locales: true }
+    }
+}
+
+impl ClassicInstall {
+    fn part(&self, enabled: bool, name: &str) -> Option<PathBuf> {
+        let dir = self.path.as_ref()?.join(name);
+        (enabled && dir.is_dir()).then_some(dir)
+    }
+
+    pub fn services_dir(&self) -> Option<PathBuf> {
+        self.part(self.use_services, "Services")
+    }
+
+    pub fn themes_dir(&self) -> Option<PathBuf> {
+        self.part(self.use_themes, "Themes")
+    }
+
+    pub fn locales_dir(&self) -> Option<PathBuf> {
+        self.part(self.use_locales, "Locales")
+    }
+
+    /// Whether `dir` looks like a classic installation.
+    pub fn looks_like_install(dir: &Path) -> bool {
+        dir.join("Services").is_dir() && (dir.join("Data").is_dir() || dir.join("Themes").is_dir())
+    }
 }
 
 impl Default for Config {
@@ -61,6 +106,7 @@ impl Default for Config {
             modules: ModulesConfig::default(),
             contents: Contents::default(),
             windows: BTreeMap::new(),
+            classic: ClassicInstall::default(),
         }
     }
 }
