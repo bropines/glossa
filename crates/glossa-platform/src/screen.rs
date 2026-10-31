@@ -356,6 +356,7 @@ pub(crate) mod x11 {
         Some(WindowInfo {
             process_name: process_name(pid).unwrap_or_default(),
             class_name,
+            focus_class: String::new(),
             title,
             pid,
         })

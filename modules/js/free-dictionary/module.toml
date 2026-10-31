@@ -1,0 +1,24 @@
+# An English dictionary from https://dictionaryapi.dev (free, no key).
+# The smallest useful Glossa JavaScript module: one entry point, one host.
+capabilities = ["dictionary"]
+
+[module]
+id = "free-dictionary"
+name = "Free Dictionary"
+version = "1.0.0"
+runtime = "js"
+entry = "main.js"
+description = "English definitions, phonetics and examples from dictionaryapi.dev."
+homepage = "https://dictionaryapi.dev"
+license = "MIT"
+
+[permissions]
+network = ["api.dictionaryapi.dev"]
+
+[[options]]
+key = "max_definitions"
+type = "number"
+label = "Definitions per part of speech"
+default = 4
+min = 1
+max = 20

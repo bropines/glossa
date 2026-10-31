@@ -131,9 +131,9 @@ pub fn needs_selection(action: Action) -> bool {
 pub fn read_selection(cfg: &glossa_core::Config, action: Action) -> Option<Task> {
     // Exceptions: leave terminals, games and the like alone.
     let foreground = glossa_platform::window::foreground_window();
-    tracing::debug!(window = ?foreground.as_ref().map(|w| (&w.process_name, &w.class_name)), "capturing the selection");
+    tracing::debug!(window = ?foreground.as_ref().map(|w| (&w.process_name, &w.class_name, &w.focus_class)), "capturing the selection");
     if let Some(win) = foreground {
-        if !cfg.exceptions.allows(&win.process_name, &win.class_name) {
+        if !cfg.exceptions.allows_window(&win.process_name, &win.class_name, &win.focus_class) {
             tracing::debug!(program = %win.process_name, class = %win.class_name, "skipped: in the exception list");
             return None;
         }

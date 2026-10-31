@@ -656,12 +656,51 @@ impl Exceptions {
     /// Whether the program is allowed to act on a window of this process and
     /// class.
     pub fn allows(&self, program: &str, window_class: &str) -> bool {
-        let hit = self.rules.iter().any(|r| r.matches(program, window_class));
+        self.allows_window(program, window_class, "")
+    }
+
+    /// The same, also knowing the class of the focused control inside the
+    /// window. A rule's class matches either; smart detection refuses
+    /// controls that never hold selectable text.
+    pub fn allows_window(&self, program: &str, window_class: &str, focus_class: &str) -> bool {
+        if self.smart_detection && is_non_text_control(program, focus_class) {
+            return false;
+        }
+        let hit = self.rules.iter().any(|r| {
+            r.matches(program, window_class) || (!focus_class.is_empty() && r.matches(program, focus_class))
+        });
         match self.mode {
             ExceptionMode::DisabledFor => !hit,
             ExceptionMode::EnabledFor => hit,
         }
     }
+}
+
+/// Standard Windows controls that show items or take keys but hold no text a
+/// user would select: pressing the hotkey there would only send a stray copy
+/// keystroke into a list or a hotkey field. Explorer's file view (a
+/// `DirectUIHWND` since Windows 7, not the classic list view) is one too: a
+/// copy keystroke there copies files.
+fn is_non_text_control(program: &str, class: &str) -> bool {
+    if program.eq_ignore_ascii_case("explorer.exe") && class == "DirectUIHWND" {
+        return true;
+    }
+    const CLASSES: [&str; 13] = [
+        "SysListView32",
+        "SysTreeView32",
+        "ListBox",
+        "ComboLBox",
+        "ScrollBar",
+        "msctls_hotkey32",
+        "msctls_trackbar32",
+        "msctls_updown32",
+        "SysTabControl32",
+        "SysHeader32",
+        "ToolbarWindow32",
+        "msctls_statusbar32",
+        "Button",
+    ];
+    CLASSES.iter().any(|c| c.eq_ignore_ascii_case(class))
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
@@ -1172,6 +1211,23 @@ mod tests {
         };
         assert!(only.allows("firefox.exe", "MozillaWindowClass"));
         assert!(!only.allows("notepad.exe", "Edit"));
+    }
+
+    #[test]
+    fn control_rules_and_smart_detection_look_at_the_focused_control() {
+        // The top-level window of Explorer is CabinetWClass; the file list
+        // inside it is what the default SysListView32 rule is about.
+        let mut e = Exceptions::default();
+        assert!(!e.allows_window("explorer.exe", "CabinetWClass", "SysListView32"));
+        assert!(e.allows_window("explorer.exe", "CabinetWClass", "Edit"), "the address bar is fine");
+
+        // Smart detection covers controls with no rule of their own.
+        e.rules.clear();
+        assert!(!e.allows_window("app.exe", "AppWindow", "msctls_trackbar32"));
+        assert!(e.allows_window("app.exe", "AppWindow", "RichEdit20W"));
+        assert!(!e.allows_window("explorer.exe", "CabinetWClass", "DirectUIHWND"), "Explorer's file view");
+        e.smart_detection = false;
+        assert!(e.allows_window("app.exe", "AppWindow", "msctls_trackbar32"));
     }
 
     #[test]

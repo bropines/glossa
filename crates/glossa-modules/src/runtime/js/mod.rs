@@ -27,6 +27,8 @@ use crate::registry::RuntimeContext;
 
 pub fn load_glossa(dir: &Path, manifest: Manifest, ctx: &RuntimeContext) -> Result<Arc<dyn Provider>, String> {
     let script = glossa::GlossaScript::from_dir(dir, &manifest.module.entry)?;
+    let name = script.path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+    engine::check_syntax(&script.source, &name)?;
     Ok(Arc::new(ProtocolProvider::new(
         manifest,
         glossa::GlossaTransport { script: Arc::new(script) },
@@ -53,4 +55,30 @@ pub fn load_pot(dir: &Path, ctx: &RuntimeContext) -> Result<Arc<dyn Provider>, S
     let plugin = pot::PotPlugin::from_dir(dir)?;
     let manifest = plugin.manifest.clone();
     Ok(Arc::new(ProtocolProvider::new(manifest, pot::PotTransport { plugin: Arc::new(plugin) }, ctx.cache.clone())))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_syntax_error_fails_the_load_with_the_file_name() {
+        let dir = std::env::temp_dir().join(format!("glossa-js-syntax-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("main.js"), "function translate(req) { return req.text + ; }").unwrap();
+        let manifest = Manifest::parse(
+            "capabilities = [\"translate\"]
+[module]
+id = \"bad\"
+name = \"Bad\"
+runtime = \"js\"
+",
+        )
+        .unwrap();
+        let err = load_glossa(&dir, manifest.clone(), &RuntimeContext::default()).err().expect("must fail");
+        assert!(err.starts_with("main.js:"), "{err}");
+        std::fs::write(dir.join("main.js"), "function translate(req) { return req.text; }").unwrap();
+        assert!(load_glossa(&dir, manifest, &RuntimeContext::default()).is_ok());
+        std::fs::remove_dir_all(&dir).ok();
+    }
 }

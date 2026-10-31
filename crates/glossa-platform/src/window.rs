@@ -20,6 +20,9 @@ pub struct WindowInfo {
     /// The window class (`Notepad`, `Chrome_WidgetWin_1`; the `WM_CLASS`
     /// class on X11). Empty on macOS.
     pub class_name: String,
+    /// The class of the control with the keyboard focus inside that window
+    /// (`Edit`, `SysListView32`), where the platform tells; else empty.
+    pub focus_class: String,
     pub title: String,
     pub pid: u32,
 }
@@ -79,6 +82,7 @@ pub fn foreground_window() -> Option<WindowInfo> {
         Some(WindowInfo {
             process_name: w.app_name().unwrap_or_default(),
             class_name: String::new(),
+            focus_class: String::new(),
             title: w.title().unwrap_or_default(),
             pid: w.pid().unwrap_or(0),
         })
@@ -242,9 +246,28 @@ mod win {
             Some(WindowInfo {
                 process_name: process_name(pid).unwrap_or_default(),
                 class_name,
+                focus_class: focus_class(hwnd).unwrap_or_default(),
                 title,
                 pid,
             })
+        }
+    }
+
+    /// The class of the focused control in a window's thread: what the
+    /// exceptions' control rules (list views, hotkey fields…) match on.
+    fn focus_class(hwnd: windows::Win32::Foundation::HWND) -> Option<String> {
+        // SAFETY: GUITHREADINFO is initialised with its size as the API
+        // requires; the class buffer is a correctly sized local.
+        unsafe {
+            let thread = GetWindowThreadProcessId(hwnd, None);
+            let mut info = GUITHREADINFO { cbSize: std::mem::size_of::<GUITHREADINFO>() as u32, ..Default::default() };
+            GetGUIThreadInfo(thread, &mut info).ok()?;
+            if info.hwndFocus.is_invalid() {
+                return None;
+            }
+            let mut class = [0u16; 256];
+            let n = GetClassNameW(info.hwndFocus, &mut class).max(0) as usize;
+            (n > 0).then(|| String::from_utf16_lossy(&class[..n]))
         }
     }
 

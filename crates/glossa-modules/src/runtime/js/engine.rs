@@ -101,6 +101,15 @@ pub fn eval(ctx: &mut Context, code: &str, name: &str) -> Result<JsValue, String
     ctx.eval(Source::from_bytes(code)).map_err(|e| format!("{name}: {}", describe(&e, ctx)))
 }
 
+/// Parse a script without running it, so a syntax error is reported when the
+/// module loads (and in `glossa-cli modules`) instead of on its first use.
+pub fn check_syntax(code: &str, name: &str) -> Result<(), String> {
+    let mut ctx = Context::default();
+    boa_engine::Script::parse(Source::from_bytes(code), None, &mut ctx)
+        .map(|_| ())
+        .map_err(|e| format!("{name}: {}", describe(&e, &mut ctx)))
+}
+
 /// Define a global property holding a JSON value.
 pub fn set_global_json(ctx: &mut Context, name: &str, value: &serde_json::Value) -> Result<(), String> {
     let v = JsValue::from_json(value, ctx).map_err(|e| describe(&e, ctx))?;

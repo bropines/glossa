@@ -29,6 +29,12 @@ pub struct PopupState {
     pub pos: egui::Pos2,
     pub size: egui::Vec2,
     pub pinned: bool,
+    /// The pointer position it was opened at, in physical pixels, while it is
+    /// placed automatically (kept on screen as its size changes). `None` once
+    /// it sits where the user put it.
+    pub cursor_px: Option<(i32, i32)>,
+    /// The user dragged it: remember where it ends up.
+    pub moved: bool,
     /// Last time the pointer was over the popup (or it was opened).
     pub last_hover: Instant,
     pub hovered: bool,
@@ -51,7 +57,7 @@ pub fn open(app: &mut GlossaApp, text: String, cursor: Option<(i32, i32)>) {
     }
     app.fonts.ensure(&app.ctx, &text);
     let service = popup_service(app);
-    let pos = anchor(app, cursor);
+    let (pos, cursor_px) = anchor(app, cursor);
     let min_w = app.cfg.appearance.popup.min_width;
     let job = translate(app, &text, &service);
     let now = Instant::now();
@@ -65,6 +71,8 @@ pub fn open(app: &mut GlossaApp, text: String, cursor: Option<(i32, i32)>) {
         pos,
         size: vec2(min_w, 60.0),
         pinned: false,
+        cursor_px,
+        moved: false,
         last_hover: now,
         hovered: false,
         favorite: false,
@@ -80,8 +88,11 @@ pub fn show_text(app: &mut GlossaApp, source: String, outcome: Option<Arc<Transl
         app.fonts.ensure(&app.ctx, &o.translation.text);
     }
     let now = Instant::now();
-    let keep_pos = app.popup.as_ref().filter(|p| p.from_ocr).map(|p| (p.pos, p.pinned));
-    let (pos, pinned) = keep_pos.unwrap_or((anchor(app, Some(near)), false));
+    let keep_pos = app.popup.as_ref().filter(|p| p.from_ocr).map(|p| (p.pos, p.pinned, None));
+    let (pos, pinned, cursor_px) = keep_pos.unwrap_or_else(|| {
+        let (pos, cursor_px) = anchor(app, Some(near));
+        (pos, false, cursor_px)
+    });
     app.popup = Some(PopupState {
         source,
         job: 0,
@@ -92,6 +103,8 @@ pub fn show_text(app: &mut GlossaApp, source: String, outcome: Option<Arc<Transl
         pos,
         size: vec2(app.cfg.appearance.popup.min_width, 60.0),
         pinned,
+        cursor_px,
+        moved: false,
         last_hover: now,
         hovered: false,
         favorite: false,
@@ -116,12 +129,38 @@ fn translate(app: &mut GlossaApp, text: &str, service: &str) -> u64 {
     app.engine.translate_async(Slot::Popup, text.to_owned(), pair, opts)
 }
 
-/// Where the popup goes: pointer + 15 px, in points.
-fn anchor(app: &GlossaApp, cursor: Option<(i32, i32)>) -> egui::Pos2 {
+/// Where the popup opens, in points, and the pointer position to keep it
+/// placed against (see [`PopupState::cursor_px`]).
+///
+/// With "auto position" on: pointer + 15 px, flipped to the other side of the
+/// pointer near the screen's edges once its size is known. Off: where the
+/// user last left it, if they ever moved it.
+fn anchor(app: &GlossaApp, cursor: Option<(i32, i32)>) -> (egui::Pos2, Option<(i32, i32)>) {
+    if !app.cfg.appearance.popup.auto_position {
+        if let Some(g) = app.cfg.windows.get(REMEMBERED) {
+            return (egui::pos2(g.x, g.y), None);
+        }
+    }
     let (x, y) = cursor.or_else(glossa_platform::window::cursor_position).unwrap_or((200, 200));
-    let scale = glossa_platform::window::monitor_at(x, y).map(|m| m.scale as f32).filter(|s| *s > 0.0).unwrap_or(1.0);
-    let _ = app;
-    egui::pos2((x as f32 + 15.0 * scale) / scale, (y as f32 + 15.0 * scale) / scale)
+    let scale = scale_at(x, y);
+    (egui::pos2((x as f32 + 15.0 * scale) / scale, (y as f32 + 15.0 * scale) / scale), Some((x, y)))
+}
+
+/// The key in `config.windows` for where the user last put the popup.
+const REMEMBERED: &str = "popup";
+
+fn scale_at(x: i32, y: i32) -> f32 {
+    glossa_platform::window::monitor_at(x, y).map(|m| m.scale).filter(|s| *s > 0.0).unwrap_or(1.0)
+}
+
+/// Keep an automatically placed popup of `size` (points) on the screen of
+/// the pointer: below-right of it, else flipped above or left.
+fn placed(cursor_px: (i32, i32), size: egui::Vec2) -> egui::Pos2 {
+    let (cx, cy) = cursor_px;
+    let scale = scale_at(cx, cy);
+    let anchor = glossa_core::ocr::Rect::new(cx as f32, cy as f32, 15.0 * scale, 15.0 * scale);
+    let (x, y) = glossa_platform::window::place_popup(anchor, (size.x * scale, size.y * scale), &glossa_platform::window::monitors());
+    egui::pos2(x / scale, y / scale)
 }
 
 impl PopupState {
@@ -196,19 +235,39 @@ pub fn show(app: &mut GlossaApp, ctx: &egui::Context) {
         .with_inner_size(state.size);
     let mut close = false;
     let mut desired = state.size;
+    let mut outer: Option<egui::Rect> = None;
     ctx.show_viewport_immediate(viewport_id(), builder, |ui, _class| {
         let (c, r) = body(app, ui, &mut state);
         close = c;
         desired = r;
+        outer = ui.input(|i| i.viewport().outer_rect);
     });
+    // Once dragged, remember where it went (for "auto position" off), and
+    // stop placing it automatically.
+    if state.moved {
+        state.cursor_px = None;
+        if let Some(o) = outer {
+            let g = glossa_core::config::WindowGeometry { x: o.min.x, y: o.min.y, width: o.width(), height: o.height(), maximized: false };
+            if app.cfg.windows.get(REMEMBERED) != Some(&g) {
+                app.cfg.windows.insert(REMEMBERED.into(), g);
+            }
+        }
+    }
     if close {
         return;
     }
-    // Fit the window to its content.
+    // Fit the window to its content, and keep it on screen at its new size.
     if (desired - state.size).length() > 1.0 {
         tracing::trace!(?desired, old = ?state.size, "popup resized");
         state.size = desired;
         ctx.send_viewport_cmd_to(viewport_id(), egui::ViewportCommand::InnerSize(desired));
+        if let Some(c) = state.cursor_px {
+            let pos = placed(c, desired);
+            if (pos - state.pos).length() > 1.0 {
+                state.pos = pos;
+                ctx.send_viewport_cmd_to(viewport_id(), egui::ViewportCommand::OuterPosition(pos));
+            }
+        }
     }
     app.popup = Some(state);
 }
@@ -246,12 +305,17 @@ fn body(app: &mut GlossaApp, ui: &mut egui::Ui, st: &mut PopupState) -> (bool, e
         + 14.0
         + 5.0 * 19.0
         + 16.0;
-    let desired_w = (text_w.max(title_w) + 16.0).clamp(min_w, max_w);
+    // "Auto size" off: a fixed box, the maximum size, scrolling inside.
+    let desired_w = if cfg.auto_size { (text_w.max(title_w) + 16.0).clamp(min_w, max_w) } else { max_w };
 
     let mut overflow = 0.0f32;
     let resp = egui::CentralPanel::no_frame().show(ui, |ui| {
         frame.show(ui, |ui| {
             ui.set_width(desired_w - 14.0);
+            if !cfg.auto_size {
+                // A fixed box: the frame fills the window.
+                ui.set_min_height(ui.available_height());
+            }
             // -- header: drag handle, title, icons --------------------------
             let header = ui.horizontal(|ui| {
                 let (drag_rect, drag) = ui.allocate_exact_size(vec2(14.0, 14.0), Sense::click_and_drag());
@@ -262,6 +326,7 @@ fn body(app: &mut GlossaApp, ui: &mut egui::Ui, st: &mut PopupState) -> (bool, e
                 let title = st.title(app);
                 let title_resp = ui.add(egui::Label::new(RichText::new(title).size(look.text_size * 1.15).color(text_color.gamma_multiply(0.85))).sense(Sense::click_and_drag()).truncate());
                 if title_resp.drag_started() || drag.drag_started() {
+                    st.moved = true;
                     if cfg.pin_when_dragging {
                         st.pinned = true;
                     }
@@ -364,7 +429,7 @@ fn body(app: &mut GlossaApp, ui: &mut egui::Ui, st: &mut PopupState) -> (bool, e
     });
 
     let content = resp.inner.response.rect.size();
-    let h = (content.y + overflow).clamp(36.0, cfg.max_height);
+    let h = if cfg.auto_size { (content.y + overflow).clamp(36.0, cfg.max_height) } else { cfg.max_height };
     (close, vec2(desired_w.ceil(), h.ceil()))
 }
 
