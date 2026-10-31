@@ -30,13 +30,20 @@ use glossa_core::{
     OcrResult, Paths, ProviderInfo, Result, SpeakRequest, Theme,
 };
 use glossa_modules::host_api::ModuleCache;
-use glossa_modules::{CancelToken, Host, OptionSpec, Origin, Provider, Registry, RuntimeContext};
+use glossa_modules::{CancelToken, Host, OptionSpec, OptionValues, Origin, Provider, Registry, RuntimeContext};
 use glossa_net::HttpClient;
 use parking_lot::{Mutex, RwLock};
 
 pub use catalog::{LocaleCatalog, LocaleEntry, ThemeCatalog, ThemeEntry};
 pub use export::ExportFormat;
 pub use pipeline::{Pipeline, Progress, TranslateOptions, TranslationOutcome};
+
+/// The presets an AI endpoint can start from, for front ends.
+pub mod ai {
+    pub use glossa_services::openai::{preset, AiPreset, PRESETS};
+    /// The id of the built-in OpenAI-compatible translator.
+    pub const BUILTIN_ID: &str = glossa_services::OpenAi::ID;
+}
 
 /// Where a job's result goes. One job per slot at a time.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -546,15 +553,41 @@ impl Engine {
         })
     }
 
-    /// The models a provider offers (AI endpoints answer this), using its
-    /// current settings.
-    pub fn list_models(&self, provider_id: &str) -> Result<Vec<String>> {
-        let registry = self.registry();
-        let provider = registry.get(provider_id).ok_or_else(|| Error::NoSuchModule(provider_id.to_owned()))?;
+    /// The models a provider offers (AI endpoints answer this). `options`
+    /// overrides the saved settings, so the options page can ask with what
+    /// the user typed but has not applied yet.
+    pub fn list_models(&self, provider_id: &str, options: Option<&OptionValues>) -> Result<Vec<String>> {
+        let provider = self.registry().get(provider_id).ok_or_else(|| Error::NoSuchModule(provider_id.to_owned()))?;
         self.with_pipeline(&CancelToken::new(), |p| {
-            let options = p.options_for(provider.as_ref());
+            let options = match options {
+                Some(o) => glossa_modules::provider::resolve_options(provider.options(), Some(o)),
+                None => p.options_for(provider.as_ref()),
+            };
             provider.list_models(&p.host(&options))
         })
+    }
+
+    /// Translate a short sample with one provider and the given settings, for
+    /// a "test" button. Returns the translation and how long it took.
+    pub fn test_provider(&self, provider_id: &str, options: Option<&OptionValues>) -> Result<(String, Duration)> {
+        let provider = self.registry().get(provider_id).ok_or_else(|| Error::NoSuchModule(provider_id.to_owned()))?;
+        let cfg = self.config();
+        let to = if cfg.general.first_language.is_language() && cfg.general.first_language != LangId::ENGLISH {
+            cfg.general.first_language
+        } else {
+            LangId::from_code("de").unwrap_or(LangId::RUSSIAN)
+        };
+        let req =
+            glossa_core::TranslateRequest::new("Hello! This is a connection test.", LangPair::new(LangId::ENGLISH, to));
+        let started = Instant::now();
+        let t = self.with_pipeline(&CancelToken::new(), |p| {
+            let options = match options {
+                Some(o) => glossa_modules::provider::resolve_options(provider.options(), Some(o)),
+                None => p.options_for(provider.as_ref()),
+            };
+            provider.translate(&p.host(&options), &req)
+        })?;
+        Ok((t.text, started.elapsed()))
     }
 
     /// Translate, blocking the caller.

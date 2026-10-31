@@ -29,6 +29,8 @@ pub struct MainState {
     pub error: Option<String>,
     pub busy: bool,
     pub job: u64,
+    /// While a streaming service writes: the translation so far.
+    pub partial: Option<String>,
     /// Sources translated this session, for back/forward.
     pub back: Vec<String>,
     pub forward: Vec<String>,
@@ -49,6 +51,7 @@ impl MainState {
             error: None,
             busy: false,
             job: 0,
+            partial: None,
             back: Vec::new(),
             forward: Vec::new(),
             edited_at: None,
@@ -310,6 +313,7 @@ impl GlossaApp {
             }
         }
         self.main.busy = true;
+        self.main.partial = None;
         self.main.job = self.engine.translate_async(Slot::Main, text, pair, opts);
     }
 
@@ -354,8 +358,19 @@ impl GlossaApp {
 
     fn handle_event(&mut self, event: Event) {
         match event {
+            Event::Progress { slot: Slot::Main, job, text } if job == self.main.job => {
+                self.fonts.ensure(&self.ctx, &text);
+                self.main.partial = Some(text);
+            }
+            Event::Progress { slot: Slot::Popup, job, text } => {
+                self.fonts.ensure(&self.ctx, &text);
+                if let Some(p) = self.popup.as_mut() {
+                    p.on_progress(job, text);
+                }
+            }
             Event::Translated { slot: Slot::Main, job, result } if job == self.main.job => {
                 self.main.busy = false;
+                self.main.partial = None;
                 match result {
                     Ok(out) => {
                         self.main.error = None;
@@ -409,7 +424,7 @@ impl GlossaApp {
                 }
             }
             Event::Action { action, text } => self.perform(action, text),
-            Event::Started { .. } | Event::Translated { .. } => {}
+            Event::Started { .. } | Event::Translated { .. } | Event::Progress { .. } => {}
         }
     }
 

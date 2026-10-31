@@ -15,6 +15,8 @@ use std::path::PathBuf;
 use std::process::ExitCode;
 
 use glossa_core::{Capabilities, LangId, LangPair, Paths};
+use std::sync::{Arc, Mutex};
+
 use glossa_engine::{Engine, ExportFormat, TranslateOptions};
 use serde_json::json;
 
@@ -240,12 +242,31 @@ fn run(args: &Args) -> Result<(), Fail> {
                 lang(args.flag(&["-f", "--from"]), LangId::AUTO)?,
                 lang(args.flag(&["-t", "--to"]), LangId::AUTO)?,
             );
+            // On a terminal, a streaming service's answer is printed as it
+            // is written; piped output gets the finished text only.
+            use std::io::IsTerminal as _;
+            let printed = Arc::new(Mutex::new(String::new()));
+            let progress = (!args.json && std::io::stdout().is_terminal()).then(|| {
+                let printed = printed.clone();
+                glossa_engine::Progress::new(move |text| {
+                    let mut done = printed.lock().unwrap_or_else(|e| e.into_inner());
+                    match text.strip_prefix(done.as_str()) {
+                        Some(new) => outp!("{new}"),
+                        // Another service took over after a failure: start again.
+                        None => outp!("\n{text}"),
+                    }
+                    let _ = std::io::Write::flush(&mut std::io::stdout());
+                    *done = text.to_owned();
+                })
+            });
             let opts = TranslateOptions {
                 provider: args.flag(&["-s", "--service"]).map(str::to_owned),
                 back_translate: args.has(&["--back"]),
+                progress,
                 ..Default::default()
             };
             let out = e.translate(&text(args)?, pair, &opts)?;
+            let streamed = std::mem::take(&mut *printed.lock().unwrap_or_else(|e| e.into_inner()));
             if args.json {
                 out!(
                     "{}",
@@ -261,7 +282,12 @@ fn run(args: &Args) -> Result<(), Fail> {
                     })
                 );
             } else {
-                out!("{}", out.translation.as_display_block());
+                let block = out.translation.as_display_block();
+                match block.strip_prefix(streamed.as_str()) {
+                    Some(rest) if !streamed.is_empty() => out!("{rest}"),
+                    _ if !streamed.is_empty() => out!("\n{block}"),
+                    _ => out!("{block}"),
+                }
                 if let Some(back) = out.back {
                     eprintln!("\n↩ {}", back.text);
                 }

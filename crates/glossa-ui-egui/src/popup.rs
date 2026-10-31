@@ -24,6 +24,8 @@ pub struct PopupState {
     pub outcome: Option<Arc<TranslationOutcome>>,
     pub error: Option<String>,
     pub busy: bool,
+    /// While a streaming service writes: the translation so far.
+    pub partial: Option<String>,
     pub service: String,
     /// Screen position of the window's top-left, in points.
     pub pos: egui::Pos2,
@@ -67,6 +69,7 @@ pub fn open(app: &mut GlossaApp, text: String, cursor: Option<(i32, i32)>) {
         outcome: None,
         error: None,
         busy: true,
+        partial: None,
         service,
         pos,
         size: vec2(min_w, 60.0),
@@ -97,6 +100,7 @@ pub fn show_text(app: &mut GlossaApp, source: String, outcome: Option<Arc<Transl
         source,
         job: 0,
         busy: false,
+        partial: None,
         error: None,
         service: outcome.as_ref().map(|o| o.translation.provider_id.clone()).unwrap_or_default(),
         outcome,
@@ -178,6 +182,7 @@ impl PopupState {
             return;
         }
         self.busy = false;
+        self.partial = None;
         match result {
             Ok(o) => {
                 self.outcome = Some(o);
@@ -186,6 +191,12 @@ impl PopupState {
             Err(_) => self.error = message,
         }
         self.last_hover = Instant::now();
+    }
+
+    pub fn on_progress(&mut self, job: u64, text: String) {
+        if job == self.job && self.busy {
+            self.partial = Some(text);
+        }
     }
 
     pub fn on_detached(&mut self, _job: u64, _result: Result<Arc<TranslationOutcome>, Arc<Error>>) {}
@@ -313,7 +324,13 @@ fn body(app: &mut GlossaApp, ui: &mut egui::Ui, st: &mut PopupState) -> (bool, e
     // Width follows the content: measure the text wrapped at the maximum, and
     // the header, and take the wider, within the configured bounds.
     let font = egui::FontId::proportional(look.text_size * 1.33);
-    let body_text = st.outcome.as_ref().map(|o| display_text(o)).or_else(|| st.error.clone()).unwrap_or_default();
+    let body_text = st
+        .partial
+        .clone()
+        .filter(|_| st.busy)
+        .or_else(|| st.outcome.as_ref().map(|o| display_text(o)))
+        .or_else(|| st.error.clone())
+        .unwrap_or_default();
     let wrap_w = (max_w - 16.0).max(60.0);
     let text_w = ui.ctx().fonts_mut(|f| f.layout(body_text, font.clone(), Color32::WHITE, wrap_w)).size().x;
     let title_w = ui
@@ -406,7 +423,15 @@ fn body(app: &mut GlossaApp, ui: &mut egui::Ui, st: &mut PopupState) -> (bool, e
             let _ = header;
 
             // -- body ---------------------------------------------------------
-            if st.busy {
+            if let Some(partial) = st.partial.clone().filter(|_| st.busy) {
+                let out = egui::ScrollArea::vertical().max_height(cfg.max_height - 70.0).stick_to_bottom(true).show(
+                    ui,
+                    |ui| {
+                        ui.add(egui::Label::new(RichText::new(partial).font(font.clone()).color(text_color)).wrap());
+                    },
+                );
+                overflow = (out.content_size.y - out.inner_rect.height()).max(0.0);
+            } else if st.busy {
                 ui.horizontal(|ui| {
                     ui.add(egui::Spinner::new().size(14.0));
                     ui.label(RichText::new(app.t("msg.translating")).color(text_color));
@@ -470,6 +495,7 @@ fn body(app: &mut GlossaApp, ui: &mut egui::Ui, st: &mut PopupState) -> (bool, e
                 if let Some(id) = switch_to {
                     st.service = id.clone();
                     st.busy = true;
+                    st.partial = None;
                     st.job = translate(app, &st.source, &id);
                     let remembered = id.clone();
                     let _ = app.engine.update_config(move |c| c.services.popup_active = remembered);

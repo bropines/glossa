@@ -462,8 +462,16 @@ fn result_pane(app: &mut GlossaApp, ui: &mut egui::Ui, height: f32) {
         ui.set_min_size(vec2(ui.available_width(), height - 8.0));
         ui.set_max_height(height - 8.0);
         let rect = ui.max_rect();
-        egui::ScrollArea::vertical().id_salt("result").show(ui, |ui| {
-            if let Some(err) = app.main.error.clone() {
+        egui::ScrollArea::vertical().id_salt("result").stick_to_bottom(app.main.busy).show(ui, |ui| {
+            if let Some(partial) = app.main.partial.clone().filter(|_| app.main.busy) {
+                // A streaming service is still writing.
+                ui.add(
+                    egui::Label::new(
+                        RichText::new(partial).font(look.text_font()).color(c(look.theme.edit.normal.text)),
+                    )
+                    .wrap(),
+                );
+            } else if let Some(err) = app.main.error.clone() {
                 ui.label(RichText::new(err).color(look.error()).font(look.text_font()));
             } else if let Some(o) = app.main.outcome.clone() {
                 let text = o.translation.text.clone();
@@ -713,6 +721,7 @@ fn navigate(app: &mut GlossaApp, backwards: bool) {
         let opts =
             glossa_engine::TranslateOptions { provider: Some(app.cfg.services.active.clone()), ..Default::default() };
         app.main.busy = true;
+        app.main.partial = None;
         app.main.job = app.engine.translate_async(glossa_engine::Slot::Main, app.main.source.clone(), pair, opts);
     }
 }

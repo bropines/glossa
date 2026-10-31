@@ -75,6 +75,20 @@ pub struct OptionsState {
     autostart_initial: bool,
     message: Option<(String, bool)>,
     show_secrets: bool,
+    /// The AI endpoint builder: the preset and name for the next endpoint.
+    new_ai_preset: String,
+    new_ai_name: String,
+    /// Models loaded per provider id, for the model picker.
+    ai_models: std::collections::HashMap<String, Vec<String>>,
+    /// A running "load models" / "test" request, and the last outcome.
+    ai_task: Option<std::sync::mpsc::Receiver<AiReply>>,
+    ai_status: Option<(String, bool)>,
+}
+
+/// What a background request from the AI endpoint settings returned.
+enum AiReply {
+    Models(String, Result<Vec<String>, String>),
+    Test(Result<(String, std::time::Duration), String>),
 }
 
 pub fn open(app: &mut GlossaApp) {
@@ -90,6 +104,11 @@ pub fn open(app: &mut GlossaApp) {
             autostart_initial: autostart,
             message: None,
             show_secrets: false,
+            new_ai_preset: "openrouter".into(),
+            new_ai_name: String::new(),
+            ai_models: Default::default(),
+            ai_task: None,
+            ai_status: None,
         });
     }
     app.ctx.request_repaint();
@@ -507,6 +526,10 @@ fn services(app: &mut GlossaApp, ui: &mut egui::Ui, st: &mut OptionsState) {
             ui.checkbox(&mut d.services.fail_over, app.t("options.services.fail_over"));
         }
     }
+    if cap == Capabilities::TRANSLATE {
+        ai_endpoints(app, ui, st);
+    }
+    poll_ai_task(app, st);
 
     // The selected provider's settings, generated from what it declares.
     if let Some(id) = st.selected_service.clone() {
@@ -531,13 +554,189 @@ fn services(app: &mut GlossaApp, ui: &mut egui::Ui, st: &mut OptionsState) {
                     ui.label(RichText::new("No settings.").color(look.weak_text()));
                 } else {
                     ui.checkbox(&mut st.show_secrets, "Show keys");
-                    let values = d.services.options.entry(id.clone()).or_default();
+                    if is_ai_endpoint(&id) {
+                        ai_tools(app, ui, &id, &mut st.draft, &st.ai_models, &mut st.ai_task, &st.ai_status);
+                    }
+                    let values = st.draft.services.options.entry(id.clone()).or_default();
                     for spec in &p.options {
                         option_field(ui, spec, values, st.show_secrets);
                     }
                 }
             });
         }
+    }
+}
+
+fn is_ai_endpoint(id: &str) -> bool {
+    id == glossa_engine::ai::BUILTIN_ID || id.starts_with("ai-")
+}
+
+/// The AI endpoint builder: the endpoints the user added, and a row to add
+/// one from a preset. Adding and removing apply at once (a provider has to
+/// exist before its settings can be shown); renaming waits for Apply.
+fn ai_endpoints(app: &mut GlossaApp, ui: &mut egui::Ui, st: &mut OptionsState) {
+    use glossa_engine::ai::{preset, PRESETS};
+    let look = app.look.clone();
+    ui.add_space(6.0);
+    group(ui, &look, "AI endpoints (OpenAI-compatible)", |ui| {
+        ui.label(
+            RichText::new(
+                "Each endpoint is a translator of its own: OpenAI, OpenRouter, DeepSeek, Gemini, a local Ollama… \
+                 Select it in the list above for its settings.",
+            )
+            .small()
+            .color(look.weak_text()),
+        );
+        let mut remove = None;
+        for e in st.draft.services.ai_endpoints.iter_mut() {
+            ui.horizontal(|ui| {
+                crate::widgets::service_badge(ui, &e.id, &e.name, 18.0);
+                ui.add(egui::TextEdit::singleline(&mut e.name).desired_width(200.0));
+                ui.label(RichText::new(preset(&e.preset).name).small().color(look.weak_text()));
+                if ui.button("Settings").clicked() {
+                    st.selected_service = Some(e.id.clone());
+                }
+                if ui.button("Remove").clicked() {
+                    remove = Some(e.id.clone());
+                }
+            });
+        }
+        if let Some(id) = remove {
+            match app.engine.remove_ai_endpoint(&id) {
+                Ok(()) => {
+                    let s = &mut st.draft.services;
+                    s.ai_endpoints.retain(|e| e.id != id);
+                    s.enabled.retain(|x| *x != id);
+                    s.order.retain(|x| *x != id);
+                    s.options.remove(&id);
+                    if s.active == id {
+                        s.active = s.enabled.first().cloned().unwrap_or_default();
+                    }
+                    if st.selected_service.as_deref() == Some(id.as_str()) {
+                        st.selected_service = None;
+                    }
+                }
+                Err(e) => st.message = Some((e.to_string(), true)),
+            }
+        }
+        ui.horizontal(|ui| {
+            egui::ComboBox::from_id_salt("ai-preset")
+                .width(190.0)
+                .selected_text(preset(&st.new_ai_preset).name)
+                .show_ui(ui, |ui| {
+                    for p in PRESETS {
+                        ui.selectable_value(&mut st.new_ai_preset, p.id.to_owned(), p.name);
+                    }
+                });
+            ui.add(
+                egui::TextEdit::singleline(&mut st.new_ai_name)
+                    .hint_text(preset(&st.new_ai_preset).name)
+                    .desired_width(180.0),
+            );
+            if ui.button("Add endpoint").clicked() {
+                match app.engine.add_ai_endpoint(&st.new_ai_name, &st.new_ai_preset) {
+                    Ok(id) => {
+                        // Mirror into the draft, or Apply would drop it again.
+                        let cfg = app.engine.config();
+                        if let Some(e) = cfg.services.ai_endpoints.iter().find(|e| e.id == id) {
+                            st.draft.services.ai_endpoints.push(e.clone());
+                        }
+                        st.draft.services.enabled.push(id.clone());
+                        st.draft.services.order.push(id.clone());
+                        st.selected_service = Some(id);
+                        st.new_ai_name.clear();
+                    }
+                    Err(e) => st.message = Some((e.to_string(), true)),
+                }
+            }
+        });
+    });
+}
+
+/// "Load models" and "Test" for an AI endpoint, with the draft's settings.
+fn ai_tools(
+    app: &mut GlossaApp,
+    ui: &mut egui::Ui,
+    id: &str,
+    draft: &mut Config,
+    models: &std::collections::HashMap<String, Vec<String>>,
+    task: &mut Option<std::sync::mpsc::Receiver<AiReply>>,
+    status: &Option<(String, bool)>,
+) {
+    let look = app.look.clone();
+    let busy = task.is_some();
+    ui.horizontal(|ui| {
+        let values = draft.services.options.get(id).cloned().unwrap_or_default();
+        if ui.add_enabled(!busy, egui::Button::new("Load models")).clicked() {
+            let (tx, rx) = std::sync::mpsc::channel();
+            let (engine, ctx, id) = (app.engine.clone(), app.ctx.clone(), id.to_owned());
+            let values = values.clone();
+            std::thread::spawn(move || {
+                let r = engine.list_models(&id, Some(&values)).map_err(|e| e.to_string());
+                let _ = tx.send(AiReply::Models(id, r));
+                ctx.request_repaint();
+            });
+            *task = Some(rx);
+        }
+        if ui.add_enabled(!busy, egui::Button::new("Test")).on_hover_text("Translate a short sample").clicked() {
+            let (tx, rx) = std::sync::mpsc::channel();
+            let (engine, ctx, id) = (app.engine.clone(), app.ctx.clone(), id.to_owned());
+            std::thread::spawn(move || {
+                let r = engine.test_provider(&id, Some(&values)).map_err(|e| e.to_string());
+                let _ = tx.send(AiReply::Test(r));
+                ctx.request_repaint();
+            });
+            *task = Some(rx);
+        }
+        if busy {
+            ui.add(egui::Spinner::new().size(14.0));
+        } else if let Some((text, error)) = status {
+            let color = if *error { look.error() } else { look.weak_text() };
+            ui.add(egui::Label::new(RichText::new(text).small().color(color)).truncate());
+        }
+    });
+    if let Some(list) = models.get(id).filter(|l| !l.is_empty()) {
+        let values = draft.services.options.entry(id.to_owned()).or_default();
+        let current = values.get("model").and_then(|v| v.as_str()).unwrap_or("").to_owned();
+        ui.horizontal(|ui| {
+            ui.label(format!("Models ({})", list.len()));
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                egui::ComboBox::from_id_salt(("ai-models", id))
+                    .width(320.0)
+                    .height(360.0)
+                    .selected_text(if current.is_empty() { "Pick a model".to_owned() } else { current.clone() })
+                    .show_ui(ui, |ui| {
+                        for m in list {
+                            if ui.selectable_label(*m == current, m).clicked() {
+                                values.insert("model".into(), m.clone().into());
+                            }
+                        }
+                    });
+            });
+        });
+    }
+}
+
+fn poll_ai_task(app: &GlossaApp, st: &mut OptionsState) {
+    let Some(rx) = &st.ai_task else { return };
+    match rx.try_recv() {
+        Ok(AiReply::Models(id, Ok(list))) => {
+            st.ai_status = Some((format!("{} models", list.len()), false));
+            st.ai_models.insert(id, list);
+            st.ai_task = None;
+        }
+        Ok(AiReply::Test(Ok((text, took)))) => {
+            st.ai_status = Some((format!("OK, {} ms: {text}", took.as_millis()), false));
+            st.ai_task = None;
+        }
+        Ok(AiReply::Models(_, Err(e)) | AiReply::Test(Err(e))) => {
+            st.ai_status = Some((e, true));
+            st.ai_task = None;
+        }
+        Err(std::sync::mpsc::TryRecvError::Empty) => {
+            app.ctx.request_repaint_after(std::time::Duration::from_millis(100))
+        }
+        Err(std::sync::mpsc::TryRecvError::Disconnected) => st.ai_task = None,
     }
 }
 
