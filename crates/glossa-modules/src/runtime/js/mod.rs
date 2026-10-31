@@ -36,6 +36,25 @@ pub fn load_glossa(dir: &Path, manifest: Manifest, ctx: &RuntimeContext) -> Resu
     )))
 }
 
+/// A Glossa JavaScript module whose `module.toml` and script are compiled
+/// into the program rather than read from a folder. `label` names the script
+/// in error messages (`bundled/<id>/main.js`). The syntax is not checked here:
+/// that costs a parse per module at every start, and the tests of the crate
+/// that embeds the sources do it once instead.
+pub fn load_embedded(
+    manifest: &str,
+    script: &str,
+    label: &str,
+    cache: Arc<crate::host_api::ModuleCache>,
+) -> Result<Arc<dyn Provider>, String> {
+    let manifest = Manifest::parse(manifest).map_err(|e| format!("{label}: module.toml: {e}"))?;
+    if manifest.module.runtime != crate::manifest::Runtime::Js {
+        return Err(format!("{label}: an embedded module must have runtime = \"js\""));
+    }
+    let script = glossa::GlossaScript { path: label.into(), source: script.trim_start_matches('\u{feff}').to_owned() };
+    Ok(Arc::new(ProtocolProvider::new(manifest, glossa::GlossaTransport { script: Arc::new(script) }, cache)))
+}
+
 pub fn load_qtranslate(dir: &Path, ctx: &RuntimeContext) -> Result<Arc<dyn Provider>, String> {
     let script = legacy::LegacyScript::from_dir(dir)?;
     let meta = script.probe()?;

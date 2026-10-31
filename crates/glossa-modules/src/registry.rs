@@ -29,6 +29,10 @@ use crate::runtime;
 pub enum Origin {
     /// Compiled into the program.
     Builtin,
+    /// A JavaScript module whose sources are compiled into the program
+    /// (`modules/bundled/` in the repository). A module with the same id in
+    /// any module directory replaces it.
+    Bundled,
     /// Loaded from a module directory.
     Module { dir: PathBuf, runtime: Runtime, version: String },
 }
@@ -107,6 +111,12 @@ impl Registry {
     /// Add a provider compiled into the program.
     pub fn add_builtin(&mut self, provider: Arc<dyn Provider>) {
         self.insert(Entry { provider, origin: Origin::Builtin });
+    }
+
+    /// Add a module compiled into the program. Add these before loading the
+    /// module directories, so a module there with the same id wins.
+    pub fn add_bundled(&mut self, provider: Arc<dyn Provider>) {
+        self.insert(Entry { provider, origin: Origin::Bundled });
     }
 
     /// Add or replace by id.
