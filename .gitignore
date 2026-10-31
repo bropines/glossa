@@ -2,8 +2,24 @@
 **/*.rs.bk
 *.pdb
 /dist/
+/data/
+.claude/worktrees/
+
+# Python modules and the SDK
 __pycache__/
 *.pyc
 .venv/
-/data/
-.claude/worktrees/
+
+# Native module builds (modules/native/example-c and the like)
+modules/native/**/*.dll
+modules/native/**/*.so
+modules/native/**/*.dylib
+modules/native/**/*.o
+modules/native/**/*.obj
+
+# Editors and OS clutter
+.idea/
+.vscode/
+*.swp
+.DS_Store
+Thumbs.db
