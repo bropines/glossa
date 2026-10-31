@@ -24,6 +24,8 @@ pub enum Task {
     Translated { action: Action, text: String, error: Option<String> },
     /// A step finished; tell the user how it went.
     Done { message: String, error: bool },
+    /// Text selected with the mouse in mouse mode.
+    Mouse { text: String, cursor: Option<(i32, i32)> },
 }
 
 pub fn perform(app: &mut GlossaApp, action: Action, text: Option<String>) {
@@ -241,6 +243,7 @@ pub fn on_task(app: &mut GlossaApp, task: Task) {
             }
         }
         Task::Done { message, error } => app.notify(message, error),
+        Task::Mouse { text, cursor } => crate::mouse::on_selection(app, text, cursor),
     }
 }
 

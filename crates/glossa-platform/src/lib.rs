@@ -41,6 +41,7 @@ pub mod hotkeys;
 pub mod idle;
 pub mod input;
 pub mod layout;
+pub mod mouse;
 pub mod selection;
 pub mod session;
 pub mod window;

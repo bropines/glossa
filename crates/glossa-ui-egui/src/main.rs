@@ -12,6 +12,7 @@ mod fonts;
 mod history;
 mod icons;
 mod main_window;
+mod mouse;
 mod ocr;
 mod options;
 mod popup;
@@ -77,6 +78,8 @@ pub struct Shell {
     /// Start a fresh copy of the program once this one has shut down (a
     /// setting that only applies at start-up changed).
     pub restart: bool,
+    /// Mouse mode's watcher; like the hotkeys it outlives the GUI.
+    pub mouse: mouse::MouseHub,
 }
 
 /// Wakes whichever loop is running: the egui loop when the GUI is loaded,
@@ -243,7 +246,24 @@ fn launch_once_only(start_visible: &mut bool) {
 }
 
 /// The parts that live as long as the process.
+/// The tray icon in the theme's accent colour, changed while mouse mode is
+/// on, with the menu's check marks.
+pub fn refresh_tray_look(shell: &Shell) {
+    let Some(t) = &shell.tray else { return };
+    let cfg = shell.engine.config();
+    t.set_look(tray::accent_of(&shell.engine), cfg.mouse_mode.enabled);
+}
+
+/// Mouse mode on or off from the tray, with no GUI needed.
+fn toggle_mouse_mode(shell: &mut Shell) {
+    let on = !shell.engine.config().mouse_mode.enabled;
+    let _ = shell.engine.update_config(move |c| c.mouse_mode.enabled = on);
+    shell.mouse.sync(on);
+    refresh_tray_look(shell);
+}
+
 fn build_shell(engine: Engine, wake: Arc<Wake>) -> Shell {
+    let wake_for_mouse = wake.clone();
     {
         let w = wake.clone();
         engine.set_waker(move || w.wake());
@@ -291,8 +311,14 @@ fn build_shell(engine: Engine, wake: Arc<Wake>) -> Shell {
         pending: Vec::new(),
         quit: false,
         restart: false,
+        mouse: mouse::MouseHub::new({
+            let w = wake_for_mouse.clone();
+            Arc::new(move || w.wake())
+        }),
     };
     register_hotkeys(&mut shell);
+    shell.mouse.sync(cfg.mouse_mode.enabled);
+    refresh_tray_look(&shell);
     shell
 }
 
@@ -331,6 +357,14 @@ fn collect_wake_events(shell: &mut Shell, events: &std::sync::mpsc::Receiver<glo
         for e in t.poll() {
             match e {
                 tray::TrayEvent::Action(Action::Quit) => shell.quit = true,
+                tray::TrayEvent::ToggleMouseMode => toggle_mouse_mode(shell),
+                tray::TrayEvent::Click => {
+                    if shell.engine.config().mouse_mode.tray_click_toggles {
+                        toggle_mouse_mode(shell);
+                    } else {
+                        shell.pending.push(tray::Pending::Tray(tray::TrayEvent::ShowMain));
+                    }
+                }
                 tray::TrayEvent::ToggleHotkeys => {
                     let on = !shell.engine.config().hotkeys.enabled;
                     let _ = shell.engine.update_config(move |c| c.hotkeys.enabled = on);
@@ -341,6 +375,12 @@ fn collect_wake_events(shell: &mut Shell, events: &std::sync::mpsc::Receiver<glo
                 }
                 other => shell.pending.push(tray::Pending::Tray(other)),
             }
+        }
+    }
+    for g in shell.mouse.poll() {
+        // Read now, before any window exists (see `read_selection`).
+        if let Some(task) = mouse::selection_task(&shell.engine.config(), g) {
+            shell.pending.push(tray::Pending::Task(task));
         }
     }
     while let Ok(ev) = events.try_recv() {
@@ -437,7 +477,15 @@ fn hand_over_to_running_instance(paths: &Paths) -> bool {
 /// The application icon, drawn rather than shipped: two overlapping speech
 /// bubbles on a rounded blue square.
 pub fn app_icon(size: u32) -> egui::IconData {
+    tinted_icon(size, [0.16, 0.55, 0.89])
+}
+
+/// The icon with another base colour (the tray follows the theme's accent).
+pub fn tinted_icon(size: u32, base: [f32; 3]) -> egui::IconData {
     let n = size as f32;
+    let shade = |k: f32| [base[0] * k, base[1] * k, base[2] * k];
+    // The back bubble is white with a hint of the base colour.
+    let pale = [0.85 + base[0] * 0.15, 0.85 + base[1] * 0.15, 0.85 + base[2] * 0.15];
     let mut rgba = vec![0u8; (size * size * 4) as usize];
     let rounded = |x: f32, y: f32, x0: f32, y0: f32, x1: f32, y1: f32, r: f32| -> f32 {
         // Signed distance to a rounded rectangle (negative inside).
@@ -459,7 +507,7 @@ pub fn app_icon(size: u32) -> egui::IconData {
             // Background square, vertical gradient.
             let d = rounded(x, y, 0.0, 0.0, n, n, n * 0.22);
             let t = y / n;
-            over([0.16 - 0.06 * t, 0.55 - 0.12 * t, 0.89 - 0.10 * t], 0.5 - d);
+            over(shade(1.0 - 0.18 * t), 0.5 - d);
             // Back bubble (light), offset up-left, with a tail.
             let d1 = rounded(x, y, n * 0.14, n * 0.17, n * 0.62, n * 0.52, n * 0.08).min(tail(
                 x,
@@ -471,7 +519,7 @@ pub fn app_icon(size: u32) -> egui::IconData {
                 n * 0.20,
                 n * 0.62,
             ));
-            over([0.85, 0.93, 1.0], 0.5 - d1);
+            over(pale, 0.5 - d1);
             // Front bubble (white), offset down-right.
             let d2 = rounded(x, y, n * 0.38, n * 0.42, n * 0.86, n * 0.77, n * 0.08).min(tail(
                 x,
@@ -487,7 +535,7 @@ pub fn app_icon(size: u32) -> egui::IconData {
             // Two "text" bars on each bubble.
             for (bx0, by, bx1) in [(0.22, 0.29, 0.52), (0.22, 0.38, 0.44), (0.46, 0.55, 0.78), (0.46, 0.64, 0.70)] {
                 let db = rounded(x, y, n * bx0, n * by - n * 0.025, n * bx1, n * by + n * 0.025, n * 0.025);
-                over([0.16, 0.50, 0.85], 0.5 - db);
+                over(shade(0.92), 0.5 - db);
             }
             let i = ((py * size + px) * 4) as usize;
             rgba[i] = (out[0] * 255.0) as u8;

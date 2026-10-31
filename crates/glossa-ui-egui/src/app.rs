@@ -85,6 +85,11 @@ pub struct GlossaApp {
     pub audio: AudioPlayer,
     pub session: Session,
     tray: Option<crate::tray::Tray>,
+    mouse: Option<crate::mouse::MouseHub>,
+    /// The button mouse mode shows by the pointer.
+    pub mouse_icon: Option<crate::mouse::MouseIcon>,
+    /// The last text mouse mode acted on, to ignore repeats.
+    pub last_mouse_text: Option<(String, Instant)>,
     server: Option<glossa_engine::server::ServerHandle>,
     pub server_error: Option<String>,
     /// Where the long-lived parts go back when the GUI unloads.
@@ -173,6 +178,9 @@ impl GlossaApp {
             audio: shell.audio,
             session: Session::detect(),
             tray: shell.tray,
+            mouse: Some(shell.mouse),
+            mouse_icon: None,
+            last_mouse_text: None,
             server: shell.server,
             server_error: shell.server_error,
             slot,
@@ -453,6 +461,13 @@ impl GlossaApp {
         self.look.apply(&self.ctx, self.cfg.appearance.ui_scale);
         self.backdrop_dirty = true;
         self.backdrop_generation += 1;
+        if let Some(m) = self.mouse.as_mut() {
+            m.sync(self.cfg.mouse_mode.enabled);
+        }
+        if let Some(t) = &self.tray {
+            let c = self.look.theme.accent;
+            t.set_look([c.r as f32 / 255.0, c.g as f32 / 255.0, c.b as f32 / 255.0], self.cfg.mouse_mode.enabled);
+        }
         if before_hotkeys != self.cfg.hotkeys {
             self.register_hotkeys();
         }
@@ -660,6 +675,16 @@ impl eframe::App for GlossaApp {
         for e in tray_events {
             crate::tray::handle(self, e);
         }
+        // Mouse mode: read the selection on a worker, as the hotkeys do.
+        for g in self.mouse.as_ref().map(|m| m.poll()).unwrap_or_default() {
+            let (cfg, tx, ctx) = (self.cfg.clone(), self.tasks_tx.clone(), self.ctx.clone());
+            std::thread::spawn(move || {
+                if let Some(task) = crate::mouse::selection_task(&cfg, g) {
+                    let _ = tx.send(task);
+                    ctx.request_repaint();
+                }
+            });
+        }
 
         // Instant translation: after a pause in typing.
         if self.cfg.general.instant_translation {
@@ -697,6 +722,7 @@ impl eframe::App for GlossaApp {
         // Something must be drawn while the main window is hidden: ask for a
         // paint anyway, so `ui` runs and can open the window.
         let needs_ui = self.popup.is_some()
+            || self.mouse_icon.is_some()
             || self.ocr.is_some()
             || self.options.is_some()
             || self.dictionary.is_some()
@@ -740,6 +766,7 @@ impl eframe::App for GlossaApp {
             crate::main_window::show(self, ui);
         }
         crate::popup::show(self, &ctx);
+        crate::mouse::show_icon(self, &ctx);
         crate::ocr::show(self, &ctx);
         crate::options::show(self, &ctx);
         crate::dictionary::show(self, &ctx);
@@ -768,6 +795,10 @@ impl eframe::App for GlossaApp {
             // Unless this was an unload, the window closing means quitting.
             quit: !self.unloading || self.quitting,
             restart: self.restarting,
+            mouse: self.mouse.take().unwrap_or_else(|| {
+                let w = self.wake.clone();
+                crate::mouse::MouseHub::new(Arc::new(move || w.wake()))
+            }),
         };
         *self.slot.borrow_mut() = Some(shell);
     }
