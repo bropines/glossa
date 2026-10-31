@@ -1,0 +1,304 @@
+//! Getting the text the user has selected in another program, and pasting a
+//! replacement over it.
+//!
+//! There is no portable "give me the selection" call, so each platform gets
+//! the least intrusive strategy that works there:
+//!
+//! - **Windows**: UI Automation first (silent, clipboard untouched); then a
+//!   synthetic copy — release the user's still-held hotkey modifiers, save
+//!   the clipboard, send Ctrl+C (or Ctrl+Insert), watch
+//!   `GetClipboardSequenceNumber` until the target program has copied or the
+//!   timeout passes, read the text, restore the clipboard.
+//! - **X11**: the PRIMARY selection, which is exactly "what is highlighted";
+//!   no keystroke at all.
+//! - **Wayland**: PRIMARY where the compositor offers data-control (KDE,
+//!   wlroots, Hyprland; GNOME bridges it for XWayland), otherwise the regular
+//!   clipboard — the user has to press Ctrl+C first, which
+//!   [`Session::limitations`](crate::Session::limitations) tells them.
+//! - **macOS**: Accessibility `AXSelectedText`, then a synthetic Cmd+C with
+//!   the clipboard saved and restored.
+
+use std::time::{Duration, Instant};
+
+use glossa_core::config::CopyAction;
+
+use crate::Result;
+#[cfg(any(windows, target_os = "macos"))]
+use crate::{clipboard::Clipboard, input};
+
+/// How long the program we pasted into gets to read the clipboard before we
+/// put the user's own content back. Pasting is asynchronous: the target
+/// reads the clipboard whenever it gets round to processing the keystroke,
+/// and Office or a busy browser can take a few hundred milliseconds.
+pub const REPLACE_RESTORE_DELAY: Duration = Duration::from_millis(600);
+
+/// How selection capture should behave; usually built from the options with
+/// [`CaptureOptions::from_config`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct CaptureOptions {
+    /// The keystroke for the synthetic copy, or none at all.
+    pub copy_action: CopyAction,
+    /// How long to wait for the target program to put the selection on the
+    /// clipboard after the synthetic copy.
+    pub wait_ms: u64,
+    /// Put the user's clipboard back afterwards. Off leaves the copied
+    /// selection on the clipboard, as a manual Ctrl+C would.
+    pub restore_clipboard: bool,
+}
+
+impl Default for CaptureOptions {
+    fn default() -> Self {
+        Self { copy_action: CopyAction::CtrlC, wait_ms: 250, restore_clipboard: true }
+    }
+}
+
+impl CaptureOptions {
+    pub fn from_config(advanced: &glossa_core::config::Advanced) -> Self {
+        Self {
+            copy_action: advanced.copy_action,
+            wait_ms: advanced.copy_wait_ms,
+            restore_clipboard: true,
+        }
+    }
+}
+
+/// The selected text in the foreground program, or `None` when nothing is
+/// selected (or it could not be read). Blocks for up to about
+/// `opts.wait_ms`; call it off the UI thread.
+pub fn capture_selection(opts: &CaptureOptions) -> Result<Option<String>> {
+    #[cfg(windows)]
+    {
+        if let Some(text) = crate::uia::selected_text() {
+            tracing::debug!("selection via UI Automation");
+            return Ok(Some(text));
+        }
+        if opts.copy_action == CopyAction::AccessibilityOnly {
+            return Ok(None);
+        }
+        copy_via_clipboard(opts)
+    }
+    #[cfg(target_os = "macos")]
+    {
+        if let Some(text) = crate::macos_ax::selected_text() {
+            tracing::debug!("selection via AXSelectedText");
+            return Ok(Some(text));
+        }
+        if opts.copy_action == CopyAction::AccessibilityOnly {
+            return Ok(None);
+        }
+        copy_via_clipboard(opts)
+    }
+    #[cfg(not(any(windows, target_os = "macos")))]
+    {
+        unix_capture(opts)
+    }
+}
+
+#[cfg(not(any(windows, target_os = "macos")))]
+fn unix_capture(opts: &CaptureOptions) -> Result<Option<String>> {
+    use crate::{clipboard::Clipboard, DisplayServer, Session};
+
+    let session = Session::detect();
+    match session.display {
+        DisplayServer::X11 => Ok(Clipboard::new()?.get_primary()),
+        DisplayServer::Wayland { .. } => {
+            let mut cb = Clipboard::new()?;
+            if let Some(text) = cb.get_primary() {
+                return Ok(Some(text));
+            }
+            // No readable PRIMARY: the clipboard is the best we have. It
+            // holds the selection only if the user copied it, which the
+            // session limitations explain.
+            static WARNED: std::sync::Once = std::sync::Once::new();
+            WARNED.call_once(|| {
+                tracing::warn!(
+                    "PRIMARY selection unavailable on this compositor; using the clipboard \
+                     (copy text with Ctrl+C before translating)"
+                );
+            });
+            let _ = opts;
+            Ok(cb.get_text())
+        }
+        _ => Err(crate::platform_err("reading the selection needs a graphical session")),
+    }
+}
+
+/// The synthetic-copy strategy shared by Windows and macOS.
+#[cfg(any(windows, target_os = "macos"))]
+fn copy_via_clipboard(opts: &CaptureOptions) -> Result<Option<String>> {
+    let mut cb = Clipboard::new()?;
+    let snapshot = cb.snapshot();
+    input::release_modifiers()?;
+
+    // Arm a change detector. Windows has the clipboard sequence number; on
+    // macOS we clear the clipboard and wait for text to appear, which also
+    // works when the selection equals what was already there.
+    #[cfg(windows)]
+    let before = Clipboard::sequence_number();
+    #[cfg(not(windows))]
+    cb.clear()?;
+
+    let sent = input::send_copy(opts.copy_action);
+    #[cfg(not(windows))]
+    if sent.is_err() {
+        let _ = cb.restore(&snapshot); // we emptied it above
+    }
+    sent?;
+
+    let deadline = Instant::now() + Duration::from_millis(opts.wait_ms);
+    #[cfg(windows)]
+    let changed = wait_until(deadline, || Clipboard::sequence_number() != before);
+    #[cfg(not(windows))]
+    let changed = true; // we emptied it, so restoring is always due
+
+    let text = if changed {
+        // The sequence number moves on EmptyClipboard, before the text is
+        // set, and the source may still hold the clipboard open: retry the
+        // read briefly past the deadline.
+        let grace = deadline.max(Instant::now() + Duration::from_millis(100));
+        let mut text = None;
+        wait_until(grace, || {
+            text = cb.get_text();
+            text.is_some()
+        });
+        text
+    } else {
+        None
+    };
+
+    let keep_copy = text.is_some() && !opts.restore_clipboard;
+    if changed && !keep_copy {
+        if let Err(e) = cb.restore(&snapshot) {
+            tracing::warn!("could not restore the clipboard: {e}");
+        }
+    }
+    Ok(text)
+}
+
+/// Poll `done` every few milliseconds until it is true or `deadline`
+/// passes; returns whether it became true.
+#[cfg_attr(not(any(windows, target_os = "macos")), allow(dead_code))]
+fn wait_until(deadline: Instant, mut done: impl FnMut() -> bool) -> bool {
+    loop {
+        if done() {
+            return true;
+        }
+        if Instant::now() >= deadline {
+            return false;
+        }
+        std::thread::sleep(Duration::from_millis(5));
+    }
+}
+
+/// Replace the selection in the foreground program with `text`: put it on
+/// the clipboard, send the paste keystroke, and restore the user's clipboard
+/// after [`REPLACE_RESTORE_DELAY`] on a background thread (only if it still
+/// holds our text — the user may have copied something new meanwhile).
+///
+/// Where synthetic input is impossible (Wayland) the text is left on the
+/// clipboard and an error says so, so the UI can tell the user to paste it.
+pub fn replace_selection(text: &str) -> Result<()> {
+    #[cfg(any(windows, target_os = "macos"))]
+    {
+        let mut cb = Clipboard::new()?;
+        let snapshot = cb.snapshot();
+        cb.set_text(text)?;
+        let ours = Clipboard::sequence_number();
+        // Let the clipboard settle before the target asks for it.
+        std::thread::sleep(Duration::from_millis(20));
+        input::release_modifiers()?;
+        input::send_paste()?;
+        let pasted = text.to_owned();
+        std::thread::spawn(move || {
+            std::thread::sleep(REPLACE_RESTORE_DELAY);
+            let still_ours = match (ours, Clipboard::sequence_number()) {
+                (Some(a), Some(b)) => a == b,
+                _ => cb.get_text().as_deref() == Some(pasted.as_str()),
+            };
+            if still_ours {
+                if let Err(e) = cb.restore(&snapshot) {
+                    tracing::warn!("could not restore the clipboard after pasting: {e}");
+                }
+            }
+        });
+        Ok(())
+    }
+    #[cfg(not(any(windows, target_os = "macos")))]
+    {
+        unix_replace(text)
+    }
+}
+
+#[cfg(not(any(windows, target_os = "macos")))]
+fn unix_replace(text: &str) -> Result<()> {
+    use crate::{clipboard::Clipboard, input, Session};
+
+    let session = Session::detect();
+    let mut cb = Clipboard::new()?;
+    if !session.supports_synthetic_input() {
+        cb.set_text(text)?;
+        // Keep the clipboard object (and so, on X11/XWayland, the data)
+        // alive long enough for a clipboard manager to take it over.
+        std::thread::spawn(move || {
+            std::thread::sleep(Duration::from_secs(30));
+            drop(cb);
+        });
+        return Err(crate::platform_err(
+            "this session does not allow pasting into other programs; the translation is on \
+             the clipboard — paste it with Ctrl+V",
+        ));
+    }
+    let snapshot = cb.snapshot();
+    cb.set_text(text)?;
+    std::thread::sleep(Duration::from_millis(20));
+    input::release_modifiers()?;
+    input::send_paste()?;
+    let pasted = text.to_owned();
+    std::thread::spawn(move || {
+        // On X11 the clipboard is served from this process: `cb` must live
+        // until the target has fetched the text.
+        std::thread::sleep(REPLACE_RESTORE_DELAY);
+        if cb.get_text().as_deref() == Some(pasted.as_str()) {
+            if let Err(e) = cb.restore(&snapshot) {
+                tracing::warn!("could not restore the clipboard after pasting: {e}");
+            }
+        }
+    });
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn options_follow_the_config() {
+        let mut adv = glossa_core::config::Advanced::default();
+        assert_eq!(CaptureOptions::from_config(&adv), CaptureOptions::default());
+        adv.copy_action = CopyAction::CtrlInsert;
+        adv.copy_wait_ms = 900;
+        let o = CaptureOptions::from_config(&adv);
+        assert_eq!(o.copy_action, CopyAction::CtrlInsert);
+        assert_eq!(o.wait_ms, 900);
+        assert!(o.restore_clipboard);
+    }
+
+    #[test]
+    fn wait_until_respects_the_deadline() {
+        let start = Instant::now();
+        assert!(!wait_until(start + Duration::from_millis(30), || false));
+        assert!(start.elapsed() >= Duration::from_millis(30));
+        let mut n = 0;
+        assert!(wait_until(start + Duration::from_secs(5), || {
+            n += 1;
+            n == 3
+        }));
+    }
+
+    #[test]
+    #[ignore = "needs a display and a selection in another window"]
+    fn capture_from_the_real_desktop() {
+        let text = capture_selection(&CaptureOptions::default()).unwrap();
+        println!("selection: {text:?}");
+    }
+}

@@ -10,3 +10,48 @@ authors.workspace = true
 [dependencies]
 glossa-core = { workspace = true }
 tracing = { workspace = true }
+thiserror = { workspace = true }
+dirs = { workspace = true }
+image = { workspace = true }
+arboard = { workspace = true }
+global-hotkey = { workspace = true }
+# Playback only, and only the codecs TTS services actually return: MP3,
+# WAV (PCM) and Ogg Vorbis. Every other symphonia codec is dead weight.
+rodio = { version = "0.23", default-features = false, features = ["playback", "mp3", "wav", "vorbis"] }
+
+[features]
+default = []
+# Screen capture on Linux through xcap, which adds Wayland capture (portal /
+# wlr-screencopy) to the built-in X11 backend. Off by default because xcap
+# links PipeWire and needs its development files, version 0.3.65 or newer,
+# to build (Debian 12 / Ubuntu 23.04 and later). Without it, Wayland capture
+# falls back to the `grim` command where installed.
+wayland-capture = ["dep:xcap-linux"]
+
+[target.'cfg(any(windows, target_os = "macos"))'.dependencies]
+xcap = { workspace = true }
+
+[target.'cfg(target_os = "linux")'.dependencies]
+arboard = { workspace = true, features = ["wayland-data-control"] }
+enigo = { version = "0.6", default-features = false, features = ["x11rb"] }
+x11rb = { version = "0.13", features = ["randr"] }
+xcap-linux = { package = "xcap", version = "0.9", optional = true }
+
+[target.'cfg(target_os = "macos")'.dependencies]
+enigo = { version = "0.6", default-features = false }
+
+[target.'cfg(windows)'.dependencies]
+windows = { workspace = true, features = [
+    "Win32_Foundation",
+    "Win32_Graphics_Gdi",
+    "Win32_System_Com",
+    "Win32_System_DataExchange",
+    "Win32_System_Memory",
+    "Win32_System_Ole",
+    "Win32_System_Registry",
+    "Win32_System_Threading",
+    "Win32_UI_Accessibility",
+    "Win32_UI_HiDpi",
+    "Win32_UI_Input_KeyboardAndMouse",
+    "Win32_UI_WindowsAndMessaging",
+] }
