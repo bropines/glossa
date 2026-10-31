@@ -119,8 +119,10 @@ pub fn open(app: &mut GlossaApp) {
 
 pub fn show(app: &mut GlossaApp, ctx: &egui::Context) {
     let Some(mut st) = app.options.take() else { return };
+    let title = app.t("options.title");
     let builder = egui::ViewportBuilder::default()
-        .with_title(app.t("options.title"))
+        .with_title(title.clone())
+        .with_transparent(app.look.window_backdrop != glossa_core::config::Backdrop::None)
         .with_inner_size([900.0, 600.0])
         .with_min_inner_size([680.0, 420.0])
         .with_icon(crate::app_icon(32));
@@ -132,6 +134,7 @@ pub fn show(app: &mut GlossaApp, ctx: &egui::Context) {
         app.zoom_input(ui);
         open &= body(app, ui, &mut st);
     });
+    app.child_backdrop(&title, false);
     if open {
         app.options = Some(st);
     }
@@ -139,7 +142,10 @@ pub fn show(app: &mut GlossaApp, ctx: &egui::Context) {
 
 fn apply(app: &mut GlossaApp, st: &mut OptionsState) {
     let draft = st.draft.clone();
-    if draft.appearance.renderer != app.engine.config().appearance.renderer {
+    let current = app.engine.config();
+    if draft.appearance.renderer != current.appearance.renderer
+        || crate::style::needs_transparent_root(&draft) != crate::style::needs_transparent_root(&current)
+    {
         st.ask_restart = true;
     }
     let result = app.engine.update_config(move |c| {
@@ -631,6 +637,37 @@ fn service_details(
     });
 }
 
+/// A backdrop picker, greyed out where backdrops cannot show.
+fn backdrop_row(
+    app: &GlossaApp,
+    ui: &mut egui::Ui,
+    label: &str,
+    salt: &str,
+    value: &mut glossa_core::config::Backdrop,
+) {
+    use glossa_core::config::Backdrop;
+    let supported = crate::style::backdrops_supported(&app.engine.config());
+    let names = [
+        (Backdrop::None, app.t("options.backdrop.none")),
+        (Backdrop::Mica, "Mica".to_owned()),
+        (Backdrop::MicaAlt, "Mica Alt".to_owned()),
+        (Backdrop::Acrylic, "Acrylic".to_owned()),
+        (Backdrop::Blur, app.t("options.backdrop.blur")),
+    ];
+    row(ui, label, |ui| {
+        ui.add_enabled_ui(supported, |ui| {
+            let cur = names.iter().find(|(b, _)| b == value).map(|(_, n)| n.clone()).unwrap_or_default();
+            egui::ComboBox::from_id_salt(salt).width(200.0).selected_text(cur).show_ui(ui, |ui| {
+                for (b, n) in &names {
+                    ui.selectable_value(value, *b, n);
+                }
+            });
+        })
+        .response
+        .on_disabled_hover_text(app.t("options.backdrop.needs_opengl"));
+    });
+}
+
 fn is_ai_endpoint(id: &str) -> bool {
     id == glossa_engine::ai::BUILTIN_ID || id.starts_with("ai-")
 }
@@ -967,6 +1004,7 @@ fn appearance(app: &mut GlossaApp, ui: &mut egui::Ui, st: &mut OptionsState) {
         row(ui, "Window transparency (0 - 90):", |ui| {
             ui.add(egui::Slider::new(&mut d.appearance.window_transparency, 0..=90));
         });
+        backdrop_row(app, ui, &app.t("options.appearance.backdrop"), "backdrop", &mut d.appearance.backdrop);
         row(ui, &app.t("options.appearance.icon_scale"), |ui| {
             ui.add(egui::Slider::new(&mut d.appearance.icon_scale, 0.75..=2.5).step_by(0.05));
         });
@@ -996,6 +1034,10 @@ fn appearance(app: &mut GlossaApp, ui: &mut egui::Ui, st: &mut OptionsState) {
         ui.checkbox(&mut p.activate_on_open, app.t("options.appearance.activate"));
         ui.checkbox(&mut p.pin_when_dragging, app.t("options.appearance.pin_when_dragging"));
         ui.checkbox(&mut p.show_border, app.t("options.appearance.show_border"));
+        backdrop_row(app, ui, &app.t("options.appearance.popup_backdrop"), "popup-backdrop", &mut p.backdrop);
+        row(ui, &app.t("options.appearance.popup_shade"), |ui| {
+            ui.add(egui::Slider::new(&mut p.shade, 0..=90));
+        });
         row(ui, &app.t("options.appearance.auto_hide"), |ui| {
             ui.label(app.t("options.appearance.seconds"));
             ui.add(egui::DragValue::new(&mut p.auto_hide_secs).range(0..=600));

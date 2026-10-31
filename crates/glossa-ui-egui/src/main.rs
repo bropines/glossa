@@ -186,7 +186,7 @@ fn main() -> eframe::Result<()> {
             .with_inner_size(geometry.map(|g| [g.width, g.height]).unwrap_or([680.0, 470.0]))
             .with_min_inner_size([420.0, 300.0])
             .with_decorations(!cfg.appearance.custom_frame)
-            .with_transparent(cfg.appearance.window_transparency > 0)
+            .with_transparent(style::needs_transparent_root(&cfg))
             .with_visible(start_visible)
             .with_icon(app_icon(64));
         if let Some(g) = geometry {

@@ -120,6 +120,16 @@ pub struct GlossaApp {
     /// The interface scale changed (Ctrl+wheel, Ctrl+plus/minus) and is
     /// waiting to be saved.
     zoom_changed: Option<Instant>,
+    /// The main window was created with an alpha channel.
+    transparent_root: bool,
+    /// The main window's backdrop needs (re)applying.
+    backdrop_dirty: bool,
+    /// Child windows' backdrops as applied: title -> (window, kind, settings
+    /// generation), so a recreated window or new settings apply again.
+    child_backdrops: HashMap<String, (isize, glossa_core::config::Backdrop, u64)>,
+    backdrop_generation: u64,
+    /// Whether the popup's backdrop really blurs (else it is shaded).
+    pub popup_blurred: bool,
     /// The last OCR region, for "repeat last recognition".
     pub last_region: Option<glossa_core::ocr::Rect>,
 }
@@ -134,6 +144,7 @@ impl GlossaApp {
         let shell = slot.borrow_mut().take().expect("the shell is handed to each GUI run");
         let engine = shell.engine.clone();
         let cfg = engine.config();
+        let transparent_root = crate::style::needs_transparent_root(&cfg);
         let look = Look::new(engine.current_theme(), &cfg);
         look.apply(&ctx, cfg.appearance.ui_scale);
         let mut fonts = Fonts::default();
@@ -186,6 +197,11 @@ impl GlossaApp {
             restarting: false,
             frames: 0,
             zoom_changed: None,
+            transparent_root,
+            backdrop_dirty: true,
+            child_backdrops: HashMap::new(),
+            backdrop_generation: 0,
+            popup_blurred: false,
             last_region: None,
         }
     }
@@ -282,6 +298,53 @@ impl GlossaApp {
                 },
             );
         }
+    }
+
+    fn apply_main_backdrop(&mut self, ctx: &egui::Context, frame: &eframe::Frame) {
+        let kind = self.look.window_backdrop;
+        if !self.transparent_root && kind != glossa_core::config::Backdrop::None {
+            return; // needs a restart: the window has no alpha channel
+        }
+        let dark = self.look.theme.dark;
+        // winit re-applies the system theme after creation, which would tint
+        // Mica the system's way; say which way it should be.
+        ctx.send_viewport_cmd_to(
+            egui::ViewportId::ROOT,
+            egui::ViewportCommand::SetTheme(if dark { egui::SystemTheme::Dark } else { egui::SystemTheme::Light }),
+        );
+        if let Err(e) = glossa_platform::backdrop::apply(frame, kind, dark) {
+            tracing::debug!("main window backdrop: {e}");
+        }
+    }
+
+    /// Give a child window (popup, options…) its backdrop once it exists,
+    /// and again when it is recreated or the settings change. egui does not
+    /// expose child windows' handles, so the window is found by its title.
+    pub fn child_backdrop(&mut self, title: &str, popup: bool) {
+        use glossa_core::config::Backdrop;
+        use glossa_platform::backdrop;
+        if !cfg!(windows) || !self.transparent_root {
+            return;
+        }
+        let kind = if popup { self.look.popup_backdrop } else { self.look.window_backdrop };
+        let applied = self.child_backdrops.get(title).copied();
+        if kind == Backdrop::None && applied.is_none_or(|(_, k, _)| k == Backdrop::None) {
+            return;
+        }
+        let Some(hwnd) = backdrop::find_own_window(title) else { return };
+        if applied == Some((hwnd, kind, self.backdrop_generation)) {
+            return;
+        }
+        let dark = self.look.theme.dark;
+        let options = if popup { backdrop::Options::unfocused(dark) } else { backdrop::Options::new(dark) };
+        let result = backdrop::apply_hwnd_with(hwnd, kind, options);
+        if popup {
+            self.popup_blurred = result.as_ref().is_ok_and(|a| a.blurs());
+        }
+        if let Err(e) = result {
+            tracing::debug!("backdrop for {title}: {e}");
+        }
+        self.child_backdrops.insert(title.to_owned(), (hwnd, kind, self.backdrop_generation));
     }
 
     /// Ctrl+wheel scales the whole interface, in any of the windows (each
@@ -388,6 +451,8 @@ impl GlossaApp {
         self.locale = self.engine.locale();
         self.look = Look::new(self.engine.current_theme(), &self.cfg);
         self.look.apply(&self.ctx, self.cfg.appearance.ui_scale);
+        self.backdrop_dirty = true;
+        self.backdrop_generation += 1;
         if before_hotkeys != self.cfg.hotkeys {
             self.register_hotkeys();
         }
@@ -654,7 +719,19 @@ impl eframe::App for GlossaApp {
         }
     }
 
-    fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
+    fn clear_color(&self, visuals: &egui::Visuals) -> [f32; 4] {
+        if self.transparent_root {
+            // Anything else veils a translucent window or backdrop.
+            [0.0; 4]
+        } else {
+            visuals.panel_fill.to_normalized_gamma_f32()
+        }
+    }
+
+    fn ui(&mut self, ui: &mut egui::Ui, frame: &mut eframe::Frame) {
+        if std::mem::take(&mut self.backdrop_dirty) {
+            self.apply_main_backdrop(ui.ctx(), frame);
+        }
         self.frames += 1;
         let ctx = ui.ctx().clone();
         self.zoom_input(ui);

@@ -56,6 +56,8 @@ pub struct PopupState {
 }
 
 const ID: &str = "glossa-popup";
+/// Unique among Glossa's windows: backdrops find the window by its title.
+const POPUP_TITLE: &str = "Glossa popup";
 
 pub fn viewport_id() -> egui::ViewportId {
     egui::ViewportId::from_hash_of(ID)
@@ -268,7 +270,7 @@ pub fn show(app: &mut GlossaApp, ctx: &egui::Context) {
     let Some(mut state) = app.popup.take() else { return };
     let cfg = &app.cfg.appearance.popup;
     let builder = egui::ViewportBuilder::default()
-        .with_title("Glossa")
+        .with_title(POPUP_TITLE)
         .with_decorations(false)
         .with_resizable(true)
         .with_min_inner_size([160.0, 48.0])
@@ -320,6 +322,7 @@ pub fn show(app: &mut GlossaApp, ctx: &egui::Context) {
             }
         }
     }
+    app.child_backdrop(POPUP_TITLE, true);
     if close {
         return;
     }
@@ -352,6 +355,9 @@ fn body(app: &mut GlossaApp, ui: &mut egui::Ui, st: &mut PopupState) -> (bool, e
     st.hovered = hovered_now;
 
     let fill = look.popup_back.gamma_multiply(look.popup_opacity);
+    // Without a real blur behind it, a translucent popup can be shaded
+    // toward black so its text stays readable.
+    let fill = crate::style::c(cfg.shaded(crate::style::from32(fill), app.popup_blurred));
     let border = if cfg.show_border { look.popup_frame_width.max(0.0) } else { 0.0 };
     let frame = egui::Frame::new()
         .fill(Color32::from_rgba_unmultiplied(fill.r(), fill.g(), fill.b(), (look.popup_opacity * 255.0) as u8))

@@ -69,10 +69,21 @@ pub fn show(app: &mut GlossaApp, ui: &mut egui::Ui) {
             if app.cfg.general.show_top_pane {
                 top_pane(app, ui);
             }
-            let services_h =
-                if app.cfg.general.show_services_pane { look.theme.metrics.service_tab_height + 8.0 } else { 0.0 };
-            let middle_h = if app.cfg.general.show_middle_pane { 34.0 } else { 6.0 };
-            let avail = ui.available_height() - services_h - middle_h - 8.0;
+            // The service strip is a bottom panel: it always gets its room,
+            // whatever the theme's sizes, and the panes share the rest.
+            if app.cfg.general.show_services_pane && app.cfg.general.results_layout == ResultsLayout::Tabs {
+                egui::Panel::bottom("main-service-strip").frame(egui::Frame::NONE).show(ui, |ui| {
+                    ui.add_space(6.0);
+                    service_strip(app, ui);
+                });
+            }
+            let spacing = ui.spacing().item_spacing.y;
+            let middle_h = if app.cfg.general.show_middle_pane {
+                ui.spacing().interact_size.y.max(26.0) + 8.0 + 2.0 * spacing
+            } else {
+                6.0 + 2.0 * spacing
+            };
+            let avail = ui.available_height() - middle_h - 4.0;
             let back_pane =
                 app.cfg.general.back_translation && app.main.outcome.as_ref().is_some_and(|o| o.back.is_some());
             let split = app.cfg.general.show_middle_pane;
@@ -95,10 +106,6 @@ pub fn show(app: &mut GlossaApp, ui: &mut egui::Ui) {
                     ui.add_space(6.0);
                     back_translation_pane(app, ui, back_h);
                 }
-            }
-            if app.cfg.general.show_services_pane && app.cfg.general.results_layout == ResultsLayout::Tabs {
-                ui.add_space(6.0);
-                service_strip(app, ui);
             }
         });
     });

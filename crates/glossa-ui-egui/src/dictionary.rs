@@ -82,8 +82,10 @@ impl DictState {
 
 pub fn show(app: &mut GlossaApp, ctx: &egui::Context) {
     let Some(mut st) = app.dictionary.take() else { return };
+    let title = app.t("dict.title");
     let builder = egui::ViewportBuilder::default()
-        .with_title(app.t("dict.title"))
+        .with_title(title.clone())
+        .with_transparent(app.look.window_backdrop != glossa_core::config::Backdrop::None)
         .with_inner_size([820.0, 560.0])
         .with_min_inner_size([480.0, 320.0])
         .with_icon(crate::app_icon(32));
@@ -95,6 +97,7 @@ pub fn show(app: &mut GlossaApp, ctx: &egui::Context) {
         app.zoom_input(ui);
         body(app, ui, &mut st);
     });
+    app.child_backdrop(&title, false);
     if open {
         app.dictionary = Some(st);
     }

@@ -6,6 +6,8 @@
 //! things egui has no slot for (popup frame, service tabs, custom title bar).
 
 use egui::{Color32, CornerRadius, Margin, Shadow, Stroke, Visuals};
+use glossa_core::config::Backdrop;
+use glossa_core::theme::Surface;
 use glossa_core::theme::{Theme, WidgetState};
 use glossa_core::Color;
 
@@ -33,11 +35,45 @@ pub struct Look {
     pub window_alpha: f32,
     /// Multiplier for icon buttons (Options → Appearance).
     pub icon_scale: f32,
+    /// The backdrop in effect for windows and for the popup: what the
+    /// settings ask for, where the platform and renderer can show it.
+    pub window_backdrop: Backdrop,
+    pub popup_backdrop: Backdrop,
+}
+
+/// Whether window backdrops can show at all: Windows or macOS, with the
+/// OpenGL renderer (under wgpu the client area stays opaque).
+pub fn backdrops_supported(cfg: &glossa_core::Config) -> bool {
+    (cfg!(windows) || cfg!(target_os = "macos")) && cfg.appearance.renderer == glossa_core::config::Renderer::OpenGl
+}
+
+/// Whether the main window has to be created with an alpha channel: child
+/// windows can only be translucent if it is.
+pub fn needs_transparent_root(cfg: &glossa_core::Config) -> bool {
+    let a = &cfg.appearance;
+    a.window_transparency > 0
+        || (backdrops_supported(cfg) && (a.backdrop != Backdrop::None || a.popup.backdrop != Backdrop::None))
 }
 
 impl Look {
-    pub fn new(theme: Theme, cfg: &glossa_core::Config) -> Look {
+    pub fn new(mut theme: Theme, cfg: &glossa_core::Config) -> Look {
         let p = &cfg.appearance.popup;
+        // `accent = "system"` themes take the system's accent colour now.
+        theme.resolve_system_accent(glossa_platform::appearance::system_accent().as_ref());
+        let supported = backdrops_supported(cfg);
+        let window_backdrop = if supported { cfg.appearance.backdrop } else { Backdrop::None };
+        let popup_backdrop = if supported { p.backdrop } else { Backdrop::None };
+        // With a backdrop the theme's fills turn translucent, so the material
+        // shows through everywhere they are used.
+        if window_backdrop != Backdrop::None {
+            theme.window.back = theme.backdrop_fill(Surface::Window, window_backdrop);
+            theme.window.client_back = theme.backdrop_fill(Surface::Client, window_backdrop);
+            let edit = theme.backdrop_fill(Surface::Edit, window_backdrop);
+            theme.edit.normal.back = edit;
+        }
+        if popup_backdrop != Backdrop::None {
+            theme.popup.back = theme.backdrop_fill(Surface::Popup, popup_backdrop);
+        }
         // With window style on (the default) the popup follows the theme; the
         // separate popup colours apply only when it is off — as the classic
         // options page greyed them out.
@@ -50,8 +86,15 @@ impl Look {
             popup_frame_width: p.frame_thickness,
             popup_opacity: p.opacity().min(theme.popup.opacity.max(0.1)).max(0.1),
             text_size: cfg.appearance.text_size,
-            window_alpha: 1.0 - cfg.appearance.window_transparency.min(90) as f32 / 100.0,
             icon_scale: cfg.appearance.icon_scale.clamp(0.75, 3.0),
+            // A backdrop replaces the transparency slider for the body.
+            window_alpha: if window_backdrop != Backdrop::None {
+                1.0
+            } else {
+                1.0 - cfg.appearance.window_transparency.min(90) as f32 / 100.0
+            },
+            window_backdrop,
+            popup_backdrop,
             theme,
         }
     }

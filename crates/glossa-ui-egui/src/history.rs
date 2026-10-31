@@ -35,8 +35,10 @@ pub fn show(app: &mut GlossaApp, ctx: &egui::Context) {
         st.entries = app.engine.search_history(&st.search, st.favorites_only);
         st.dirty = false;
     }
+    let title = app.t("history.title");
     let builder = egui::ViewportBuilder::default()
-        .with_title(app.t("history.title"))
+        .with_title(title.clone())
+        .with_transparent(app.look.window_backdrop != glossa_core::config::Backdrop::None)
         .with_inner_size([760.0, 520.0])
         .with_min_inner_size([420.0, 260.0])
         .with_icon(crate::app_icon(32));
@@ -48,6 +50,7 @@ pub fn show(app: &mut GlossaApp, ctx: &egui::Context) {
         app.zoom_input(ui);
         body(app, ui, &mut st, &mut open);
     });
+    app.child_backdrop(&title, false);
     if open {
         app.history = Some(st);
     }
