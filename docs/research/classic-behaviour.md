@@ -72,6 +72,32 @@ Appearance, Exceptions, Advanced, Updates; OK / Cancel / Apply at the bottom.
   indicator, preferred domain, GUI translation, slower repeat listening,
   remove line breaks; "Mouse mode" group; "API keys" group (OCR key).
 
+## How classic service scripts expect to be driven
+
+Learned from the scripts themselves and from running each of them live
+(November 2026):
+
+- `serviceHost(capability, from, to)` gets the capability (translation,
+  dictionary…) as its first argument; several dictionary scripts pick a
+  different host per capability. A host returned without a scheme means
+  `https://`.
+- A reply handled through `nextRequestHandler` is a continuation: its text is
+  added to what the first request produced (Microsoft's script chains a
+  dictionary lookup after the translation of a short phrase). A
+  `nextRequestHandler` that is not a function name ends the chain;
+  Translatero puts the source text there.
+- A POST without a `Content-Type` was sent as a form by the classic host;
+  some services (Bing's dictionary lookup) ignore the body otherwise.
+- Scripts use `escape`/`unescape`, a `Utils` object with `md5`, and
+  `ActiveXObject("htmlfile")` to parse HTML, besides the WinHTTP objects.
+- Many scripts parse an error page as if it were the answer; a script that
+  throws after an HTTP error is reported as that HTTP error.
+
+At that date, of the scripts in a typical installation, 7 translators and 7
+dictionaries worked; the rest failed on the remote side (endpoints retired or
+moved, Cloudflare or bot checks, expired certificates), the same for the
+classic program.
+
 ## Process and security notes
 
 - The classic program is registered to start at logon through a scheduled
