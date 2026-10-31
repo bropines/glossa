@@ -703,8 +703,10 @@ dependencies = [
 name = "glossa-dict"
 version = "0.1.0"
 dependencies = [
+ "flate2",
  "glossa-core",
  "glossa-modules",
+ "glossa-net",
  "serde",
  "serde_json",
  "tracing",
