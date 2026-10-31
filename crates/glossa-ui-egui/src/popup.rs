@@ -248,6 +248,7 @@ fn body(app: &mut GlossaApp, ui: &mut egui::Ui, st: &mut PopupState) -> (bool, e
         + 16.0;
     let desired_w = (text_w.max(title_w) + 16.0).clamp(min_w, max_w);
 
+    let mut overflow = 0.0f32;
     let resp = egui::CentralPanel::no_frame().show(ui, |ui| {
         frame.show(ui, |ui| {
             ui.set_width(desired_w - 14.0);
@@ -308,7 +309,7 @@ fn body(app: &mut GlossaApp, ui: &mut egui::Ui, st: &mut PopupState) -> (bool, e
                 ui.label(RichText::new(e).color(look.error()).font(font.clone()));
             } else if let Some(o) = &st.outcome {
                 let shown = display_text(o);
-                egui::ScrollArea::vertical().max_height(cfg.max_height - 70.0).show(ui, |ui| {
+                let out = egui::ScrollArea::vertical().max_height(cfg.max_height - 70.0).show(ui, |ui| {
                     let rtl = o.pair.to.is_rtl();
                     let text = if glossa_core::text::needs_bidi(&shown) { glossa_core::text::for_display(&shown, rtl) } else { shown };
                     let label = egui::Label::new(RichText::new(text).font(font.clone()).color(text_color)).selectable(true).wrap();
@@ -318,6 +319,10 @@ fn body(app: &mut GlossaApp, ui: &mut egui::Ui, st: &mut PopupState) -> (bool, e
                         ui.add(label);
                     }
                 });
+                // The scroll area is no taller than the window is now, so a
+                // longer text would never make the window grow: add what is
+                // hidden.
+                overflow = (out.content_size.y - out.inner_rect.height()).max(0.0);
             }
 
             // -- service strip, while the pointer is over the popup ----------
@@ -359,7 +364,7 @@ fn body(app: &mut GlossaApp, ui: &mut egui::Ui, st: &mut PopupState) -> (bool, e
     });
 
     let content = resp.inner.response.rect.size();
-    let h = content.y.clamp(36.0, cfg.max_height);
+    let h = (content.y + overflow).clamp(36.0, cfg.max_height);
     (close, vec2(desired_w.ceil(), h.ceil()))
 }
 

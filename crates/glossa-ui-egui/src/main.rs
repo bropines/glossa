@@ -289,7 +289,14 @@ pub fn register_hotkeys(shell: &mut Shell) {
 fn collect_wake_events(shell: &mut Shell, events: &std::sync::mpsc::Receiver<glossa_engine::Event>) {
     if let Some(h) = shell.hotkeys.as_mut() {
         while let Some(a) = h.poll() {
-            shell.pending.push(tray::Pending::Action(a, None));
+            if actions::needs_selection(a) {
+                // Read it now, before the windows exist (see `read_selection`).
+                if let Some(task) = actions::read_selection(&shell.engine.config(), a) {
+                    shell.pending.push(tray::Pending::Task(task));
+                }
+            } else {
+                shell.pending.push(tray::Pending::Action(a, None));
+            }
         }
     }
     if let Some(t) = &shell.tray {
@@ -375,9 +382,12 @@ fn hand_over_to_running_instance(paths: &Paths) -> bool {
     if !cfg.server.enabled || cfg.server.token.is_empty() {
         return false;
     }
+    // Is anything listening at all? Binding the port answers at once, where a
+    // connection to a closed port on Windows waits for its timeout.
+    if std::net::TcpListener::bind(&cfg.server.bind).is_ok() {
+        return false;
+    }
     let url = format!("http://{}/v1/action/{}?token={}", cfg.server.bind, Action::ShowMainWindow.id(), cfg.server.token);
-    // No retries: when nothing is listening the answer is immediate, and a
-    // retry would only delay a normal start.
     let settings = glossa_core::config::Network {
         timeout_secs: 1,
         max_retries: 0,

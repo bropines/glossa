@@ -14,6 +14,7 @@ members = [
     "crates/glossa-ui-egui",
     "modules/native/example-rot13",
 ]
+exclude = ["third_party"]
 
 [workspace.package]
 version = "0.1.0"
@@ -85,3 +86,7 @@ inherits = "release"
 opt-level = 3
 panic = "unwind"
 strip = "debuginfo"
+
+# Local fixes to upstream crates; see third_party/README.md.
+[patch.crates-io]
+eframe = { path = "third_party/eframe" }

@@ -498,6 +498,7 @@ impl eframe::App for GlossaApp {
                 match p {
                     crate::tray::Pending::Action(a, text) => self.perform(a, text),
                     crate::tray::Pending::Tray(e) => crate::tray::handle(self, e),
+                    crate::tray::Pending::Task(t) => crate::actions::on_task(self, t),
                 }
             }
         }

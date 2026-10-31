@@ -27,6 +27,9 @@ pub enum TrayEvent {
 pub enum Pending {
     Action(Action, Option<String>),
     Tray(TrayEvent),
+    /// A step already done before the GUI came up (the selection, read
+    /// while the windows did not exist yet).
+    Task(crate::actions::Task),
 }
 
 impl Pending {
