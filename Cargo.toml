@@ -9,6 +9,7 @@ members = [
     "crates/glossa-dict",
     "crates/glossa-ocr",
     "crates/glossa-platform",
+    "modules/native/example-rot13",
 ]
 
 [workspace.package]

@@ -1,0 +1,23 @@
+# An example native module. Build the library with
+#   cargo build --release -p glossa-example-rot13
+# and copy it beside this file:
+#   Windows: target/release/glossa_example_rot13.dll
+#   Linux:   target/release/libglossa_example_rot13.so
+#   macOS:   target/release/libglossa_example_rot13.dylib
+capabilities = ["translate", "detect_language", "dictionary"]
+
+[module]
+id = "example-rot13"
+name = "ROT13 (native example)"
+version = "0.1.0"
+api = 1
+runtime = "native"
+# The cargo package name: Glossa tries `glossa-example-rot13`, then the
+# platform's library names, also with `-` turned into `_` as cargo does.
+entry = "glossa-example-rot13"
+description = "Rotates Latin letters by 13 places. Demonstrates the native module ABI."
+license = "MIT OR Apache-2.0"
+
+# ROT13 needs no network at all.
+[permissions]
+network = []
