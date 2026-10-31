@@ -1,0 +1,42 @@
+name: Feature request
+description: Something Glossa should do, or do differently.
+labels: [enhancement]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Please write in English. A new translation service is often best
+        written as a module, without changing Glossa itself: see the
+        [module guides](https://github.com/bropines/glossa/blob/main/docs/modules/README.md).
+  - type: textarea
+    id: problem
+    attributes:
+      label: What you want to do
+      description: The task, not the solution. What are you trying to get done, and what gets in the way today?
+    validations:
+      required: true
+  - type: textarea
+    id: idea
+    attributes:
+      label: How it could work
+      description: The behaviour you have in mind. If classic QTranslate or another program does it, say how it behaves there.
+  - type: dropdown
+    id: area
+    attributes:
+      label: Area
+      options:
+        - Popup or main window
+        - Text recognition (OCR)
+        - Dictionary
+        - Text to speech
+        - A translation service
+        - Modules and the module protocol
+        - Command line or control API
+        - Themes and appearance
+        - Hotkeys and platform integration
+        - Something else
+  - type: textarea
+    id: more
+    attributes:
+      label: Anything else
+      description: Mock-ups, links, alternatives you considered.

@@ -1,0 +1,72 @@
+name: Bug report
+description: Something does not work as it should.
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for taking the time. Please write in English; translate any
+        text in screenshots that is in another language.
+
+        **Never paste API keys, tokens or passwords**, including ones in your
+        `config.toml`, a classic `Service.js`, or the log. Replace them with
+        `***`.
+
+        Security problems go to a private advisory instead, see
+        [SECURITY.md](https://github.com/bropines/glossa/blob/main/SECURITY.md).
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened
+      description: What you did, what you expected, and what happened instead.
+      placeholder: |
+        1. Selected "Hello" in Notepad and pressed Ctrl+Shift+Q
+        2. Expected the popup with the translation
+        3. The popup opened empty with "service unavailable"
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: Glossa version
+      description: Tray menu → About Glossa, or Options → Updates. For a build from source, the commit.
+      placeholder: 0.1.0
+    validations:
+      required: true
+  - type: input
+    id: os
+    attributes:
+      label: Operating system
+      description: Version and, on Linux, the desktop and whether it is X11 or Wayland.
+      placeholder: Windows 11 24H2 / Debian 12, KDE Plasma 6, Wayland
+    validations:
+      required: true
+  - type: input
+    id: service
+    attributes:
+      label: Service or module involved
+      description: The translator, dictionary, voice or OCR engine, if the problem is with one. Say whether it is built in, a module (JavaScript, Python, native), a classic QTranslate script or a pot-app plugin.
+      placeholder: Bing (built in) / free-dictionary (JS module) / a classic Service.js
+  - type: textarea
+    id: modules
+    attributes:
+      label: Output of `glossa-cli modules`
+      description: What loaded, what failed and why. Leave empty if the problem has nothing to do with services or modules.
+      render: text
+  - type: textarea
+    id: log
+    attributes:
+      label: Log excerpt
+      description: |
+        The lines around the problem from `glossa.log` in the cache folder:
+        `%LOCALAPPDATA%\Glossa\glossa.log` on Windows, `~/.cache/glossa/glossa.log`
+        on Linux, `data\cache\glossa.log` beside the program in portable mode
+        (or under `GLOSSA_HOME` if you set it). For more detail, set
+        `GLOSSA_LOG=debug` before starting Glossa, or run the failing command
+        with `glossa-cli -v`.
+      render: text
+  - type: textarea
+    id: more
+    attributes:
+      label: Anything else
+      description: Screenshots, the relevant part of `config.toml` (keys removed), whether it worked in an earlier version or in classic QTranslate.
