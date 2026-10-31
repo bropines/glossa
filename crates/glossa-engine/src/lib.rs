@@ -527,8 +527,12 @@ impl Engine {
             };
             let to = if pair.to.is_language() && pair.to != from { pair.to } else { cfg.smart_target(from) };
             let req = DictRequest { text: text.clone(), from, to, exact: cfg.dictionary.exact_search };
+            // Fail-over follows the same setting as translation: with it off,
+            // a failing dictionary reports its own error instead of another
+            // dictionary's article turning up in its place.
+            let fail_over = cfg.services.fail_over;
             let mut last = Error::NoProvider("dictionary lookup");
-            for provider in p.candidates(Capabilities::DICTIONARY, provider, true) {
+            for provider in p.candidates(Capabilities::DICTIONARY, provider, fail_over) {
                 p.host_check()?;
                 let opts = p.options_for(provider.as_ref());
                 let host = Host {
@@ -549,9 +553,15 @@ impl Engine {
                         last = Error::Module {
                             module: provider.info().id.clone(),
                             detail: format!("no results for {text:?}"),
+                        };
+                        if !fail_over {
+                            return Err(last);
                         }
                     }
-                    Err(e) if e.should_try_next_provider() => last = e,
+                    Err(e) if fail_over && e.should_try_next_provider() => {
+                        tracing::debug!(provider = %provider.info().id, error = %e, "dictionary failed, trying the next");
+                        last = e;
+                    }
                     Err(e) => return Err(e),
                 }
             }
@@ -991,6 +1001,47 @@ mod tests {
             )
             .unwrap();
         assert_eq!(out.translation.text, "hello");
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn dictionaries_respect_fail_over_and_name_who_answered() {
+        let (e, dir) = engine("dict-failover");
+        let classic = dir.join("QTranslate");
+        std::fs::create_dir_all(classic.join("Data")).unwrap();
+        std::fs::write(classic.join("Data").join("Options.json"), "{}").unwrap();
+        // Two dictionaries that need no network: one never finds anything,
+        // the other always answers.
+        for (name, body) in [("Empty", "\"\""), ("Answers", "'<b>' + a + '</b>'")] {
+            let folder = classic.join("Services").join(name);
+            std::fs::create_dir_all(&folder).unwrap();
+            std::fs::write(
+                folder.join("Service.js"),
+                format!(
+                    r#"function serviceHeader(){{return new ServiceHeader(900,"{name}","",Capability.DICTIONARY)}}
+                       function serviceHost(){{return "https://dict.test"}}
+                       SupportedLanguages=[-1,"auto"]; SupportedLanguages[17]="en"; SupportedLanguages[46]="ru";
+                       function serviceDictionaryRequest(a,b,c){{return new RequestData(HttpMethod.UNDEFINED)}}
+                       function serviceDictionaryResponse(a,b,c,d){{return new ResponseData({body},c,d)}}"#
+                ),
+            )
+            .unwrap();
+        }
+        e.import_classic(&classic).unwrap();
+        e.update_config(|c| {
+            c.services.dictionary_enabled = vec!["qt-answers".into()];
+            c.services.fail_over = false;
+        })
+        .unwrap();
+        let pair = LangPair::new(LangId::ENGLISH, LangId::RUSSIAN);
+
+        let err = e.dictionary("house", pair, Some("qt-empty")).unwrap_err();
+        assert!(err.to_string().contains("house"), "the asked-for dictionary's own failure: {err}");
+
+        e.update_config(|c| c.services.fail_over = true).unwrap();
+        let a = e.dictionary("house", pair, Some("qt-empty")).unwrap();
+        assert_eq!(a.provider_id, "qt-answers", "the article says which dictionary produced it");
+        assert_eq!(a.html.as_deref(), Some("<b>house</b>"));
         std::fs::remove_dir_all(&dir).ok();
     }
 

@@ -302,8 +302,11 @@ fn run(args: &Args) -> Result<(), Fail> {
             } else if let Some(html) = &a.html {
                 out!("{}", glossa_dict::to_plain_text(html));
             }
-            if let Some(link) = &a.link {
-                eprintln!("{link}");
+            if !args.json {
+                if let Some(link) = &a.link {
+                    eprintln!("{link}");
+                }
+                eprintln!("[{} · {} ms]", a.provider_id, a.elapsed_ms);
             }
             Ok(())
         }
