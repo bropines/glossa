@@ -635,7 +635,7 @@ impl Engine {
                     }
                     // Translate ourselves when asked and the provider did not.
                     let translation = match translate_to {
-                        Some(to) if ocr.translation.as_deref().map_or(true, |t| t.trim().is_empty()) => {
+                        Some(to) if ocr.translation.as_deref().is_none_or(|t| t.trim().is_empty()) => {
                             let from = ocr.detected_lang.filter(|l| l.is_language()).unwrap_or(LangId::AUTO);
                             self.with_pipeline(cancel, |p| {
                                 p.translate(&ocr.text, LangPair::new(from, to), &TranslateOptions::default())

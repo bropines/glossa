@@ -252,7 +252,7 @@ mod tests {
         )
         .unwrap();
         std::fs::write(user.join("Mine.toml"), "extends = \"Flat Dark\"\naccent = \"#ff0000\"\n").unwrap();
-        let cat = ThemeCatalog::discover(&[user.clone()], &[classic.clone()]);
+        let cat = ThemeCatalog::discover(std::slice::from_ref(&user), std::slice::from_ref(&classic));
         let names = cat.names();
         assert!(names.contains(&"Glossa Dark".to_string()));
         assert!(names.contains(&"Flat Dark".to_string()));
@@ -276,7 +276,7 @@ mod tests {
         )
         .unwrap();
         std::fs::write(dir.join("de.json"), r#"{ "code": "de", "name": "German", "native_name": "Deutsch", "strings": { "main.translate": "Übersetzen" } }"#).unwrap();
-        let cat = LocaleCatalog::discover(&[dir.clone()]);
+        let cat = LocaleCatalog::discover(std::slice::from_ref(&dir));
         assert_eq!(cat.entries().len(), 3, "English + two");
         assert_eq!(cat.find("ru").unwrap().native_name, "Русский");
         assert_eq!(cat.find("Russian").unwrap().code, "ru", "the classic options store the folder name");

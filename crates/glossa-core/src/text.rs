@@ -65,7 +65,7 @@ pub fn unwrap_hard_breaks(text: &str) -> String {
 
         let ends_sentence =
             trimmed.chars().last().is_some_and(|c| matches!(c, '.' | '!' | '?' | ':' | ';' | '。' | '！' | '？' | '؟'));
-        let next_starts_list = next.trim_start().starts_with(|c: char| matches!(c, '-' | '*' | '•' | '–' | '—'));
+        let next_starts_list = next.trim_start().starts_with(['-', '*', '•', '–', '—']);
 
         if ends_sentence || next_starts_list {
             out.push('\n');
@@ -110,16 +110,7 @@ pub fn truncate_at_boundary(text: &str, max_chars: usize) -> &str {
     if max_chars == 0 {
         return "";
     }
-    let mut end = text.len();
-    let mut seen = 0usize;
-    for (offset, grapheme) in text.grapheme_indices(true) {
-        if seen == max_chars {
-            end = offset;
-            break;
-        }
-        seen += 1;
-        let _ = grapheme;
-    }
+    let end = text.grapheme_indices(true).nth(max_chars).map_or(text.len(), |(offset, _)| offset);
     if end == text.len() {
         return text;
     }

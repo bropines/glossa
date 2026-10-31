@@ -207,7 +207,7 @@ fn main() -> eframe::Result<()> {
             tracing::error!("the window system failed: {e}");
             break;
         }
-        let quit = slot.borrow().as_ref().map_or(true, |s| s.quit);
+        let quit = slot.borrow().as_ref().is_none_or(|s| s.quit);
         if quit || !can_unload {
             break;
         }
@@ -484,6 +484,7 @@ pub fn app_icon(size: u32) -> egui::IconData {
 }
 
 /// Signed distance to a triangle (a bubble's tail), approximately.
+#[allow(clippy::too_many_arguments)] // three points, spelled out
 fn tail(x: f32, y: f32, ax: f32, ay: f32, bx: f32, by: f32, cx: f32, cy: f32) -> f32 {
     let edge = |px: f32, py: f32, qx: f32, qy: f32| {
         let (ex, ey) = (qx - px, qy - py);

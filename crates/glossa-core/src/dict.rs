@@ -60,7 +60,7 @@ impl Article {
     pub fn is_empty(&self) -> bool {
         self.explanations.iter().all(|e| e.definitions.is_empty())
             && self.examples.is_empty()
-            && self.html.as_deref().map_or(true, |h| h.trim().is_empty())
+            && self.html.as_deref().is_none_or(|h| h.trim().is_empty())
     }
 
     /// A plain-text rendering, for the clipboard and the popup.

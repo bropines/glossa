@@ -74,11 +74,9 @@ impl Fonts {
     /// further loading there.
     pub fn install_base(&mut self, ctx: &egui::Context, family: &str) {
         if let Some((path, index)) = base_font(family) {
-            if self.add(ctx, "ui", &path, index, FontPriority::Highest) {
-                if cfg!(windows) {
-                    self.loaded.insert(Script::ArabicHebrew);
-                    self.loaded.insert(Script::ArmenianGeorgian);
-                }
+            if self.add(ctx, "ui", &path, index, FontPriority::Highest) && cfg!(windows) {
+                self.loaded.insert(Script::ArabicHebrew);
+                self.loaded.insert(Script::ArmenianGeorgian);
             }
         }
     }

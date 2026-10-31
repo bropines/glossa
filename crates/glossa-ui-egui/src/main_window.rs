@@ -72,8 +72,7 @@ pub fn show(app: &mut GlossaApp, ui: &mut egui::Ui) {
             let services_h =
                 if app.cfg.general.show_services_pane { look.theme.metrics.service_tab_height + 8.0 } else { 0.0 };
             let middle_h = if app.cfg.general.show_middle_pane { 34.0 } else { 6.0 };
-            let status_h = if app.toast.is_some() || app.main.error.is_some() { 0.0 } else { 0.0 };
-            let avail = ui.available_height() - services_h - middle_h - status_h - 8.0;
+            let avail = ui.available_height() - services_h - middle_h - 8.0;
             let back_pane =
                 app.cfg.general.back_translation && app.main.outcome.as_ref().is_some_and(|o| o.back.is_some());
             let split = app.cfg.general.show_middle_pane;

@@ -47,8 +47,13 @@ impl Http for ScopedHttp<'_> {
 /// to persist data.
 #[derive(Default)]
 pub struct ModuleCache {
-    entries: Mutex<HashMap<(String, String), (serde_json::Value, Option<Instant>)>>,
+    entries: Mutex<HashMap<CacheKey, CacheEntry>>,
 }
+
+/// (module id, key).
+type CacheKey = (String, String);
+/// The value and when it expires, if ever.
+type CacheEntry = (serde_json::Value, Option<Instant>);
 
 impl ModuleCache {
     pub fn new() -> Arc<Self> {
@@ -73,7 +78,7 @@ impl ModuleCache {
         // Bound the cache: a module cannot grow it without limit.
         if map.len() > 4096 {
             let now = Instant::now();
-            map.retain(|_, (_, exp)| exp.map_or(true, |e| e > now));
+            map.retain(|_, (_, exp)| exp.is_none_or(|e| e > now));
             if map.len() > 4096 {
                 map.clear();
             }

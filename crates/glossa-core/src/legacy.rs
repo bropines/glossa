@@ -147,8 +147,8 @@ pub fn import_options(text: &str, config: &mut Config) -> Result<Vec<String>, St
     if get(&v, &["HotKeys"]).is_some() {
         for action in Action::CLASSIC {
             let key = action.legacy_option_key().expect("classic action");
-            match n(&["HotKeys", key]) {
-                Some(raw) => match Hotkey::from_legacy(raw as u32) {
+            if let Some(raw) = n(&["HotKeys", key]) {
+                match Hotkey::from_legacy(raw as u32) {
                     Some(hk) => {
                         config.hotkeys.bindings.insert(action, hk);
                     }
@@ -158,8 +158,7 @@ pub fn import_options(text: &str, config: &mut Config) -> Result<Vec<String>, St
                             notes.push(format!("hotkey {key}={raw} uses a key we do not know"));
                         }
                     }
-                },
-                None => {}
+                }
             }
         }
     }

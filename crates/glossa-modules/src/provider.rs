@@ -261,11 +261,14 @@ pub fn resolve_options(specs: &[OptionSpec], user: Option<&OptionValues>) -> Opt
     out
 }
 
+type TranslateFn = Box<dyn Fn(&Host, &TranslateRequest) -> Result<Translation> + Send + Sync>;
+type DetectFn = Box<dyn Fn(&Host, &str) -> Result<Detection> + Send + Sync>;
+
 /// A provider made of closures, for tests and for tiny built-ins.
 pub struct FnProvider {
     pub info: ProviderInfo,
-    pub translate: Option<Box<dyn Fn(&Host, &TranslateRequest) -> Result<Translation> + Send + Sync>>,
-    pub detect: Option<Box<dyn Fn(&Host, &str) -> Result<Detection> + Send + Sync>>,
+    pub translate: Option<TranslateFn>,
+    pub detect: Option<DetectFn>,
 }
 
 impl FnProvider {

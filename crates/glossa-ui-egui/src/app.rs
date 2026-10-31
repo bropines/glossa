@@ -280,14 +280,12 @@ impl GlossaApp {
         if text.is_empty() {
             return;
         }
-        if self.main.translated_source != text {
-            if !self.main.translated_source.is_empty() {
-                let prev = std::mem::take(&mut self.main.translated_source);
-                if self.main.back.last() != Some(&prev) {
-                    self.main.back.push(prev);
-                }
-                self.main.forward.clear();
+        if self.main.translated_source != text && !self.main.translated_source.is_empty() {
+            let prev = std::mem::take(&mut self.main.translated_source);
+            if self.main.back.last() != Some(&prev) {
+                self.main.back.push(prev);
             }
+            self.main.forward.clear();
         }
         self.main.translated_source = text.clone();
         self.main.edited_at = None;
@@ -561,10 +559,12 @@ impl eframe::App for GlossaApp {
                 self.quitting = true;
             }
         }
-        if self.main_visible && self.cfg.general.minimize_to_tray_on_minimize && self.tray.is_some() {
-            if ctx.input(|i| i.viewport().minimized).unwrap_or(false) {
-                self.hide_main();
-            }
+        if self.main_visible
+            && self.cfg.general.minimize_to_tray_on_minimize
+            && self.tray.is_some()
+            && ctx.input(|i| i.viewport().minimized).unwrap_or(false)
+        {
+            self.hide_main();
         }
 
         // Something must be drawn while the main window is hidden: ask for a

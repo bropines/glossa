@@ -18,6 +18,7 @@ use crate::lang::{LangId, LangPair};
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
+#[derive(Default)]
 pub struct Config {
     pub general: General,
     pub history: HistoryConfig,
@@ -83,31 +84,6 @@ impl ClassicInstall {
     /// Whether `dir` looks like a classic installation.
     pub fn looks_like_install(dir: &Path) -> bool {
         dir.join("Services").is_dir() && (dir.join("Data").is_dir() || dir.join("Themes").is_dir())
-    }
-}
-
-impl Default for Config {
-    fn default() -> Self {
-        Self {
-            general: General::default(),
-            history: HistoryConfig::default(),
-            hotkeys: HotkeysConfig::default(),
-            network: Network::default(),
-            services: Services::default(),
-            languages: Languages::default(),
-            appearance: Appearance::default(),
-            exceptions: Exceptions::default(),
-            advanced: Advanced::default(),
-            mouse_mode: MouseMode::default(),
-            ocr: OcrConfig::default(),
-            dictionary: DictionaryConfig::default(),
-            updates: Updates::default(),
-            server: Server::default(),
-            modules: ModulesConfig::default(),
-            contents: Contents::default(),
-            windows: BTreeMap::new(),
-            classic: ClassicInstall::default(),
-        }
     }
 }
 

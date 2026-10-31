@@ -47,7 +47,7 @@ const ID: &str = "glossa-ocr";
 pub fn begin(app: &mut GlossaApp, action: Action, image: image::RgbaImage, origin: (i32, i32)) {
     let scale = glossa_platform::window::monitor_at(origin.0, origin.1)
         .or_else(|| glossa_platform::window::monitors().into_iter().find(|m| m.is_primary))
-        .map(|m| m.scale as f32)
+        .map(|m| m.scale)
         .filter(|s| *s > 0.0)
         .unwrap_or(1.0);
     app.ocr = Some(OcrState {
@@ -474,7 +474,7 @@ impl Watch {
                 while !stop.load(Ordering::SeqCst) {
                     if let Ok(img) = glossa_platform::capture::capture_rect(region) {
                         let changed =
-                            last.as_ref().map_or(true, |l| glossa_platform::capture::images_differ(l, &img, 0.02));
+                            last.as_ref().is_none_or(|l| glossa_platform::capture::images_differ(l, &img, 0.02));
                         if changed {
                             *pending.lock() = Some(glossa_platform::capture::encode_png(&img));
                             last = Some(img);
