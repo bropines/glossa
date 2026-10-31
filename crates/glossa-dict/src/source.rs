@@ -227,13 +227,8 @@ const CP1251_HIGH: [u16; 128] = [
 /// never an error, because a slightly mis-decoded dictionary beats none.
 pub(crate) fn decode_text(bytes: &[u8], cyrillic_fallback: bool) -> String {
     fn utf16(bytes: &[u8], le: bool) -> String {
-        let units = bytes.chunks_exact(2).map(|c| {
-            if le {
-                u16::from_le_bytes([c[0], c[1]])
-            } else {
-                u16::from_be_bytes([c[0], c[1]])
-            }
-        });
+        let units =
+            bytes.as_chunks::<2>().0.iter().map(|c| if le { u16::from_le_bytes(*c) } else { u16::from_be_bytes(*c) });
         char::decode_utf16(units).map(|r| r.unwrap_or('\u{fffd}')).collect()
     }
     if let Some(rest) = bytes.strip_prefix(&[0xEF, 0xBB, 0xBF]) {

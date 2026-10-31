@@ -34,7 +34,7 @@ Use a throwaway data folder so the real settings stay untouched:
 
 ```powershell
 $env:GLOSSA_HOME = "$env:LOCALAPPDATA\Temp\glossa-win-test"
-$env:RUST_LOG = "glossa=debug,glossa_platform=debug,glossa_engine=debug"
+$env:GLOSSA_LOG = "glossa=debug,glossa_platform=debug,glossa_engine=debug"
 Start-Process dist\windows\glossa.exe -ArgumentList '--hidden'
 Get-Content "$env:GLOSSA_HOME\cache\glossa.log" -Tail 30
 ```

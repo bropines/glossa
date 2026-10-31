@@ -280,7 +280,7 @@ pub(crate) mod x11 {
             return None;
         }
         let mut out = Vec::with_capacity((w * h * 4) as usize);
-        for px in data[..(w * h * 4) as usize].chunks_exact(4) {
+        for px in data[..(w * h * 4) as usize].as_chunks::<4>().0 {
             let (r, g, b) = if lsb_first { (px[2], px[1], px[0]) } else { (px[1], px[2], px[3]) };
             out.extend_from_slice(&[r, g, b, 255]);
         }

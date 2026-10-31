@@ -212,7 +212,7 @@ mod win {
 
     pub fn utf16_bytes_to_string(bytes: &[u8]) -> String {
         let units: Vec<u16> =
-            bytes.chunks_exact(2).map(|c| u16::from_le_bytes([c[0], c[1]])).take_while(|&u| u != 0).collect();
+            bytes.as_chunks::<2>().0.iter().map(|c| u16::from_le_bytes(*c)).take_while(|&u| u != 0).collect();
         String::from_utf16_lossy(&units)
     }
 
