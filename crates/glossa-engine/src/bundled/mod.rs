@@ -40,6 +40,7 @@ pub static BUNDLED: &[Bundled] = bundled![
     "yandex-web",
     "deepl-web",
     "lara",
+    "modernmt",
     "multitran",
     "lingvo-live",
     "oxford-learners",
@@ -47,6 +48,8 @@ pub static BUNDLED: &[Bundled] = bundled![
     "youdao",
     "dic-academic",
     "translate-academic",
+    "wikipedia",
+    "urban-dictionary",
 ];
 
 /// The bundled modules as providers. One that fails to load (which the tests

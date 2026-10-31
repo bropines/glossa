@@ -84,7 +84,11 @@ fn every_bundled_module_loads_with_a_sane_manifest() {
         assert!(m.module.ready_to_use && m.options.iter().all(|o| !o.required), "{}", b.id);
         // Network access is limited to the service's own hosts.
         assert!(!m.permissions.network.is_empty(), "{}", b.id);
-        assert!(m.permissions.network.iter().all(|h| !h.contains('*')), "{}", b.id);
+        assert!(
+            m.permissions.network.iter().all(|h| h != "*" && h.trim_start_matches("*.").contains('.')),
+            "{}: no blanket network access",
+            b.id
+        );
         for code in m.languages.iter().chain(m.language_map.keys()) {
             assert!(LangId::from_code(code).is_some_and(|l| l.is_language()), "{}: unknown language {code}", b.id);
         }
@@ -286,6 +290,76 @@ fn lara_translates_and_names_unsupported_languages() {
     );
     let e = translate("lara", &http, "Hello", "en", "tt").unwrap_err();
     assert!(matches!(e, Error::TargetLanguageUnsupported { .. }), "{e:?}");
+}
+
+// -- ModernMT -----------------------------------------------------------------
+
+#[test]
+fn modernmt_posts_the_page_form_and_reads_the_route_data() {
+    let http = MockHttp::new().on(
+        Method::Post,
+        "https://www.modernmt.com/translate?_data=routes%2Ftranslate",
+        200,
+        r#"{"status":"success","fields":["text","targetLanguage"],"value":{"translation":"Доброе утро","detectedLanguage":"de"}}"#,
+    );
+    let t = translate("modernmt", &http, "Guten Morgen", "auto", "ru").unwrap();
+    assert_eq!(t.text, "Доброе утро");
+    assert_eq!(t.detected_from, Some(lang("de")));
+    assert_eq!(body(&http.requests()[0]), "text=Guten%20Morgen&targetLanguage=ru", "no source: ModernMT detects");
+
+    translate("modernmt", &http, "Hi", "en", "zh-Hant").unwrap();
+    let sent = body(&http.requests()[1]);
+    assert!(sent.contains("targetLanguage=zh-TW") && sent.contains("sourceLanguage=en"), "{sent}");
+
+    let http = MockHttp::new().on(
+        Method::Post,
+        "https://www.modernmt.com/translate",
+        200,
+        r#"{"status":"error","error":{"":["Language pair not supported: en > eu"]}}"#,
+    );
+    let e = translate("modernmt", &http, "Hi", "en", "eu").unwrap_err();
+    assert!(matches!(e, Error::TargetLanguageUnsupported { .. }), "{e:?}");
+}
+
+// -- Wikipedia and Urban Dictionary -------------------------------------------
+
+#[test]
+fn wikipedia_reads_the_summary_from_the_source_languages_wikipedia() {
+    let http = MockHttp::new()
+        .on(
+            Method::Get,
+            "https://de.wikipedia.org/api/rest_v1/page/summary/Lampe",
+            200,
+            r#"{"type":"standard","title":"Lampe","description":"Lichtquelle","extract":"Eine Lampe ist eine Lichtquelle.\nSie leuchtet.",
+                "content_urls":{"desktop":{"page":"https://de.wikipedia.org/wiki/Lampe"}}}"#,
+        )
+        .on(Method::Get, "https://en.wikipedia.org/", 404, r#"{"status":404}"#);
+    let a = look_up("wikipedia", &http, "Lampe", "de", "ru").unwrap();
+    assert_eq!(a.headword, "Lampe");
+    assert_eq!(a.explanations[0].part_of_speech, "Lichtquelle");
+    assert_eq!(a.explanations[0].definitions, ["Eine Lampe ist eine Lichtquelle.", "Sie leuchtet."]);
+    assert_eq!(a.link.as_deref(), Some("https://de.wikipedia.org/wiki/Lampe"));
+    let e = look_up("wikipedia", &http, "qwzxv", "auto", "ru").unwrap_err();
+    assert!(e.to_string().contains("qwzxv"), "an unknown source asks English Wikipedia: {e}");
+}
+
+#[test]
+fn urban_dictionary_sorts_by_votes_and_drops_link_brackets() {
+    let http = MockHttp::new().on(
+        Method::Get,
+        "https://api.urbandictionary.com/v0/define?term=yeet",
+        200,
+        r#"{"list":[
+            {"word":"yeet","definition":"A [shout].","example":"","thumbs_up":3,"thumbs_down":1},
+            {"word":"Yeet","definition":"To [throw] hard.","example":"He [yeeted] the can.","thumbs_up":90,"thumbs_down":5}]}"#,
+    );
+    let a = look_up("urban-dictionary", &http, "yeet", "en", "ru").unwrap();
+    assert_eq!(a.headword, "Yeet");
+    assert_eq!(a.explanations[0].definitions, ["To throw hard.", "A shout."]);
+    assert_eq!(a.examples.len(), 1);
+    assert_eq!(a.examples[0].source, "He yeeted the can.");
+    let none = MockHttp::new().on(Method::Get, "https://api.urbandictionary.com/", 200, r#"{"list":[]}"#);
+    assert!(look_up("urban-dictionary", &none, "qwzxv", "en", "ru").unwrap_err().to_string().contains("qwzxv"));
 }
 
 // -- Multitran ----------------------------------------------------------------
@@ -565,9 +639,18 @@ fn bundled_capabilities_match_their_roles() {
     let caps = |id: &str| provider(id).info().capabilities;
     assert!(caps("yandex-web").contains(Capabilities::TRANSLATE | Capabilities::DICTIONARY));
     assert!(caps("deepl-web").contains(Capabilities::TRANSLATE));
-    for id in
-        ["multitran", "lingvo-live", "oxford-learners", "wiktionary", "youdao", "dic-academic", "translate-academic"]
-    {
+    assert!(caps("modernmt").contains(Capabilities::TRANSLATE));
+    for id in [
+        "multitran",
+        "lingvo-live",
+        "oxford-learners",
+        "wiktionary",
+        "youdao",
+        "dic-academic",
+        "translate-academic",
+        "wikipedia",
+        "urban-dictionary",
+    ] {
         assert!(caps(id).contains(Capabilities::DICTIONARY), "{id}");
         assert!(!caps(id).contains(Capabilities::TRANSLATE), "{id}");
     }

@@ -1150,7 +1150,7 @@ mod tests {
         let s = e.config().services;
         // A fresh install switches on what works without setup, nothing else:
         // the keyless built-ins, then the bundled modules.
-        assert_eq!(s.enabled, vec!["google", "bing", "mymemory", "yandex-web", "deepl-web", "lara"]);
+        assert_eq!(s.enabled, vec!["google", "bing", "mymemory", "yandex-web", "deepl-web", "lara", "modernmt"]);
         assert_eq!(s.active, "google");
         assert_eq!(
             s.dictionary_enabled,
@@ -1163,7 +1163,9 @@ mod tests {
                 "wiktionary",
                 "youdao",
                 "dic-academic",
-                "translate-academic"
+                "translate-academic",
+                "wikipedia",
+                "urban-dictionary"
             ]
         );
         assert!(!s.enabled.contains(&"yandex".to_string()), "the keyed Yandex needs setup");
