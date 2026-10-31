@@ -1,0 +1,25 @@
+# English Wiktionary's definitions of words in any language, through the
+# Wikimedia REST API. Bundled with Glossa; see main.js for the protocol.
+capabilities = ["dictionary"]
+
+[module]
+id = "wiktionary"
+name = "Wiktionary"
+version = "1.0.0"
+runtime = "js"
+entry = "main.js"
+description = "Definitions and examples from English Wiktionary, for words in hundreds of languages (CC BY-SA)."
+homepage = "https://en.wiktionary.org"
+author = "Glossa"
+license = "MIT OR Apache-2.0"
+max_input_chars = 200
+ready_to_use = true
+
+# Wiktionary's section codes where they differ from Glossa's.
+[language_map]
+"zh-Hans" = "zh"
+"zh-Hant" = "zh"
+"fil" = "tl"
+
+[permissions]
+network = ["en.wiktionary.org"]

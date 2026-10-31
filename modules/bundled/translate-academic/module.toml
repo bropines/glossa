@@ -1,0 +1,39 @@
+# Academic translations (translate.academic.ru): bilingual dictionary entries
+# from the Academic collection. Bundled with Glossa; see main.js.
+capabilities = ["dictionary"]
+languages = [
+  "af", "az", "sq", "ar", "hy", "eu", "be", "bg", "ca", "zh-Hans", "zh-Hant", "hr", "cs", "da", "nl", "en",
+  "et", "fi", "fr", "gl", "de", "el", "ht", "he", "hi", "hu", "is", "id", "it", "ga", "ja", "ka", "ko",
+  "lv", "lt", "mk", "ms", "mt", "nb", "fa", "pl", "pt", "ro", "ru", "sr", "sk", "sl", "es", "sw", "sv",
+  "th", "tr", "uk", "ur", "vi", "cy", "yi", "eo", "la", "lo", "kk", "uz", "si", "tg", "te", "km", "mn",
+  "kn", "ta", "mr", "bn", "tt",
+]
+
+[module]
+id = "translate-academic"
+name = "Academic Translations"
+version = "1.0.0"
+runtime = "js"
+entry = "main.js"
+description = "translate.academic.ru: a word's entries in the Academic collection's bilingual dictionaries, mostly to and from Russian."
+homepage = "https://translate.academic.ru"
+author = "Glossa"
+license = "MIT OR Apache-2.0"
+max_input_chars = 200
+ready_to_use = true
+
+[language_map]
+"zh-Hans" = "zh"
+"zh-Hant" = "zh"
+"nb" = "no"
+
+[permissions]
+network = ["translate.academic.ru"]
+
+[[options]]
+key = "max_entries"
+type = "number"
+label = "Dictionaries to show"
+default = 6
+min = 1
+max = 30

@@ -1,0 +1,28 @@
+# Oxford Learner's Dictionaries (English), read from its public pages.
+# Bundled with Glossa; see main.js for how the page is read.
+capabilities = ["dictionary"]
+languages = ["en"]
+
+[module]
+id = "oxford-learners"
+name = "Oxford Learner's Dictionary"
+version = "1.0.0"
+runtime = "js"
+entry = "main.js"
+description = "English definitions, British and American pronunciation and examples from the Oxford Advanced Learner's Dictionary."
+homepage = "https://www.oxfordlearnersdictionaries.com"
+author = "Glossa"
+license = "MIT OR Apache-2.0"
+max_input_chars = 100
+ready_to_use = true
+
+[permissions]
+network = ["www.oxfordlearnersdictionaries.com"]
+
+[[options]]
+key = "examples"
+type = "number"
+label = "Examples per sense"
+default = 2
+min = 0
+max = 10

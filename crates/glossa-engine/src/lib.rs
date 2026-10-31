@@ -11,6 +11,8 @@
 //! main window with instant translation on never lets an older, slower answer
 //! overwrite a newer one.
 
+#[cfg(feature = "js")]
+pub mod bundled;
 pub mod catalog;
 pub mod export;
 pub mod pipeline;
@@ -166,6 +168,8 @@ struct Inner {
     last_spoken: Mutex<Option<(String, Instant)>>,
     /// Built-in providers are created once; modules are reloaded around them.
     builtins: Vec<Arc<dyn Provider>>,
+    /// The JavaScript modules compiled into the program, also created once.
+    bundled: Vec<Arc<dyn Provider>>,
 }
 
 /// The engine. Cheap to clone; all clones share one state.
@@ -208,6 +212,11 @@ impl Engine {
 
         let mut builtins = glossa_services::builtin_providers();
         builtins.extend(glossa_ocr::builtin_providers(&config.ocr));
+        let module_cache = ModuleCache::new();
+        #[cfg(feature = "js")]
+        let bundled = bundled::providers(&module_cache);
+        #[cfg(not(feature = "js"))]
+        let bundled = Vec::new();
 
         let inner = Inner {
             paths,
@@ -220,13 +229,14 @@ impl Engine {
             locales: RwLock::new(LocaleCatalog::default()),
             locale: RwLock::new(Arc::new(Locale::english())),
             modules: RwLock::new(ModuleStatus::default()),
-            module_cache: ModuleCache::new(),
+            module_cache,
             subscribers: Mutex::new(Vec::new()),
             waker: RwLock::new(None),
             slots: Mutex::new(HashMap::new()),
             next_job: AtomicU64::new(1),
             last_spoken: Mutex::new(None),
             builtins,
+            bundled,
         };
         let engine = Engine { inner: Arc::new(inner) };
         engine.reload_modules();
@@ -291,9 +301,11 @@ impl Engine {
         self.inner.modules.read().clone()
     }
 
-    /// Rebuild the provider list: built-ins, then module directories in
-    /// priority order (the classic installation's services, bundled modules,
-    /// the user's modules, extra directories from the settings).
+    /// Rebuild the provider list: built-ins, the modules compiled into the
+    /// program, then module directories in priority order (the classic
+    /// installation's services, modules installed beside the program, the
+    /// user's modules, extra directories from the settings). A module with the
+    /// id of an earlier provider replaces it.
     pub fn reload_modules(&self) {
         let cfg = self.config();
         let paths = &self.inner.paths;
@@ -312,6 +324,11 @@ impl Engine {
         for p in &self.inner.builtins {
             if !cfg.modules.disabled.contains(&p.info().id) {
                 reg.add_builtin(p.clone());
+            }
+        }
+        for p in &self.inner.bundled {
+            if !cfg.modules.disabled.contains(&p.info().id) {
+                reg.add_bundled(p.clone());
             }
         }
         for e in &cfg.services.ai_endpoints {
@@ -434,6 +451,7 @@ impl Engine {
             .map(|e| {
                 let (origin, dir) = match &e.origin {
                     Origin::Builtin => ("Built-in".to_owned(), None),
+                    Origin::Bundled => ("Bundled".to_owned(), None),
                     Origin::Module { dir, runtime, .. } => (runtime.label().to_owned(), Some(dir.clone())),
                 };
                 ProviderSummary {
@@ -1113,7 +1131,7 @@ mod tests {
         let (e, dir) = engine("start");
         let translators = e.providers(Capabilities::TRANSLATE);
         assert!(translators.iter().any(|p| p.info.id == "google"));
-        assert!(translators.iter().all(|p| p.origin == "Built-in" || p.dir.is_some()));
+        assert!(translators.iter().all(|p| p.origin == "Built-in" || p.origin == "Bundled" || p.dir.is_some()));
         assert!(e.providers(Capabilities::OCR).iter().any(|p| p.info.id == "lens"));
         assert!(!e.config().server.token.is_empty(), "a control API token is generated");
         assert_eq!(
@@ -1130,10 +1148,25 @@ mod tests {
     fn services_are_adopted_as_they_appear_not_hard_coded() {
         let (e, dir) = engine("adopt");
         let s = e.config().services;
-        // A fresh install switches on what works without setup, nothing else.
-        assert_eq!(s.enabled, vec!["google", "bing", "mymemory"]);
+        // A fresh install switches on what works without setup, nothing else:
+        // the keyless built-ins, then the bundled modules.
+        assert_eq!(s.enabled, vec!["google", "bing", "mymemory", "yandex-web", "deepl-web", "lara"]);
         assert_eq!(s.active, "google");
-        assert_eq!(s.dictionary_enabled, vec!["google-dictionary"]);
+        assert_eq!(
+            s.dictionary_enabled,
+            vec![
+                "google-dictionary",
+                "yandex-web",
+                "multitran",
+                "lingvo-live",
+                "oxford-learners",
+                "wiktionary",
+                "youdao",
+                "dic-academic",
+                "translate-academic"
+            ]
+        );
+        assert!(!s.enabled.contains(&"yandex".to_string()), "the keyed Yandex needs setup");
         assert_eq!(s.tts, "google");
         assert!(s.seen.contains(&"deepl".to_string()), "listed, not enabled: it needs a key");
         assert!(!s.enabled.contains(&"deepl".to_string()));
@@ -1156,6 +1189,43 @@ mod tests {
         let s = e.config().services;
         assert!(s.enabled.contains(&"ready".to_string()), "{:?}", s.enabled);
         assert!(Config::load(&e.paths().config_file()).unwrap().services.enabled.contains(&"ready".to_string()));
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn bundled_modules_are_listed_and_a_user_module_replaces_one() {
+        let (e, dir) = engine("bundled");
+        let yandex = e.providers(Capabilities::TRANSLATE).into_iter().find(|p| p.info.id == "yandex-web").unwrap();
+        assert_eq!(yandex.origin, "Bundled");
+        assert_eq!(yandex.info.name, "Yandex");
+        assert!(yandex.dir.is_none(), "nothing on disk");
+
+        // Switched off by the user: not loaded at all.
+        e.update_config(|c| c.modules.disabled.push("lara".into())).unwrap();
+        e.reload_modules();
+        assert!(e.registry().get("lara").is_none());
+
+        // The same id in the user's modules folder wins.
+        let m = e.paths().user_module_dir().join("my-yandex");
+        std::fs::create_dir_all(&m).unwrap();
+        std::fs::write(
+            m.join("module.toml"),
+            "capabilities = [\"translate\"]\n[module]\nid = \"yandex-web\"\nname = \"My Yandex\"\nruntime = \"js\"\n",
+        )
+        .unwrap();
+        std::fs::write(m.join("main.js"), "function translate(req) { return 'mine: ' + req.text; }").unwrap();
+        e.reload_modules();
+        let p = e.providers(Capabilities::TRANSLATE).into_iter().find(|p| p.info.id == "yandex-web").unwrap();
+        assert_eq!(p.info.name, "My Yandex");
+        assert_eq!(p.origin, "JavaScript");
+        let out = e
+            .translate(
+                "hi",
+                LangPair::new(LangId::ENGLISH, LangId::RUSSIAN),
+                &TranslateOptions { provider: Some("yandex-web".into()), fail_over: Some(false), ..Default::default() },
+            )
+            .unwrap();
+        assert_eq!(out.translation.text, "mine: hi");
         std::fs::remove_dir_all(&dir).ok();
     }
 

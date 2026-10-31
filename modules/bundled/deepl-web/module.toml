@@ -1,0 +1,24 @@
+# DeepL without a key, through the endpoint DeepL's iOS app uses for its
+# free tier. Bundled with Glossa; see main.js for the protocol.
+capabilities = ["translate"]
+languages = [
+  "ar", "bg", "zh-Hans", "zh-Hant", "cs", "da", "nl", "en", "et", "fi", "fr", "de", "el", "he", "hu",
+  "id", "it", "ja", "ko", "lv", "lt", "nb", "pl", "pt", "ro", "ru", "sk", "sl", "es", "sv", "th", "tr",
+  "uk", "vi",
+]
+
+[module]
+id = "deepl-web"
+name = "DeepL"
+version = "1.0.0"
+runtime = "js"
+entry = "main.js"
+description = "DeepL translation with no key or account, through the free service DeepL's mobile app uses. Rate-limited: it pauses after many requests in a row."
+homepage = "https://www.deepl.com/translator"
+author = "Glossa"
+license = "MIT OR Apache-2.0"
+max_input_chars = 1500
+ready_to_use = true
+
+[permissions]
+network = ["oneshot-free.www.deepl.com"]

@@ -45,10 +45,16 @@ impl Yandex {
     pub const ID: &'static str = "yandex";
 
     pub fn new() -> Self {
-        let mut info =
-            ProviderInfo::new(Self::ID, "Yandex Translate", Capabilities::TRANSLATE | Capabilities::DETECT_LANGUAGE);
+        // "Yandex" alone is the keyless bundled module (yandex-web); this one
+        // says in its name that it needs setup.
+        let mut info = ProviderInfo::new(
+            Self::ID,
+            "Yandex Cloud (API key)",
+            Capabilities::TRANSLATE | Capabilities::DETECT_LANGUAGE,
+        );
         info.description = "Yandex's translator through the official Yandex Cloud API. Strong for Russian and \
-                            the languages of the former USSR. Needs a Yandex Cloud API key."
+                            the languages of the former USSR. Needs a Yandex Cloud API key; the bundled \
+                            \"Yandex\" service needs none."
             .into();
         info.homepage = "https://yandex.cloud/en/services/translate".into();
         info.languages =
