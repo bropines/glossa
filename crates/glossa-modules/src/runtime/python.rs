@@ -509,6 +509,12 @@ fn probe_python() -> Option<(OsString, Vec<String>)> {
     let mut candidates: Vec<(&str, Vec<String>)> = vec![("python3", vec![]), ("python", vec![])];
     if cfg!(windows) {
         candidates.push(("py", vec!["-3".into()]));
+        // Version managers (pyenv-win, conda's activation scripts) put
+        // `python.bat` / `python.cmd` shims on PATH, which CreateProcess does
+        // not run. cmd resolves them; the probe then reports the real
+        // python.exe, so modules themselves start without cmd.
+        candidates.push(("cmd", vec!["/d".into(), "/c".into(), "python3".into()]));
+        candidates.push(("cmd", vec!["/d".into(), "/c".into(), "python".into()]));
     }
     for (program, args) in candidates {
         let mut cmd = Command::new(program);
