@@ -18,3 +18,9 @@ base64 = { workspace = true }
 
 [target.'cfg(windows)'.dependencies]
 winreg = "0.55"
+# Certificates are checked by the operating system on Windows and macOS (see
+# `tls_config`); Linux keeps the bundled Mozilla roots.
+ureq = { workspace = true, features = ["platform-verifier"] }
+
+[target.'cfg(target_os = "macos")'.dependencies]
+ureq = { workspace = true, features = ["platform-verifier"] }
