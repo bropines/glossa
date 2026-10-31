@@ -1,0 +1,15 @@
+capabilities = ["translate"]
+
+[module]
+id = "example-reverse"
+name = "Reverse (Python example)"
+version = "1.0.0"
+api = 1
+runtime = "python"
+entry = "main.py"
+description = "Writes the text backwards. A minimal Python module to copy from; it never touches the network."
+license = "MIT"
+idle_timeout_secs = 60
+
+[permissions]
+network = []

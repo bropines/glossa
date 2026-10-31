@@ -1,0 +1,28 @@
+capabilities = ["ocr"]
+
+[module]
+id = "lens-ocr-python"
+name = "Google Lens (Python module)"
+version = "1.0.0"
+api = 1
+runtime = "python"
+entry = "main.py"
+description = "Google Lens OCR through the chrome-lens-py package installed in the Python that Glossa runs, without its daemon or CLI."
+homepage = "https://github.com/bropines/chrome-lens-py"
+license = "MIT"
+# Each warm process holds Pillow, protobuf and httpx in memory; let it go
+# sooner than the default when unused.
+idle_timeout_secs = 180
+
+# Empty on purpose: this module talks to Google itself through chrome-lens-py,
+# not through Glossa's HTTP. Permissions only govern host-proxied requests;
+# a Python module is an ordinary program and can do its own I/O.
+[permissions]
+network = []
+
+[[options]]
+key = "proxy"
+type = "text"
+label = "Proxy for Lens"
+placeholder = "socks5://127.0.0.1:9050"
+help = "Passed to chrome-lens-py. Glossa's own proxy setting does not apply to this module's traffic."
