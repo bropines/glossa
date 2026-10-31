@@ -1,0 +1,22 @@
+[package]
+name = "glossa-cli"
+description = "Glossa on the command line: translate, detect, look up, recognise, speak, manage modules, run the control API."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+
+[[bin]]
+name = "glossa-cli"
+path = "src/main.rs"
+
+[dependencies]
+glossa-core = { workspace = true }
+glossa-engine = { workspace = true }
+glossa-net = { workspace = true }
+glossa-modules = { workspace = true }
+glossa-dict = { workspace = true }
+serde_json = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }

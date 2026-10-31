@@ -1,10 +1,12 @@
 //! Microsoft Translator (the engine behind Bing Translator and Edge).
 //!
-//! Two modes. Without a key, it borrows the token Edge's built-in page
-//! translator uses: `edge.microsoft.com/translate/auth` hands out a short-lived
-//! JWT to anyone, which the `api-edge` host accepts as a bearer token. With an
-//! Azure subscription key it talks to the documented Translator v3 endpoint
-//! instead. Both speak the same v3 request and response shapes.
+//! Two modes. Without a key it talks to Bing Translator the way the web page
+//! does: load `bing.com/translator` once to pick up the page id (`IG`), the
+//! anti-abuse key and token, and the session cookies, then post to
+//! `/ttranslatev3`. That is also what the classic QTranslate host did for its
+//! Microsoft script. (Edge's anonymous token endpoint, which some translators
+//! relied on, stopped answering in 2026.) With an Azure subscription key it
+//! uses the documented Translator v3 API instead.
 
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
@@ -13,17 +15,17 @@ use glossa_core::{
     Capabilities, Detection, Error, LangId, LangPair, ProviderInfo, Result, TranslateRequest, Translation,
 };
 use glossa_modules::{Host, OptionSpec, Provider};
-use glossa_net::{url_encode, HttpRequest, HttpResponse};
+use glossa_net::{url_encode, HttpRequest};
 use serde_json::{json, Value};
 
-use crate::common::{check_pair, check_status, detected, is_auto, json_body, require_str};
+use crate::common::{check_pair, detected, is_auto, json_body, require_str};
 
-const AUTH_URL: &str = "https://edge.microsoft.com/translate/auth";
-const EDGE_API: &str = "https://api-edge.cognitive.microsofttranslator.com";
+const PAGE_URL: &str = "https://www.bing.com/translator";
+const WEB_API: &str = "https://www.bing.com/ttranslatev3";
 const KEYED_API: &str = "https://api.cognitive.microsofttranslator.com";
-/// The Edge token lives ten minutes; refreshing at eight leaves room for a
-/// slow request and clock skew.
-const TOKEN_TTL: Duration = Duration::from_secs(8 * 60);
+/// The page's token is good for an hour; refreshing well before that leaves
+/// room for clock skew and a long-lived session.
+const SESSION_TTL: Duration = Duration::from_secs(20 * 60);
 
 /// Table languages Microsoft does not offer.
 const MISSING: &[&str] = &["be", "eo", "la", "yi", "tg"];
@@ -46,12 +48,21 @@ fn from_code(code: &str) -> Option<LangId> {
     detected(code)
 }
 
-/// Microsoft Translator, keyless (Edge token) or with an Azure key.
+/// What the translator page hands out to a browser.
+#[derive(Debug, Clone)]
+struct Session {
+    ig: String,
+    key: String,
+    token: String,
+    cookie: String,
+    fetched: Instant,
+}
+
+/// Microsoft Translator, keyless (Bing web session) or with an Azure key.
 pub struct Bing {
     info: ProviderInfo,
     options: Vec<OptionSpec>,
-    /// The Edge token and when it was fetched.
-    token: Mutex<Option<(String, Instant)>>,
+    session: Mutex<Option<Session>>,
 }
 
 impl Default for Bing {
@@ -69,85 +80,134 @@ impl Bing {
             "Microsoft Translator",
             Capabilities::TRANSLATE | Capabilities::DETECT_LANGUAGE,
         );
-        info.description = "Microsoft's translator, as used by Bing and Edge. Works without a key; an Azure \
-                            Translator key and region switch it to the official, metered API."
+        info.description = "Microsoft's translator, as used by Bing. Works without a key; an Azure Translator key \
+                            and region switch it to the official, metered API."
             .into();
         info.homepage = "https://www.bing.com/translator".into();
         info.languages = std::iter::once(LangId::AUTO)
             .chain(LangId::all().filter(|l| !MISSING.contains(&l.bcp47())))
             .collect();
-        info.max_input_chars = Some(50_000);
+        // The web endpoint refuses more than about a thousand characters.
+        info.max_input_chars = Some(1000);
         let options = vec![
             OptionSpec::secret("api_key", "Azure Translator key")
-                .help("Optional. Leave empty to use the free endpoint Edge uses."),
+                .help("Optional. Leave empty to use Bing Translator's free web endpoint (up to 1000 characters)."),
             OptionSpec::text("region", "Azure region", "")
                 .placeholder("westeurope")
                 .help("The region of your Translator resource; leave empty for a global resource."),
         ];
-        Self { info, options, token: Mutex::new(None) }
+        Self { info, options, session: Mutex::new(None) }
     }
 
     fn name(&self) -> &str {
         &self.info.name
     }
 
-    /// The cached Edge token, or a fresh one.
-    fn token(&self, host: &Host, force: bool) -> Result<String> {
-        // Held across the fetch on purpose: concurrent jobs then share one
-        // token request instead of racing for several.
-        let mut guard = self.token.lock().unwrap_or_else(|e| e.into_inner());
+    /// The cached web session, or a fresh one.
+    fn session(&self, host: &Host, force: bool) -> Result<Session> {
+        // Held across the fetch on purpose: concurrent jobs share one page
+        // load instead of racing for several.
+        let mut guard = self.session.lock().unwrap_or_else(|e| e.into_inner());
         if !force {
-            if let Some((tok, at)) = guard.as_ref() {
-                if at.elapsed() < TOKEN_TTL {
-                    return Ok(tok.clone());
+            if let Some(s) = guard.as_ref() {
+                if s.fetched.elapsed() < SESSION_TTL {
+                    return Ok(s.clone());
                 }
             }
         }
-        let resp = check_status(host.http.send(HttpRequest::get(AUTH_URL).provider(self.name()))?, self.name())?;
-        let tok = resp.text().trim().to_owned();
-        // A JWT is three dot-separated parts; anything else is an error page.
-        if tok.split('.').count() != 3 || tok.contains(char::is_whitespace) {
-            return Err(Error::bad_response(self.name(), "authentication endpoint did not return a token"));
+        let resp = host.http.send(HttpRequest::get(PAGE_URL).provider(self.name()))?;
+        if !resp.is_success() {
+            return Err(Error::HttpStatus { provider: self.name().into(), status: resp.status, body: String::new() });
         }
-        *guard = Some((tok.clone(), Instant::now()));
-        Ok(tok)
+        let body = resp.text();
+        let ig = between(&body, "IG:\"", "\"")
+            .ok_or_else(|| Error::bad_response(self.name(), "the translator page has no IG id"))?
+            .to_owned();
+        let helper = between(&body, "params_AbusePreventionHelper", "]")
+            .ok_or_else(|| Error::bad_response(self.name(), "the translator page has no anti-abuse parameters"))?;
+        let mut parts = helper.trim_start_matches([' ', '=', '[']).splitn(3, ',');
+        let key = parts.next().unwrap_or("").trim().to_owned();
+        let token = parts.next().unwrap_or("").trim().trim_matches('"').to_owned();
+        if key.is_empty() || token.is_empty() {
+            return Err(Error::bad_response(self.name(), "the anti-abuse parameters are incomplete"));
+        }
+        let cookie = resp
+            .headers
+            .iter()
+            .filter(|(k, _)| k.eq_ignore_ascii_case("set-cookie"))
+            .filter_map(|(_, v)| v.split(';').next())
+            .map(str::trim)
+            .filter(|c| !c.is_empty())
+            .collect::<Vec<_>>()
+            .join("; ");
+        let s = Session { ig, key, token, cookie, fetched: Instant::now() };
+        *guard = Some(s.clone());
+        Ok(s)
     }
 
-    /// POST a v3 call (`/translate?…`, `/detect?…`) in whichever mode the
-    /// options select.
-    fn call(&self, host: &Host, path: &str, body: &Value) -> Result<Value> {
-        let key = host.option_str("api_key").trim();
-        if !key.is_empty() {
-            let mut req = HttpRequest::post(format!("{KEYED_API}{path}"))
-                .json(body)
-                .header("Ocp-Apim-Subscription-Key", key)
+    /// One `/ttranslatev3` call. `to` is the target; detection-only calls
+    /// still need one.
+    fn web_call(&self, host: &Host, text: &str, from: &str, to: &str) -> Result<Value> {
+        let send = |s: &Session| {
+            let url = format!("{WEB_API}?isVertical=1&&IG={}&IID=translator.5027", s.ig);
+            let mut req = HttpRequest::post(url)
+                .form(&[
+                    ("fromLang", from),
+                    ("to", to),
+                    ("text", text),
+                    ("token", &s.token),
+                    ("key", &s.key),
+                    ("tryFetchingGenderDebiasedTranslations", "true"),
+                ])
+                .header("Origin", "https://www.bing.com")
+                .header("Referer", PAGE_URL)
                 .provider(self.name());
-            let region = host.option_str("region").trim();
-            if !region.is_empty() {
-                req = req.header("Ocp-Apim-Subscription-Region", region);
+            if !s.cookie.is_empty() {
+                req = req.header("Cookie", &s.cookie);
             }
-            return json_body(host.http.send(req)?, self.name());
-        }
-
-        let send = |tok: &str| -> Result<HttpResponse> {
-            host.http.send(
-                HttpRequest::post(format!("{EDGE_API}{path}"))
-                    .json(body)
-                    .header("Authorization", format!("Bearer {tok}"))
-                    .provider(self.name()),
-            )
+            host.http.send(req)
         };
-        let tok = self.token(host, false)?;
+        let s = self.session(host, false)?;
         host.check_cancelled()?;
-        let mut resp = send(&tok)?;
-        if resp.status == 401 {
-            // The cached token expired early or was revoked: refresh once.
-            let tok = self.token(host, true)?;
+        let mut resp = send(&s)?;
+        // An expired session answers with an error status or a bare status
+        // object instead of the result array: refresh once.
+        let stale = !resp.is_success() || !resp.body.trim_ascii_start().starts_with(b"[");
+        if stale {
+            let s = self.session(host, true)?;
             host.check_cancelled()?;
-            resp = send(&tok)?;
+            resp = send(&s)?;
         }
-        json_body(resp, self.name())
+        let v = json_body(resp, self.name())?;
+        if !v.is_array() {
+            let status = v.get("statusCode").and_then(|c| c.as_i64()).unwrap_or(0);
+            return Err(if status == 429 {
+                Error::RateLimited { provider: self.name().into(), retry_after_secs: None }
+            } else {
+                Error::bad_response(self.name(), format!("unexpected reply (status {status})"))
+            });
+        }
+        Ok(v)
     }
+
+    /// A v3 call with a subscription key.
+    fn keyed_call(&self, host: &Host, key: &str, path: &str, body: &Value) -> Result<Value> {
+        let mut req = HttpRequest::post(format!("{KEYED_API}{path}"))
+            .json(body)
+            .header("Ocp-Apim-Subscription-Key", key)
+            .provider(self.name());
+        let region = host.option_str("region").trim();
+        if !region.is_empty() {
+            req = req.header("Ocp-Apim-Subscription-Region", region);
+        }
+        json_body(host.http.send(req)?, self.name())
+    }
+}
+
+fn between<'a>(s: &'a str, start: &str, end: &str) -> Option<&'a str> {
+    let from = s.find(start)? + start.len();
+    let len = s[from..].find(end)?;
+    Some(&s[from..from + len])
 }
 
 impl Provider for Bing {
@@ -161,30 +221,41 @@ impl Provider for Bing {
 
     fn translate(&self, host: &Host, req: &TranslateRequest) -> Result<Translation> {
         check_pair(&self.info, req.from, req.to)?;
-        let mut path = format!("/translate?api-version=3.0&to={}", url_encode(code(req.to)));
-        if !is_auto(req.from) {
-            path.push_str("&from=");
-            path.push_str(&url_encode(code(req.from)));
-        }
-        let v = self.call(host, &path, &json!([{ "Text": req.text }]))?;
+        let key = host.option_str("api_key").trim().to_owned();
+        let v = if key.is_empty() {
+            let from = if is_auto(req.from) { "auto-detect" } else { code(req.from) };
+            self.web_call(host, &req.text, from, code(req.to))?
+        } else {
+            let mut path = format!("/translate?api-version=3.0&to={}", url_encode(code(req.to)));
+            if !is_auto(req.from) {
+                path.push_str("&from=");
+                path.push_str(&url_encode(code(req.from)));
+            }
+            self.keyed_call(host, &key, &path, &json!([{ "Text": req.text }]))?
+        };
         let item = &v[0];
-        let text = require_str(&item["translations"][0]["text"], "translations[0].text", self.name())?;
+        let translation = &item["translations"][0];
+        let text = require_str(&translation["text"], "translations[0].text", self.name())?;
         Ok(Translation {
             text: text.to_owned(),
             detected_from: item["detectedLanguage"]["language"].as_str().and_then(from_code),
+            romanisation: translation["transliteration"]["text"].as_str().map(str::to_owned).filter(|s| !s.is_empty()),
             ..Default::default()
         })
     }
 
     fn detect(&self, host: &Host, text: &str) -> Result<Detection> {
-        let v = self.call(host, "/detect?api-version=3.0", &json!([{ "Text": text }]))?;
-        let item = &v[0];
-        if !item.is_object() {
-            return Err(Error::bad_response(self.name(), "expected an array of detections"));
-        }
-        let lang = item["language"].as_str().and_then(from_code).ok_or(Error::LanguageNotDetected)?;
-        let confidence = item["score"].as_f64().unwrap_or(1.0).clamp(0.0, 1.0) as f32;
-        Ok(Detection { lang, confidence })
+        let key = host.option_str("api_key").trim().to_owned();
+        let (lang, score) = if key.is_empty() {
+            let v = self.web_call(host, text, "auto-detect", "en")?;
+            let d = &v[0]["detectedLanguage"];
+            (d["language"].as_str().map(str::to_owned), d["score"].as_f64())
+        } else {
+            let v = self.keyed_call(host, &key, "/detect?api-version=3.0", &json!([{ "Text": text }]))?;
+            (v[0]["language"].as_str().map(str::to_owned), v[0]["score"].as_f64())
+        };
+        let lang = lang.as_deref().and_then(from_code).ok_or(Error::LanguageNotDetected)?;
+        Ok(Detection { lang, confidence: score.unwrap_or(1.0).clamp(0.0, 1.0) as f32 })
     }
 
     fn web_link(&self, text: &str, pair: LangPair) -> Option<String> {
@@ -201,70 +272,66 @@ impl Provider for Bing {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::common::testing::{body_json, header, opts, SeqHttp};
+    use crate::common::testing::{header, opts, SeqHttp};
     use glossa_modules::provider::with_test_host;
     use glossa_modules::OptionValues;
     use glossa_net::mock::MockHttp;
     use glossa_net::Method;
 
-    const JWT: &str = "eyJhbGciOiJIUzI1NiJ9.eyJyZWdpb24iOiJnbG9iYWwifQ.c2lnbmF0dXJl";
-    const TRANSLATED: &str = r#"[{"detectedLanguage":{"language":"en","score":1.0},"translations":[{"text":"Привет, мир","to":"ru"}]}]"#;
+    const PAGE: &str = r#"<html><script>_G={IG:"5A1B2C3D",x:1};var params_AbusePreventionHelper = [1712345678901,"tokEN-x_9",3600000];</script></html>"#;
+    const TRANSLATED: &str = r#"[{"detectedLanguage":{"language":"en","score":1.0},"translations":[{"text":"Привет, мир","transliteration":{"text":"Privet, mir","script":"Latn"},"to":"ru"}]}]"#;
 
     fn req(from: LangId, to: LangId) -> TranslateRequest {
         TranslateRequest::new("Hello world", LangPair::new(from, to))
     }
 
+    fn form(r: &glossa_net::HttpRequest) -> String {
+        String::from_utf8(r.body.clone().unwrap_or_default()).unwrap()
+    }
+
     #[test]
-    fn keyless_mode_fetches_a_token_and_reuses_it() {
-        let http = MockHttp::new()
-            .on(Method::Get, AUTH_URL, 200, JWT)
-            .on(Method::Post, &format!("{EDGE_API}/translate"), 200, TRANSLATED);
+    fn keyless_mode_loads_the_page_once_and_posts_the_form() {
+        let http = MockHttp::new().on(Method::Get, PAGE_URL, 200, PAGE).on(Method::Post, WEB_API, 200, TRANSLATED);
         let bing = Bing::new();
-        let opts = OptionValues::new();
-        let out = with_test_host(&http, &opts, |h| bing.translate(h, &req(LangId::AUTO, LangId::RUSSIAN))).unwrap();
+        let o = OptionValues::new();
+        let out = with_test_host(&http, &o, |h| bing.translate(h, &req(LangId::AUTO, LangId::RUSSIAN))).unwrap();
         assert_eq!(out.text, "Привет, мир");
         assert_eq!(out.detected_from, Some(LangId::ENGLISH));
-        with_test_host(&http, &opts, |h| bing.translate(h, &req(LangId::AUTO, LangId::RUSSIAN))).unwrap();
+        assert_eq!(out.romanisation.as_deref(), Some("Privet, mir"));
+        with_test_host(&http, &o, |h| bing.translate(h, &req(LangId::ENGLISH, LangId::RUSSIAN))).unwrap();
 
         let reqs = http.requests();
-        // One token fetch for two translations.
-        assert_eq!(reqs.iter().filter(|r| r.url == AUTH_URL).count(), 1);
+        assert_eq!(reqs.iter().filter(|r| r.url == PAGE_URL).count(), 1, "the session is reused");
         let t = &reqs[1];
-        assert_eq!(t.url, format!("{EDGE_API}/translate?api-version=3.0&to=ru"));
-        assert_eq!(header(t, "authorization"), Some(format!("Bearer {JWT}").as_str()));
-        assert_eq!(body_json(t), json!([{ "Text": "Hello world" }]));
+        assert_eq!(t.url, format!("{WEB_API}?isVertical=1&&IG=5A1B2C3D&IID=translator.5027"));
+        let body = form(t);
+        assert!(body.contains("fromLang=auto-detect"), "{body}");
+        assert!(body.contains("to=ru"));
+        assert!(body.contains("text=Hello%20world"));
+        assert!(body.contains("token=tokEN-x_9"));
+        assert!(body.contains("key=1712345678901"));
+        assert_eq!(header(t, "Referer"), Some(PAGE_URL));
+        assert!(form(&reqs[2]).contains("fromLang=en"));
     }
 
     #[test]
-    fn a_401_refreshes_the_token_once_and_retries() {
+    fn a_stale_session_is_refreshed_once() {
         let http = SeqHttp::new()
-            .then(200, JWT)
-            .then(401, r#"{"error":{"code":401000,"message":"expired"}}"#)
-            .then(200, "aaa.bbb.ccc")
+            .then(200, PAGE)
+            .then(200, r#"{"statusCode":205}"#)
+            .then(200, PAGE)
             .then(200, TRANSLATED);
-        let out = with_test_host(&http, &OptionValues::new(), |h| {
-            Bing::new().translate(h, &req(LangId::ENGLISH, LangId::RUSSIAN))
-        })
-        .unwrap();
+        let out = with_test_host(&http, &OptionValues::new(), |h| Bing::new().translate(h, &req(LangId::ENGLISH, LangId::RUSSIAN))).unwrap();
         assert_eq!(out.text, "Привет, мир");
-        let reqs = http.requests();
-        assert_eq!(reqs.len(), 4);
-        assert!(reqs[1].url.ends_with("&to=ru&from=en"), "{}", reqs[1].url);
-        assert_eq!(header(&reqs[3], "authorization"), Some("Bearer aaa.bbb.ccc"));
+        assert_eq!(http.requests().len(), 4);
     }
 
     #[test]
-    fn a_second_401_is_reported() {
-        let http = SeqHttp::new()
-            .then(200, JWT)
-            .then(401, r#"{"error":{"code":401000,"message":"expired"}}"#)
-            .then(200, JWT)
-            .then(401, r#"{"error":{"code":401000,"message":"still expired"}}"#);
-        let r = with_test_host(&http, &OptionValues::new(), |h| {
-            Bing::new().translate(h, &req(LangId::ENGLISH, LangId::RUSSIAN))
-        });
+    fn a_page_without_the_session_values_is_a_clear_error() {
+        let http = MockHttp::new().on(Method::Get, PAGE_URL, 200, "<html>captcha</html>");
+        let r = with_test_host(&http, &OptionValues::new(), |h| Bing::new().translate(h, &req(LangId::ENGLISH, LangId::RUSSIAN)));
         match r {
-            Err(Error::HttpStatus { status: 401, body, .. }) => assert_eq!(body, "still expired"),
+            Err(Error::BadResponse { detail, .. }) => assert!(detail.contains("IG"), "{detail}"),
             other => panic!("{other:?}"),
         }
     }
@@ -275,11 +342,23 @@ mod tests {
         let o = opts(&[("api_key", json!("k123")), ("region", json!("westeurope"))]);
         with_test_host(&http, &o, |h| Bing::new().translate(h, &req(LangId::AUTO, LangId(11)))).unwrap();
         let reqs = http.requests();
-        assert_eq!(reqs.len(), 1, "no token fetch in keyed mode");
+        assert_eq!(reqs.len(), 1, "no page load in keyed mode");
         assert_eq!(reqs[0].url, format!("{KEYED_API}/translate?api-version=3.0&to=zh-Hans"));
         assert_eq!(header(&reqs[0], "Ocp-Apim-Subscription-Key"), Some("k123"));
         assert_eq!(header(&reqs[0], "Ocp-Apim-Subscription-Region"), Some("westeurope"));
-        assert_eq!(header(&reqs[0], "authorization"), None);
+    }
+
+    #[test]
+    fn detection_uses_the_web_endpoint_without_a_key() {
+        let http = MockHttp::new().on(Method::Get, PAGE_URL, 200, PAGE).on(
+            Method::Post,
+            WEB_API,
+            200,
+            r#"[{"detectedLanguage":{"language":"de","score":0.92},"translations":[{"text":"Hello world","to":"en"}]}]"#,
+        );
+        let d = with_test_host(&http, &OptionValues::new(), |h| Bing::new().detect(h, "Hallo Welt")).unwrap();
+        assert_eq!(d.lang, LangId(23));
+        assert!((d.confidence - 0.92).abs() < 1e-6);
     }
 
     #[test]
@@ -303,41 +382,17 @@ mod tests {
     }
 
     #[test]
-    fn detect_parses_language_and_score() {
-        let http = MockHttp::new()
-            .on(Method::Get, AUTH_URL, 200, JWT)
-            .on(
-                Method::Post,
-                &format!("{EDGE_API}/detect"),
-                200,
-                r#"[{"language":"de","score":0.92,"isTranslationSupported":true,"isTransliterationSupported":false}]"#,
-            );
-        let d = with_test_host(&http, &OptionValues::new(), |h| Bing::new().detect(h, "Hallo Welt")).unwrap();
-        assert_eq!(d.lang, LangId(23));
-        assert!((d.confidence - 0.92).abs() < 1e-6);
-        assert_eq!(http.requests()[1].url, format!("{EDGE_API}/detect?api-version=3.0"));
-    }
-
-    #[test]
-    fn bad_token_and_bad_json_are_errors() {
-        let http = MockHttp::new().on(Method::Get, AUTH_URL, 200, "<html>blocked</html>");
-        let r = with_test_host(&http, &OptionValues::new(), |h| {
-            Bing::new().translate(h, &req(LangId::ENGLISH, LangId::RUSSIAN))
-        });
-        assert!(matches!(r, Err(Error::BadResponse { .. })), "{r:?}");
-
-        let http = MockHttp::new()
-            .on(Method::Get, AUTH_URL, 200, JWT)
-            .on(Method::Post, EDGE_API, 200, r#"[{"translations":[]}]"#);
-        let r = with_test_host(&http, &OptionValues::new(), |h| {
-            Bing::new().translate(h, &req(LangId::ENGLISH, LangId::RUSSIAN))
-        });
-        assert!(matches!(r, Err(Error::BadResponse { .. })), "{r:?}");
-    }
-
-    #[test]
     fn web_link_points_at_bing() {
         let l = Bing::new().web_link("hi there", LangPair::new(LangId::AUTO, LangId::RUSSIAN)).unwrap();
         assert_eq!(l, "https://www.bing.com/translator?from=auto-detect&to=ru&text=hi%20there");
+    }
+
+    #[test]
+    #[ignore]
+    fn live_keyless_translation() {
+        let http = glossa_net::HttpClient::plain();
+        let out = with_test_host(&http, &OptionValues::new(), |h| Bing::new().translate(h, &req(LangId::AUTO, LangId::RUSSIAN))).unwrap();
+        eprintln!("{out:?}");
+        assert!(!out.text.is_empty());
     }
 }
