@@ -18,13 +18,21 @@ use crate::lang::{LangId, LangPair};
 
 /// The numeric ids classic service scripts declared in their header, and the
 /// provider id each became here. Several community scripts reused a number;
-/// the first claimant is listed.
+/// the one found in installations is listed. Where Glossa has a keyless
+/// service doing the same job (the bundled modules: `yandex-web`,
+/// `deepl-web`, `lara`, the dictionaries), the classic id points at it, so an
+/// imported installation gets working tabs without any setup. More than one
+/// classic id may land on the same service.
 pub static SERVICE_IDS: &[(u32, &str)] = &[
     (1, "google"),
     (5, "bing"),
     (10, "google-search"),
-    (11, "yandex"),
-    (12, "deepl"),
+    // The classic Yandex script used the keyless web endpoint, as does the
+    // bundled module; the built-in `yandex` needs a Yandex Cloud key.
+    (11, "yandex-web"),
+    // Scripts named "DeepL" circulated under 12 (in a folder named Promt), 31
+    // and, as "DeepLX", 106; all of them were keyless.
+    (12, "deepl-web"),
     (13, "babylon"),
     (14, "wikipedia"),
     (17, "multitran"),
@@ -37,7 +45,7 @@ pub static SERVICE_IDS: &[(u32, &str)] = &[
     (26, "youdao"),
     (29, "oxford-learners"),
     (30, "papago"),
-    (31, "deeplx"),
+    (31, "deepl-web"),
     (41, "modernmt"),
     (42, "amazon"),
     (82, "wiktionary"),
@@ -49,6 +57,9 @@ pub static SERVICE_IDS: &[(u32, &str)] = &[
     (99, "reverso"),
     (103, "openrouter"),
     (104, "lara"),
+    (106, "deepl-web"),
+    // A copy of the Lara script, in a folder named Baidu.
+    (107, "lara"),
 ];
 
 pub fn service_id(legacy: u32) -> String {
@@ -202,12 +213,31 @@ pub fn import_options(text: &str, config: &mut Config) -> Result<Vec<String>, St
     }
 
     // -- Services ---------------------------------------------------------------------
-    let ids = |path: &[&str]| -> Option<Vec<String>> {
-        get(&v, path)?.as_array().map(|a| a.iter().filter_map(Value::as_u64).map(|x| service_id(x as u32)).collect())
+    let numbers = |path: &[&str]| -> Option<Vec<u32>> {
+        get(&v, path)?.as_array().map(|a| a.iter().filter_map(Value::as_u64).map(|x| x as u32).collect())
     };
-    let disabled = ids(&["DisabledServices"]).unwrap_or_default();
-    if let Some(order) = ids(&["ServicesOrder"]) {
-        config.services.enabled = order.iter().filter(|id| !disabled.contains(id)).cloned().collect();
+    let ids = |path: &[&str]| -> Option<Vec<String>> { numbers(path).map(|n| n.into_iter().map(service_id).collect()) };
+    // An order and its disabled list → (order, enabled) in Glossa ids. Several
+    // classic ids can map to one service: it keeps the first one's place, and
+    // is on when any of them was.
+    let lists = |order: Vec<u32>, disabled: &[u32]| -> (Vec<String>, Vec<String>) {
+        let (mut ordered, mut enabled) = (Vec::<String>::new(), Vec::<String>::new());
+        for n in order {
+            let id = service_id(n);
+            if !disabled.contains(&n) && !enabled.contains(&id) {
+                enabled.push(id.clone());
+            }
+            if !ordered.contains(&id) {
+                ordered.push(id);
+            }
+        }
+        // Keep the enabled list in the order's order.
+        enabled.sort_by_key(|id| ordered.iter().position(|o| o == id));
+        (ordered, enabled)
+    };
+    if let Some(order) = numbers(&["ServicesOrder"]) {
+        let (order, enabled) = lists(order, &numbers(&["DisabledServices"]).unwrap_or_default());
+        config.services.enabled = enabled;
         // The classic settings already decided about these; do not switch
         // any of them back on as "new".
         config.services.seen.extend(order.iter().cloned());
@@ -216,9 +246,9 @@ pub fn import_options(text: &str, config: &mut Config) -> Result<Vec<String>, St
     if let Some(active) = ids(&["General", "ActiveServices"]).and_then(|a| a.into_iter().next()) {
         config.services.active = active;
     }
-    if let Some(order) = ids(&["DictionariesOrder"]) {
-        let disabled = ids(&["DisabledDictionaries"]).unwrap_or_default();
-        config.services.dictionary_enabled = order.iter().filter(|id| !disabled.contains(id)).cloned().collect();
+    if let Some(order) = numbers(&["DictionariesOrder"]) {
+        let (order, enabled) = lists(order, &numbers(&["DisabledDictionaries"]).unwrap_or_default());
+        config.services.dictionary_enabled = enabled;
         config.services.seen.extend(order.iter().cloned());
         config.services.dictionary_order = order;
     }
@@ -440,9 +470,9 @@ mod tests {
         assert_eq!(c.network.proxy.scheme, ProxyScheme::Socks5);
         assert_eq!(c.network.proxy.url().as_deref(), Some("socks5://127.0.0.1:2080"));
 
-        assert_eq!(&c.services.order[..3], ["google", "bing", "deepl"]);
-        assert!(!c.services.enabled.contains(&"deepl".to_string()), "disabled services are off");
-        assert!(c.services.enabled.contains(&"lara".to_string()));
+        assert_eq!(&c.services.order[..5], ["google", "bing", "deepl-web", "babylon", "yandex-web"]);
+        assert!(!c.services.enabled.contains(&"deepl-web".to_string()), "disabled services are off");
+        assert_eq!(c.services.enabled, ["google", "bing", "yandex-web", "lara", "chatgpt"]);
         assert_eq!(c.services.active, "lara");
         assert_eq!(c.services.dictionary_order, ["google-search", "wordreference", "multitran"]);
 
@@ -468,7 +498,7 @@ mod tests {
         let entries: Vec<_> = h.iter().collect();
         assert_eq!(entries[0].source, "Привет");
         assert!(entries[0].favorite);
-        assert_eq!(entries[0].results[0].provider_id, "yandex");
+        assert_eq!(entries[0].results[0].provider_id, "yandex-web");
         assert_eq!(entries[0].results[1].provider_id, "google");
         assert_eq!(entries[1].source, "oh\nok", "CRLF normalised");
         assert_eq!(entries[1].results[0].provider_id, "lara");
@@ -478,5 +508,38 @@ mod tests {
     fn unknown_service_numbers_keep_their_number() {
         assert_eq!(service_id(1), "google");
         assert_eq!(service_id(9999), "legacy-9999");
+    }
+
+    #[test]
+    fn classic_services_land_on_the_keyless_glossa_ones() {
+        assert_eq!(service_id(11), "yandex-web", "not the built-in that needs a Yandex Cloud key");
+        for n in [12, 31, 106] {
+            assert_eq!(service_id(n), "deepl-web", "{n}");
+        }
+        assert_eq!(service_id(107), "lara");
+        assert_eq!(service_id(25), "lingvo-live");
+        let mut ids: Vec<u32> = SERVICE_IDS.iter().map(|(n, _)| *n).collect();
+        ids.sort_unstable();
+        ids.dedup();
+        assert_eq!(ids.len(), SERVICE_IDS.len(), "each classic number is listed once");
+    }
+
+    #[test]
+    fn classic_ids_sharing_a_service_merge() {
+        // Three DeepL scripts: the first one off, the other two on.
+        let mut c = Config::default();
+        import_options(
+            r#"{ "ServicesOrder": [1, 12, 31, 106, 11], "DisabledServices": [12],
+                 "DictionariesOrder": [17, 26], "DisabledDictionaries": [] }"#,
+            &mut c,
+        )
+        .unwrap();
+        assert_eq!(c.services.order, ["google", "deepl-web", "yandex-web"], "one entry, at the first one's place");
+        assert_eq!(c.services.enabled, ["google", "deepl-web", "yandex-web"], "on because another one was");
+        assert_eq!(c.services.dictionary_enabled, ["multitran", "youdao"]);
+
+        let mut c = Config::default();
+        import_options(r#"{ "ServicesOrder": [12, 31, 1], "DisabledServices": [12, 31] }"#, &mut c).unwrap();
+        assert_eq!(c.services.enabled, ["google"], "off when every one of them was");
     }
 }
