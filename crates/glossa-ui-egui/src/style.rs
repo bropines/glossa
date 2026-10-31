@@ -1,0 +1,176 @@
+//! A [`Theme`] applied to egui.
+//!
+//! egui draws every widget from one `Visuals` struct with a style per
+//! interaction state; a Glossa theme has the same idea with different names.
+//! This module maps one onto the other and keeps the theme around for the
+//! things egui has no slot for (popup frame, service tabs, custom title bar).
+
+use egui::{Color32, CornerRadius, Margin, Shadow, Stroke, Visuals};
+use glossa_core::theme::{Theme, WidgetState};
+use glossa_core::Color;
+
+pub fn c(color: Color) -> Color32 {
+    Color32::from_rgba_unmultiplied(color.r, color.g, color.b, color.a)
+}
+
+pub fn from32(c: Color32) -> Color {
+    let [r, g, b, a] = c.to_srgba_unmultiplied();
+    Color::rgba(r, g, b, a)
+}
+
+/// The resolved look, cheap to clone into viewports.
+#[derive(Clone)]
+pub struct Look {
+    pub theme: Theme,
+    /// The popup's colours after applying the options' overrides.
+    pub popup_back: Color32,
+    pub popup_text: Color32,
+    pub popup_frame: Color32,
+    pub popup_frame_width: f32,
+    pub popup_opacity: f32,
+    pub text_size: f32,
+}
+
+impl Look {
+    pub fn new(theme: Theme, cfg: &glossa_core::Config) -> Look {
+        let p = &cfg.appearance.popup;
+        // With window style on (the default) the popup follows the theme; the
+        // separate popup colours apply only when it is off — as the classic
+        // options page greyed them out.
+        let themed = cfg.appearance.custom_frame;
+        let pick = |own: Option<Color>, theme_c: Color| if themed { theme_c } else { own.unwrap_or(theme_c) };
+        Look {
+            popup_back: c(pick(p.back, theme.popup.back)),
+            popup_text: c(pick(p.text, theme.popup.text)),
+            popup_frame: c(pick(p.frame, theme.popup.frame)),
+            popup_frame_width: p.frame_thickness,
+            popup_opacity: p.opacity().min(theme.popup.opacity.max(0.1)).max(0.1),
+            text_size: cfg.appearance.text_size,
+            theme,
+        }
+    }
+
+    pub fn accent(&self) -> Color32 {
+        c(self.theme.accent)
+    }
+
+    pub fn text(&self) -> Color32 {
+        c(self.theme.window.text)
+    }
+
+    pub fn weak_text(&self) -> Color32 {
+        c(self.theme.window.text_disabled)
+    }
+
+    pub fn icon(&self, state: WidgetState) -> Color32 {
+        c(self.theme.icon.get(state).main)
+    }
+
+    pub fn error(&self) -> Color32 {
+        c(self.theme.error)
+    }
+
+    pub fn edit_back(&self) -> Color32 {
+        c(self.theme.edit.normal.back)
+    }
+
+    pub fn border(&self) -> Color32 {
+        c(self.theme.window.border)
+    }
+
+    /// Apply to an egui context: visuals, spacing, rounding.
+    pub fn apply(&self, ctx: &egui::Context, ui_scale: f32) {
+        let t = &self.theme;
+        let mut v = if t.dark { Visuals::dark() } else { Visuals::light() };
+        let radius = CornerRadius::same(t.metrics.button_radius.round().clamp(0.0, 20.0) as u8);
+        let win_radius = CornerRadius::same(t.metrics.window_radius.round().clamp(0.0, 20.0) as u8);
+
+        v.override_text_color = Some(c(t.window.text));
+        v.panel_fill = c(t.window.back);
+        v.window_fill = c(t.window.back);
+        v.window_stroke = Stroke::new(t.metrics.border_width, c(t.window.border));
+        v.window_corner_radius = win_radius;
+        v.menu_corner_radius = radius;
+        v.extreme_bg_color = c(t.edit.normal.back);
+        v.text_edit_bg_color = Some(c(t.edit.normal.back));
+        v.faint_bg_color = c(t.window.client_back);
+        v.code_bg_color = c(t.window.client_back);
+        v.hyperlink_color = c(t.link);
+        v.error_fg_color = c(t.error);
+        v.warn_fg_color = c(t.warning);
+        v.selection.bg_fill = c(t.selection);
+        v.selection.stroke = Stroke::new(1.0, c(t.accent));
+        v.window_shadow = Shadow { offset: [0, 4], blur: 12, spread: 0, color: Color32::from_black_alpha(if t.dark { 110 } else { 50 }) };
+        v.popup_shadow = Shadow { offset: [0, 3], blur: 8, spread: 0, color: Color32::from_black_alpha(if t.dark { 90 } else { 40 }) };
+
+        let set = |w: &mut egui::style::WidgetVisuals, state: WidgetState| {
+            let b = t.button.get(state);
+            w.bg_fill = c(b.back());
+            w.weak_bg_fill = c(b.back());
+            w.bg_stroke = Stroke::new(t.metrics.border_width, c(b.border));
+            w.fg_stroke = Stroke::new(1.0, c(b.text));
+            w.corner_radius = radius;
+        };
+        set(&mut v.widgets.inactive, WidgetState::Normal);
+        set(&mut v.widgets.hovered, WidgetState::Hover);
+        set(&mut v.widgets.active, WidgetState::Pressed);
+        set(&mut v.widgets.open, WidgetState::Pressed);
+        // Labels, separators and frames.
+        v.widgets.noninteractive.bg_fill = c(t.window.back);
+        v.widgets.noninteractive.weak_bg_fill = c(t.window.client_back);
+        v.widgets.noninteractive.bg_stroke = Stroke::new(1.0, c(t.window.group_box));
+        v.widgets.noninteractive.fg_stroke = Stroke::new(1.0, c(t.window.text));
+        v.widgets.noninteractive.corner_radius = radius;
+
+        ctx.set_visuals(v);
+        ctx.all_styles_mut(|s| {
+            let sp = t.metrics.spacing.clamp(0.0, 24.0);
+            let pad = t.metrics.padding.clamp(0.0, 24.0);
+            s.spacing.item_spacing = egui::vec2(sp, sp * 0.75);
+            s.spacing.button_padding = egui::vec2(pad + 2.0, pad * 0.5 + 1.0);
+            s.spacing.window_margin = Margin::same(8);
+            s.spacing.menu_margin = Margin::same(4);
+            s.spacing.interact_size.y = (t.fonts.size * 2.0).max(22.0);
+            s.interaction.tooltip_delay = 0.35;
+            s.text_styles.insert(egui::TextStyle::Body, egui::FontId::proportional(t.fonts.size * 1.33));
+            s.text_styles.insert(egui::TextStyle::Button, egui::FontId::proportional(t.fonts.size * 1.33));
+            s.text_styles.insert(egui::TextStyle::Small, egui::FontId::proportional(t.fonts.size * 1.1));
+            s.text_styles.insert(egui::TextStyle::Heading, egui::FontId::proportional(t.fonts.size * 1.8));
+            s.text_styles.insert(egui::TextStyle::Monospace, egui::FontId::monospace(t.fonts.size * 1.25));
+        });
+        ctx.set_zoom_factor(ui_scale.clamp(0.5, 3.0));
+    }
+
+    /// The font for the source and translation panes.
+    pub fn text_font(&self) -> egui::FontId {
+        egui::FontId::proportional(self.text_size * 1.33)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn colours_convert_both_ways() {
+        // Opaque colours are exact; translucent ones go through egui's
+        // premultiplied storage and may move by one step.
+        let col = Color::rgb(10, 20, 30);
+        assert_eq!(from32(c(col)), col);
+        let translucent = from32(c(Color::rgba(10, 20, 30, 200)));
+        assert_eq!(translucent.a, 200);
+        assert!((translucent.b as i32 - 30).abs() <= 1);
+    }
+
+    #[test]
+    fn popup_colours_follow_the_theme_while_window_style_is_on() {
+        let mut cfg = glossa_core::Config::default();
+        cfg.appearance.popup.back = Some(Color::WHITE);
+        let theme = glossa_core::theme::builtin::glossa_dark();
+        let themed = Look::new(theme.clone(), &cfg);
+        assert_eq!(themed.popup_back, c(theme.popup.back));
+        cfg.appearance.custom_frame = false;
+        let own = Look::new(theme, &cfg);
+        assert_eq!(own.popup_back, Color32::WHITE);
+    }
+}

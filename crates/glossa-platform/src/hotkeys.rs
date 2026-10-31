@@ -47,6 +47,9 @@ pub struct HotkeyService {
     /// global-hotkey id → (the registered chord, its action).
     registered: HashMap<u32, (HotKey, Action)>,
     queue: VecDeque<Action>,
+    /// Set by [`HotkeyService::set_waker`]: events then arrive here instead
+    /// of through the crate's global receiver.
+    events: Option<std::sync::mpsc::Receiver<GlobalHotKeyEvent>>,
 }
 
 impl std::fmt::Debug for HotkeyService {
@@ -71,7 +74,7 @@ impl HotkeyService {
         }
         let manager = GlobalHotKeyManager::new()
             .map_err(|e| HotkeyError::Unsupported { reason: e.to_string() })?;
-        Ok(HotkeyService { manager, registered: HashMap::new(), queue: VecDeque::new() })
+        Ok(HotkeyService { manager, registered: HashMap::new(), queue: VecDeque::new(), events: None })
     }
 
     /// Bind `hotkey` to `action`, replacing any hotkey the action had.
@@ -123,6 +126,18 @@ impl HotkeyService {
         v
     }
 
+    /// Call `waker` on every hotkey event, from whatever thread the OS
+    /// delivers it on, so a GUI whose window is hidden can wake its loop
+    /// instead of polling. Events are still collected by [`poll`](Self::poll).
+    pub fn set_waker(&mut self, waker: impl Fn() + Send + Sync + 'static) {
+        let (tx, rx) = std::sync::mpsc::channel();
+        GlobalHotKeyEvent::set_event_handler(Some(move |event: GlobalHotKeyEvent| {
+            let _ = tx.send(event);
+            waker();
+        }));
+        self.events = Some(rx);
+    }
+
     /// The next triggered action, if any. Drains the global event channel
     /// (key presses only; releases are ignored) without blocking; call it
     /// from the event loop on every wake-up.
@@ -130,7 +145,12 @@ impl HotkeyService {
     /// Uses `GlobalHotKeyEvent::receiver()`, so nothing else in the process
     /// may install `GlobalHotKeyEvent::set_event_handler`.
     pub fn poll(&mut self) -> Option<Action> {
-        while let Ok(event) = GlobalHotKeyEvent::receiver().try_recv() {
+        loop {
+            let event = match &self.events {
+                Some(rx) => rx.try_recv().ok(),
+                None => GlobalHotKeyEvent::receiver().try_recv().ok(),
+            };
+            let Some(event) = event else { break };
             if event.state() != HotKeyState::Pressed {
                 continue;
             }

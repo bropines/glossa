@@ -1,0 +1,36 @@
+[package]
+name = "glossa-ui-egui"
+description = "The Glossa desktop application: main window, selection popup, OCR overlay, dictionary, history, options, tray."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+
+[[bin]]
+name = "glossa"
+path = "src/main.rs"
+
+[dependencies]
+glossa-core = { workspace = true }
+glossa-engine = { workspace = true }
+glossa-modules = { workspace = true }
+glossa-platform = { workspace = true }
+glossa-dict = { workspace = true }
+glossa-net = { workspace = true }
+eframe = { workspace = true, features = ["glow", "default_fonts", "x11", "wayland"] }
+egui = { workspace = true }
+image = { workspace = true }
+rfd = { workspace = true }
+tray-icon = { workspace = true }
+parking_lot = { workspace = true }
+serde_json = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+
+[target.'cfg(target_os = "linux")'.dependencies]
+# tray-icon on Linux needs GTK initialised and pumped on the thread that owns
+# the icon; tray-icon already depends on this version.
+gtk = "0.18"
+
+[build-dependencies]

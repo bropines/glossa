@@ -398,6 +398,9 @@ pub struct Services {
     pub enabled: Vec<String>,
     /// The selected tab.
     pub active: String,
+    /// The popup keeps its own current service, switched from the strip that
+    /// appears when the pointer is over it. Empty: follow `active`.
+    pub popup_active: String,
     /// Dictionary services, the same way.
     pub dictionary_order: Vec<String>,
     pub dictionary_enabled: Vec<String>,
@@ -419,6 +422,7 @@ impl Default for Services {
                 .to_vec(),
             enabled: ["google", "bing", "yandex", "deepl"].map(String::from).to_vec(),
             active: "google".into(),
+            popup_active: String::new(),
             dictionary_order: Vec::new(),
             dictionary_enabled: vec!["google-dictionary".into()],
             dictionary_active: "google-dictionary".into(),
@@ -515,6 +519,9 @@ pub struct PopupConfig {
     pub back: Option<Color>,
     pub text: Option<Color>,
     pub frame: Option<Color>,
+    /// Width bounds, in logical pixels. The classic popup measured 350 for a
+    /// single word and 600 for a sentence.
+    pub min_width: f32,
     pub max_width: f32,
     pub max_height: f32,
 }
@@ -533,8 +540,9 @@ impl Default for PopupConfig {
             back: None,
             text: None,
             frame: None,
-            max_width: 520.0,
-            max_height: 420.0,
+            min_width: 350.0,
+            max_width: 600.0,
+            max_height: 480.0,
         }
     }
 }
@@ -958,6 +966,7 @@ impl Config {
         p.frame_thickness = p.frame_thickness.clamp(0.0, 10.0);
         p.auto_hide_secs = p.auto_hide_secs.min(600);
         p.max_width = p.max_width.clamp(160.0, 4000.0);
+        p.min_width = p.min_width.clamp(80.0, p.max_width);
         p.max_height = p.max_height.clamp(80.0, 4000.0);
         self.appearance.ui_scale = self.appearance.ui_scale.clamp(0.5, 3.0);
         self.appearance.text_size = self.appearance.text_size.clamp(6.0, 48.0);

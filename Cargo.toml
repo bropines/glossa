@@ -11,6 +11,7 @@ members = [
     "crates/glossa-platform",
     "crates/glossa-engine",
     "crates/glossa-cli",
+    "crates/glossa-ui-egui",
     "modules/native/example-rot13",
 ]
 
