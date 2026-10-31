@@ -13,3 +13,7 @@ glossa-modules = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 tracing = { workspace = true }
+flate2 = { version = "1.1", default-features = false, features = ["rust_backend"] }
+
+[dev-dependencies]
+glossa-net = { workspace = true }
