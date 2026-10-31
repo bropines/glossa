@@ -3,7 +3,7 @@
 capabilities = ["translate"]
 languages = [
   "ar", "bg", "zh-Hans", "zh-Hant", "cs", "da", "nl", "en", "et", "fi", "fr", "de", "el", "he", "hu",
-  "id", "it", "ja", "ko", "lv", "lt", "nb", "pl", "pt", "ro", "ru", "sk", "sl", "es", "sv", "th", "tr",
+  "id", "it", "ja", "ko", "lv", "lt", "nb", "pl", "pt", "ro", "ru", "sk", "sl", "es", "sv", "tr",
   "uk", "vi",
 ]
 
