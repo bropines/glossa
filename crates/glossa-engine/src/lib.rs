@@ -186,6 +186,11 @@ impl Engine {
         config.sanitise();
         if config.server.token.is_empty() {
             config.server.token = random_token();
+            // Other programs (glossa-cli among them) read the token from the
+            // file, so it has to be there from the first run.
+            if let Err(e) = config.save(&paths.config_file()) {
+                tracing::warn!("could not save the new control API token: {e}");
+            }
         }
         let http = Arc::new(HttpClient::new(&config.network)?);
         let history = if config.history.enabled {
@@ -1049,6 +1054,11 @@ mod tests {
         assert!(translators.iter().all(|p| p.origin == "Built-in" || p.dir.is_some()));
         assert!(e.providers(Capabilities::OCR).iter().any(|p| p.info.id == "lens"));
         assert!(!e.config().server.token.is_empty(), "a control API token is generated");
+        assert_eq!(
+            Config::load(&e.paths().config_file()).unwrap().server.token,
+            e.config().server.token,
+            "and saved, so glossa-cli can use it"
+        );
         // Enabled providers come first, in the configured order.
         assert_eq!(translators[0].info.id, "google");
         std::fs::remove_dir_all(&dir).ok();
