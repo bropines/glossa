@@ -46,13 +46,18 @@
 - **Recognise text on screen** (OCR) and translate it: drag over a region,
   copy it, or watch it and re-translate when it changes. Google Lens through
   [chrome-lens-py](https://github.com/bropines/chrome-lens-py).
-- **Dictionary**: online (Google, and the classic dictionary scripts) and
-  offline (StarDict, DSL, XDXF, TSV).
+- **Dictionary**: online (Google, Yandex, Multitran, ABBYY Lingvo Live,
+  Oxford Learner's, Wiktionary, Youdao, Academic, Wikipedia, Urban
+  Dictionary, and the classic dictionary scripts) and offline (StarDict, DSL,
+  XDXF, TSV).
 - **Listen**: text to speech for the source and the translation.
 - **Replace, copy, convert layout**: translate the selection in place, copy
   the translation, fix text typed in the wrong keyboard layout.
-- **Many services, built in**: Google, Bing, DeepL, DeepLX, Yandex,
-  LibreTranslate, MyMemory, Lingva; fail-over from one to the next.
+- **Many services, built in**: Google, Bing, Yandex, DeepL, Lara, ModernMT
+  and MyMemory with no key or account; the DeepL and Yandex Cloud APIs,
+  DeepLX, LibreTranslate and Lingva with your own key or server; fail-over
+  from one to the next. The keyless web services ship as readable JavaScript
+  modules inside the executable ([list](docs/modules/README.md#bundled-modules)).
 - **AI translators**: any number of OpenAI-compatible endpoints (OpenAI,
   OpenRouter, DeepSeek, Gemini, Groq, Mistral, a local Ollama or LM Studio),
   made from presets, with the answer streaming into the popup as it is written.
@@ -99,6 +104,12 @@ in place. To bring over the settings and history as well:
 glossa-cli import-classic "C:\Program Files (x86)\QTranslate"
 ```
 
+The import points each classic service at Glossa's own version of it where
+one exists (classic Yandex becomes the keyless Yandex, the DeepL scripts
+become DeepL, Multitran, Lingvo, Oxford and the other dictionaries their
+bundled modules), so the tabs work without setup. Classic scripts with no
+Glossa counterpart still load from the installation.
+
 The popup, the main window and the options pages follow the classic program's
 behaviour, studied by observing it ([notes](docs/research/classic-behaviour.md)).
 
@@ -141,7 +152,9 @@ function translate(req, host) {
 
 Start with the [modules overview](docs/modules/README.md). Examples live in
 [`modules/`](modules): a dictionary in JavaScript, Python and Rust/C samples,
-and a Lens OCR module.
+and a Lens OCR module. The services bundled with Glossa are modules too, in
+[`modules/bundled/`](modules/bundled); copying one into your modules folder
+and editing it replaces the bundled copy.
 
 ## Command line
 
@@ -193,9 +206,11 @@ Not yet: mouse mode (translate on double-click or selection without a hotkey),
 speech input, the update check. On Wayland, global hotkeys and reading the
 selection depend on the compositor.
 
-Classic QTranslate service scripts depend on the websites they talk to; when a
-site changes, the script breaks for QTranslate and Glossa alike. `glossa-cli
-modules` and `glossa-cli -v` show what failed and why.
+Classic QTranslate service scripts and the keyless bundled services depend on
+the websites they talk to; when a site changes, a classic script breaks for
+QTranslate and Glossa alike, and a bundled module until it is updated (or
+replaced by your own copy). `glossa-cli modules` and `glossa-cli -v` show what
+failed and why.
 
 ## Clean room
 

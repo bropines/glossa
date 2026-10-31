@@ -32,8 +32,16 @@ for Windows and Linux.
   enabled services that stops on configuration faults, per-service input
   limits, back translation, jobs cancelled when superseded.
 - **Built-in services**: Google, Google Dictionary, Bing (keyless through the
-  translator page session, or the keyed API), DeepL, DeepLX, Yandex,
-  LibreTranslate, MyMemory, Lingva and any OpenAI-compatible API.
+  translator page session, or the keyed API), DeepL API, DeepLX, Yandex
+  Cloud, LibreTranslate, MyMemory, Lingva and any OpenAI-compatible API.
+- **Bundled modules**: keyless services written as Glossa JavaScript modules
+  (`modules/bundled/`) and compiled into the executable, switched on at first
+  start: Yandex (translation, detection and dictionary), DeepL (the iOS app's
+  free endpoint), Lara and ModernMT translators; Multitran, ABBYY Lingvo Live,
+  Oxford Learner's, Wiktionary, Youdao, Academic (dic and translate),
+  Wikipedia and Urban Dictionary dictionaries. A module with the same id in a
+  modules folder replaces the bundled one. The keyed built-ins are now named
+  "Yandex Cloud (API key)" and "DeepL API (key)".
 - **Text recognition**: drag over a screen region to copy or translate its
   text, repeat the last region, or watch a region and re-translate when it
   changes. Google Lens through
@@ -53,7 +61,10 @@ for Windows and Linux.
   `lens-ocr` (Python), `example-rot13` (Rust) and `example-c` (C).
 - **Classic QTranslate**: point Glossa at an installation to use its
   services, themes and languages in place, or import its `Options.json` and
-  history with `glossa-cli import-classic`.
+  history with `glossa-cli import-classic`. The import maps classic services
+  onto the keyless Glossa ones (classic Yandex onto the bundled Yandex rather
+  than the keyed API, the DeepL and DeepLX scripts onto DeepL, the Lara copy
+  onto Lara), merging classic ids that land on the same service.
 - **AI endpoints**: any number of OpenAI-compatible translators made from
   presets (OpenAI, OpenRouter, DeepSeek, Gemini, Groq, Mistral, Ollama, LM
   Studio, custom), each with its model, prompt, temperature or reasoning

@@ -49,6 +49,42 @@ modules/
     └── shout.dll
 ```
 
+## Bundled modules
+
+Some services ship inside Glossa as ordinary JavaScript modules: their
+sources live in [`modules/bundled/<id>/`](../../modules/bundled) in the
+repository and are compiled into the executable (`include_str!` in
+`crates/glossa-engine/src/bundled/`), so they need no files on disk. Each
+`main.js` opens with a description of the service's protocol. All of them work
+without a key or account and are switched on when they first appear.
+
+| id | name | does | service |
+|---|---|---|---|
+| `yandex-web` | Yandex | translate, detect, dictionary | translate.yandex.net, the endpoint Yandex's browser clients use |
+| `deepl-web` | DeepL | translate | the free endpoint of DeepL's iOS app (rate-limited after a burst) |
+| `lara` | Lara | translate | laratranslate.com's web API |
+| `modernmt` | ModernMT | translate | the form behind modernmt.com/translate |
+| `multitran` | Multitran | dictionary | multitran.com result pages |
+| `lingvo-live` | ABBYY Lingvo Live | dictionary | Lingvo Live's word-card JSON |
+| `oxford-learners` | Oxford Learner's Dictionary | dictionary (English) | oxfordlearnersdictionaries.com entry pages |
+| `wiktionary` | Wiktionary | dictionary | English Wiktionary's REST definitions |
+| `youdao` | Youdao | dictionary (English, French, Chinese) | dict.youdao.com's JSON |
+| `dic-academic` | Academic | dictionary | dic.academic.ru search |
+| `translate-academic` | Academic Translations | dictionary | translate.academic.ru entries, as HTML |
+| `wikipedia` | Wikipedia | dictionary | the Wikimedia REST page summary |
+| `urban-dictionary` | Urban Dictionary | dictionary (English) | api.urbandictionary.com |
+
+The keyed APIs stay Rust built-ins with names that say so: "Yandex Cloud (API
+key)" (`yandex`) and "DeepL API (key)" (`deepl`).
+
+**Changing one.** Bundled modules are registered before any module folder is
+scanned, and a module with the same id replaces an earlier one. To change a
+bundled service, copy its folder from `modules/bundled/` into your modules
+folder, keep the `id`, edit, and *Reload modules*; `glossa-cli services` then
+shows it as `[JavaScript]` instead of `[Bundled]`. Delete the copy to go back.
+To hide one without replacing it, switch it off in *Options → Modules*
+(`[modules] disabled` in `config.toml`).
+
 ## module.toml
 
 ```toml
