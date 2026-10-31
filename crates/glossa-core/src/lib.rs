@@ -25,7 +25,7 @@ pub mod translate;
 
 pub use capability::Capabilities;
 pub use color::Color;
-pub use config::Config;
+pub use config::{Backdrop, Config};
 pub use dict::{Article, Audio, DictRequest, SpeakRequest};
 pub use error::{Error, Result};
 pub use history::History;
