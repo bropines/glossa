@@ -500,3 +500,17 @@ fn tail(x: f32, y: f32, ax: f32, ay: f32, bx: f32, by: f32, cx: f32, cy: f32) ->
         d
     }
 }
+
+#[cfg(test)]
+mod tests {
+    /// Writes the application icon as a PNG when `GLOSSA_ICON_OUT` names a
+    /// file, for the README and installers:
+    /// `GLOSSA_ICON_OUT=assets/icons/glossa.png cargo test -p glossa-ui-egui export_icon -- --ignored`
+    #[test]
+    #[ignore]
+    fn export_icon() {
+        let Some(out) = std::env::var_os("GLOSSA_ICON_OUT") else { return };
+        let icon = super::app_icon(256);
+        image::RgbaImage::from_raw(icon.width, icon.height, icon.rgba).unwrap().save(out).unwrap();
+    }
+}

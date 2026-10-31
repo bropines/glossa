@@ -389,7 +389,12 @@ impl OpenAi {
                 return Err(Error::Config(format!("{}: extra request fields must be a JSON object", self.name())));
             };
             for (k, v) in fields {
-                body[k] = v;
+                // `null` takes a field out, for a model that rejects one of ours.
+                if v.is_null() {
+                    body.as_object_mut().expect("the body is an object").remove(&k);
+                } else {
+                    body[k] = v;
+                }
             }
         }
         let url = format!("{}/chat/completions", self.root(host));
@@ -503,7 +508,7 @@ fn options_for(p: &AiPreset) -> Vec<OptionSpec> {
         OptionSpec::multiline("extra_headers", "Extra headers", p.headers).help("One `Name: value` per line."),
         OptionSpec::multiline("extra_body", "Extra request fields", "").help(
             "A JSON object merged into the request, e.g. {\"top_p\": 0.9} or OpenRouter's \
-             {\"provider\": {\"sort\": \"price\"}}.",
+             {\"provider\": {\"sort\": \"price\"}}. null removes a field Glossa would send.",
         ),
     ]
 }
@@ -812,7 +817,7 @@ data: [DONE]\n\n";
             ("reasoning_effort", json!("low")),
             ("max_tokens", json!(500)),
             ("extra_headers", defaults("extra_headers")),
-            ("extra_body", json!("{\"provider\": {\"sort\": \"price\"}, \"top_p\": 0.9}")),
+            ("extra_body", json!("{\"provider\": {\"sort\": \"price\"}, \"top_p\": 0.9, \"max_tokens\": null}")),
         ]);
         with_test_host(&http, &o, |h| p.translate(h, &req())).unwrap();
         let r = &http.requests()[0];
@@ -820,7 +825,7 @@ data: [DONE]\n\n";
         assert_eq!(b["model"], "openai/gpt-4o-mini", "the preset's model when none is set");
         assert_eq!(b["reasoning_effort"], "low");
         assert!(b.get("temperature").is_none(), "no temperature alongside a reasoning effort");
-        assert_eq!(b["max_tokens"], 500);
+        assert!(b.get("max_tokens").is_none(), "null in the extra fields removes ours");
         assert_eq!(b["provider"]["sort"], "price");
         assert_eq!(b["top_p"], 0.9);
         assert_eq!(header(r, "x-title"), Some("Glossa"));

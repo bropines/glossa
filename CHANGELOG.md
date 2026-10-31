@@ -54,6 +54,12 @@ for Windows and Linux.
 - **Classic QTranslate**: point Glossa at an installation to use its
   services, themes and languages in place, or import its `Options.json` and
   history with `glossa-cli import-classic`.
+- **AI endpoints**: any number of OpenAI-compatible translators made from
+  presets (OpenAI, OpenRouter, DeepSeek, Gemini, Groq, Mistral, Ollama, LM
+  Studio, custom), each with its model, prompt, temperature or reasoning
+  effort, token limit, timeout, extra headers and extra request fields; *Load
+  models* and *Test* in the options. Answers stream into the popup, the main
+  window and the terminal as they are written.
 - **History** with favourites and export to text, CSV, HTML and JSON.
 - **Command line** (`glossa-cli`): translate, detect, dict, ocr, speak,
   services, modules, history, import-classic, theme, locale, config, serve
@@ -78,6 +84,12 @@ for Windows and Linux.
   a fix (`third_party/README.md`).
 - Python installed through pyenv-win, or behind another `.bat`/`.cmd` shim,
   is found.
+- The control API token generated on first run is saved, so `glossa-cli
+  action` and other clients can use it.
+- Popup: *Auto position* keeps it on screen near the edges (or reopens it
+  where it was dragged), *Auto size* off gives a fixed box; exception rules
+  for controls (list views, hotkey fields, Explorer's file view) match, and
+  *Smart detection* works.
 
 ### Known gaps
 

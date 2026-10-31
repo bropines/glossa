@@ -697,7 +697,16 @@ fn ai_tools(
     });
     if let Some(list) = models.get(id).filter(|l| !l.is_empty()) {
         let values = draft.services.options.entry(id.to_owned()).or_default();
-        let current = values.get("model").and_then(|v| v.as_str()).unwrap_or("").to_owned();
+        // The saved value, else the preset's default shown in the field below.
+        let default = app
+            .engine
+            .registry()
+            .get(id)
+            .and_then(|p| {
+                p.options().iter().find(|o| o.key == "model").and_then(|o| o.default.as_str().map(str::to_owned))
+            })
+            .unwrap_or_default();
+        let current = values.get("model").and_then(|v| v.as_str()).map(str::to_owned).unwrap_or(default);
         ui.horizontal(|ui| {
             ui.label(format!("Models ({})", list.len()));
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
