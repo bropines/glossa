@@ -84,6 +84,10 @@ pub struct ModuleSection {
     /// stopped, in seconds. Keeps resident memory down.
     #[serde(default)]
     pub idle_timeout_secs: Option<u64>,
+    /// The module works with no setup, so Glossa may switch it on when it
+    /// first appears. Leave it off for anything that needs a key or a server.
+    #[serde(default)]
+    pub ready_to_use: bool,
 }
 
 fn default_version() -> String {
@@ -223,6 +227,7 @@ impl Manifest {
             languages,
             max_input_chars: self.module.max_input_chars,
             needs_credentials: self.options.iter().any(|o| o.required),
+            ready_to_use: self.module.ready_to_use && !self.options.iter().any(|o| o.required),
         }
     }
 

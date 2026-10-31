@@ -68,6 +68,7 @@ author = "You"
 license = "MIT"
 max_input_chars = 5000        # optional: longer text is cut at a word boundary
 idle_timeout_secs = 300       # Python only: stop the process after this long unused
+ready_to_use = true           # works with no key or setup: switched on when it first appears
 
 [language_map]                # optional: Glossa's code -> the service's
 "zh-Hans" = "zh"
@@ -112,6 +113,13 @@ leaves, and the module gets an error naming the permission. Those requests use
 the user's proxy settings and Glossa's timeouts and retries. A Python or
 native module can open its own connections; permissions do not cover those
 (they are ordinary programs), which is one reason to prefer the host calls.
+
+**Switching on.** Glossa keeps no fixed list of services. When a provider
+appears for the first time (a built-in on the first run, your module the
+first time it loads), it is switched on in the service strip if it declares
+`ready_to_use = true` and has no required options; otherwise it is only
+listed, for the user to switch on in *Options → Services*. Either way the
+choice is remembered, so a service the user switched off stays off.
 
 **Options** are stored in the user's `config.toml` under
 `[services.options.<module id>]`, and every request carries them as

@@ -11,6 +11,8 @@ entry = "main.js"
 description = "English definitions, phonetics and examples from dictionaryapi.dev."
 homepage = "https://dictionaryapi.dev"
 license = "MIT"
+# No key needed: Glossa switches it on when it first appears.
+ready_to_use = true
 
 [permissions]
 network = ["api.dictionaryapi.dev"]

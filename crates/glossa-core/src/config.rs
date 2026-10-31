@@ -379,6 +379,12 @@ pub struct Services {
     /// Per-module settings, keyed by module id, then option key. Values are
     /// whatever the module's manifest declares.
     pub options: BTreeMap<String, BTreeMap<String, serde_json::Value>>,
+    /// Every provider that has been offered once. A provider not in this
+    /// list is new: it is switched on if it works without setup
+    /// ([`ProviderInfo::ready_to_use`](crate::ProviderInfo)), otherwise just
+    /// listed. Either way it is added here, so a service the user switched
+    /// off stays off.
+    pub seen: Vec<String>,
     /// OpenAI-compatible endpoints the user added (Options → Services → AI
     /// endpoints). Each becomes a translator of its own; its settings (URL,
     /// key, model, prompt…) live in `options` under its id like any
@@ -425,16 +431,20 @@ impl Services {
 impl Default for Services {
     fn default() -> Self {
         Self {
-            order: ["google", "bing", "yandex", "deepl", "libretranslate", "mymemory"].map(String::from).to_vec(),
-            enabled: ["google", "bing", "yandex", "deepl"].map(String::from).to_vec(),
-            active: "google".into(),
+            // Nothing is listed here on purpose: which services exist is only
+            // known once built-ins and modules are loaded, and the engine
+            // fills these in from what it finds (`Engine::adopt_providers`).
+            order: Vec::new(),
+            enabled: Vec::new(),
+            active: String::new(),
             popup_active: String::new(),
             dictionary_order: Vec::new(),
-            dictionary_enabled: vec!["google-dictionary".into()],
-            dictionary_active: "google-dictionary".into(),
-            tts: "google".into(),
+            dictionary_enabled: Vec::new(),
+            dictionary_active: String::new(),
+            tts: String::new(),
             fail_over: true,
             options: BTreeMap::new(),
+            seen: Vec::new(),
             ai_endpoints: Vec::new(),
         }
     }

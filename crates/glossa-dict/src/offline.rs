@@ -118,6 +118,8 @@ impl OfflineDictionaries {
         let mut info =
             ProviderInfo::new("offline", "Offline dictionaries", Capabilities::DICTIONARY | Capabilities::OFFLINE);
         info.description = "Looks words up in local StarDict, Lingvo DSL, XDXF and tab-separated dictionaries.".into();
+        // It exists only once the user has added dictionary files.
+        info.ready_to_use = true;
         OfflineDictionaries { info, sources: RwLock::new(Vec::new()) }
     }
 

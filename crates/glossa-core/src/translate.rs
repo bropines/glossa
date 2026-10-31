@@ -178,6 +178,11 @@ pub struct ProviderInfo {
     /// Whether the provider needs a credential the user has to supply.
     #[serde(default)]
     pub needs_credentials: bool,
+    /// Works with no setup at all (no key, no server of one's own). Such a
+    /// provider is switched on the first time it appears; others are listed
+    /// for the user to switch on.
+    #[serde(default)]
+    pub ready_to_use: bool,
 }
 
 impl ProviderInfo {
@@ -191,6 +196,7 @@ impl ProviderInfo {
             languages: Vec::new(),
             max_input_chars: None,
             needs_credentials: false,
+            ready_to_use: false,
         }
     }
 

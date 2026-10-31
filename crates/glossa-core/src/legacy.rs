@@ -208,6 +208,9 @@ pub fn import_options(text: &str, config: &mut Config) -> Result<Vec<String>, St
     let disabled = ids(&["DisabledServices"]).unwrap_or_default();
     if let Some(order) = ids(&["ServicesOrder"]) {
         config.services.enabled = order.iter().filter(|id| !disabled.contains(id)).cloned().collect();
+        // The classic settings already decided about these; do not switch
+        // any of them back on as "new".
+        config.services.seen.extend(order.iter().cloned());
         config.services.order = order;
     }
     if let Some(active) = ids(&["General", "ActiveServices"]).and_then(|a| a.into_iter().next()) {
@@ -216,6 +219,7 @@ pub fn import_options(text: &str, config: &mut Config) -> Result<Vec<String>, St
     if let Some(order) = ids(&["DictionariesOrder"]) {
         let disabled = ids(&["DisabledDictionaries"]).unwrap_or_default();
         config.services.dictionary_enabled = order.iter().filter(|id| !disabled.contains(id)).cloned().collect();
+        config.services.seen.extend(order.iter().cloned());
         config.services.dictionary_order = order;
     }
     if let Some(active) = ids(&["General", "ActiveDictionaryServices"]).and_then(|a| a.into_iter().next()) {

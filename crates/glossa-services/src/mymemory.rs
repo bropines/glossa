@@ -51,6 +51,7 @@ impl MyMemory {
                             output. No key; supplying an e-mail raises the free daily quota."
             .into();
         info.homepage = "https://mymemory.translated.net".into();
+        info.ready_to_use = true;
         // Every table language, but no `auto`: MyMemory cannot detect, so the
         // engine has to work the source out first.
         info.languages = LangId::all().collect();

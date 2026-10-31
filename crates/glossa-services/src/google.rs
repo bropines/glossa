@@ -223,6 +223,7 @@ impl Google {
                             romanisation and per-part-of-speech alternatives, and reads text aloud."
             .into();
         info.homepage = "https://translate.google.com".into();
+        info.ready_to_use = true;
         info.languages = all_langs_with_auto();
         info.max_input_chars = Some(5000);
         let options = vec![
@@ -332,6 +333,7 @@ impl GoogleDictionary {
                             with translations grouped by part of speech. No key needed."
             .into();
         info.homepage = "https://translate.google.com".into();
+        info.ready_to_use = true;
         info.languages = all_langs_with_auto();
         info.max_input_chars = Some(200);
         Self { info, domain: DomainMemo::default() }

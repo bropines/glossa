@@ -178,6 +178,9 @@ impl LegacyMeta {
                 license: String::new(),
                 max_input_chars: Some(5000),
                 idle_timeout_secs: None,
+                // A classic install brings dozens; the imported settings or
+                // the user decide which to show.
+                ready_to_use: false,
             },
             capabilities: caps.names().into_iter().map(String::from).collect(),
             languages,

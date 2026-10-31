@@ -101,6 +101,7 @@ impl PotPlugin {
                 license: String::new(),
                 max_input_chars: None,
                 idle_timeout_secs: None,
+                ready_to_use: false,
             },
             capabilities: vec![capability.into()],
             languages,

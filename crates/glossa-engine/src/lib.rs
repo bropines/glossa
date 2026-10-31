@@ -347,7 +347,59 @@ impl Engine {
         old.suspend_all();
         *self.inner.modules.write() =
             ModuleStatus { loaded: report.loaded, failed: report.failed, skipped: report.skipped };
+        self.adopt_providers();
         self.emit(Event::ModulesReloaded);
+    }
+
+    /// Bring the service lists up to date with the providers that exist now.
+    ///
+    /// Nothing about which services exist is hard-coded in the settings: a
+    /// provider that shows up for the first time (a built-in on the first
+    /// run, a module installed later) is switched on if it works without
+    /// setup, otherwise only listed, and remembered as seen either way, so a
+    /// service the user switched off stays off. Empty choices (the active
+    /// tab, the speech service) are then filled from what is enabled.
+    fn adopt_providers(&self) {
+        let registry = self.registry();
+        let mut cfg = self.inner.config.write();
+        let before = cfg.services.clone();
+        let s = &mut cfg.services;
+        for entry in registry.entries() {
+            let info = entry.info();
+            if s.seen.contains(&info.id) {
+                continue;
+            }
+            s.seen.push(info.id.clone());
+            if !info.ready_to_use {
+                continue;
+            }
+            let id = info.id.clone();
+            if info.capabilities.contains(Capabilities::TRANSLATE) && !s.enabled.contains(&id) {
+                s.enabled.push(id.clone());
+            }
+            if info.capabilities.contains(Capabilities::DICTIONARY) && !s.dictionary_enabled.contains(&id) {
+                s.dictionary_enabled.push(id.clone());
+            }
+            if info.capabilities.contains(Capabilities::LISTEN) && s.tts.is_empty() {
+                s.tts = id;
+            }
+        }
+        if s.active.is_empty() {
+            s.active = s.enabled.first().cloned().unwrap_or_default();
+        }
+        if s.dictionary_active.is_empty() {
+            s.dictionary_active = s.dictionary_enabled.first().cloned().unwrap_or_default();
+        }
+        if s.tts.is_empty() {
+            if let Some(p) = registry.with_capability(Capabilities::LISTEN).first() {
+                s.tts = p.info().id.clone();
+            }
+        }
+        if cfg.services != before {
+            if let Err(e) = cfg.save(&self.inner.paths.config_file()) {
+                tracing::warn!("could not save the service lists: {e}");
+            }
+        }
     }
 
     fn reload_catalogs(&self) {
@@ -1071,6 +1123,39 @@ mod tests {
         );
         // Enabled providers come first, in the configured order.
         assert_eq!(translators[0].info.id, "google");
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn services_are_adopted_as_they_appear_not_hard_coded() {
+        let (e, dir) = engine("adopt");
+        let s = e.config().services;
+        // A fresh install switches on what works without setup, nothing else.
+        assert_eq!(s.enabled, vec!["google", "bing", "mymemory"]);
+        assert_eq!(s.active, "google");
+        assert_eq!(s.dictionary_enabled, vec!["google-dictionary"]);
+        assert_eq!(s.tts, "google");
+        assert!(s.seen.contains(&"deepl".to_string()), "listed, not enabled: it needs a key");
+        assert!(!s.enabled.contains(&"deepl".to_string()));
+
+        // The user's choice sticks across reloads.
+        e.update_config(|c| c.services.enabled.retain(|id| id != "bing")).unwrap();
+        e.reload_modules();
+        assert!(!e.config().services.enabled.contains(&"bing".to_string()));
+
+        // A module installed later that works without setup is switched on.
+        let m = e.paths().user_module_dir().join("ready");
+        std::fs::create_dir_all(&m).unwrap();
+        std::fs::write(
+            m.join("module.toml"),
+            "capabilities = [\"translate\"]\n[module]\nid = \"ready\"\nname = \"Ready\"\nruntime = \"js\"\nready_to_use = true\n",
+        )
+        .unwrap();
+        std::fs::write(m.join("main.js"), "function translate(req) { return req.text; }").unwrap();
+        e.reload_modules();
+        let s = e.config().services;
+        assert!(s.enabled.contains(&"ready".to_string()), "{:?}", s.enabled);
+        assert!(Config::load(&e.paths().config_file()).unwrap().services.enabled.contains(&"ready".to_string()));
         std::fs::remove_dir_all(&dir).ok();
     }
 

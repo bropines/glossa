@@ -80,6 +80,7 @@ impl Bing {
             "Microsoft Translator",
             Capabilities::TRANSLATE | Capabilities::DETECT_LANGUAGE,
         );
+        info.ready_to_use = true;
         info.description = "Microsoft's translator, as used by Bing. Works without a key; an Azure Translator key \
                             and region switch it to the official, metered API."
             .into();
