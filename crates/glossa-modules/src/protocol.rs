@@ -75,10 +75,12 @@ impl<T: Transport> ProtocolProvider<T> {
         };
         let params = serde_json::to_value(params).map_err(|e| Error::module(&self.info.id, e))?;
         let started = Instant::now();
-        let value = self
-            .transport
-            .call(method, params, &|m, p| api.handle(m, p))
-            .map_err(|e| from_module_error(&self.info.id, &self.info.name, e))?;
+        let value = self.transport.call(method, params, &|m, p| api.handle(m, p)).map_err(|e| match e.kind {
+            // "Not found" means no text in an image only for recognition;
+            // for a lookup it is the module's own "no article" message.
+            wire::ErrorKind::NotFound if method != "recognize" => Error::module(&self.info.id, e.message),
+            _ => from_module_error(&self.info.id, &self.info.name, e),
+        })?;
         tracing::debug!(module = %self.info.id, method, ms = started.elapsed().as_millis() as u64, "module call");
         host.check_cancelled()?;
         serde_json::from_value(value).map_err(|e| Error::bad_response(&self.info.name, format!("{method} reply: {e}")))

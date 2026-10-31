@@ -19,6 +19,29 @@ if (typeof String.prototype.substr !== "function") {
   };
 }
 
+// Annex B escape/unescape. Old crypto code (CryptoJS's UTF-8 codec among it)
+// converts strings with `unescape(encodeURIComponent(s))`.
+if (typeof escape !== "function") {
+  var escape = function (s) {
+    s = String(s);
+    var out = "";
+    for (var i = 0; i < s.length; i++) {
+      var c = s.charCodeAt(i);
+      if (/[A-Za-z0-9@*_+\-.\/]/.test(s.charAt(i))) out += s.charAt(i);
+      else if (c < 256) out += "%" + (c < 16 ? "0" : "") + c.toString(16).toUpperCase();
+      else out += "%u" + ("000" + c.toString(16).toUpperCase()).slice(-4);
+    }
+    return out;
+  };
+}
+if (typeof unescape !== "function") {
+  var unescape = function (s) {
+    return String(s).replace(/%u([0-9A-Fa-f]{4})|%([0-9A-Fa-f]{2})/g, function (m, u, b) {
+      return String.fromCharCode(parseInt(u || b, 16));
+    });
+  };
+}
+
 /** Thrown by a module to report a typed error to Glossa. */
 function ModuleError(kind, message) {
   this.name = "ModuleError";

@@ -215,6 +215,47 @@ pub struct LegacyTransport {
     pub preferred_domain: String,
 }
 
+/// The classic `Capability` values. The host passes one as the first argument
+/// of `serviceHost`, so a script serving several capabilities can name a
+/// different host for each (`serviceHost(Capability.DICTIONARY, from, to)` is
+/// how the scripts call it themselves).
+mod cap {
+    pub const TRANSLATE: i32 = 1;
+    pub const DETECT_LANGUAGE: i32 = 2;
+    pub const LISTEN: i32 = 4;
+    pub const DICTIONARY: i32 = 8;
+}
+
+/// One performed request, as the driver needs it.
+struct Fetched {
+    text: String,
+    bytes: Vec<u8>,
+    status: u16,
+    url: String,
+}
+
+impl Fetched {
+    /// Nothing was requested (`HttpMethod.UNDEFINED`).
+    fn none() -> Fetched {
+        Fetched { text: String::new(), bytes: Vec::new(), status: 200, url: String::new() }
+    }
+
+    fn succeeded(&self) -> bool {
+        (200..300).contains(&self.status)
+    }
+
+    /// The error to report when a script got nothing out of a failed
+    /// response: the HTTP status says more than the script's own complaint.
+    fn http_error(&self, detail: Option<&str>) -> ModuleError {
+        let kind = if self.status == 429 { ErrorKind::RateLimited } else { ErrorKind::Http };
+        let mut message = format!("HTTP {} from {}", self.status, glossa_net::redact(&self.url));
+        if let Some(d) = detail {
+            message.push_str(&format!("; the script could not read the reply ({d})"));
+        }
+        ModuleError::new(kind, message)
+    }
+}
+
 /// The classic request description, read out of a `RequestData` object.
 struct RequestData {
     method: i64,
@@ -248,10 +289,13 @@ impl LegacyTransport {
     ) -> Result<serde_json::Value, ModuleError> {
         let mut user = params.get("options").and_then(|o| o.as_object()).cloned().unwrap_or_default();
         if self.script.needs_bing_session() {
-            match bing_session(host) {
-                Ok(session) => user.extend(session),
-                Err(e) => tracing::debug!("could not fetch the Bing session values: {}", e.message),
-            }
+            // Without these values the script would only fail later with a
+            // confusing TypeError (`Options.BingKey` is undefined), so the
+            // real cause is reported instead.
+            let session = bing_session(host).map_err(|e| {
+                ModuleError::new(e.kind, format!("could not start a Bing Translator session: {}", e.message))
+            })?;
+            user.extend(session);
         }
         let mut ctx = self.script.context(&self.host_options(&user)).map_err(engine::script_error)?;
         let text = params.get("text").and_then(|v| v.as_str()).unwrap_or("").to_owned();
@@ -264,10 +308,28 @@ impl LegacyTransport {
             "translate" => {
                 let (from, to) = (slot("from"), slot("to"));
                 let args = [JsValue::from(js(&text)), JsValue::from(from), JsValue::from(to)];
-                let resp = self.flow(&mut ctx, host, "serviceTranslateRequest", "serviceTranslateResponse", &args)?;
+                let resp = self.flow(
+                    &mut ctx,
+                    host,
+                    cap::TRANSLATE,
+                    "serviceTranslateRequest",
+                    "serviceTranslateResponse",
+                    &args,
+                )?;
                 let translation = resp.get("translation").and_then(|v| v.as_str()).unwrap_or("").replace("\r\n", "\n");
                 if translation.trim().is_empty() {
-                    return Err(ModuleError::new(ErrorKind::BadResponse, "the script returned no translation"));
+                    // Some scripts explain a failure in the `data` slot.
+                    let reason = resp
+                        .get("data")
+                        .and_then(|v| v.as_str())
+                        .map(str::trim)
+                        .filter(|s| !s.is_empty() && !has_scheme(s))
+                        .map(|s| format!(" ({s})"))
+                        .unwrap_or_default();
+                    return Err(ModuleError::new(
+                        ErrorKind::BadResponse,
+                        format!("the script returned no translation{reason}"),
+                    ));
                 }
                 let detected =
                     resp.get("sourceLanguage").and_then(|v| v.as_i64()).filter(|n| *n > 1).map(|n| LangId(n as u16));
@@ -279,7 +341,14 @@ impl LegacyTransport {
             "dictionary" => {
                 let (from, to) = (slot("from"), slot("to"));
                 let args = [JsValue::from(js(&text)), JsValue::from(from), JsValue::from(to)];
-                let resp = self.flow(&mut ctx, host, "serviceDictionaryRequest", "serviceDictionaryResponse", &args)?;
+                let resp = self.flow(
+                    &mut ctx,
+                    host,
+                    cap::DICTIONARY,
+                    "serviceDictionaryRequest",
+                    "serviceDictionaryResponse",
+                    &args,
+                )?;
                 let html = resp.get("translation").and_then(|v| v.as_str()).unwrap_or("").to_owned();
                 if html.trim().is_empty() {
                     return Err(ModuleError::new(ErrorKind::NotFound, format!("no article for {text:?}")));
@@ -292,13 +361,16 @@ impl LegacyTransport {
                 let rd = engine::call_global(&mut ctx, "serviceDetectLanguageRequest", &[JsValue::from(js(&text))])
                     .map_err(engine::script_error)?;
                 let rd = read_request(&mut ctx, &rd)?;
-                let body = self.perform(&mut ctx, host, &rd, &text, 1, 0, false)?;
+                let fetched = self.perform(&mut ctx, host, &rd, cap::DETECT_LANGUAGE, 1, 0, false)?;
                 let handler =
                     if rd.response_handler.is_empty() { "serviceDetectLanguageResponse" } else { &rd.response_handler };
-                let lang = engine::call_global(&mut ctx, handler, &[JsValue::from(js(&body.0))])
-                    .map_err(engine::script_error)?;
+                let lang = engine::call_global(&mut ctx, handler, &[JsValue::from(js(&fetched.text))])
+                    .map_err(|e| script_failure(&fetched, e))?;
                 let n = engine::to_json(&mut ctx, &lang).ok().and_then(|v| v.as_i64()).unwrap_or(0);
                 let lang = LangId(n.max(0) as u16);
+                if !lang.is_language() && !fetched.succeeded() {
+                    return Err(fetched.http_error(None));
+                }
                 if !lang.is_language() {
                     return Err(ModuleError::new(ErrorKind::NotFound, "the script could not detect the language"));
                 }
@@ -315,7 +387,11 @@ impl LegacyTransport {
                 )
                 .map_err(engine::script_error)?;
                 let rd = read_request(&mut ctx, &rd)?;
-                let (_, bytes) = self.perform(&mut ctx, host, &rd, &text, lang.0 as i32, lang.0 as i32, true)?;
+                let fetched = self.perform(&mut ctx, host, &rd, cap::LISTEN, lang.0 as i32, lang.0 as i32, true)?;
+                if !fetched.succeeded() {
+                    return Err(fetched.http_error(None));
+                }
+                let bytes = fetched.bytes;
                 if bytes.is_empty() {
                     return Err(ModuleError::new(ErrorKind::BadResponse, "the service returned no audio"));
                 }
@@ -329,10 +405,20 @@ impl LegacyTransport {
     }
 
     /// request -> HTTP -> response handler, following `nextRequestHandler`.
+    ///
+    /// A chained response *adds to* what came before rather than replacing
+    /// it: the Microsoft script, for one, translates first and then chains a
+    /// dictionary lookup whose response holds only the dictionary block
+    /// (starting with a blank line, to sit under the translation). So the
+    /// pieces are concatenated, the languages a response settled on carry
+    /// over into the next hop, and a `nextRequestHandler` that names no
+    /// function ends the chain with what has been collected — some scripts
+    /// put other values in that slot.
     fn flow(
         &self,
         ctx: &mut Context,
         host: &dyn Fn(&str, serde_json::Value) -> Reply,
+        capability: i32,
         request_fn: &str,
         response_fn: &str,
         args: &[JsValue; 3],
@@ -340,62 +426,82 @@ impl LegacyTransport {
         if !engine::has_function(ctx, request_fn) {
             return Err(ModuleError::unsupported(request_fn));
         }
-        let text = engine::to_string(ctx, &args[0]);
-        let from = engine::to_json(ctx, &args[1]).ok().and_then(|v| v.as_i64()).unwrap_or(1) as i32;
-        let to = engine::to_json(ctx, &args[2]).ok().and_then(|v| v.as_i64()).unwrap_or(0) as i32;
+        let mut from = engine::to_json(ctx, &args[1]).ok().and_then(|v| v.as_i64()).unwrap_or(1) as i32;
+        let mut to = engine::to_json(ctx, &args[2]).ok().and_then(|v| v.as_i64()).unwrap_or(0) as i32;
+        let mut collected = String::new();
 
         let mut rd_value = engine::call_global(ctx, request_fn, args).map_err(engine::script_error)?;
         for _ in 0..MAX_HOPS {
             let rd = read_request(ctx, &rd_value)?;
-            let (body, _) = self.perform(ctx, host, &rd, &text, from, to, false)?;
+            let fetched = self.perform(ctx, host, &rd, capability, from, to, false)?;
             let handler =
                 if rd.response_handler.is_empty() { response_fn.to_owned() } else { rd.response_handler.clone() };
             let resp_value = engine::call_global(
                 ctx,
                 &handler,
-                &[args[0].clone(), JsValue::from(js(&body)), args[1].clone(), args[2].clone()],
+                &[args[0].clone(), JsValue::from(js(&fetched.text)), JsValue::from(from), JsValue::from(to)],
             )
-            .map_err(engine::script_error)?;
-            let resp = engine::to_json(ctx, &resp_value).map_err(ModuleError::other)?;
+            .map_err(|e| script_failure(&fetched, e))?;
+            let mut resp = engine::to_json(ctx, &resp_value).map_err(ModuleError::other)?;
+            if let Some(piece) = resp.get("translation").and_then(|v| v.as_str()) {
+                collected.push_str(piece);
+            }
+            let language = |key: &str| resp.get(key).and_then(|v| v.as_i64()).filter(|n| *n > 1).map(|n| n as i32);
+            from = language("sourceLanguage").unwrap_or(from);
+            to = language("translationLanguage").unwrap_or(to);
+
             let next = resp.get("nextRequestHandler").and_then(|v| v.as_str()).unwrap_or("").to_owned();
-            if next.is_empty() {
+            if next.is_empty() || !engine::has_function(ctx, &next) {
+                if !next.is_empty() {
+                    tracing::debug!("nextRequestHandler {next:?} is not a function; the response is final");
+                }
+                if collected.trim().is_empty() && !fetched.succeeded() {
+                    return Err(fetched.http_error(None));
+                }
+                if let Some(obj) = resp.as_object_mut() {
+                    obj.insert("translation".into(), collected.into());
+                    obj.insert("sourceLanguage".into(), from.into());
+                    obj.insert("translationLanguage".into(), to.into());
+                }
                 return Ok(resp);
             }
             rd_value =
-                engine::call_global(ctx, &next, &[args[0].clone(), args[1].clone(), args[2].clone(), resp_value])
+                engine::call_global(ctx, &next, &[args[0].clone(), JsValue::from(from), JsValue::from(to), resp_value])
                     .map_err(engine::script_error)?;
         }
         Err(ModuleError::new(ErrorKind::BadResponse, "the script chained too many requests"))
     }
 
-    /// Perform one classic request through the host. Returns the body decoded
-    /// as text and the raw bytes.
+    /// Perform one classic request through the host.
     #[allow(clippy::too_many_arguments)]
     fn perform(
         &self,
         ctx: &mut Context,
         host: &dyn Fn(&str, serde_json::Value) -> Reply,
         rd: &RequestData,
-        text: &str,
+        capability: i32,
         from: i32,
         to: i32,
         binary: bool,
-    ) -> Result<(String, Vec<u8>), ModuleError> {
+    ) -> Result<Fetched, ModuleError> {
         // HttpMethod.UNDEFINED: the script needs no request; its response
         // handler works from the text alone.
         if rd.method == 0 {
-            return Ok((String::new(), Vec::new()));
+            return Ok(Fetched::none());
         }
-        let url = if rd.uri.starts_with("http://") || rd.uri.starts_with("https://") {
+        let url = if has_scheme(&rd.uri) {
             rd.uri.clone()
         } else {
             let base = engine::call_global(
                 ctx,
                 "serviceHost",
-                &[JsValue::from(js(text)), JsValue::from(from), JsValue::from(to)],
+                &[JsValue::from(capability), JsValue::from(from), JsValue::from(to)],
             )
             .map(|v| engine::to_string(ctx, &v))
             .map_err(engine::script_error)?;
+            // A few scripts name a bare host ("dict.example.com"); the
+            // classic host connected to it over HTTP(S) all the same.
+            let base = if has_scheme(&base) { base } else { format!("https://{}", base.trim_start_matches('/')) };
             join_url(&base, &rd.uri)
         };
         let codepage = Codepage::from_number(rd.codepage as u32).unwrap_or(Codepage::Utf8);
@@ -408,13 +514,20 @@ impl LegacyTransport {
             }
         }
         let method = if rd.method == 2 { "POST" } else { "GET" };
+        // A POST built with the GET header set carries no Content-Type. Form
+        // encoding is what such a body always is (and what a browser or curl
+        // would declare); some endpoints ignore an undeclared body — Bing's
+        // dictionary lookup answers "status 205" without it.
+        if method == "POST" && !rd.data.is_empty() && !headers.keys().any(|k| k.eq_ignore_ascii_case("content-type")) {
+            headers.insert("Content-Type".into(), "application/x-www-form-urlencoded".into());
+        }
         let mut req = serde_json::json!({ "method": method, "url": url, "headers": headers, "binary": true });
         if method == "POST" {
             let body = codepage.encode(&rd.data);
             req["body_base64"] = base64::engine::general_purpose::STANDARD.encode(body).into();
         }
         let resp = host("http", req).into_result()?;
-        let status = resp.get("status").and_then(|v| v.as_u64()).unwrap_or(0);
+        let status = resp.get("status").and_then(|v| v.as_u64()).unwrap_or(0) as u16;
         let bytes = resp
             .get("body_base64")
             .and_then(|v| v.as_str())
@@ -426,17 +539,33 @@ impl LegacyTransport {
             .and_then(|v| v.as_str())
             .and_then(|ct| ct.split(';').find_map(|p| p.trim().strip_prefix("charset=")))
             .and_then(|c| Codepage::from_label(c.trim_matches('"')));
-        let body_text = if binary { String::new() } else { declared.unwrap_or(codepage).decode(&bytes) };
-        if !(200..300).contains(&status) {
-            // Some services report errors in a body the script knows how to
-            // read; hand those over, and fail only on an empty one.
-            if body_text.trim().is_empty() {
-                let kind = if status == 429 { ErrorKind::RateLimited } else { ErrorKind::Http };
-                return Err(ModuleError::new(kind, format!("HTTP {status} from {}", glossa_net::redact(&url))));
-            }
+        let text = if binary { String::new() } else { declared.unwrap_or(codepage).decode(&bytes) };
+        let fetched = Fetched { text, bytes, status, url };
+        // Some services report errors in a body the script knows how to read;
+        // hand those over. Fail at once on an empty body, and on a server
+        // error page (a proxy's "502 Bad Gateway"), which a scraping script
+        // would otherwise present as the article.
+        let error_page = fetched.status >= 500 && fetched.text.trim_start().starts_with('<');
+        if !fetched.succeeded() && !binary && (fetched.text.trim().is_empty() || error_page) {
+            return Err(fetched.http_error(None));
         }
-        Ok((body_text, bytes))
+        Ok(fetched)
     }
+}
+
+/// A response handler threw. After a failed request the HTTP status is the
+/// real story (an error page the script cannot parse); otherwise it is the
+/// script's own error.
+fn script_failure(fetched: &Fetched, message: String) -> ModuleError {
+    if fetched.succeeded() {
+        engine::script_error(message)
+    } else {
+        fetched.http_error(Some(&message))
+    }
+}
+
+fn has_scheme(url: &str) -> bool {
+    url.starts_with("http://") || url.starts_with("https://")
 }
 
 impl Transport for LegacyTransport {
@@ -800,6 +929,201 @@ mod tests {
         assert_eq!(s["BingCookie"], "MUID=1; _EDGE_S=F=1");
         bing_session(&host).unwrap();
         assert_eq!(*calls.borrow(), 1, "second call is served from the cache");
+    }
+
+    /// The header and language table every test script below shares.
+    const HEAD: &str = r#"
+        function serviceHeader() { return new ServiceHeader(902, "Hops", "", Capability.TRANSLATE | Capability.DICTIONARY); }
+        SupportedLanguages = [-1, "auto"]; SupportedLanguages[17] = "en"; SupportedLanguages[46] = "ru";
+    "#;
+
+    fn translate_with(
+        p: &ProtocolProvider<LegacyTransport>,
+        http: &MockHttp,
+        text: &str,
+    ) -> glossa_core::Result<String> {
+        let opts = OptionValues::new();
+        with_test_host(http, &opts, |host| {
+            p.translate(host, &TranslateRequest::new(text, LangPair::new(LangId::ENGLISH, LangId::RUSSIAN)))
+                .map(|t| t.text)
+        })
+    }
+
+    #[test]
+    fn service_host_gets_the_capability_and_bare_hosts_get_a_scheme() {
+        let service = format!(
+            r#"{HEAD}
+            function serviceHost(a, b, c) {{ return a == Capability.DICTIONARY ? "https://" + codeFromLanguage(b) + ".dict.test" : "tr.test"; }}
+            function serviceTranslateRequest(a, b, c) {{ return new RequestData(HttpMethod.GET, "/t?q=" + encodeGetParam(a)); }}
+            function serviceTranslateResponse(a, b, c, d) {{ return new ResponseData(b, c, d); }}
+            function serviceDictionaryRequest(a, b, c) {{ return new RequestData(HttpMethod.GET, "/w/" + a); }}
+            function serviceDictionaryResponse(a, b, c, d) {{ return new ResponseData(b, c, d, serviceHost(Capability.DICTIONARY, c, d) + "/w/" + a); }}"#
+        );
+        let p = provider(&service);
+        let http = MockHttp::new().on(Method::Get, "https://tr.test/t?q=hi", 200, "привет").on(
+            Method::Get,
+            "https://en.dict.test/w/run",
+            200,
+            "<b>run</b>",
+        );
+        assert_eq!(translate_with(&p, &http, "hi").unwrap(), "привет");
+        let opts = OptionValues::new();
+        with_test_host(&http, &opts, |host| {
+            let req = DictRequest { text: "run".into(), from: LangId::ENGLISH, to: LangId::RUSSIAN, exact: true };
+            let a = p.dictionary(host, &req).unwrap();
+            assert_eq!(a.link.as_deref(), Some("https://en.dict.test/w/run"));
+        });
+    }
+
+    #[test]
+    fn chained_responses_add_to_the_translation() {
+        // Translate, then chain a lookup whose response holds only the extra
+        // block, the way the Microsoft script appends its dictionary.
+        let service = format!(
+            r#"{HEAD}
+            function serviceHost() {{ return "https://svc.test"; }}
+            function serviceTranslateRequest(a, b, c) {{ return new RequestData(HttpMethod.GET, "/t"); }}
+            function serviceTranslateResponse(a, b, c, d) {{ return new ResponseData(b, c, d, null, "lookupRequest"); }}
+            function lookupRequest(a, b, c, prev) {{
+                return new RequestData(HttpMethod.GET, "/l?from=" + codeFromLanguage(b) + "&had=" + encodeGetParam(prev.translation), "", "", null, "lookupResponse");
+            }}
+            function lookupResponse(a, b, c, d) {{ return new ResponseData(Const.NL2 + "Nouns: " + b, c, d); }}"#
+        );
+        let p = provider(&service);
+        let http = MockHttp::new().on(Method::Get, "https://svc.test/t", 200, "дом").on(
+            Method::Get,
+            "https://svc.test/l?from=en&had=%D0%B4%D0%BE%D0%BC",
+            200,
+            "дом, здание",
+        );
+        assert_eq!(translate_with(&p, &http, "house").unwrap(), "дом\n\nNouns: дом, здание");
+
+        // An empty extra block leaves the translation alone.
+        let http = MockHttp::new().on(Method::Get, "https://svc.test/t", 200, "дом").on(
+            Method::Get,
+            "https://svc.test/l",
+            200,
+            "",
+        );
+        let p = provider(&service.replace("Const.NL2 + \"Nouns: \" + b", "\"\""));
+        assert_eq!(translate_with(&p, &http, "house").unwrap(), "дом");
+    }
+
+    #[test]
+    fn a_post_without_a_content_type_is_sent_as_a_form() {
+        let service = format!(
+            r#"{HEAD}
+            function serviceHost() {{ return "https://svc.test"; }}
+            function serviceTranslateRequest(a, b, c) {{ return new RequestData(HttpMethod.POST, "/t", "text=" + encodePostParam(a), getHeader()); }}
+            function serviceTranslateResponse(a, b, c, d) {{ return new ResponseData(b, c, d); }}"#
+        );
+        let p = provider(&service);
+        let http = MockHttp::new().on(Method::Post, "https://svc.test/t", 200, "дом");
+        assert_eq!(translate_with(&p, &http, "house").unwrap(), "дом");
+        let req = &http.requests()[0];
+        assert!(req.headers.iter().any(|(k, v)| k == "Content-Type" && v == "application/x-www-form-urlencoded"));
+    }
+
+    #[test]
+    fn a_next_handler_that_is_not_a_function_ends_the_chain() {
+        // Seen in the wild: the source text passed as the fifth argument.
+        let service = format!(
+            r#"{HEAD}
+            function serviceHost() {{ return "https://svc.test"; }}
+            function serviceTranslateRequest(a, b, c) {{ return new RequestData(HttpMethod.GET, "/t"); }}
+            function serviceTranslateResponse(a, b, c, d) {{ return new ResponseData(b, c, d, null, a); }}"#
+        );
+        let p = provider(&service);
+        let http = MockHttp::new().on(Method::Get, "https://svc.test/t", 200, "Погода хорошая.");
+        assert_eq!(translate_with(&p, &http, "The weather is nice.").unwrap(), "Погода хорошая.");
+    }
+
+    #[test]
+    fn a_failed_request_is_reported_by_its_status() {
+        let service = format!(
+            r#"{HEAD}
+            function serviceHost() {{ return "https://svc.test"; }}
+            function serviceTranslateRequest(a, b, c) {{ return new RequestData(HttpMethod.GET, "/t?q=" + a); }}
+            function serviceTranslateResponse(a, b, c, d) {{ return new ResponseData(parseJSON(b).response.text, c, d); }}"#
+        );
+        let p = provider(&service);
+        // The script chokes on the error body: the status is what is reported.
+        let http = MockHttp::new().on(Method::Get, "https://svc.test/t", 404, r#"{"detail":"Not Found"}"#);
+        let msg = translate_with(&p, &http, "x").unwrap_err().to_string();
+        assert!(msg.contains("HTTP 404 from https://svc.test/t") && msg.contains("TypeError"), "{msg}");
+        assert!(!msg.contains("q=x"), "the query (the user's text) stays out of the message: {msg}");
+
+        // A script that swallows the problem and returns nothing gets the same.
+        let quiet = service.replace("parseJSON(b).response.text", "''");
+        let p = provider(&quiet);
+        let http = MockHttp::new().on(Method::Get, "https://svc.test/t", 502, "<html>Bad Gateway</html>");
+        let msg = translate_with(&p, &http, "x").unwrap_err().to_string();
+        assert!(msg.contains("HTTP 502"), "{msg}");
+    }
+
+    #[test]
+    fn a_reason_in_the_data_slot_explains_an_empty_translation() {
+        let service = format!(
+            r#"{HEAD}
+            function serviceHost() {{ return "https://svc.test"; }}
+            function serviceTranslateRequest(a, b, c) {{ return new RequestData(HttpMethod.GET, "/t"); }}
+            function serviceTranslateResponse(a, b, c, d) {{ return new ResponseData("", 0, d, "Translation error: quota"); }}"#
+        );
+        let p = provider(&service);
+        let http = MockHttp::new().on(Method::Get, "https://svc.test/t", 200, "{}");
+        let msg = translate_with(&p, &http, "x").unwrap_err().to_string();
+        assert!(msg.contains("Translation error: quota"), "{msg}");
+    }
+
+    #[test]
+    fn host_utils_and_the_htmlfile_document() {
+        let mut ctx = engine::new_context().unwrap();
+        engine::eval(&mut ctx, LEGACY_HOST, "host").unwrap();
+        engine::eval(&mut ctx, COMPAT, "compat").unwrap();
+        let check = |ctx: &mut Context, expr: &str| -> serde_json::Value {
+            let v = engine::eval(ctx, expr, "t").unwrap();
+            engine::to_json(ctx, &v).unwrap()
+        };
+        assert_eq!(check(&mut ctx, "Utils.md5('')"), "d41d8cd98f00b204e9800998ecf8427e");
+        assert_eq!(check(&mut ctx, "Utils.md5('привет')"), "608333adc72f545078ede3aad71bfe74");
+
+        let page = r#"<html><body><div id="header"><div>logo</div><div>menu</div></div>
+            <div id="content" class="c"><p>article <img src="x.png"> text</p></div>
+            <div id='page'><textarea id="out">a &amp; b</textarea></div><div id="footer">foot</div></body></html>"#;
+        engine::set_global_json(&mut ctx, "page", &serde_json::json!(page)).unwrap();
+        let out = check(
+            &mut ctx,
+            r#"var doc = new ActiveXObject("htmlfile"); doc.write(page);
+               var h = doc.getElementById("header"); if (h) h.parentNode.removeChild(h);
+               var f = doc.getElementById("footer"); f.parentNode.removeChild(f);
+               doc.getElementById("content").style.margin = "0";
+               var p = doc.getElementById("page"); p.style.padding = "0"; p.style.width = "100%";
+               [doc.getElementById("missing") === null, doc.getElementById("out").value,
+                doc.getElementById("content").getAttribute("class"), doc.documentElement.outerHTML]"#,
+        );
+        assert_eq!(out[0], true);
+        assert_eq!(out[1], "a & b");
+        assert_eq!(out[2], "c");
+        let html = out[3].as_str().unwrap();
+        assert!(!html.contains("logo") && !html.contains("menu") && !html.contains("foot"), "{html}");
+        assert!(html.contains(r#"<div style="margin:0" id="content" class="c">"#), "{html}");
+        assert!(html.contains(r#"<div style="padding:0;width:100%" id='page'>"#), "{html}");
+        assert!(html.contains("article <img src=\"x.png\"> text"), "{html}");
+    }
+
+    #[test]
+    fn a_missing_bing_session_is_reported_instead_of_a_script_error() {
+        let service = format!(
+            r#"{HEAD}
+            function serviceHost() {{ return "https://www.bing.com"; }}
+            function serviceTranslateRequest(a, b, c) {{ return new RequestData(HttpMethod.POST, "/t", "key=" + Options.BingKey.match(/[0-9]+$/g)); }}
+            function serviceTranslateResponse(a, b, c, d) {{ return new ResponseData(b, c, d); }}"#
+        );
+        let p = provider(&service);
+        let http =
+            MockHttp::new().on(Method::Get, "https://www.bing.com/translator", 200, "<html>no session here</html>");
+        let msg = translate_with(&p, &http, "x").unwrap_err().to_string();
+        assert!(msg.contains("Bing Translator session") && msg.contains("IG"), "{msg}");
     }
 
     #[test]

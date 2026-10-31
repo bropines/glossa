@@ -238,7 +238,7 @@ impl HttpClient {
             } else {
                 settings.user_agent.clone()
             });
-        cfg = cfg.proxy(proxy);
+        cfg = cfg.proxy(proxy).tls_config(tls_config());
         Ok(HttpClient {
             agent: cfg.build().into(),
             timeout,
@@ -400,39 +400,84 @@ impl Http for HttpClient {
     }
 }
 
+/// Which certificates a server must chain up to.
+///
+/// On Windows and macOS the operating system decides, as it does for the
+/// browser and as WinHTTP did for the classic program: the system store
+/// (with corporate and user-installed roots), revocation, and fetching an
+/// intermediate certificate a misconfigured server forgot to send — a
+/// bundled root list fails those servers with "UnknownIssuer". Linux keeps
+/// the bundled Mozilla roots, which work without any system setup.
+fn tls_config() -> ureq::tls::TlsConfig {
+    let roots = if cfg!(any(windows, target_os = "macos")) {
+        ureq::tls::RootCerts::PlatformVerifier
+    } else {
+        ureq::tls::RootCerts::WebPki
+    };
+    ureq::tls::TlsConfig::builder().root_certs(roots).build()
+}
+
 /// Strip the query string from a URL before it reaches a log, since keys and
 /// the user's text travel there.
 pub fn redact(url: &str) -> &str {
     url.split(['?', '#']).next().unwrap_or(url)
 }
 
+/// Hosts that never go through a proxy: a local server (a self-hosted DeepLX
+/// or LibreTranslate, say) is unreachable from the proxy's side.
+const LOOPBACK: &[&str] = &["localhost", "127.0.0.1", "::1", "[::1]"];
+
 fn resolve_proxy(settings: &Network) -> Result<Option<ureq::Proxy>, Error> {
-    let url = match settings.proxy.mode {
-        ProxyMode::None => None,
-        ProxyMode::Manual => settings.proxy.url(),
-        ProxyMode::System | ProxyMode::Auto => system_proxy(),
+    let (url, bypass) = match settings.proxy.mode {
+        ProxyMode::None => return Ok(None),
+        ProxyMode::Manual => (settings.proxy.url(), Vec::new()),
+        ProxyMode::System | ProxyMode::Auto => match system_proxy() {
+            Some((url, bypass)) => (Some(url), bypass),
+            None => (None, Vec::new()),
+        },
     };
-    match url {
-        Some(u) => ureq::Proxy::new(&u).map(Some).map_err(|e| Error::Config(format!("proxy {u:?}: {e}"))),
-        None => Ok(None),
+    let Some(u) = url else { return Ok(None) };
+    let bad = |e: ureq::Error| Error::Config(format!("proxy {u:?}: {e}"));
+    // Parsed once for its parts, then rebuilt with the bypass list, which
+    // only the builder takes.
+    let parsed = ureq::Proxy::new(&u).map_err(bad)?;
+    let mut builder = ureq::Proxy::builder(parsed.protocol()).host(parsed.host()).port(parsed.port());
+    if let Some(user) = parsed.username() {
+        builder = builder.username(user);
+        if let Some(password) = parsed.password() {
+            builder = builder.password(password);
+        }
     }
+    for host in LOOPBACK.iter().copied().chain(bypass.iter().map(String::as_str)) {
+        builder = builder.no_proxy(host);
+    }
+    builder.build().map(Some).map_err(bad)
 }
 
-/// The system proxy: environment variables first (the convention on Unix and
-/// what most tools honour), then on Windows the per-user WinINet setting.
-fn system_proxy() -> Option<String> {
+/// The system proxy and the hosts that bypass it: environment variables
+/// first (the convention on Unix and what most tools honour, with
+/// `NO_PROXY`), then on Windows the per-user WinINet setting (with its
+/// `ProxyOverride` list).
+fn system_proxy() -> Option<(String, Vec<String>)> {
     for var in ["HTTPS_PROXY", "https_proxy", "ALL_PROXY", "all_proxy", "HTTP_PROXY", "http_proxy"] {
         if let Ok(v) = std::env::var(var) {
             if !v.trim().is_empty() {
-                return Some(v);
+                let bypass = ["NO_PROXY", "no_proxy"].iter().find_map(|k| std::env::var(k).ok()).unwrap_or_default();
+                return Some((v, split_bypass(&bypass, ',')));
             }
         }
     }
     windows_proxy()
 }
 
+/// A bypass list as single host patterns. WinINet's `<local>` (hosts
+/// without a dot) has no equivalent; loopback is always bypassed anyway.
+fn split_bypass(list: &str, separator: char) -> Vec<String> {
+    list.split(separator).map(str::trim).filter(|s| !s.is_empty() && *s != "<local>").map(str::to_owned).collect()
+}
+
 #[cfg(windows)]
-fn windows_proxy() -> Option<String> {
+fn windows_proxy() -> Option<(String, Vec<String>)> {
     use winreg::enums::HKEY_CURRENT_USER;
     let key = winreg::RegKey::predef(HKEY_CURRENT_USER)
         .open_subkey(r"Software\Microsoft\Windows\CurrentVersion\Internet Settings")
@@ -442,11 +487,12 @@ fn windows_proxy() -> Option<String> {
         return None;
     }
     let server: String = key.get_value("ProxyServer").ok()?;
-    parse_wininet_proxy(&server)
+    let bypass: String = key.get_value("ProxyOverride").unwrap_or_default();
+    Some((parse_wininet_proxy(&server)?, split_bypass(&bypass, ';')))
 }
 
 #[cfg(not(windows))]
-fn windows_proxy() -> Option<String> {
+fn windows_proxy() -> Option<(String, Vec<String>)> {
     None
 }
 
@@ -583,6 +629,31 @@ mod tests {
         }
         // 503 without Retry-After is a plain status error (transient anyway).
         assert!(matches!(r(503, vec![]).error_for_status("p"), Err(Error::HttpStatus { status: 503, .. })));
+    }
+
+    #[test]
+    fn loopback_and_listed_hosts_bypass_the_proxy() {
+        assert_eq!(split_bypass("<local>;*.google.com; 10.* ;", ';'), ["*.google.com", "10.*"]);
+        assert_eq!(split_bypass("localhost,.corp.test", ','), ["localhost", ".corp.test"]);
+
+        let settings = Network {
+            proxy: glossa_core::config::Proxy {
+                mode: ProxyMode::Manual,
+                host: "proxy.test".into(),
+                port: 3128,
+                username: "u ser".into(),
+                password: "p@ss".into(),
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        let proxy = resolve_proxy(&settings).unwrap().unwrap();
+        assert_eq!((proxy.host(), proxy.port()), ("proxy.test", 3128));
+        assert_eq!((proxy.username(), proxy.password()), (Some("u ser"), Some("p@ss")));
+        let uri = |s: &str| s.parse::<ureq::http::Uri>().unwrap();
+        assert!(proxy.is_no_proxy(&uri("http://127.0.0.1:1188/translate")));
+        assert!(proxy.is_no_proxy(&uri("http://localhost:5000/")));
+        assert!(!proxy.is_no_proxy(&uri("https://translate.example.com/")));
     }
 
     #[test]

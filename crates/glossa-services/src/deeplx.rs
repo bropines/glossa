@@ -84,11 +84,19 @@ impl Provider for DeepLx {
             body["source_lang"] = Value::String(source_code(req.from));
         }
         let token = host.option_str("token").trim();
-        let mut http_req = HttpRequest::post(url).json(&body).provider(self.name());
+        let mut http_req = HttpRequest::post(url.clone()).json(&body).provider(self.name());
         if !token.is_empty() {
             http_req = http_req.header("Authorization", format!("Bearer {token}"));
         }
-        let resp = host.http.send(http_req)?;
+        // DeepLX is a server the user runs; the default address only works
+        // once one is running. Say that, rather than a bare socket error.
+        let resp = host.http.send(http_req).map_err(|e| match e {
+            Error::Network(detail) => Error::Network(format!(
+                "no DeepLX server answers at {}: start one, or set its address in the service's options ({detail})",
+                glossa_net::redact(&url)
+            )),
+            other => other,
+        })?;
         if resp.status == 401 && token.is_empty() {
             return Err(Error::MissingCredential { provider: self.name().to_owned(), what: "token".into() });
         }
@@ -182,6 +190,16 @@ mod tests {
             MockHttp::new().on(Method::Post, DEFAULT_URL, 401, r#"{"code":401,"message":"Invalid access token"}"#);
         let r = with_test_host(&http, &OptionValues::new(), |h| DeepLx::new().translate(h, &req(LangId::AUTO)));
         assert!(matches!(r, Err(Error::MissingCredential { ref what, .. }) if what == "token"), "{r:?}");
+    }
+
+    #[test]
+    fn no_server_at_the_address_is_explained() {
+        let http = MockHttp::new();
+        let r = with_test_host(&http, &OptionValues::new(), |h| DeepLx::new().translate(h, &req(LangId::AUTO)));
+        match r {
+            Err(Error::Network(m)) => assert!(m.contains("no DeepLX server answers at http://127.0.0.1:1188"), "{m}"),
+            other => panic!("{other:?}"),
+        }
     }
 
     #[test]
