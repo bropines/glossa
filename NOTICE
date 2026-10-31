@@ -1,0 +1,70 @@
+Glossa
+Copyright (c) 2026 bropines and contributors
+Licensed under the MIT License or the Apache License, Version 2.0, at your
+option (see LICENSE-MIT and LICENSE-APACHE).
+
+QTranslate
+----------
+
+Glossa is an independent successor to QTranslate, the classic Windows
+translator. It is not affiliated with or endorsed by QTranslate or its author;
+the name is used only to describe compatibility with the classic program and
+its files.
+
+Glossa is a clean-room implementation. It contains no code, strings or assets
+from the QTranslate executable, which was never decompiled or disassembled.
+Its behaviour was studied from the outside: the plain-text files users already
+edit (Options.json, the JavaScript service scripts and their helper API,
+themes, lang.json) and the running program. The helper API that classic
+service scripts call (crates/glossa-modules/src/runtime/js/qtranslate_compat.js)
+is written for this project.
+
+Classic service scripts, themes and language files are not part of this
+repository or of the release builds. Glossa reads them from the user's own
+QTranslate installation when pointed at one.
+
+Third-party code in this repository
+-----------------------------------
+
+third_party/eframe
+  eframe 0.37.0 from egui, https://github.com/emilk/egui
+  MIT OR Apache-2.0, Copyright (c) 2018-2021 Emil Ernerfeldt.
+  Vendored with one local fix, marked "Glossa patch" in the source and
+  described in third_party/README.md.
+
+Notable dependencies
+--------------------
+
+The release binaries are statically linked with these crates, among others,
+each under its own license:
+
+  egui and eframe (MIT OR Apache-2.0), winit (Apache-2.0), glow and wgpu
+    (MIT OR Apache-2.0): the window system and rendering. epaint_default_fonts
+    embeds the Hack, Ubuntu and Noto Emoji fonts (MIT / Bitstream Vera, Ubuntu
+    Font Licence 1.0, SIL OFL 1.1).
+  boa (https://boajs.dev, Unlicense OR MIT): the JavaScript engine that runs
+    JavaScript modules and classic QTranslate service scripts.
+  ureq (MIT OR Apache-2.0) with rustls (Apache-2.0 OR ISC OR MIT) and ring
+    (Apache-2.0 AND ISC): HTTP and TLS. webpki-roots carries Mozilla's CA
+    certificate list (CDLA-Permissive-2.0).
+  tray-icon, muda and global-hotkey from the Tauri project (MIT OR
+    Apache-2.0): the tray icon and global hotkeys. arboard (MIT OR
+    Apache-2.0): the clipboard. rfd (MIT): file dialogs.
+  rodio (MIT OR Apache-2.0) and cpal (Apache-2.0) with Symphonia (MPL-2.0):
+    audio playback for text to speech. Symphonia is used unmodified; its
+    source is at https://github.com/pdeljanov/Symphonia.
+  image, tiny_http and flate2 (MIT OR Apache-2.0), zip (MIT) and libloading
+    (ISC); on Linux enigo (MIT), on Windows xcap (Apache-2.0).
+
+The full list, with versions, is in Cargo.lock; each crate's license file
+ships with its source on crates.io.
+
+Google Lens
+-----------
+
+Text recognition through Google Lens is provided by chrome-lens-py
+(https://github.com/bropines/chrome-lens-py, MIT, by the same author), a
+separate program the user installs; Glossa runs it and does not include it.
+Google and Google Lens are trademarks of Google LLC. Glossa is not affiliated
+with Google or with any other translation service it can call; the services'
+own terms apply to their use.
