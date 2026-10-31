@@ -1,0 +1,92 @@
+name: ci
+
+on:
+  # Prose, legal texts, templates and the release workflow change nothing CI
+  # checks.
+  push:
+    branches: [main]
+    paths-ignore:
+      - '**/*.md'
+      - LICENSE-*
+      - NOTICE
+      - .github/ISSUE_TEMPLATE/**
+      - .github/workflows/release.yml
+  pull_request:
+    paths-ignore:
+      - '**/*.md'
+      - LICENSE-*
+      - NOTICE
+      - .github/ISSUE_TEMPLATE/**
+      - .github/workflows/release.yml
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+  # Incremental artifacts are useless on a fresh runner and bloat the cache.
+  CARGO_INCREMENTAL: 0
+
+jobs:
+  fmt:
+    name: rustfmt
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt
+      - run: cargo fmt --all -- --check
+
+  clippy:
+    name: clippy (linux)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      # Build-time system libraries: GTK 3 for the tray icon and its menu
+      # (tray-icon, muda) and ALSA for audio (rodio -> cpal). X11, Wayland,
+      # libxkbcommon, libxcb and appindicator are opened at run time with
+      # dlopen and need nothing here.
+      - name: Linux build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends libgtk-3-dev libasound2-dev
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo clippy --workspace --all-targets --locked -- -D warnings
+
+  test:
+    name: test (linux)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Linux build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends libgtk-3-dev libasound2-dev
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo test --workspace --locked
+
+  windows:
+    # The platform code behind cfg(windows) (UI Automation, the clipboard,
+    # synthetic input, the registry) is only compiled, linted and tested here.
+    # Native MSVC on the runner; the author's own builds cross-compile with
+    # x86_64-pc-windows-gnu from WSL instead (see AGENTS.md).
+    name: clippy + test (windows)
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo clippy --workspace --all-targets --locked -- -D warnings
+      - run: cargo test --workspace --locked
+
