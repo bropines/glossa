@@ -19,7 +19,7 @@ exclude = ["third_party"]
 [workspace.package]
 version = "0.1.0"
 edition = "2021"
-rust-version = "1.82"
+rust-version = "1.95"
 license = "MIT OR Apache-2.0"
 authors = ["Glossa contributors"]
 repository = "https://github.com/bropines/glossa"

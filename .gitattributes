@@ -1,5 +1,12 @@
 * text=auto eol=lf
+*.rs diff=rust
+*.sh text eol=lf
 *.png binary
 *.ico binary
+*.ttf binary
+*.otf binary
 *.dll binary
 *.so binary
+*.dylib binary
+Cargo.lock linguist-generated=true
+third_party/** linguist-vendored

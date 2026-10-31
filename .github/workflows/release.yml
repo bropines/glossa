@@ -1,0 +1,153 @@
+name: release
+
+# Tag v1.2.3 (matching the workspace version in Cargo.toml) -> a draft GitHub
+# release with one archive per platform and SHA256SUMS. Review the draft and
+# publish it by hand. To redo a failed run, delete the draft first.
+#
+#   glossa-1.2.3-x86_64-linux.tar.gz
+#   glossa-1.2.3-x86_64-windows.zip
+#     glossa(.exe), glossa-cli(.exe)
+#     README.md, CHANGELOG.md, LICENSE-MIT, LICENSE-APACHE, NOTICE
+#     examples/modules/{js,python}/...   example modules, as source
+#     sdk/python/                        glossa_module.py; Python modules
+#                                        import it, and Glossa looks for it
+#                                        beside the executable
+
+on:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  version:
+    name: tag matches Cargo.toml
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.v.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+      - id: v
+        run: |
+          version="$(cargo metadata --no-deps --format-version 1 | jq -r '.packages[] | select(.name == "glossa-cli") | .version')"
+          if [ "v$version" != "$GITHUB_REF_NAME" ]; then
+            echo "::error::tag $GITHUB_REF_NAME does not match the workspace version $version"
+            exit 1
+          fi
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+
+  linux:
+    name: build (x86_64-unknown-linux-gnu)
+    needs: version
+    runs-on: ubuntu-latest
+    # Built on Debian 12 rather than the runner's Ubuntu so the binaries ask
+    # for glibc 2.36 at most and start on Debian 12, Ubuntu 22.04 and newer.
+    container: debian:bookworm
+    env:
+      TARGET: x86_64-unknown-linux-gnu
+      NAME: glossa-${{ needs.version.outputs.version }}-x86_64-linux
+    steps:
+      # GTK 3 and ALSA are the only libraries linked at build time (see
+      # ci.yml); the rest is tooling the bare container lacks.
+      - name: Build dependencies
+        run: |
+          apt-get update
+          apt-get install -y --no-install-recommends \
+            build-essential pkg-config curl ca-certificates git \
+            libgtk-3-dev libasound2-dev
+      - uses: actions/checkout@v4
+      # No build cache in release builds: a fresh, reproducible build from the
+      # tag is worth the extra minutes.
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Build
+        run: cargo build --release --locked --target "$TARGET" -p glossa-ui-egui -p glossa-cli
+      - name: Package
+        run: |
+          mkdir -p "dist/$NAME/examples/modules" "dist/$NAME/sdk"
+          cp "target/$TARGET/release/glossa" "target/$TARGET/release/glossa-cli" "dist/$NAME/"
+          cp README.md CHANGELOG.md LICENSE-MIT LICENSE-APACHE NOTICE "dist/$NAME/"
+          # Next to the executable, modules/ is a live module folder that
+          # Glossa scans; the examples go under examples/ so they do not
+          # load until the user copies one there.
+          cp -r modules/js modules/python "dist/$NAME/examples/modules/"
+          cp -r sdk/python "dist/$NAME/sdk/"
+          find "dist/$NAME" -name __pycache__ -prune -exec rm -rf {} +
+          tar -C dist -czf "dist/$NAME.tar.gz" "$NAME"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: linux
+          path: dist/*.tar.gz
+          if-no-files-found: error
+
+  windows:
+    name: build (x86_64-pc-windows-msvc)
+    needs: version
+    runs-on: windows-latest
+    defaults:
+      run:
+        shell: bash
+    env:
+      TARGET: x86_64-pc-windows-msvc
+      NAME: glossa-${{ needs.version.outputs.version }}-x86_64-windows
+      # Link the C runtime statically, so the executables start on a system
+      # without the Visual C++ redistributable installed. With an explicit
+      # --target, RUSTFLAGS leave build scripts and proc macros alone.
+      RUSTFLAGS: -C target-feature=+crt-static
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Build
+        run: cargo build --release --locked --target "$TARGET" -p glossa-ui-egui -p glossa-cli
+      - name: Package
+        run: |
+          mkdir -p "dist/$NAME/examples/modules" "dist/$NAME/sdk"
+          cp "target/$TARGET/release/glossa.exe" "target/$TARGET/release/glossa-cli.exe" "dist/$NAME/"
+          cp README.md CHANGELOG.md LICENSE-MIT LICENSE-APACHE NOTICE "dist/$NAME/"
+          cp -r modules/js modules/python "dist/$NAME/examples/modules/"
+          cp -r sdk/python "dist/$NAME/sdk/"
+          find "dist/$NAME" -name __pycache__ -prune -exec rm -rf {} +
+          cd dist && 7z a -tzip "$NAME.zip" "$NAME" > /dev/null
+      - uses: actions/upload-artifact@v4
+        with:
+          name: windows
+          path: dist/*.zip
+          if-no-files-found: error
+
+  release:
+    name: draft release
+    needs: [version, linux, windows]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+      - name: Checksums
+        working-directory: dist
+        run: |
+          sha256sum -- * > SHA256SUMS
+          cat SHA256SUMS
+      - name: Create the draft release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ needs.version.outputs.version }}
+        run: |
+          # The notes are this version's section of CHANGELOG.md; GitHub's
+          # generated notes stand in when there is none.
+          awk -v v="$VERSION" '/^## \[/ { p = index($0, "[" v "]") > 0; next } p' CHANGELOG.md > notes.md
+          if [ -s notes.md ]; then notes=(--notes-file notes.md); else notes=(--generate-notes); fi
+          # v1.2.3-rc.1 and the like are pre-releases.
+          case "$GITHUB_REF_NAME" in *-*) pre=(--prerelease) ;; *) pre=() ;; esac
+          gh release create "$GITHUB_REF_NAME" dist/* \
+            --draft --verify-tag --title "Glossa $VERSION" "${notes[@]}" "${pre[@]}"

@@ -1,0 +1,11 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Documentation
+    url: https://github.com/bropines/glossa/tree/main/docs
+    about: Modules, the module protocol, themes and the architecture.
+  - name: Writing a module
+    url: https://github.com/bropines/glossa/blob/main/docs/modules/README.md
+    about: Add a translator, dictionary, voice or OCR engine in JavaScript, Python or as a native library.
+  - name: Report a security problem
+    url: https://github.com/bropines/glossa/security/advisories/new
+    about: Privately, not as a public issue. See SECURITY.md.
