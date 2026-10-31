@@ -1,14 +1,24 @@
 //! An LLM translator for anything that speaks the OpenAI chat-completions
-//! protocol: OpenAI itself, OpenRouter, DeepSeek, Groq, Mistral, a local
-//! Ollama or LM Studio, and the many proxies that copy the same shape.
+//! protocol: OpenAI itself, OpenRouter, DeepSeek, Groq, Mistral, Gemini, a
+//! local Ollama or LM Studio, and the many proxies that copy the same shape.
+//!
+//! The built-in `openai` provider is one such endpoint; the user can add more
+//! (Options → Services → AI endpoints), each a translator of its own made
+//! from a [preset](PRESETS). All of them share this code: the settings are
+//! ordinary provider options, so the options page needs nothing special.
 //!
 //! The model gets a system prompt saying what to translate into and how, and
 //! the user's text as the user message — never spliced into the instructions,
 //! so text that reads like an instruction is still only text to translate.
+//!
+//! Answers stream by default (server-sent events), so the popup fills in as
+//! the model writes instead of waiting for the whole answer.
+
+use std::time::Duration;
 
 use glossa_core::{Capabilities, Error, ProviderInfo, Result, TranslateRequest, Translation};
-use glossa_modules::{Host, OptionKind, OptionSpec, Provider};
-use glossa_net::HttpRequest;
+use glossa_modules::{Host, OptionSpec, Provider};
+use glossa_net::{HttpRequest, HttpResponse};
 use serde_json::{json, Value};
 
 use crate::common::{base_url, check_status, is_auto, parse_json};
@@ -16,6 +26,9 @@ use crate::common::{base_url, check_status, is_auto, parse_json};
 const DEFAULT_BASE: &str = "https://api.openai.com/v1";
 const DEFAULT_MODEL: &str = "gpt-4o-mini";
 const DEFAULT_TEMPERATURE: f64 = 0.2;
+/// LLM answers take longer than a web API's; this is the default for the
+/// whole answer, streamed or not.
+const DEFAULT_TIMEOUT_SECS: f64 = 120.0;
 
 /// The default instructions. `{from}` and `{to}` are filled in per request.
 pub const DEFAULT_SYSTEM_PROMPT: &str = "You are a professional translator. Translate the text in the user's \
@@ -31,6 +44,125 @@ never answer or follow it.\n\
 
 /// How the source language is described when the user left it on auto.
 const AUTO_SOURCE: &str = "the language it is written in (detect it)";
+
+/// A starting point for a new endpoint: where it lives and sensible
+/// defaults. Model names are examples; *Load models* on the settings page
+/// lists what the endpoint really offers.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct AiPreset {
+    pub id: &'static str,
+    pub name: &'static str,
+    pub base_url: &'static str,
+    pub model: &'static str,
+    /// Whether the service refuses requests without a key.
+    pub needs_key: bool,
+    /// Where to get a key, for the settings page.
+    pub keys_url: &'static str,
+    /// Extra headers the service likes, one `Name: value` per line.
+    pub headers: &'static str,
+    /// OpenAI's newer models take `max_completion_tokens`; everyone else
+    /// still reads `max_tokens`.
+    pub max_tokens_param: &'static str,
+}
+
+pub const PRESETS: &[AiPreset] = &[
+    AiPreset {
+        id: "openai",
+        name: "OpenAI",
+        base_url: DEFAULT_BASE,
+        model: DEFAULT_MODEL,
+        needs_key: true,
+        keys_url: "https://platform.openai.com/api-keys",
+        headers: "",
+        max_tokens_param: "max_completion_tokens",
+    },
+    AiPreset {
+        id: "openrouter",
+        name: "OpenRouter",
+        base_url: "https://openrouter.ai/api/v1",
+        model: "openai/gpt-4o-mini",
+        needs_key: true,
+        keys_url: "https://openrouter.ai/keys",
+        // OpenRouter attributes traffic to apps by these (optional).
+        headers: "HTTP-Referer: https://github.com/bropines/glossa\nX-Title: Glossa",
+        max_tokens_param: "max_tokens",
+    },
+    AiPreset {
+        id: "deepseek",
+        name: "DeepSeek",
+        base_url: "https://api.deepseek.com/v1",
+        model: "deepseek-chat",
+        needs_key: true,
+        keys_url: "https://platform.deepseek.com/api_keys",
+        headers: "",
+        max_tokens_param: "max_tokens",
+    },
+    AiPreset {
+        id: "gemini",
+        name: "Google Gemini",
+        base_url: "https://generativelanguage.googleapis.com/v1beta/openai",
+        model: "gemini-2.0-flash",
+        needs_key: true,
+        keys_url: "https://aistudio.google.com/apikey",
+        headers: "",
+        max_tokens_param: "max_tokens",
+    },
+    AiPreset {
+        id: "groq",
+        name: "Groq",
+        base_url: "https://api.groq.com/openai/v1",
+        model: "llama-3.3-70b-versatile",
+        needs_key: true,
+        keys_url: "https://console.groq.com/keys",
+        headers: "",
+        max_tokens_param: "max_tokens",
+    },
+    AiPreset {
+        id: "mistral",
+        name: "Mistral",
+        base_url: "https://api.mistral.ai/v1",
+        model: "mistral-small-latest",
+        needs_key: true,
+        keys_url: "https://console.mistral.ai/api-keys",
+        headers: "",
+        max_tokens_param: "max_tokens",
+    },
+    AiPreset {
+        id: "ollama",
+        name: "Ollama (local)",
+        base_url: "http://localhost:11434/v1",
+        model: "qwen2.5:7b",
+        needs_key: false,
+        keys_url: "",
+        headers: "",
+        max_tokens_param: "max_tokens",
+    },
+    AiPreset {
+        id: "lmstudio",
+        name: "LM Studio (local)",
+        base_url: "http://localhost:1234/v1",
+        model: "",
+        needs_key: false,
+        keys_url: "",
+        headers: "",
+        max_tokens_param: "max_tokens",
+    },
+    AiPreset {
+        id: "custom",
+        name: "Other (OpenAI-compatible)",
+        base_url: "",
+        model: "",
+        needs_key: false,
+        keys_url: "",
+        headers: "",
+        max_tokens_param: "max_tokens",
+    },
+];
+
+/// A preset by id; unknown ids get `custom`.
+pub fn preset(id: &str) -> &'static AiPreset {
+    PRESETS.iter().find(|p| p.id == id).unwrap_or(&PRESETS[PRESETS.len() - 1])
+}
 
 /// Build the system prompt for one request: the template with its
 /// placeholders filled, then the style and glossary, if any.
@@ -52,15 +184,16 @@ pub(crate) fn system_prompt(template: &str, req: &TranslateRequest) -> String {
     prompt
 }
 
-/// The endpoint for a configured base URL. A URL that already names the
-/// endpoint (people paste those) is used as is.
+/// The API root for a configured base URL. People paste the full
+/// chat-completions URL too, so that suffix is dropped.
+fn api_root(base: &str, default: &str) -> String {
+    let base = base_url(base, if default.is_empty() { DEFAULT_BASE } else { default });
+    base.strip_suffix("/chat/completions").map(str::to_owned).unwrap_or(base)
+}
+
+#[cfg(test)]
 fn endpoint(base: &str) -> String {
-    let base = base_url(base, DEFAULT_BASE);
-    if base.ends_with("/chat/completions") {
-        base
-    } else {
-        format!("{base}/chat/completions")
-    }
+    format!("{}/chat/completions", api_root(base, DEFAULT_BASE))
 }
 
 /// The assistant text: a plain string, or the newer array of content parts.
@@ -73,21 +206,79 @@ fn message_text(content: &Value) -> Option<String> {
 }
 
 /// Drop a reasoning model's `<think>…</think>` preamble (DeepSeek R1, Qwen 3
-/// through Ollama), which is not part of the translation.
+/// through Ollama), which is not part of the translation. While the preamble
+/// is still being written (streaming), nothing is visible yet.
 fn strip_thinking(s: &str) -> &str {
     let t = s.trim_start();
     if t.starts_with("<think>") {
-        if let Some(end) = t.find("</think>") {
-            return &t[end + "</think>".len()..];
-        }
+        return match t.find("</think>") {
+            Some(end) => t[end + "</think>".len()..].trim_start(),
+            None => "",
+        };
+    }
+    if !t.is_empty() && "<think>".starts_with(t) {
+        return ""; // the tag itself is still arriving
     }
     s
 }
 
-/// AI translator over the OpenAI-compatible chat API.
+/// `Name: value` lines.
+fn header_lines(block: &str) -> impl Iterator<Item = (&str, &str)> {
+    block.lines().filter_map(|l| l.split_once(':')).map(|(n, v)| (n.trim(), v.trim())).filter(|(n, _)| !n.is_empty())
+}
+
+/// Splits a server-sent-events stream into the payloads of its `data:`
+/// fields, whatever the chunk boundaries.
+#[derive(Default)]
+struct SseParser {
+    pending: Vec<u8>,
+    data: Option<String>,
+}
+
+impl SseParser {
+    fn feed(&mut self, chunk: &[u8]) -> Vec<String> {
+        self.pending.extend_from_slice(chunk);
+        let mut out = Vec::new();
+        // Line ends are ASCII, so splitting the bytes cannot cut a character.
+        while let Some(nl) = self.pending.iter().position(|&b| b == b'\n') {
+            let line: Vec<u8> = self.pending.drain(..=nl).collect();
+            let line = String::from_utf8_lossy(&line);
+            let line = line.trim_end_matches(['\n', '\r']);
+            if line.is_empty() {
+                out.extend(self.data.take());
+            } else if let Some(payload) = line.strip_prefix("data:") {
+                let payload = payload.strip_prefix(' ').unwrap_or(payload);
+                match &mut self.data {
+                    Some(d) => {
+                        d.push('\n');
+                        d.push_str(payload);
+                    }
+                    None => self.data = Some(payload.to_owned()),
+                }
+            }
+            // `event:`, `id:`, `retry:` and `:` comments carry nothing we use.
+        }
+        out
+    }
+
+    /// Whatever was still open when the stream ended: a server that drops the
+    /// final blank line, or the last line without its newline.
+    fn finish(&mut self) -> Vec<String> {
+        let mut out = Vec::new();
+        if !self.pending.is_empty() {
+            out = self.feed(b"\n");
+        }
+        out.extend(self.data.take());
+        out
+    }
+}
+
+/// AI translator over the OpenAI-compatible chat API: the built-in one, or an
+/// endpoint the user added.
 pub struct OpenAi {
     info: ProviderInfo,
     options: Vec<OptionSpec>,
+    preset: &'static AiPreset,
 }
 
 impl Default for OpenAi {
@@ -99,47 +290,222 @@ impl Default for OpenAi {
 impl OpenAi {
     pub const ID: &'static str = "openai";
 
+    /// The built-in endpoint, `openai`.
     pub fn new() -> Self {
-        let mut info = ProviderInfo::new(
-            Self::ID,
-            "AI Translator (OpenAI-compatible)",
-            Capabilities::TRANSLATE | Capabilities::PROMPTABLE,
-        );
-        info.description = "Translate with a large language model through any OpenAI-compatible API: ChatGPT \
-                            (OpenAI), OpenRouter, DeepSeek, Groq, Mistral, or a local model in Ollama or LM \
-                            Studio. Follows style instructions and glossaries."
+        let mut me = Self::endpoint(Self::ID, "AI Translator (OpenAI-compatible)", "openai");
+        me.info.description = "Translate with a large language model through any OpenAI-compatible API: ChatGPT \
+                               (OpenAI), OpenRouter, DeepSeek, Groq, Mistral, or a local model in Ollama or LM \
+                               Studio. Follows style instructions and glossaries. Add more endpoints under AI \
+                               endpoints."
             .into();
-        info.homepage = "https://platform.openai.com/docs/api-reference/chat".into();
+        me.info.homepage = "https://platform.openai.com/docs/api-reference/chat".into();
+        // The built-in one also serves local servers, which need no key.
+        me.info.needs_credentials = false;
+        me.options = options_for(&AiPreset { needs_key: false, ..*preset("openai") });
+        me
+    }
+
+    /// A user-defined endpoint made from a preset.
+    pub fn endpoint(id: &str, name: &str, preset_id: &str) -> Self {
+        let p = preset(preset_id);
+        let mut info = ProviderInfo::new(id, name, Capabilities::TRANSLATE | Capabilities::PROMPTABLE);
+        info.description = format!("OpenAI-compatible endpoint ({}).", p.name);
+        info.homepage = if p.keys_url.is_empty() {
+            "https://platform.openai.com/docs/api-reference/chat".into()
+        } else {
+            p.keys_url.into()
+        };
         info.max_input_chars = Some(20_000);
-        let options = vec![
-            OptionSpec::url("base_url", "API base URL", DEFAULT_BASE).help(
-                "OpenAI: https://api.openai.com/v1 · OpenRouter: https://openrouter.ai/api/v1 · DeepSeek: \
-                 https://api.deepseek.com/v1 · Ollama: http://localhost:11434/v1 · LM Studio: \
-                 http://localhost:1234/v1",
-            ),
-            OptionSpec::secret("api_key", "API key").help("Not needed for a local Ollama or LM Studio server."),
-            OptionSpec::text("model", "Model", DEFAULT_MODEL)
-                .help("e.g. gpt-4o-mini, deepseek-chat, openai/gpt-4o-mini on OpenRouter, qwen2.5:7b on Ollama."),
-            OptionSpec {
-                kind: OptionKind::Multiline,
-                ..OptionSpec::text("system_prompt", "System prompt", DEFAULT_SYSTEM_PROMPT)
-                    .help("{from} and {to} are replaced with the language names.")
-            },
-            OptionSpec {
-                kind: OptionKind::Number,
-                default: json!(DEFAULT_TEMPERATURE),
-                min: Some(0.0),
-                max: Some(2.0),
-                ..OptionSpec::text("temperature", "Temperature", "")
-                    .help("Lower is more literal and repeatable; 0–0.3 suits translation.")
-            },
-        ];
-        Self { info, options }
+        info.needs_credentials = p.needs_key;
+        Self { info, options: options_for(p), preset: p }
+    }
+
+    pub fn preset(&self) -> &'static AiPreset {
+        self.preset
     }
 
     fn name(&self) -> &str {
         &self.info.name
     }
+
+    fn root(&self, host: &Host) -> String {
+        api_root(host.option_str("base_url"), self.preset.base_url)
+    }
+
+    /// What every request carries: the key, the user's extra headers, the
+    /// timeout.
+    fn with_headers(&self, mut req: HttpRequest, host: &Host) -> HttpRequest {
+        let key = host.option_str("api_key").trim();
+        if !key.is_empty() {
+            req = req.header("Authorization", format!("Bearer {key}"));
+        }
+        for (name, value) in header_lines(host.option_str("extra_headers")) {
+            req = req.header(name, value);
+        }
+        let secs = host.option_f64("timeout_secs").filter(|s| *s >= 1.0).unwrap_or(DEFAULT_TIMEOUT_SECS);
+        req.timeout(Duration::from_secs_f64(secs)).provider(self.name())
+    }
+
+    fn chat_request(&self, host: &Host, req: &TranslateRequest, stream: bool) -> Result<HttpRequest> {
+        if !req.to.is_language() {
+            return Err(Error::TargetLanguageUnsupported { provider: self.name().to_owned(), lang: req.to });
+        }
+        let model = match host.option_str("model").trim() {
+            "" if !self.preset.model.is_empty() => self.preset.model,
+            "" => DEFAULT_MODEL,
+            m => m,
+        };
+        let mut body = json!({
+            "model": model,
+            "messages": [
+                { "role": "system", "content": system_prompt(host.option_str("system_prompt"), req) },
+                { "role": "user", "content": req.text },
+            ],
+        });
+        // Reasoning models reject a temperature other than the default, so
+        // asking for an effort level means leaving temperature out.
+        match host.option_str("reasoning_effort").trim() {
+            "" => {
+                let t = host.option_f64("temperature").unwrap_or(DEFAULT_TEMPERATURE).clamp(0.0, 2.0);
+                body["temperature"] = json!(t);
+            }
+            effort => body["reasoning_effort"] = json!(effort),
+        }
+        let max = host.option_f64("max_tokens").unwrap_or(0.0);
+        if max >= 1.0 {
+            let param = match host.option_str("max_tokens_param").trim() {
+                "" => self.preset.max_tokens_param,
+                p => p,
+            };
+            body[param] = json!(max as u64);
+        }
+        if stream {
+            body["stream"] = json!(true);
+        }
+        // Anything else the service understands, given as a JSON object.
+        let extra = host.option_str("extra_body").trim();
+        if !extra.is_empty() {
+            let Ok(Value::Object(fields)) = serde_json::from_str::<Value>(extra) else {
+                return Err(Error::Config(format!("{}: extra request fields must be a JSON object", self.name())));
+            };
+            for (k, v) in fields {
+                body[k] = v;
+            }
+        }
+        let url = format!("{}/chat/completions", self.root(host));
+        Ok(self.with_headers(HttpRequest::post(url).json(&body), host))
+    }
+
+    /// Turn a failed answer into the right error: no key against a server
+    /// that wants one is a setup problem, not an HTTP error.
+    fn check(&self, resp: HttpResponse, host: &Host) -> Result<HttpResponse> {
+        if resp.status == 401 && host.option_str("api_key").trim().is_empty() {
+            return Err(Error::MissingCredential { provider: self.name().to_owned(), what: "api_key".into() });
+        }
+        check_status(resp, self.name())
+    }
+
+    fn finish(&self, content: &str, host: &Host) -> Result<Translation> {
+        let strip = host.option("strip_thinking").and_then(Value::as_bool).unwrap_or(true);
+        let text = if strip { strip_thinking(content) } else { content };
+        let text = text.trim_matches(['\n', '\r']).trim_end();
+        if text.trim().is_empty() {
+            return Err(Error::bad_response(self.name(), "the model returned an empty answer"));
+        }
+        Ok(Translation { text: text.to_owned(), ..Default::default() })
+    }
+
+    /// The assistant's text in a complete (non-streamed) answer.
+    fn completion_text(&self, v: &Value, status: u16) -> Result<String> {
+        // Some proxies report failures in a 200.
+        if let Some(msg) = v["error"]["message"].as_str() {
+            return Err(Error::HttpStatus { provider: self.name().to_owned(), status, body: msg.to_owned() });
+        }
+        message_text(&v["choices"][0]["message"]["content"])
+            .ok_or_else(|| Error::bad_response(self.name(), "missing choices[0].message.content"))
+    }
+}
+
+/// What one streamed event contributes.
+enum Event {
+    Text(String),
+    Error(String),
+    Done,
+    Nothing,
+}
+
+fn stream_event(data: &str) -> Event {
+    if data.trim() == "[DONE]" {
+        return Event::Done;
+    }
+    let Ok(v) = serde_json::from_str::<Value>(data) else { return Event::Nothing };
+    if let Some(m) = v["error"]["message"].as_str().or_else(|| v["error"].as_str()) {
+        return Event::Error(m.to_owned());
+    }
+    let choice = &v["choices"][0];
+    if let Some(d) = choice["delta"]["content"].as_str() {
+        return Event::Text(d.to_owned());
+    }
+    // A few servers put the whole message in the last event.
+    match message_text(&choice["message"]["content"]) {
+        Some(t) => Event::Text(t),
+        None => Event::Nothing,
+    }
+}
+
+/// The settings page for an endpoint made from `p`.
+fn options_for(p: &AiPreset) -> Vec<OptionSpec> {
+    let key_help = match (p.needs_key, p.keys_url) {
+        (true, url) if !url.is_empty() => format!("Get one at {url}"),
+        (true, _) => "Required by this service.".to_owned(),
+        (false, _) => "Not needed for a local Ollama or LM Studio server.".to_owned(),
+    };
+    let key = OptionSpec::secret("api_key", "API key").help(&key_help);
+    vec![
+        OptionSpec::url("base_url", "API base URL", p.base_url).help(
+            "OpenAI: https://api.openai.com/v1 · OpenRouter: https://openrouter.ai/api/v1 · DeepSeek: \
+             https://api.deepseek.com/v1 · Ollama: http://localhost:11434/v1 · LM Studio: \
+             http://localhost:1234/v1",
+        ),
+        if p.needs_key { key.required() } else { key },
+        OptionSpec::text("model", "Model", p.model)
+            .help("Use Load models to pick from what the endpoint offers, or type an id."),
+        OptionSpec::boolean("stream", "Stream the answer", true).help("Show the translation as the model writes it."),
+        OptionSpec::multiline("system_prompt", "System prompt", DEFAULT_SYSTEM_PROMPT)
+            .help("{from} and {to} are replaced with the language names."),
+        OptionSpec::number("temperature", "Temperature", DEFAULT_TEMPERATURE, 0.0, 2.0)
+            .help("Lower is more literal and repeatable; 0–0.3 suits translation. Not sent with a reasoning effort."),
+        OptionSpec::select(
+            "reasoning_effort",
+            "Reasoning effort",
+            "",
+            &[
+                ("", "Not sent"),
+                ("none", "None"),
+                ("minimal", "Minimal"),
+                ("low", "Low"),
+                ("medium", "Medium"),
+                ("high", "High"),
+            ],
+        )
+        .help("For reasoning models (o-series, GPT-5, DeepSeek R1, Gemini 2.5…). Leave unsent for others."),
+        OptionSpec::boolean("strip_thinking", "Hide <think> blocks", true)
+            .help("Drop the reasoning some local models write before the answer."),
+        OptionSpec::number("max_tokens", "Max answer tokens", 0.0, 0.0, 1_000_000.0).help("0: no limit sent."),
+        OptionSpec::select(
+            "max_tokens_param",
+            "Token limit field",
+            p.max_tokens_param,
+            &[("max_tokens", "max_tokens"), ("max_completion_tokens", "max_completion_tokens (newer OpenAI models)")],
+        ),
+        OptionSpec::number("timeout_secs", "Timeout, seconds", DEFAULT_TIMEOUT_SECS, 5.0, 3600.0)
+            .help("For the whole answer."),
+        OptionSpec::multiline("extra_headers", "Extra headers", p.headers).help("One `Name: value` per line."),
+        OptionSpec::multiline("extra_body", "Extra request fields", "").help(
+            "A JSON object merged into the request, e.g. {\"top_p\": 0.9} or OpenRouter's \
+             {\"provider\": {\"sort\": \"price\"}}.",
+        ),
+    ]
 }
 
 impl Provider for OpenAi {
@@ -152,48 +518,89 @@ impl Provider for OpenAi {
     }
 
     fn translate(&self, host: &Host, req: &TranslateRequest) -> Result<Translation> {
-        if !req.to.is_language() {
-            return Err(Error::TargetLanguageUnsupported { provider: self.name().to_owned(), lang: req.to });
-        }
-        let model = match host.option_str("model").trim() {
-            "" => DEFAULT_MODEL,
-            m => m,
-        };
-        let temperature = host.option_f64("temperature").unwrap_or(DEFAULT_TEMPERATURE).clamp(0.0, 2.0);
-        let body = json!({
-            "model": model,
-            "temperature": temperature,
-            "messages": [
-                { "role": "system", "content": system_prompt(host.option_str("system_prompt"), req) },
-                { "role": "user", "content": req.text },
-            ],
-        });
-        let key = host.option_str("api_key").trim();
-        let mut http_req = HttpRequest::post(endpoint(host.option_str("base_url"))).json(&body).provider(self.name());
-        if !key.is_empty() {
-            http_req = http_req.header("Authorization", format!("Bearer {key}"));
-        }
-        let resp = host.http.send(http_req)?;
-        if resp.status == 401 && key.is_empty() {
-            return Err(Error::MissingCredential { provider: self.name().to_owned(), what: "api_key".into() });
-        }
-        let resp = check_status(resp, self.name())?;
+        let http_req = self.chat_request(host, req, false)?;
+        let resp = self.check(host.http.send(http_req)?, host)?;
         let v = parse_json(&resp, self.name())?;
-        // Some proxies report failures in a 200.
-        if let Some(msg) = v["error"]["message"].as_str() {
-            return Err(Error::HttpStatus {
-                provider: self.name().to_owned(),
-                status: resp.status,
-                body: msg.to_owned(),
-            });
+        let content = self.completion_text(&v, resp.status)?;
+        self.finish(&content, host)
+    }
+
+    fn translate_stream(&self, host: &Host, req: &TranslateRequest, progress: &dyn Fn(&str)) -> Result<Translation> {
+        // `stream` defaults to on through the declared options; a bare test
+        // host without them reads it as off.
+        if !host.option("stream").and_then(Value::as_bool).unwrap_or(false) {
+            return self.translate(host, req);
         }
-        let content = message_text(&v["choices"][0]["message"]["content"])
-            .ok_or_else(|| Error::bad_response(self.name(), "missing choices[0].message.content"))?;
-        let text = strip_thinking(&content).trim_matches(['\n', '\r']).trim_end();
-        if text.trim().is_empty() {
-            return Err(Error::bad_response(self.name(), "the model returned an empty answer"));
+        let strip = host.option("strip_thinking").and_then(Value::as_bool).unwrap_or(true);
+        let http_req = self.chat_request(host, req, true)?;
+
+        let mut parser = SseParser::default();
+        let mut text = String::new();
+        let mut events = 0usize;
+        // A server that ignores `stream` answers with plain JSON: keep the
+        // start of the body to read it that way.
+        let mut raw: Vec<u8> = Vec::new();
+        let mut api_error: Option<String> = None;
+        let mut done = false;
+        let mut shown = String::new();
+        let apply =
+            |data: &str, text: &mut String, api_error: &mut Option<String>, done: &mut bool| match stream_event(data) {
+                Event::Text(t) => text.push_str(&t),
+                Event::Error(m) => *api_error = Some(m),
+                Event::Done => *done = true,
+                Event::Nothing => {}
+            };
+        let resp = host.http.send_streaming(http_req, &mut |chunk| {
+            if host.cancel.is_cancelled() {
+                return false;
+            }
+            if events == 0 && raw.len() < 1 << 20 {
+                raw.extend_from_slice(chunk);
+            }
+            for data in parser.feed(chunk) {
+                events += 1;
+                apply(&data, &mut text, &mut api_error, &mut done);
+            }
+            let visible = if strip { strip_thinking(&text) } else { text.as_str() };
+            let visible = visible.trim_start_matches(['\n', '\r']);
+            if visible != shown {
+                shown = visible.to_owned();
+                progress(&shown);
+            }
+            !done && api_error.is_none()
+        })?;
+        if host.cancel.is_cancelled() {
+            return Err(glossa_core::Error::Cancelled);
         }
-        Ok(Translation { text: text.to_owned(), ..Default::default() })
+        let resp = self.check(resp, host)?;
+        for data in parser.finish() {
+            events += 1;
+            apply(&data, &mut text, &mut api_error, &mut done);
+        }
+        if let Some(body) = api_error {
+            return Err(Error::HttpStatus { provider: self.name().to_owned(), status: resp.status, body });
+        }
+        if events == 0 {
+            let v: Value = serde_json::from_slice(&raw)
+                .map_err(|e| Error::bad_response(self.name(), format!("neither events nor JSON: {e}")))?;
+            text = self.completion_text(&v, resp.status)?;
+        }
+        self.finish(&text, host)
+    }
+
+    fn list_models(&self, host: &Host) -> Result<Vec<String>> {
+        let url = format!("{}/models", self.root(host));
+        let resp = self.check(host.http.send(self.with_headers(HttpRequest::get(url), host))?, host)?;
+        let v = parse_json(&resp, self.name())?;
+        let list = v["data"]
+            .as_array()
+            .or_else(|| v["models"].as_array())
+            .ok_or_else(|| Error::bad_response(self.name(), "the models list has no `data` array"))?;
+        let mut ids: Vec<String> =
+            list.iter().filter_map(|m| m["id"].as_str().or_else(|| m["name"].as_str()).map(str::to_owned)).collect();
+        ids.sort();
+        ids.dedup();
+        Ok(ids)
     }
 }
 
@@ -204,9 +611,10 @@ mod tests {
     use glossa_core::translate::GlossaryTerm;
     use glossa_core::{LangId, LangPair};
     use glossa_modules::provider::with_test_host;
-    use glossa_modules::OptionValues;
+    use glossa_modules::{OptionKind, OptionValues};
     use glossa_net::mock::MockHttp;
     use glossa_net::Method;
+    use std::time::Duration;
 
     const OK: &str = r#"{"id":"chatcmpl-1","object":"chat.completion","created":1730000000,"model":"gpt-4o-mini","choices":[{"index":0,"message":{"role":"assistant","content":"Привет,\nмир!"},"finish_reason":"stop"}],"usage":{"prompt_tokens":60,"completion_tokens":5,"total_tokens":65}}"#;
 
@@ -333,5 +741,125 @@ mod tests {
         assert_eq!(t.kind, OptionKind::Number);
         assert!(!p.info().needs_credentials);
         assert!(p.info().capabilities.contains(Capabilities::PROMPTABLE));
+    }
+
+    #[test]
+    fn sse_events_survive_any_chunking() {
+        let stream = "data: {\"a\":1}\n\n: keep-alive\n\nevent: x\ndata: {\"b\":\r\ndata: 2}\r\n\r\ndata: [DONE]\n\n";
+        for split in 1..stream.len() {
+            let mut p = SseParser::default();
+            let (a, b) = stream.as_bytes().split_at(split);
+            let mut got = p.feed(a);
+            got.extend(p.feed(b));
+            got.extend(p.finish());
+            assert_eq!(got, vec!["{\"a\":1}", "{\"b\":\n2}", "[DONE]"], "split at {split}");
+        }
+        // A last event with no blank line after it still counts.
+        let mut p = SseParser::default();
+        assert!(p.feed(b"data: {\"c\":3}").is_empty());
+        assert_eq!(p.finish(), vec!["{\"c\":3}"]);
+    }
+
+    const STREAM: &str = "data: {\"choices\":[{\"delta\":{\"role\":\"assistant\"}}]}\n\n\
+data: {\"choices\":[{\"delta\":{\"content\":\"<think>hm\"}}]}\n\n\
+data: {\"choices\":[{\"delta\":{\"content\":\"</think>\\n\\nПри\"}}]}\n\n\
+data: {\"choices\":[{\"delta\":{\"content\":\"вет\"}}]}\n\n\
+data: [DONE]\n\n";
+
+    #[test]
+    fn streaming_reports_progress_and_hides_thinking() {
+        let http = MockHttp::new().on(Method::Post, DEFAULT_BASE, 200, STREAM);
+        let o = opts(&[("stream", json!(true))]);
+        let seen = std::cell::RefCell::new(Vec::<String>::new());
+        let out = with_test_host(&http, &o, |h| {
+            OpenAi::new().translate_stream(h, &req(), &|t| seen.borrow_mut().push(t.to_owned()))
+        })
+        .unwrap();
+        assert_eq!(out.text, "Привет");
+        assert_eq!(seen.borrow().last().map(String::as_str), Some("Привет"));
+        assert!(seen.borrow().iter().all(|s| !s.contains("think")), "{:?}", seen.borrow());
+        assert_eq!(body_json(&http.requests()[0])["stream"], true);
+    }
+
+    #[test]
+    fn a_server_that_ignores_stream_still_works_and_errors_in_streams_surface() {
+        let http = MockHttp::new().on(Method::Post, DEFAULT_BASE, 200, OK);
+        let o = opts(&[("stream", json!(true))]);
+        let out = with_test_host(&http, &o, |h| OpenAi::new().translate_stream(h, &req(), &|_| {})).unwrap();
+        assert_eq!(out.text, "Привет,\nмир!");
+
+        let body = "data: {\"error\":{\"message\":\"model overloaded\"}}\n\n";
+        let http = MockHttp::new().on(Method::Post, DEFAULT_BASE, 200, body);
+        match with_test_host(&http, &o, |h| OpenAi::new().translate_stream(h, &req(), &|_| {})) {
+            Err(Error::HttpStatus { body, .. }) => assert_eq!(body, "model overloaded"),
+            other => panic!("{other:?}"),
+        }
+
+        // With streaming off, translate_stream is a plain request.
+        let http = MockHttp::new().on(Method::Post, DEFAULT_BASE, 200, OK);
+        let o = opts(&[("stream", json!(false))]);
+        with_test_host(&http, &o, |h| OpenAi::new().translate_stream(h, &req(), &|_| {})).unwrap();
+        assert!(body_json(&http.requests()[0]).get("stream").is_none());
+    }
+
+    #[test]
+    fn reasoning_limits_headers_and_extra_fields_shape_the_request() {
+        let http = MockHttp::new().on(Method::Post, "https://openrouter.ai/api/v1/chat/completions", 200, OK);
+        let p = OpenAi::endpoint("ai-or", "My OpenRouter", "openrouter");
+        let defaults = |key: &str| p.options().iter().find(|o| o.key == key).unwrap().default.clone();
+        let o = opts(&[
+            ("api_key", json!("k")),
+            ("reasoning_effort", json!("low")),
+            ("max_tokens", json!(500)),
+            ("extra_headers", defaults("extra_headers")),
+            ("extra_body", json!("{\"provider\": {\"sort\": \"price\"}, \"top_p\": 0.9}")),
+        ]);
+        with_test_host(&http, &o, |h| p.translate(h, &req())).unwrap();
+        let r = &http.requests()[0];
+        let b = body_json(r);
+        assert_eq!(b["model"], "openai/gpt-4o-mini", "the preset's model when none is set");
+        assert_eq!(b["reasoning_effort"], "low");
+        assert!(b.get("temperature").is_none(), "no temperature alongside a reasoning effort");
+        assert_eq!(b["max_tokens"], 500);
+        assert_eq!(b["provider"]["sort"], "price");
+        assert_eq!(b["top_p"], 0.9);
+        assert_eq!(header(r, "x-title"), Some("Glossa"));
+        assert_eq!(r.timeout, Some(Duration::from_secs(120)));
+
+        let o = opts(&[("extra_body", json!("[1, 2]"))]);
+        assert!(matches!(with_test_host(&http, &o, |h| p.translate(h, &req())), Err(Error::Config(_))));
+
+        // OpenAI's own preset uses the newer field name.
+        let http = MockHttp::new().on(Method::Post, DEFAULT_BASE, 200, OK);
+        let o = opts(&[("max_tokens", json!(64))]);
+        with_test_host(&http, &o, |h| OpenAi::endpoint("ai-oa", "OA", "openai").translate(h, &req())).unwrap();
+        assert_eq!(body_json(&http.requests()[0])["max_completion_tokens"], 64);
+    }
+
+    #[test]
+    fn models_are_listed_from_the_endpoint() {
+        let http = MockHttp::new().on(
+            Method::Get,
+            "http://localhost:11434/v1/models",
+            200,
+            r#"{"object":"list","data":[{"id":"qwen2.5:7b"},{"id":"gemma3:4b"},{"id":"qwen2.5:7b"}]}"#,
+        );
+        let p = OpenAi::endpoint("ai-local", "Local", "ollama");
+        let models = with_test_host(&http, &OptionValues::new(), |h| p.list_models(h)).unwrap();
+        assert_eq!(models, vec!["gemma3:4b", "qwen2.5:7b"]);
+    }
+
+    #[test]
+    fn presets_cover_the_usual_services_and_unknown_ids_fall_back() {
+        for id in ["openai", "openrouter", "deepseek", "gemini", "groq", "mistral", "ollama", "lmstudio"] {
+            assert_eq!(preset(id).id, id);
+        }
+        assert_eq!(preset("nonsense").id, "custom");
+        let local = OpenAi::endpoint("ai-x", "X", "ollama");
+        assert!(!local.info().needs_credentials);
+        let key = local.options().iter().find(|o| o.key == "api_key").unwrap();
+        assert!(!key.required);
+        let remote = OpenAi::endpoint("ai-y", "Y", "deepseek");
+        assert!(remote.options().iter().find(|o| o.key == "api_key").unwrap().required);
     }
 }

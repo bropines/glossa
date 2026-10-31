@@ -379,6 +379,47 @@ pub struct Services {
     /// Per-module settings, keyed by module id, then option key. Values are
     /// whatever the module's manifest declares.
     pub options: BTreeMap<String, BTreeMap<String, serde_json::Value>>,
+    /// OpenAI-compatible endpoints the user added (Options → Services → AI
+    /// endpoints). Each becomes a translator of its own; its settings (URL,
+    /// key, model, prompt…) live in `options` under its id like any
+    /// provider's.
+    pub ai_endpoints: Vec<AiEndpoint>,
+}
+
+/// One user-defined OpenAI-compatible endpoint.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AiEndpoint {
+    /// The provider id: `ai-` and a slug, unique.
+    pub id: String,
+    /// Shown in the service strip and lists.
+    pub name: String,
+    /// The preset it was made from (`openrouter`, `ollama`…), for its icon and
+    /// defaults; `custom` for none.
+    #[serde(default)]
+    pub preset: String,
+}
+
+impl Services {
+    /// A fresh, unused endpoint id for a name: `ai-` + a slug of it.
+    pub fn new_ai_endpoint_id(&self, name: &str) -> String {
+        let mut slug: String = name
+            .chars()
+            .map(|c| if c.is_ascii_alphanumeric() { c.to_ascii_lowercase() } else { '-' })
+            .collect::<String>()
+            .split('-')
+            .filter(|p| !p.is_empty())
+            .collect::<Vec<_>>()
+            .join("-");
+        if slug.is_empty() {
+            slug = "endpoint".into();
+        }
+        let base = format!("ai-{slug}");
+        let taken = |id: &str| self.ai_endpoints.iter().any(|e| e.id == id) || self.options.contains_key(id);
+        if !taken(&base) {
+            return base;
+        }
+        (2..).map(|n| format!("{base}-{n}")).find(|id| !taken(id)).expect("unbounded")
+    }
 }
 
 impl Default for Services {
@@ -394,6 +435,7 @@ impl Default for Services {
             tts: "google".into(),
             fail_over: true,
             options: BTreeMap::new(),
+            ai_endpoints: Vec::new(),
         }
     }
 }
@@ -1134,6 +1176,16 @@ mod tests {
         assert_eq!(p.url().as_deref(), Some("socks5://me:p%40ss%3Aw@127.0.0.1:2080"));
         p.mode = ProxyMode::System;
         assert_eq!(p.url(), None);
+    }
+
+    #[test]
+    fn ai_endpoint_ids_are_slugs_and_unique() {
+        let mut s = Services::default();
+        assert_eq!(s.new_ai_endpoint_id("DeepSeek (work)"), "ai-deepseek-work");
+        assert_eq!(s.new_ai_endpoint_id("Ollama — локально"), "ai-ollama");
+        assert_eq!(s.new_ai_endpoint_id("Модель"), "ai-endpoint");
+        s.ai_endpoints.push(AiEndpoint { id: "ai-ollama".into(), name: "Ollama".into(), preset: "ollama".into() });
+        assert_eq!(s.new_ai_endpoint_id("Ollama"), "ai-ollama-2");
     }
 
     #[test]

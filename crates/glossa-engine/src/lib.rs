@@ -36,7 +36,7 @@ use parking_lot::{Mutex, RwLock};
 
 pub use catalog::{LocaleCatalog, LocaleEntry, ThemeCatalog, ThemeEntry};
 pub use export::ExportFormat;
-pub use pipeline::{Pipeline, TranslateOptions, TranslationOutcome};
+pub use pipeline::{Pipeline, Progress, TranslateOptions, TranslationOutcome};
 
 /// Where a job's result goes. One job per slot at a time.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -73,6 +73,13 @@ pub enum Event {
         slot: Slot,
         job: u64,
         result: std::result::Result<Arc<Audio>, Arc<Error>>,
+    },
+    /// A streaming translation so far: the whole text written up to now.
+    /// [`Event::Translated`] still follows with the final result.
+    Progress {
+        slot: Slot,
+        job: u64,
+        text: String,
     },
     /// A job started (for a busy indicator).
     Started {
@@ -239,6 +246,7 @@ impl Engine {
             *self.inner.http.write() = Arc::new(HttpClient::new(&after.network)?);
         }
         if before.modules != after.modules
+            || before.services.ai_endpoints != after.services.ai_endpoints
             || before.classic != after.classic
             || before.ocr != after.ocr
             || before.dictionary.offline != after.dictionary.offline
@@ -292,6 +300,11 @@ impl Engine {
         for p in &self.inner.builtins {
             if !cfg.modules.disabled.contains(&p.info().id) {
                 reg.add_builtin(p.clone());
+            }
+        }
+        for e in &cfg.services.ai_endpoints {
+            if !cfg.modules.disabled.contains(&e.id) {
+                reg.add_builtin(Arc::new(glossa_services::OpenAi::endpoint(&e.id, &e.name, &e.preset)));
             }
         }
         if !cfg.dictionary.offline.is_empty() {
@@ -481,14 +494,86 @@ impl Engine {
         f(&p)
     }
 
+    // -- AI endpoints ----------------------------------------------------------------
+
+    /// Add an OpenAI-compatible endpoint made from a preset (see
+    /// [`glossa_services::openai::PRESETS`]). It becomes a translator of its
+    /// own, enabled in the service strip; returns its id.
+    pub fn add_ai_endpoint(&self, name: &str, preset: &str) -> Result<String> {
+        let name = name.trim();
+        let name = if name.is_empty() { glossa_services::openai::preset(preset).name } else { name };
+        let mut id = String::new();
+        self.update_config(|c| {
+            id = c.services.new_ai_endpoint_id(name);
+            c.services.ai_endpoints.push(glossa_core::config::AiEndpoint {
+                id: id.clone(),
+                name: name.to_owned(),
+                preset: preset.to_owned(),
+            });
+            c.services.enabled.push(id.clone());
+            c.services.order.push(id.clone());
+        })?;
+        Ok(id)
+    }
+
+    /// Rename an endpoint the user added.
+    pub fn rename_ai_endpoint(&self, id: &str, name: &str) -> Result<()> {
+        let name = name.trim().to_owned();
+        if name.is_empty() {
+            return Ok(());
+        }
+        self.update_config(|c| {
+            if let Some(e) = c.services.ai_endpoints.iter_mut().find(|e| e.id == id) {
+                e.name = name;
+            }
+        })
+    }
+
+    /// Remove an endpoint and everything that refers to it.
+    pub fn remove_ai_endpoint(&self, id: &str) -> Result<()> {
+        self.update_config(|c| {
+            let s = &mut c.services;
+            s.ai_endpoints.retain(|e| e.id != id);
+            s.enabled.retain(|x| x != id);
+            s.order.retain(|x| x != id);
+            s.options.remove(id);
+            if s.active == id {
+                s.active = s.enabled.first().cloned().unwrap_or_default();
+            }
+            if s.popup_active == id {
+                s.popup_active.clear();
+            }
+        })
+    }
+
+    /// The models a provider offers (AI endpoints answer this), using its
+    /// current settings.
+    pub fn list_models(&self, provider_id: &str) -> Result<Vec<String>> {
+        let registry = self.registry();
+        let provider = registry.get(provider_id).ok_or_else(|| Error::NoSuchModule(provider_id.to_owned()))?;
+        self.with_pipeline(&CancelToken::new(), |p| {
+            let options = p.options_for(provider.as_ref());
+            provider.list_models(&p.host(&options))
+        })
+    }
+
     /// Translate, blocking the caller.
     pub fn translate(&self, text: &str, pair: LangPair, opts: &TranslateOptions) -> Result<TranslationOutcome> {
         self.with_pipeline(&CancelToken::new(), |p| p.translate(text, pair, opts))
     }
 
     /// Translate on a worker; the result arrives as [`Event::Translated`].
-    pub fn translate_async(&self, slot: Slot, text: String, pair: LangPair, opts: TranslateOptions) -> u64 {
+    pub fn translate_async(&self, slot: Slot, text: String, pair: LangPair, mut opts: TranslateOptions) -> u64 {
         let (job, cancel) = self.begin(slot);
+        // Windows that show translations get them as they are written.
+        if opts.progress.is_none() && matches!(slot, Slot::Main | Slot::Popup) {
+            let (me, cancel) = (self.clone(), cancel.clone());
+            opts.progress = Some(Progress::new(move |text| {
+                if !cancel.is_cancelled() && me.current(slot, job) {
+                    me.emit(Event::Progress { slot, job, text: text.to_owned() });
+                }
+            }));
+        }
         let me = self.clone();
         self.spawn("translate", move || {
             let result = me.with_pipeline(&cancel, |p| p.translate(&text, pair, &opts));
@@ -933,6 +1018,97 @@ mod tests {
         assert!(!e.config().server.token.is_empty(), "a control API token is generated");
         // Enabled providers come first, in the configured order.
         assert_eq!(translators[0].info.id, "google");
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn ai_endpoints_become_translators_and_leave_no_trace() {
+        let (e, dir) = engine("ai-endpoints");
+        let id = e.add_ai_endpoint("Local Qwen", "ollama").unwrap();
+        assert_eq!(id, "ai-local-qwen");
+        let p = e.registry().get(&id).expect("registered as a provider");
+        assert_eq!(p.info().name, "Local Qwen");
+        assert!(e.config().services.enabled.contains(&id));
+        e.rename_ai_endpoint(&id, "Qwen at home").unwrap();
+        assert_eq!(e.registry().get(&id).unwrap().info().name, "Qwen at home");
+        e.update_config(|c| {
+            c.services.active = id.clone();
+            c.services.options.entry(id.clone()).or_default().insert("model".into(), serde_json::json!("qwen3:8b"));
+        })
+        .unwrap();
+        e.remove_ai_endpoint(&id).unwrap();
+        let c = e.config();
+        assert!(e.registry().get(&id).is_none());
+        assert!(!c.services.enabled.contains(&id) && !c.services.order.contains(&id));
+        assert!(!c.services.options.contains_key(&id));
+        assert_ne!(c.services.active, id);
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// A one-shot OpenAI-compatible server that streams `words` as events.
+    fn sse_server(words: &'static [&'static str]) -> u16 {
+        use std::io::{BufRead, BufReader, Write};
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        std::thread::spawn(move || {
+            let (stream, _) = listener.accept().unwrap();
+            let mut reader = BufReader::new(stream.try_clone().unwrap());
+            let mut length = 0usize;
+            loop {
+                let mut line = String::new();
+                reader.read_line(&mut line).unwrap();
+                if let Some(v) = line.to_ascii_lowercase().strip_prefix("content-length:") {
+                    length = v.trim().parse().unwrap();
+                }
+                if line == "\r\n" {
+                    break;
+                }
+            }
+            let mut body = vec![0u8; length];
+            std::io::Read::read_exact(&mut reader, &mut body).unwrap();
+            assert!(String::from_utf8_lossy(&body).contains("\"stream\":true"));
+            let mut out = stream;
+            out.write_all(b"HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nConnection: close\r\n\r\n").unwrap();
+            for w in words {
+                let event = serde_json::json!({ "choices": [{ "delta": { "content": w } }] });
+                out.write_all(format!("data: {event}\n\n").as_bytes()).unwrap();
+                out.flush().unwrap();
+                std::thread::sleep(Duration::from_millis(20));
+            }
+            out.write_all(b"data: [DONE]\n\n").unwrap();
+        });
+        port
+    }
+
+    #[test]
+    fn streamed_translations_arrive_piece_by_piece() {
+        let (e, dir) = engine("stream");
+        let port = sse_server(&["При", "вет, ", "мир"]);
+        let id = e.add_ai_endpoint("Test", "custom").unwrap();
+        e.update_config(|c| {
+            let o = c.services.options.entry(id.clone()).or_default();
+            o.insert("base_url".into(), serde_json::json!(format!("http://127.0.0.1:{port}/v1")));
+            o.insert("model".into(), serde_json::json!("test"));
+        })
+        .unwrap();
+        let rx = e.subscribe();
+        let opts = TranslateOptions { provider: Some(id.clone()), fail_over: Some(false), ..Default::default() };
+        let job = e.translate_async(
+            Slot::Popup,
+            "Hello, world".into(),
+            LangPair::new(LangId::ENGLISH, LangId::RUSSIAN),
+            opts,
+        );
+        let mut progress = Vec::new();
+        let result = loop {
+            match rx.recv_timeout(Duration::from_secs(10)).expect("an event") {
+                Event::Progress { job: j, text, .. } if j == job => progress.push(text),
+                Event::Translated { job: j, result, .. } if j == job => break result,
+                _ => {}
+            }
+        };
+        assert_eq!(result.unwrap().translation.text, "Привет, мир");
+        assert_eq!(progress, vec!["При", "Привет, ", "Привет, мир"]);
         std::fs::remove_dir_all(&dir).ok();
     }
 

@@ -185,6 +185,27 @@ impl HttpResponse {
 /// test doubles.
 pub trait Http: Send + Sync {
     fn send(&self, request: HttpRequest) -> Result<HttpResponse, Error>;
+
+    /// Send a request and hand a successful (2xx) response's body to
+    /// `on_chunk` as it arrives, for streamed answers (server-sent events).
+    /// `on_chunk` returns `false` to stop reading. The returned response has
+    /// an empty body when it was streamed; any other status comes back whole,
+    /// so error bodies read as usual.
+    ///
+    /// The default sends normally and delivers the body as one chunk, which
+    /// is what test doubles want.
+    fn send_streaming(
+        &self,
+        request: HttpRequest,
+        on_chunk: &mut dyn FnMut(&[u8]) -> bool,
+    ) -> Result<HttpResponse, Error> {
+        let mut response = self.send(request)?;
+        if (200..300).contains(&response.status) {
+            let body = std::mem::take(&mut response.body);
+            on_chunk(&body);
+        }
+        Ok(response)
+    }
 }
 
 /// The real client.
@@ -237,6 +258,24 @@ impl HttpClient {
 
     fn send_once(&self, request: &HttpRequest) -> Result<HttpResponse, Error> {
         let provider = if request.provider.is_empty() { "http" } else { &request.provider };
+        let mut response = self.open(request)?;
+        let (status, headers) = status_and_headers(&response);
+        let body = if request.method == Method::Head {
+            Vec::new()
+        } else {
+            response
+                .body_mut()
+                .with_config()
+                .limit(MAX_BODY)
+                .read_to_vec()
+                .map_err(|e| Error::Network(format!("{provider}: reading body: {e}")))?
+        };
+        Ok(HttpResponse { status, headers, body, codepage: request.codepage })
+    }
+
+    /// Make the request and return the response with its body unread.
+    fn open(&self, request: &HttpRequest) -> Result<ureq::http::Response<ureq::Body>, Error> {
+        let provider = if request.provider.is_empty() { "http" } else { &request.provider };
         let mut builder = ureq::http::Request::builder().method(request.method.as_str()).uri(request.url.as_str());
         for (name, value) in &request.headers {
             // ureq negotiates compression itself and only undoes what it
@@ -263,28 +302,10 @@ impl HttpClient {
             }
         };
 
-        let mut response = call.map_err(|e| match e {
+        call.map_err(|e| match e {
             ureq::Error::Timeout(_) => Error::Timeout(request.timeout.unwrap_or(self.timeout).as_millis() as u64),
             other => Error::Network(format!("{provider}: {other}")),
-        })?;
-
-        let status = response.status().as_u16();
-        let headers = response
-            .headers()
-            .iter()
-            .map(|(n, v)| (n.as_str().to_owned(), String::from_utf8_lossy(v.as_bytes()).into_owned()))
-            .collect();
-        let body = if request.method == Method::Head {
-            Vec::new()
-        } else {
-            response
-                .body_mut()
-                .with_config()
-                .limit(MAX_BODY)
-                .read_to_vec()
-                .map_err(|e| Error::Network(format!("{provider}: reading body: {e}")))?
-        };
-        Ok(HttpResponse { status, headers, body, codepage: request.codepage })
+        })
     }
 
     /// Run a request, with its own timeout if it asked for one.
@@ -303,7 +324,52 @@ impl HttpClient {
     }
 }
 
+fn status_and_headers(response: &ureq::http::Response<ureq::Body>) -> (u16, Vec<(String, String)>) {
+    let headers = response
+        .headers()
+        .iter()
+        .map(|(n, v)| (n.as_str().to_owned(), String::from_utf8_lossy(v.as_bytes()).into_owned()))
+        .collect();
+    (response.status().as_u16(), headers)
+}
+
 impl Http for HttpClient {
+    fn send_streaming(
+        &self,
+        request: HttpRequest,
+        on_chunk: &mut dyn FnMut(&[u8]) -> bool,
+    ) -> Result<HttpResponse, Error> {
+        use std::io::Read as _;
+        let provider = if request.provider.is_empty() { "http" } else { request.provider.as_str() };
+        // No retries: once part of an answer has been shown, repeating the
+        // request would show it twice. A failure to connect is reported as
+        // is, and the engine's fail-over takes it from there.
+        let mut response = self.open(&request)?;
+        let (status, headers) = status_and_headers(&response);
+        if !(200..300).contains(&status) {
+            let body = response.body_mut().with_config().limit(MAX_BODY).read_to_vec().unwrap_or_default();
+            return Ok(HttpResponse { status, headers, body, codepage: request.codepage });
+        }
+        let mut reader = response.body_mut().with_config().limit(MAX_BODY).reader();
+        let mut buf = [0u8; 4096];
+        loop {
+            match reader.read(&mut buf) {
+                Ok(0) => break,
+                Ok(n) => {
+                    if !on_chunk(&buf[..n]) {
+                        break;
+                    }
+                }
+                Err(e) if e.kind() == std::io::ErrorKind::Interrupted => continue,
+                Err(e) if e.kind() == std::io::ErrorKind::TimedOut => {
+                    return Err(Error::Timeout(request.timeout.unwrap_or(self.timeout).as_millis() as u64));
+                }
+                Err(e) => return Err(Error::Network(format!("{provider}: reading body: {e}"))),
+            }
+        }
+        Ok(HttpResponse { status, headers, body: Vec::new(), codepage: request.codepage })
+    }
+
     fn send(&self, request: HttpRequest) -> Result<HttpResponse, Error> {
         let started = Instant::now();
         let mut attempt = 0;

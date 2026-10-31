@@ -33,6 +33,24 @@ pub struct TranslateOptions {
     pub back_translate: bool,
     /// Extra instructions for LLM providers.
     pub style: Option<String>,
+    /// Report the translation so far while a streaming provider writes it.
+    pub progress: Option<Progress>,
+}
+
+/// A sink for partial translations (the whole text so far each time).
+#[derive(Clone)]
+pub struct Progress(pub Arc<dyn Fn(&str) + Send + Sync>);
+
+impl Progress {
+    pub fn new(f: impl Fn(&str) + Send + Sync + 'static) -> Self {
+        Self(Arc::new(f))
+    }
+}
+
+impl std::fmt::Debug for Progress {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("Progress")
+    }
 }
 
 /// The result, with everything the UI wants to show about how it was made.
@@ -107,7 +125,7 @@ impl Pipeline<'_> {
         out
     }
 
-    fn host<'b>(&'b self, options: &'b OptionValues) -> Host<'b> {
+    pub(crate) fn host<'b>(&'b self, options: &'b OptionValues) -> Host<'b> {
         Host {
             http: self.http,
             options,
@@ -218,7 +236,12 @@ impl Pipeline<'_> {
             req.style = opts.style.clone();
             let opts_values = self.options_for(provider.as_ref());
             let call_started = Instant::now();
-            match provider.translate(&self.host(&opts_values), &req) {
+            let host = self.host(&opts_values);
+            let result = match &opts.progress {
+                Some(progress) => provider.translate_stream(&host, &req, &|text| (progress.0)(text)),
+                None => provider.translate(&host, &req),
+            };
+            match result {
                 Ok(mut t) if !t.is_empty() => {
                     t.provider_id = info.id.clone();
                     t.elapsed_ms = call_started.elapsed().as_millis() as u64;

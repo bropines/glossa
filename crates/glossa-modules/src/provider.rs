@@ -112,6 +112,21 @@ pub trait Provider: Send + Sync {
         Err(self.unsupported("translation"))
     }
 
+    /// Translate, reporting the translation so far through `progress` as it
+    /// arrives (each call carries the whole text up to that point, not a
+    /// delta). For services that answer piece by piece, such as LLMs; the
+    /// default just translates and reports nothing.
+    fn translate_stream(&self, host: &Host, req: &TranslateRequest, progress: &dyn Fn(&str)) -> Result<Translation> {
+        let _ = progress;
+        self.translate(host, req)
+    }
+
+    /// The models the service offers, for a picker on the settings page.
+    fn list_models(&self, host: &Host) -> Result<Vec<String>> {
+        let _ = host;
+        Err(self.unsupported("listing models"))
+    }
+
     fn detect(&self, host: &Host, text: &str) -> Result<Detection> {
         let _ = (host, text);
         Err(self.unsupported("language detection"))
@@ -202,6 +217,20 @@ impl OptionSpec {
 
     pub fn boolean(key: &str, label: &str, default: bool) -> Self {
         Self { kind: OptionKind::Bool, default: serde_json::Value::Bool(default), ..Self::text(key, label, "") }
+    }
+
+    pub fn number(key: &str, label: &str, default: f64, min: f64, max: f64) -> Self {
+        Self {
+            kind: OptionKind::Number,
+            default: serde_json::json!(default),
+            min: Some(min),
+            max: Some(max),
+            ..Self::text(key, label, "")
+        }
+    }
+
+    pub fn multiline(key: &str, label: &str, default: &str) -> Self {
+        Self { kind: OptionKind::Multiline, ..Self::text(key, label, default) }
     }
 
     pub fn select(key: &str, label: &str, default: &str, choices: &[(&str, &str)]) -> Self {
