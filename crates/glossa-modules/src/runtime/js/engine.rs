@@ -415,6 +415,15 @@ mod tests {
     }
 
     #[test]
+    fn annex_b_escape_and_unescape_are_available() {
+        assert_eq!(run("escape('a b+c/ä€')"), "a%20b+c/%E4%u20AC");
+        assert_eq!(run("unescape('a%20b%E4%u20AC')"), "a bä€");
+        // The idiom old crypto code uses to get a UTF-8 "binary string".
+        assert_eq!(run("unescape(encodeURIComponent('ж'))"), "\u{d0}\u{b6}");
+        assert_eq!(run("decodeURIComponent(escape(unescape(encodeURIComponent('жук'))))"), "жук");
+    }
+
+    #[test]
     fn hex_helpers() {
         assert_eq!(hex_encode(&[0, 15, 255]), "000fff");
         assert_eq!(hex_decode("000fff"), Some(vec![0, 15, 255]));
