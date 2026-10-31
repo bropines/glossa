@@ -1,0 +1,16 @@
+# An example native module written in C. Build shout.c into a library named
+# for your platform (libshout.so, libshout.dylib or shout.dll — see the
+# comment at the top of shout.c) and keep it beside this file.
+capabilities = ["translate"]
+
+[module]
+id = "example-shout"
+name = "SHOUT (C example)"
+version = "0.1.0"
+api = 1
+runtime = "native"
+# Glossa tries `shout`, then shout.dll / libshout.dll on Windows,
+# libshout.so / shout.so on Linux, libshout.dylib / shout.dylib on macOS.
+entry = "shout"
+description = "Uppercases text. Demonstrates that the native ABI is plain C."
+license = "MIT OR Apache-2.0"

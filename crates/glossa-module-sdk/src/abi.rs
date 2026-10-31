@@ -31,6 +31,20 @@
 //! `call` returns a [`Reply`](crate::wire::Reply) as JSON: `{"result": ...}`
 //! or `{"error": {"kind": ..., "message": ...}}`. The host frees it with the
 //! module's own `free`, so each side frees only what it allocated.
+//!
+//! The rest of the contract, which [`export_module!`](crate::export_module)
+//! honours for Rust authors and `include/glossa_module.h` spells out for
+//! everyone else:
+//!
+//! * strings passed *into* a function are borrowed for that call only;
+//! * a string returned by the host's `call` goes back through the host's
+//!   `free` (never the module's allocator — on Windows the two may live in
+//!   different C runtimes with different heaps);
+//! * the host never makes two calls into one module at once, but successive
+//!   calls may come from different threads;
+//! * the [`HostVTable`] is valid only during the call it was passed to, and
+//!   only on that call's thread;
+//! * nothing may unwind across the boundary (the macro catches panics).
 
 use std::ffi::{CStr, CString};
 use std::os::raw::{c_char, c_void};

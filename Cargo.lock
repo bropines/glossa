@@ -711,6 +711,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "glossa-example-rot13"
+version = "0.1.0"
+dependencies = [
+ "glossa-module-sdk",
+ "serde_json",
+]
+
+[[package]]
 name = "glossa-module-sdk"
 version = "0.1.0"
 dependencies = [

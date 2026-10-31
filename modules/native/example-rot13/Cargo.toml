@@ -1,0 +1,20 @@
+[package]
+name = "glossa-example-rot13"
+description = "Example native Glossa module: ROT13 'translation', written with glossa-module-sdk."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+publish = false
+
+[lib]
+# `cdylib` is the loadable module (example_rot13.dll / libglossa_example_rot13.so);
+# `rlib` lets the crate's own tests call the module directly.
+crate-type = ["cdylib", "rlib"]
+
+# A module outside this repository would write the same line with a version
+# or a git URL, and depend on nothing else from Glossa.
+[dependencies]
+glossa-module-sdk = { path = "../../../crates/glossa-module-sdk" }
+serde_json = { workspace = true }
