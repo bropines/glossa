@@ -18,7 +18,13 @@ pub struct HistoryState {
 
 pub fn open(app: &mut GlossaApp) {
     if app.history.is_none() {
-        app.history = Some(HistoryState { search: String::new(), favorites_only: false, entries: Vec::new(), dirty: true, confirm_clear: false });
+        app.history = Some(HistoryState {
+            search: String::new(),
+            favorites_only: false,
+            entries: Vec::new(),
+            dirty: true,
+            confirm_clear: false,
+        });
     }
     app.ctx.request_repaint();
 }
@@ -29,7 +35,11 @@ pub fn show(app: &mut GlossaApp, ctx: &egui::Context) {
         st.entries = app.engine.search_history(&st.search, st.favorites_only);
         st.dirty = false;
     }
-    let builder = egui::ViewportBuilder::default().with_title(app.t("history.title")).with_inner_size([760.0, 520.0]).with_min_inner_size([420.0, 260.0]).with_icon(crate::app_icon(32));
+    let builder = egui::ViewportBuilder::default()
+        .with_title(app.t("history.title"))
+        .with_inner_size([760.0, 520.0])
+        .with_min_inner_size([420.0, 260.0])
+        .with_icon(crate::app_icon(32));
     let mut open = true;
     ctx.show_viewport_immediate(egui::ViewportId::from_hash_of("glossa-history"), builder, |ui, _| {
         if ui.input(|i| i.viewport().close_requested()) {
@@ -48,7 +58,11 @@ fn body(app: &mut GlossaApp, ui: &mut egui::Ui, st: &mut HistoryState, open: &mu
     egui::Panel::top("hist-top").show(ui, |ui| {
         ui.add_space(4.0);
         ui.horizontal(|ui| {
-            let r = ui.add(egui::TextEdit::singleline(&mut st.search).hint_text(app.t("history.search")).desired_width(ui.available_width() - 200.0));
+            let r = ui.add(
+                egui::TextEdit::singleline(&mut st.search)
+                    .hint_text(app.t("history.search"))
+                    .desired_width(ui.available_width() - 200.0),
+            );
             if r.changed() {
                 st.dirty = true;
             }
@@ -118,7 +132,9 @@ fn body(app: &mut GlossaApp, ui: &mut egui::Ui, st: &mut HistoryState, open: &mu
                             }
                             let src = one_line(&e.source, if expand { 400 } else { 90 });
                             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                                if icons::sized_button(ui, &look, Icon::Trash, &app.t("history.delete"), 18.0, true).clicked() {
+                                if icons::sized_button(ui, &look, Icon::Trash, &app.t("history.delete"), 18.0, true)
+                                    .clicked()
+                                {
                                     action = Some((e.id, "delete"));
                                 }
                                 ui.with_layout(egui::Layout::left_to_right(egui::Align::Center), |ui| {
@@ -134,20 +150,40 @@ fn body(app: &mut GlossaApp, ui: &mut egui::Ui, st: &mut HistoryState, open: &mu
                         if let Some(r) = e.latest() {
                             ui.horizontal(|ui| {
                                 ui.add_space(24.0);
-                                ui.label(RichText::new(format!("{} · {} → {}", r.provider_id, r.from.english_name(), r.to.english_name())).small().color(look.weak_text()));
+                                ui.label(
+                                    RichText::new(format!(
+                                        "{} · {} → {}",
+                                        r.provider_id,
+                                        r.from.english_name(),
+                                        r.to.english_name()
+                                    ))
+                                    .small()
+                                    .color(look.weak_text()),
+                                );
                             });
                         }
                     })
                     .response
                     .interact(egui::Sense::click());
                 if resp.hovered() {
-                    ui.painter().rect_stroke(resp.rect, 2.0, egui::Stroke::new(1.0, look.border()), egui::StrokeKind::Inside);
+                    ui.painter().rect_stroke(
+                        resp.rect,
+                        2.0,
+                        egui::Stroke::new(1.0, look.border()),
+                        egui::StrokeKind::Inside,
+                    );
                 }
                 if resp.double_clicked() {
                     action = Some((e.id, "open"));
                 }
                 resp.context_menu(|ui| {
-                    for (key, what) in [("history.open", "open"), ("history.copy_text", "copy_text"), ("history.copy_translation", "copy_tr"), ("history.listen", "listen"), ("history.delete", "delete")] {
+                    for (key, what) in [
+                        ("history.open", "open"),
+                        ("history.copy_text", "copy_text"),
+                        ("history.copy_translation", "copy_tr"),
+                        ("history.listen", "listen"),
+                        ("history.delete", "delete"),
+                    ] {
                         if ui.button(app.t(key)).clicked() {
                             action = Some((e.id, what));
                             ui.close();

@@ -25,14 +25,16 @@ use std::sync::RwLock;
 use glossa_core::dict::{Example, Explanation, Pronunciation};
 use glossa_core::translate::{PartOfSpeechEntry, Sense};
 use glossa_core::{
-    Article, Audio, Capabilities, Detection, DictRequest, Error, LangId, LangPair, ProviderInfo, Result,
-    SpeakRequest, TranslateRequest, Translation,
+    Article, Audio, Capabilities, Detection, DictRequest, Error, LangId, LangPair, ProviderInfo, Result, SpeakRequest,
+    TranslateRequest, Translation,
 };
 use glossa_modules::{Host, OptionSpec, Provider};
 use glossa_net::{url_encode, HttpRequest};
 use serde_json::Value;
 
-use crate::common::{all_langs_with_auto, check_pair, check_status, detected, is_auto, json_body, split_text, strip_tags};
+use crate::common::{
+    all_langs_with_auto, check_pair, check_status, detected, is_auto, json_body, split_text, strip_tags,
+};
 
 const API: &str = "https://translate.googleapis.com/translate_a/single";
 const TTS: &str = "https://translate.google.com/translate_tts";
@@ -338,12 +340,7 @@ impl GoogleDictionary {
 
 /// Build an [`Article`] from a `bd/md/ex/ss/rm/t` answer.
 pub(crate) fn parse_article(v: &Value, query_text: &str) -> Article {
-    let headword = v[0][0][1]
-        .as_str()
-        .map(str::trim)
-        .filter(|s| !s.is_empty())
-        .unwrap_or(query_text.trim())
-        .to_owned();
+    let headword = v[0][0][1].as_str().map(str::trim).filter(|s| !s.is_empty()).unwrap_or(query_text.trim()).to_owned();
 
     // Only the source's own transliteration is a pronunciation of the
     // headword; the target's would describe the translation.
@@ -526,8 +523,9 @@ mod tests {
 
     #[test]
     fn detected_language_falls_back_to_the_ld_block() {
-        let v: Value = serde_json::from_str(r#"[[["a","b"]],null,null,null,null,null,0.5,[],[["fr"],null,[0.5],["fr"]]]"#)
-            .unwrap();
+        let v: Value =
+            serde_json::from_str(r#"[[["a","b"]],null,null,null,null,null,0.5,[],[["fr"],null,[0.5],["fr"]]]"#)
+                .unwrap();
         assert_eq!(detected_source(&v), Some(LangId(21)));
     }
 
@@ -630,7 +628,13 @@ mod tests {
         let cancel = CancelToken::new();
         cancel.cancel();
         let options = OptionValues::new();
-        let host = Host { http: &http, options: &options, ui_language: LangId::ENGLISH, preferred_domain: "com", cancel: &cancel };
+        let host = Host {
+            http: &http,
+            options: &options,
+            ui_language: LangId::ENGLISH,
+            preferred_domain: "com",
+            cancel: &cancel,
+        };
         let r = Google::new().speak(&host, &SpeakRequest { text: "hi".into(), lang: LangId::ENGLISH, slow: false });
         assert!(matches!(r, Err(Error::Cancelled)));
     }
@@ -641,7 +645,13 @@ mod tests {
         let http = MockHttp::new().on(Method::Get, API, 200, HELLO_WORLD);
         let options = OptionValues::new();
         let cancel = CancelToken::new();
-        let host = Host { http: &http, options: &options, ui_language: LangId::RUSSIAN, preferred_domain: "ru", cancel: &cancel };
+        let host = Host {
+            http: &http,
+            options: &options,
+            ui_language: LangId::RUSSIAN,
+            preferred_domain: "ru",
+            cancel: &cancel,
+        };
         g.translate(&host, &TranslateRequest::new("Hello world", LangPair::new(LangId::ENGLISH, ru()))).unwrap();
         assert!(http.requests()[0].url.contains("&hl=ru"));
         assert_eq!(
@@ -664,10 +674,8 @@ mod tests {
     fn dictionary_article_has_definitions_examples_synonyms_and_translations() {
         let http = MockHttp::new().on(Method::Get, API, 200, RUN);
         let a = with_test_host(&http, &OptionValues::new(), |h| {
-            GoogleDictionary::new().dictionary(
-                h,
-                &DictRequest { text: " run ".into(), from: LangId::ENGLISH, to: ru(), exact: true },
-            )
+            GoogleDictionary::new()
+                .dictionary(h, &DictRequest { text: " run ".into(), from: LangId::ENGLISH, to: ru(), exact: true })
         })
         .unwrap();
         assert_eq!(a.headword, "run");

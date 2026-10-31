@@ -21,10 +21,8 @@ impl TempImage {
 
     pub fn write_in(dir: &Path, bytes: &[u8]) -> Result<TempImage> {
         let n = COUNTER.fetch_add(1, Ordering::Relaxed);
-        let nanos = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map(|d| d.subsec_nanos())
-            .unwrap_or(0);
+        let nanos =
+            std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.subsec_nanos()).unwrap_or(0);
         let name = format!("glossa-ocr-{}-{n}-{nanos:x}.{}", std::process::id(), extension_for(bytes));
         let path = dir.join(name);
         std::fs::write(&path, bytes).map_err(|e| Error::Platform(format!("cannot write {}: {e}", path.display())))?;

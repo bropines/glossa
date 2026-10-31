@@ -159,12 +159,21 @@ fn placed(cursor_px: (i32, i32), size: egui::Vec2) -> egui::Pos2 {
     let (cx, cy) = cursor_px;
     let scale = scale_at(cx, cy);
     let anchor = glossa_core::ocr::Rect::new(cx as f32, cy as f32, 15.0 * scale, 15.0 * scale);
-    let (x, y) = glossa_platform::window::place_popup(anchor, (size.x * scale, size.y * scale), &glossa_platform::window::monitors());
+    let (x, y) = glossa_platform::window::place_popup(
+        anchor,
+        (size.x * scale, size.y * scale),
+        &glossa_platform::window::monitors(),
+    );
     egui::pos2(x / scale, y / scale)
 }
 
 impl PopupState {
-    pub fn on_result(&mut self, job: u64, result: Result<Arc<TranslationOutcome>, Arc<Error>>, message: Option<String>) {
+    pub fn on_result(
+        &mut self,
+        job: u64,
+        result: Result<Arc<TranslationOutcome>, Arc<Error>>,
+        message: Option<String>,
+    ) {
         if job != self.job {
             return;
         }
@@ -187,7 +196,11 @@ impl PopupState {
             .registry()
             .get(&self.service)
             .map(|p| p.info().name.clone())
-            .or_else(|| self.outcome.as_ref().and_then(|o| app.engine.registry().get(&o.translation.provider_id).map(|p| p.info().name.clone())))
+            .or_else(|| {
+                self.outcome
+                    .as_ref()
+                    .and_then(|o| app.engine.registry().get(&o.translation.provider_id).map(|p| p.info().name.clone()))
+            })
             .unwrap_or_default();
         match &self.outcome {
             Some(o) => {
@@ -247,7 +260,13 @@ pub fn show(app: &mut GlossaApp, ctx: &egui::Context) {
     if state.moved {
         state.cursor_px = None;
         if let Some(o) = outer {
-            let g = glossa_core::config::WindowGeometry { x: o.min.x, y: o.min.y, width: o.width(), height: o.height(), maximized: false };
+            let g = glossa_core::config::WindowGeometry {
+                x: o.min.x,
+                y: o.min.y,
+                width: o.width(),
+                height: o.height(),
+                maximized: false,
+            };
             if app.cfg.windows.get(REMEMBERED) != Some(&g) {
                 app.cfg.windows.insert(REMEMBERED.into(), g);
             }
@@ -299,7 +318,9 @@ fn body(app: &mut GlossaApp, ui: &mut egui::Ui, st: &mut PopupState) -> (bool, e
     let text_w = ui.ctx().fonts_mut(|f| f.layout(body_text, font.clone(), Color32::WHITE, wrap_w)).size().x;
     let title_w = ui
         .ctx()
-        .fonts_mut(|f| f.layout_no_wrap(st.title(app), egui::FontId::proportional(look.text_size * 1.15), Color32::WHITE))
+        .fonts_mut(|f| {
+            f.layout_no_wrap(st.title(app), egui::FontId::proportional(look.text_size * 1.15), Color32::WHITE)
+        })
         .size()
         .x
         + 14.0
@@ -319,12 +340,23 @@ fn body(app: &mut GlossaApp, ui: &mut egui::Ui, st: &mut PopupState) -> (bool, e
             // -- header: drag handle, title, icons --------------------------
             let header = ui.horizontal(|ui| {
                 let (drag_rect, drag) = ui.allocate_exact_size(vec2(14.0, 14.0), Sense::click_and_drag());
-                icons::paint(ui.painter(), drag_rect, if st.pinned { Icon::Pin } else { Icon::Close }, look.icon(glossa_core::theme::WidgetState::Normal));
+                icons::paint(
+                    ui.painter(),
+                    drag_rect,
+                    if st.pinned { Icon::Pin } else { Icon::Close },
+                    look.icon(glossa_core::theme::WidgetState::Normal),
+                );
                 if drag.clicked() {
                     close = true;
                 }
                 let title = st.title(app);
-                let title_resp = ui.add(egui::Label::new(RichText::new(title).size(look.text_size * 1.15).color(text_color.gamma_multiply(0.85))).sense(Sense::click_and_drag()).truncate());
+                let title_resp = ui.add(
+                    egui::Label::new(
+                        RichText::new(title).size(look.text_size * 1.15).color(text_color.gamma_multiply(0.85)),
+                    )
+                    .sense(Sense::click_and_drag())
+                    .truncate(),
+                );
                 if title_resp.drag_started() || drag.drag_started() {
                     st.moved = true;
                     if cfg.pin_when_dragging {
@@ -337,19 +369,28 @@ fn body(app: &mut GlossaApp, ui: &mut egui::Ui, st: &mut PopupState) -> (bool, e
                     let size = 18.0;
                     let translation = st.outcome.as_ref().map(|o| o.translation.text.clone()).unwrap_or_default();
                     let has = !translation.is_empty();
-                    if cfg.icons.replace && icons::sized_button(ui, &look, Icon::Replace, &app.t("popup.replace"), size, has).clicked() {
+                    if cfg.icons.replace
+                        && icons::sized_button(ui, &look, Icon::Replace, &app.t("popup.replace"), size, has).clicked()
+                    {
                         app.perform(Action::ReplaceSelection, Some(st.source.clone()));
                         close = true;
                     }
-                    if cfg.icons.copy && icons::sized_button(ui, &look, Icon::Copy, &app.t("popup.copy"), size, has).clicked() {
+                    if cfg.icons.copy
+                        && icons::sized_button(ui, &look, Icon::Copy, &app.t("popup.copy"), size, has).clicked()
+                    {
                         app.copy_text(&translation);
                     }
-                    if cfg.icons.listen && icons::sized_button(ui, &look, Icon::Listen, &app.t("popup.listen"), size, true).clicked() {
+                    if cfg.icons.listen
+                        && icons::sized_button(ui, &look, Icon::Listen, &app.t("popup.listen"), size, true).clicked()
+                    {
                         // The classic icon read the selected text aloud.
                         let lang = st.outcome.as_ref().map(|o| o.pair.from).unwrap_or(LangId::AUTO);
                         app.speak(&st.source, lang);
                     }
-                    if cfg.icons.dictionary && icons::sized_button(ui, &look, Icon::Dictionary, &app.t("popup.dictionary"), size, true).clicked() {
+                    if cfg.icons.dictionary
+                        && icons::sized_button(ui, &look, Icon::Dictionary, &app.t("popup.dictionary"), size, true)
+                            .clicked()
+                    {
                         crate::dictionary::open(app, Some(st.source.clone()));
                     }
                     let star = if st.favorite { Icon::StarFilled } else { Icon::Star };
@@ -376,8 +417,14 @@ fn body(app: &mut GlossaApp, ui: &mut egui::Ui, st: &mut PopupState) -> (bool, e
                 let shown = display_text(o);
                 let out = egui::ScrollArea::vertical().max_height(cfg.max_height - 70.0).show(ui, |ui| {
                     let rtl = o.pair.to.is_rtl();
-                    let text = if glossa_core::text::needs_bidi(&shown) { glossa_core::text::for_display(&shown, rtl) } else { shown };
-                    let label = egui::Label::new(RichText::new(text).font(font.clone()).color(text_color)).selectable(true).wrap();
+                    let text = if glossa_core::text::needs_bidi(&shown) {
+                        glossa_core::text::for_display(&shown, rtl)
+                    } else {
+                        shown
+                    };
+                    let label = egui::Label::new(RichText::new(text).font(font.clone()).color(text_color))
+                        .selectable(true)
+                        .wrap();
                     if rtl {
                         ui.with_layout(egui::Layout::top_down(egui::Align::Max), |ui| ui.add(label));
                     } else {
@@ -411,7 +458,10 @@ fn body(app: &mut GlossaApp, ui: &mut egui::Ui, st: &mut PopupState) -> (bool, e
                         for p in &enabled {
                             let info = p.info();
                             let selected = info.id == st.service;
-                            if crate::widgets::service_tab(ui, &look, &info.id, &info.name, selected, each - 1.0).clicked() && !selected {
+                            if crate::widgets::service_tab(ui, &look, &info.id, &info.name, selected, each - 1.0)
+                                .clicked()
+                                && !selected
+                            {
                                 switch_to = Some(info.id.clone());
                             }
                         }

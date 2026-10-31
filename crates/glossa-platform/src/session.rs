@@ -121,9 +121,7 @@ impl Session {
     pub fn detect_from(os: Os, env: impl Fn(&str) -> Option<String>) -> Session {
         let get = |k: &str| env(k).map(|v| v.trim().to_owned()).filter(|v| !v.is_empty());
         match os {
-            Os::Windows => {
-                Session { os, display: DisplayServer::Windows, desktop: "Windows".into() }
-            }
+            Os::Windows => Session { os, display: DisplayServer::Windows, desktop: "Windows".into() },
             Os::MacOs => Session { os, display: DisplayServer::MacOs, desktop: "macOS".into() },
             Os::Linux | Os::OtherUnix => {
                 let desktop = get("XDG_CURRENT_DESKTOP")
@@ -262,9 +260,7 @@ fn detect_compositor(get: &impl Fn(&str) -> Option<String>, desktop: &str) -> Co
             "hyprland" => return Compositor::Hyprland,
             "niri" => return Compositor::Niri,
             "cosmic" => return Compositor::Cosmic,
-            "river" | "wayfire" | "labwc" | "dwl" | "qtile" | "hikari" | "cage" => {
-                return Compositor::Wlroots(part)
-            }
+            "river" | "wayfire" | "labwc" | "dwl" | "qtile" | "hikari" | "cage" => return Compositor::Wlroots(part),
             _ => {}
         }
     }
@@ -281,8 +277,7 @@ mod tests {
     use std::collections::HashMap;
 
     fn linux(vars: &[(&str, &str)]) -> Session {
-        let map: HashMap<String, String> =
-            vars.iter().map(|(k, v)| (k.to_string(), v.to_string())).collect();
+        let map: HashMap<String, String> = vars.iter().map(|(k, v)| (k.to_string(), v.to_string())).collect();
         Session::detect_from(Os::Linux, move |k| map.get(k).cloned())
     }
 
@@ -310,11 +305,7 @@ mod tests {
 
     #[test]
     fn wayland_wins_over_xwayland_display() {
-        let s = linux(&[
-            ("DISPLAY", ":0"),
-            ("WAYLAND_DISPLAY", "wayland-0"),
-            ("XDG_CURRENT_DESKTOP", "ubuntu:GNOME"),
-        ]);
+        let s = linux(&[("DISPLAY", ":0"), ("WAYLAND_DISPLAY", "wayland-0"), ("XDG_CURRENT_DESKTOP", "ubuntu:GNOME")]);
         assert_eq!(s.display, DisplayServer::Wayland { compositor: Compositor::Gnome });
         assert!(s.is_wayland());
         assert!(!s.supports_global_hotkeys());
@@ -351,16 +342,10 @@ mod tests {
     #[test]
     fn wlroots_family_and_unknowns() {
         let s = linux(&[("WAYLAND_DISPLAY", "w"), ("XDG_CURRENT_DESKTOP", "river")]);
-        assert_eq!(
-            s.display,
-            DisplayServer::Wayland { compositor: Compositor::Wlroots("river".into()) }
-        );
+        assert_eq!(s.display, DisplayServer::Wayland { compositor: Compositor::Wlroots("river".into()) });
         assert!(s.supports_primary_selection());
         let s = linux(&[("WAYLAND_DISPLAY", "w"), ("XDG_CURRENT_DESKTOP", "Weird")]);
-        assert_eq!(
-            s.display,
-            DisplayServer::Wayland { compositor: Compositor::Other("Weird".into()) }
-        );
+        assert_eq!(s.display, DisplayServer::Wayland { compositor: Compositor::Other("Weird".into()) });
         assert!(!s.supports_primary_selection());
         let s = linux(&[("WAYLAND_DISPLAY", "w")]);
         assert_eq!(s.display, DisplayServer::Wayland { compositor: Compositor::Unknown });

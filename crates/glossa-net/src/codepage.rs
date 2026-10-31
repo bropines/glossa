@@ -42,10 +42,9 @@ impl Codepage {
                 String::from_utf8_lossy(bytes).into_owned()
             }
             Codepage::Latin1 => bytes.iter().map(|&b| b as char).collect(),
-            Codepage::Windows1251 => bytes
-                .iter()
-                .map(|&b| if b < 0x80 { b as char } else { CP1251_HIGH[(b - 0x80) as usize] })
-                .collect(),
+            Codepage::Windows1251 => {
+                bytes.iter().map(|&b| if b < 0x80 { b as char } else { CP1251_HIGH[(b - 0x80) as usize] }).collect()
+            }
         }
     }
 

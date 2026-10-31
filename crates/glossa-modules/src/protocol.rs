@@ -12,8 +12,8 @@ use std::time::Instant;
 use glossa_core::dict::{Example, Explanation, Pronunciation};
 use glossa_core::translate::{PartOfSpeechEntry, Sense};
 use glossa_core::{
-    Article, Audio, Detection, DictRequest, Error, OcrRequest, OcrResult, ProviderInfo, Result,
-    SpeakRequest, TranslateRequest, Translation,
+    Article, Audio, Detection, DictRequest, Error, OcrRequest, OcrResult, ProviderInfo, Result, SpeakRequest,
+    TranslateRequest, Translation,
 };
 use glossa_module_sdk::wire::{self, ModuleError, Reply};
 
@@ -58,10 +58,19 @@ impl<T: Transport> ProtocolProvider<T> {
         &self.transport
     }
 
-    fn invoke<P: serde::Serialize, R: serde::de::DeserializeOwned>(&self, host: &Host, method: &str, params: P) -> Result<R> {
+    fn invoke<P: serde::Serialize, R: serde::de::DeserializeOwned>(
+        &self,
+        host: &Host,
+        method: &str,
+        params: P,
+    ) -> Result<R> {
         host.check_cancelled()?;
         let api = HostApi {
-            http: ScopedHttp { inner: host.http, permissions: &self.manifest.permissions, module_id: &self.manifest.module.id },
+            http: ScopedHttp {
+                inner: host.http,
+                permissions: &self.manifest.permissions,
+                module_id: &self.manifest.module.id,
+            },
             cache: &self.cache,
         };
         let params = serde_json::to_value(params).map_err(|e| Error::module(&self.info.id, e))?;
@@ -72,8 +81,7 @@ impl<T: Transport> ProtocolProvider<T> {
             .map_err(|e| from_module_error(&self.info.id, &self.info.name, e))?;
         tracing::debug!(module = %self.info.id, method, ms = started.elapsed().as_millis() as u64, "module call");
         host.check_cancelled()?;
-        serde_json::from_value(value)
-            .map_err(|e| Error::bad_response(&self.info.name, format!("{method} reply: {e}")))
+        serde_json::from_value(value).map_err(|e| Error::bad_response(&self.info.name, format!("{method} reply: {e}")))
     }
 
     fn code(&self, lang: glossa_core::LangId) -> String {
@@ -153,7 +161,12 @@ impl<T: Transport> Provider for ProtocolProvider<T> {
         let r: wire::SpeakResult = self.invoke(
             host,
             "speak",
-            wire::SpeakParams { text: req.text.clone(), lang: self.code(req.lang), slow: req.slow, options: host.options.clone() },
+            wire::SpeakParams {
+                text: req.text.clone(),
+                lang: self.code(req.lang),
+                slow: req.slow,
+                options: host.options.clone(),
+            },
         )?;
         use base64::Engine;
         let bytes = base64::engine::general_purpose::STANDARD
@@ -270,7 +283,10 @@ mod tests {
         let opts = OptionValues::new();
         with_test_host(&http, &opts, |host| {
             let t = p
-                .translate(host, &TranslateRequest::new("hi", LangPair::new(LangId::AUTO, LangId::from_code("zh-CN").unwrap())))
+                .translate(
+                    host,
+                    &TranslateRequest::new("hi", LangPair::new(LangId::AUTO, LangId::from_code("zh-CN").unwrap())),
+                )
                 .unwrap();
             assert_eq!(t.text, "hi|\"auto\"|\"ZH\"|\"ok\"", "codes mapped out, host call answered");
             assert_eq!(t.detected_from, LangId::from_code("zh-Hans"), "codes mapped back");
@@ -280,12 +296,18 @@ mod tests {
             assert_eq!(d.lang, LangId::RUSSIAN);
 
             let a = p
-                .dictionary(host, &DictRequest { text: "w".into(), from: LangId::ENGLISH, to: LangId::RUSSIAN, exact: true })
+                .dictionary(
+                    host,
+                    &DictRequest { text: "w".into(), from: LangId::ENGLISH, to: LangId::RUSSIAN, exact: true },
+                )
                 .unwrap();
             assert_eq!(a.headword, "w", "headword defaults to the query");
             assert_eq!(a.explanations[0].definitions, ["x"]);
 
-            assert!(matches!(p.speak(host, &SpeakRequest { text: "x".into(), lang: LangId::ENGLISH, slow: false }), Err(Error::Unsupported { .. })));
+            assert!(matches!(
+                p.speak(host, &SpeakRequest { text: "x".into(), lang: LangId::ENGLISH, slow: false }),
+                Err(Error::Unsupported { .. })
+            ));
         });
     }
 
@@ -297,7 +319,9 @@ mod tests {
         let http = MockHttp::new().on(Method::Get, "https://api.test/", 200, "ok");
         let opts = OptionValues::new();
         with_test_host(&http, &opts, |host| {
-            let err = p.translate(host, &TranslateRequest::new("hi", LangPair::new(LangId::AUTO, LangId::ENGLISH))).unwrap_err();
+            let err = p
+                .translate(host, &TranslateRequest::new("hi", LangPair::new(LangId::AUTO, LangId::ENGLISH)))
+                .unwrap_err();
             assert!(err.to_string().contains("permissions"), "{err}");
         });
         assert!(http.requests().is_empty());

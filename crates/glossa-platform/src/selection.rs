@@ -54,11 +54,7 @@ impl Default for CaptureOptions {
 
 impl CaptureOptions {
     pub fn from_config(advanced: &glossa_core::config::Advanced) -> Self {
-        Self {
-            copy_action: advanced.copy_action,
-            wait_ms: advanced.copy_wait_ms,
-            restore_clipboard: true,
-        }
+        Self { copy_action: advanced.copy_action, wait_ms: advanced.copy_wait_ms, restore_clipboard: true }
     }
 }
 

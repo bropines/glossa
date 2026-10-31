@@ -171,12 +171,7 @@ impl Rect {
     pub fn expanded(&self, pad: f32) -> Rect {
         let x = (self.x - pad).max(0.0);
         let y = (self.y - pad).max(0.0);
-        Rect {
-            x,
-            y,
-            width: self.x + self.width + pad - x,
-            height: self.y + self.height + pad - y,
-        }
+        Rect { x, y, width: self.x + self.width + pad - x, height: self.y + self.height + pad - y }
     }
 }
 
@@ -217,10 +212,8 @@ mod tests {
     #[test]
     fn emptiness_considers_blocks_as_well_as_text() {
         assert!(OcrResult::default().is_empty());
-        let with_block = OcrResult {
-            blocks: vec![OcrBlock { text: "hi".into(), ..Default::default() }],
-            ..Default::default()
-        };
+        let with_block =
+            OcrResult { blocks: vec![OcrBlock { text: "hi".into(), ..Default::default() }], ..Default::default() };
         assert!(!with_block.is_empty());
     }
 }

@@ -49,20 +49,15 @@ mod uia;
 
 pub use audio::AudioPlayer;
 pub use autostart::{is_autostart_enabled, set_autostart};
-pub use capture::{
-    capture_all, capture_rect, capture_virtual_desktop, encode_png, images_differ, MonitorShot,
-};
+pub use capture::{capture_all, capture_rect, capture_virtual_desktop, encode_png, images_differ, MonitorShot};
 pub use clipboard::{Clipboard, ClipboardSnapshot};
 pub use hotkeys::{HotkeyError, HotkeyService};
 pub use input::{release_modifiers, send_copy, send_paste, type_text};
-pub use layout::{
-    convert_layout, guess_direction, switch_keyboard_layout_of_foreground, Conversion,
-};
+pub use layout::{convert_layout, guess_direction, switch_keyboard_layout_of_foreground, Conversion};
 pub use selection::{capture_selection, replace_selection, CaptureOptions};
 pub use session::{Compositor, DisplayServer, Os, Session};
 pub use window::{
-    caret_rect, cursor_position, foreground_window, monitor_at, monitors, place_popup, Monitor,
-    WindowInfo,
+    caret_rect, cursor_position, foreground_window, monitor_at, monitors, place_popup, Monitor, WindowInfo,
 };
 
 // On Linux xcap is an optional, renamed dependency (see Cargo.toml); give it

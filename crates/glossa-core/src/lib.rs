@@ -42,8 +42,5 @@ pub const VERSION: &str = env!("CARGO_PKG_VERSION");
 
 /// Seconds since the Unix epoch, for timestamps in history and logs.
 pub fn now_unix() -> i64 {
-    std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_secs() as i64)
-        .unwrap_or(0)
+    std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs() as i64).unwrap_or(0)
 }

@@ -87,9 +87,9 @@ impl History {
         }
         if let Some(front) = self.entries.front_mut() {
             if front.source == source {
-                front.results.retain(|r| {
-                    !(r.provider_id == result.provider_id && r.from == result.from && r.to == result.to)
-                });
+                front
+                    .results
+                    .retain(|r| !(r.provider_id == result.provider_id && r.from == result.from && r.to == result.to));
                 front.results.push(result);
                 front.created = now;
                 return front.id;

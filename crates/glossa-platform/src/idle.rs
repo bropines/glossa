@@ -112,7 +112,9 @@ pub fn trim_working_set() {
         use windows::Win32::System::Threading::GetCurrentProcess;
         // SAFETY: (usize::MAX, usize::MAX) is the documented "trim" request
         // for the current process's pseudo-handle.
-        let _ = unsafe { SetProcessWorkingSetSizeEx(GetCurrentProcess(), usize::MAX, usize::MAX, SETPROCESSWORKINGSETSIZEEX_FLAGS(0)) };
+        let _ = unsafe {
+            SetProcessWorkingSetSizeEx(GetCurrentProcess(), usize::MAX, usize::MAX, SETPROCESSWORKINGSETSIZEEX_FLAGS(0))
+        };
     }
 }
 

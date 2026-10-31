@@ -25,7 +25,8 @@ pub fn article(ui: &mut egui::Ui, look: &Look, a: &Article, zoom: f32) -> Option
             if p.symbol.is_empty() {
                 continue;
             }
-            let text = if p.region.is_empty() { format!("[{}]", p.symbol) } else { format!("{} [{}]", p.region, p.symbol) };
+            let text =
+                if p.region.is_empty() { format!("[{}]", p.symbol) } else { format!("{} [{}]", p.region, p.symbol) };
             ui.label(RichText::new(text).size(base).color(look.weak_text()));
         }
         if crate::icons::sized_button(ui, look, crate::icons::Icon::Listen, "", base * 1.4, true).clicked() {
@@ -76,7 +77,9 @@ pub fn article(ui: &mut egui::Ui, look: &Look, a: &Article, zoom: f32) -> Option
     if let Some(link) = &a.link {
         ui.add_space(6.0);
         ui.horizontal(|ui| {
-            if crate::icons::sized_button(ui, look, crate::icons::Icon::Open, "", 18.0, true).clicked() || ui.link(RichText::new(link).small()).clicked() {
+            if crate::icons::sized_button(ui, look, crate::icons::Icon::Open, "", 18.0, true).clicked()
+                || ui.link(RichText::new(link).small()).clicked()
+            {
                 click = Some(ArticleClick::Open(link.clone()));
             }
         });

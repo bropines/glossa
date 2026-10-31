@@ -77,10 +77,12 @@ pub fn paint(painter: &egui::Painter, rect: Rect, icon: Icon, color: Color32) {
         }
         Icon::Mic => {
             painter.rect_stroke(Rect::from_min_max(p(6.0, 2.0), p(10.0, 10.0)), 2.0 * u, st, egui::StrokeKind::Middle);
-            let arc: Vec<Pos2> = (0..=10).map(|i| {
-                let a = std::f32::consts::PI * (i as f32 / 10.0);
-                p(8.0 + 4.5 * a.cos(), 8.0 + 4.0 * a.sin())
-            }).collect();
+            let arc: Vec<Pos2> = (0..=10)
+                .map(|i| {
+                    let a = std::f32::consts::PI * (i as f32 / 10.0);
+                    p(8.0 + 4.5 * a.cos(), 8.0 + 4.0 * a.sin())
+                })
+                .collect();
             poly(arc, false);
             line(p(8.0, 12.0), p(8.0, 14.5));
             line(p(5.5, 14.5), p(10.5, 14.5));
@@ -162,7 +164,9 @@ pub fn paint(painter: &egui::Painter, rect: Rect, icon: Icon, color: Color32) {
         }
         Icon::Camera => {
             // A selection frame with a corner mark: "recognise a region".
-            for (x, y, dx, dy) in [(2.0, 2.0, 1.0, 1.0), (14.0, 2.0, -1.0, 1.0), (2.0, 14.0, 1.0, -1.0), (14.0, 14.0, -1.0, -1.0)] {
+            for (x, y, dx, dy) in
+                [(2.0, 2.0, 1.0, 1.0), (14.0, 2.0, -1.0, 1.0), (2.0, 14.0, 1.0, -1.0), (14.0, 14.0, -1.0, -1.0)]
+            {
                 poly(vec![p(x, y + 4.0 * dy), p(x, y), p(x + 4.0 * dx, y)], false);
             }
             let font = egui::FontId::proportional(7.0 * u);
@@ -200,17 +204,20 @@ pub fn paint(painter: &egui::Painter, rect: Rect, icon: Icon, color: Color32) {
         Icon::Globe => {
             painter.circle_stroke(p(8.0, 8.0), 6.0 * u, st);
             line(p(2.0, 8.0), p(14.0, 8.0));
-            let mer: Vec<Pos2> = (0..=12).map(|i| {
-                let a = std::f32::consts::PI * (i as f32 / 12.0) - std::f32::consts::FRAC_PI_2;
-                p(8.0 + 2.8 * a.cos(), 8.0 + 6.0 * a.sin())
-            }).collect();
+            let mer: Vec<Pos2> = (0..=12)
+                .map(|i| {
+                    let a = std::f32::consts::PI * (i as f32 / 12.0) - std::f32::consts::FRAC_PI_2;
+                    p(8.0 + 2.8 * a.cos(), 8.0 + 6.0 * a.sin())
+                })
+                .collect();
             poly(mer, false);
         }
     }
 }
 
 pub fn sized_button(ui: &mut Ui, look: &Look, icon: Icon, tooltip: &str, size: f32, enabled: bool) -> Response {
-    let (rect, mut resp) = ui.allocate_exact_size(vec2(size, size), if enabled { Sense::click() } else { Sense::hover() });
+    let (rect, mut resp) =
+        ui.allocate_exact_size(vec2(size, size), if enabled { Sense::click() } else { Sense::hover() });
     if ui.is_rect_visible(rect) {
         let state = if !enabled {
             WidgetState::Disabled
@@ -222,7 +229,13 @@ pub fn sized_button(ui: &mut Ui, look: &Look, icon: Icon, tooltip: &str, size: f
             WidgetState::Normal
         };
         if enabled && resp.hovered() {
-            let plate = look.theme.window_button.get(WidgetState::Hover).back.map(crate::style::c).unwrap_or_else(|| look.border());
+            let plate = look
+                .theme
+                .window_button
+                .get(WidgetState::Hover)
+                .back
+                .map(crate::style::c)
+                .unwrap_or_else(|| look.border());
             ui.painter().rect_filled(rect, 3.0, plate.gamma_multiply(0.6));
         }
         paint(ui.painter(), rect.shrink(size * 0.17), icon, look.icon(state));
@@ -244,10 +257,34 @@ mod tests {
         let mut out = ctx.run_ui(egui::RawInput::default(), |ui| {
             let painter = ui.painter();
             for icon in [
-                Icon::Listen, Icon::Copy, Icon::Mic, Icon::Swap, Icon::Clear, Icon::Menu, Icon::Back, Icon::Forward,
-                Icon::Dictionary, Icon::Replace, Icon::Pin, Icon::Close, Icon::Minimize, Icon::Maximize, Icon::Restore,
-                Icon::Star, Icon::StarFilled, Icon::Search, Icon::Gear, Icon::Camera, Icon::History, Icon::Keyboard,
-                Icon::Trash, Icon::Up, Icon::Down, Icon::Open, Icon::Translate, Icon::Globe,
+                Icon::Listen,
+                Icon::Copy,
+                Icon::Mic,
+                Icon::Swap,
+                Icon::Clear,
+                Icon::Menu,
+                Icon::Back,
+                Icon::Forward,
+                Icon::Dictionary,
+                Icon::Replace,
+                Icon::Pin,
+                Icon::Close,
+                Icon::Minimize,
+                Icon::Maximize,
+                Icon::Restore,
+                Icon::Star,
+                Icon::StarFilled,
+                Icon::Search,
+                Icon::Gear,
+                Icon::Camera,
+                Icon::History,
+                Icon::Keyboard,
+                Icon::Trash,
+                Icon::Up,
+                Icon::Down,
+                Icon::Open,
+                Icon::Translate,
+                Icon::Globe,
             ] {
                 for s in [8.0, 16.0, 48.0] {
                     paint(painter, Rect::from_min_size(pos2(0.0, 0.0), vec2(s, s)), icon, Color32::WHITE);

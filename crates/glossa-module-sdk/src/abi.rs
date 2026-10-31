@@ -65,7 +65,8 @@ pub struct HostVTable {
 #[repr(C)]
 pub struct ModuleVTable {
     pub protocol_version: u32,
-    pub call: unsafe extern "C" fn(method: *const c_char, params: *const c_char, host: *const HostVTable) -> *mut c_char,
+    pub call:
+        unsafe extern "C" fn(method: *const c_char, params: *const c_char, host: *const HostVTable) -> *mut c_char,
     pub free: unsafe extern "C" fn(s: *mut c_char),
 }
 
@@ -119,7 +120,8 @@ pub unsafe fn __entry<M: Module + Default>(
             .unwrap_or_else(|| "module panicked".into());
         Reply::err(ModuleError::new(ErrorKind::Other, format!("panic: {msg}")))
     });
-    let text = serde_json::to_string(&reply).unwrap_or_else(|_| r#"{"error":{"kind":"other","message":"unserialisable reply"}}"#.into());
+    let text = serde_json::to_string(&reply)
+        .unwrap_or_else(|_| r#"{"error":{"kind":"other","message":"unserialisable reply"}}"#.into());
     CString::new(text).map(CString::into_raw).unwrap_or(std::ptr::null_mut())
 }
 

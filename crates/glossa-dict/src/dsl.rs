@@ -30,8 +30,8 @@ use glossa_core::{Article, LangId};
 
 use crate::html::escape;
 use crate::source::{
-    decode_text, guess_lang_pair, invalid, lang_from_any, read_maybe_gzip, split_example, strip_numbering, tidy,
-    Body, CardIndex, DictionarySource, RawEntry,
+    decode_text, guess_lang_pair, invalid, lang_from_any, read_maybe_gzip, split_example, strip_numbering, tidy, Body,
+    CardIndex, DictionarySource, RawEntry,
 };
 
 /// An opened DSL dictionary, held in memory.
@@ -136,8 +136,6 @@ impl Dsl {
         };
         Ok(Dsl { name, lang_pair, text, cards })
     }
-
-
 }
 
 fn contains(hay: &[u8], needle: &[u8]) -> bool {
@@ -558,7 +556,8 @@ mod tests {
     use super::*;
     use crate::source::testutil::{gzip, utf16le_with_bom, TempDir};
 
-    const SAMPLE: &str = "#NAME\t\"Tiny En-Ru\"\r\n#INDEX_LANGUAGE\t\"English\"\r\n#CONTENTS_LANGUAGE\t\"Russian\"\r\n\r\n\
+    const SAMPLE: &str =
+        "#NAME\t\"Tiny En-Ru\"\r\n#INDEX_LANGUAGE\t\"English\"\r\n#CONTENTS_LANGUAGE\t\"Russian\"\r\n\r\n\
 colo(u)r\r\n\
 hue\r\n\
 \t[m0][b]colour[/b] \\[[t]ˈkʌlə[/t]\\][/m]\r\n\

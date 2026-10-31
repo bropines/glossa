@@ -51,8 +51,9 @@ impl Transport for GlossaTransport {
         let name = self.script.path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
         engine::eval(&mut ctx, &self.script.source, &name).map_err(engine::script_error)?;
 
-        let entry = engine::call_global(&mut ctx, "__glossaEntry", &[JsValue::from(boa_engine::JsString::from(method))])
-            .map_err(ModuleError::other)?;
+        let entry =
+            engine::call_global(&mut ctx, "__glossaEntry", &[JsValue::from(boa_engine::JsString::from(method))])
+                .map_err(ModuleError::other)?;
         let Some(f) = entry.as_callable() else {
             return Err(ModuleError::unsupported(method));
         };
@@ -121,7 +122,9 @@ mod tests {
         let mut opts = OptionValues::new();
         opts.insert("key".into(), serde_json::json!("secret"));
         with_test_host(&http, &opts, |host| {
-            let t = p.translate(host, &TranslateRequest::new("world", LangPair::new(LangId::AUTO, LangId::RUSSIAN))).unwrap();
+            let t = p
+                .translate(host, &TranslateRequest::new("world", LangPair::new(LangId::AUTO, LangId::RUSSIAN)))
+                .unwrap();
             assert_eq!(t.text, "мир");
             assert_eq!(t.detected_from, Some(LangId::ENGLISH));
         });
@@ -145,7 +148,9 @@ mod tests {
         let http = MockHttp::new();
         let opts = OptionValues::new();
         with_test_host(&http, &opts, |host| {
-            let t = p.translate(host, &TranslateRequest::new("abc", LangPair::new(LangId::ENGLISH, LangId::RUSSIAN))).unwrap();
+            let t = p
+                .translate(host, &TranslateRequest::new("abc", LangPair::new(LangId::ENGLISH, LangId::RUSSIAN)))
+                .unwrap();
             assert_eq!(t.text, "cba", "a bare string is accepted for translate");
             let d = p.detect(host, "x").unwrap();
             assert_eq!(d.lang, LangId::RUSSIAN);

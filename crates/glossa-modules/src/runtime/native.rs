@@ -217,8 +217,10 @@ fn open_library(path: &Path) -> Result<Library, libloading::Error> {
         // system directories, never the current directory (DLL planting).
         // SAFETY: loading runs the library's initialisers; see the module
         // docs — trusting native code is what `allow_native` opts into.
-        unsafe { WinLibrary::load_with_flags(&path, LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR | LOAD_LIBRARY_SEARCH_DEFAULT_DIRS) }
-            .map(Library::from)
+        unsafe {
+            WinLibrary::load_with_flags(&path, LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR | LOAD_LIBRARY_SEARCH_DEFAULT_DIRS)
+        }
+        .map(Library::from)
     }
     #[cfg(unix)]
     {
@@ -264,7 +266,9 @@ fn check_protocol(version: u32) -> Result<(), String> {
 /// Turn a module's reply text into a result.
 fn parse_reply(bytes: &[u8]) -> Result<serde_json::Value, ModuleError> {
     serde_json::from_slice::<Reply>(bytes)
-        .map_err(|e| ModuleError::bad_response(format!("module reply is not a {{\"result\"}} / {{\"error\"}} envelope: {e}")))?
+        .map_err(|e| {
+            ModuleError::bad_response(format!("module reply is not a {{\"result\"}} / {{\"error\"}} envelope: {e}"))
+        })?
         .into_result()
 }
 
@@ -275,7 +279,8 @@ impl Transport for NativeTransport {
         params: serde_json::Value,
         host: &dyn Fn(&str, serde_json::Value) -> Reply,
     ) -> Result<serde_json::Value, ModuleError> {
-        let method_c = CString::new(method).map_err(|_| ModuleError::new(ErrorKind::BadRequest, "method contains NUL"))?;
+        let method_c =
+            CString::new(method).map_err(|_| ModuleError::new(ErrorKind::BadRequest, "method contains NUL"))?;
         // serde_json escapes NUL inside strings, so this only fails on a bug.
         let params_c = CString::new(params.to_string()).map_err(|_| ModuleError::other("params contain NUL"))?;
 
@@ -471,7 +476,8 @@ mod tests {
     #[test]
     fn replies_parse_into_results_and_errors() {
         assert_eq!(parse_reply(br#"{"result":{"text":"x"}}"#).unwrap(), serde_json::json!({"text": "x"}));
-        let e = parse_reply(br#"{"error":{"kind":"rate_limited","message":"slow down","retry_after_secs":3}}"#).unwrap_err();
+        let e = parse_reply(br#"{"error":{"kind":"rate_limited","message":"slow down","retry_after_secs":3}}"#)
+            .unwrap_err();
         assert_eq!((e.kind, e.retry_after_secs), (ErrorKind::RateLimited, Some(3)));
         assert_eq!(parse_reply(b"not json").unwrap_err().kind, ErrorKind::BadResponse);
         assert_eq!(parse_reply(br#"{"text":"bare"}"#).unwrap_err().kind, ErrorKind::BadResponse);
@@ -581,7 +587,10 @@ mod tests {
         let opts = OptionValues::new();
         with_test_host(&http, &opts, |host| {
             let t = provider
-                .translate(host, &TranslateRequest::new("Hello, World!", LangPair::new(LangId::ENGLISH, LangId::RUSSIAN)))
+                .translate(
+                    host,
+                    &TranslateRequest::new("Hello, World!", LangPair::new(LangId::ENGLISH, LangId::RUSSIAN)),
+                )
                 .unwrap();
             assert_eq!(t.text, "Uryyb, Jbeyq!");
             assert_eq!(t.detected_from, Some(LangId::ENGLISH), "detected_from echoes the request's `from`");
@@ -589,16 +598,17 @@ mod tests {
             assert_eq!(provider.detect(host, "anything").unwrap().lang, LangId::ENGLISH);
 
             let a = provider
-                .dictionary(host, &DictRequest { text: "abc".into(), from: LangId::ENGLISH, to: LangId::ENGLISH, exact: true })
+                .dictionary(
+                    host,
+                    &DictRequest { text: "abc".into(), from: LangId::ENGLISH, to: LangId::ENGLISH, exact: true },
+                )
                 .unwrap();
             assert_eq!(a.headword, "abc");
             assert_eq!(a.explanations[0].definitions, ["nop"]);
             assert_eq!(a.examples[0].target, "nop");
 
-            let unsupported = provider.speak(
-                host,
-                &glossa_core::SpeakRequest { text: "x".into(), lang: LangId::ENGLISH, slow: false },
-            );
+            let unsupported = provider
+                .speak(host, &glossa_core::SpeakRequest { text: "x".into(), lang: LangId::ENGLISH, slow: false });
             assert!(matches!(unsupported, Err(glossa_core::Error::Unsupported { .. })), "{unsupported:?}");
         });
         assert!(http.requests().is_empty(), "rot13 needs no network");
@@ -616,9 +626,8 @@ mod tests {
             calls.borrow_mut().push((m.to_owned(), p));
             Reply::ok(serde_json::Value::Null)
         };
-        let out = transport
-            .call("translate", serde_json::json!({"text": "abc", "from": "en", "to": "ru"}), &host)
-            .unwrap();
+        let out =
+            transport.call("translate", serde_json::json!({"text": "abc", "from": "en", "to": "ru"}), &host).unwrap();
         assert_eq!(out["text"], "nop");
         {
             let calls = calls.borrow();
@@ -648,7 +657,8 @@ mod tests {
                     let opts = OptionValues::new();
                     with_test_host(&http, &opts, |host| {
                         for _ in 0..25 {
-                            let req = TranslateRequest::new(format!("n{i}"), LangPair::new(LangId::ENGLISH, LangId::RUSSIAN));
+                            let req =
+                                TranslateRequest::new(format!("n{i}"), LangPair::new(LangId::ENGLISH, LangId::RUSSIAN));
                             assert_eq!(provider.translate(host, &req).unwrap().text, format!("a{i}"));
                         }
                     });
@@ -698,7 +708,8 @@ mod tests {
         let http = MockHttp::new();
         let opts = OptionValues::new();
         with_test_host(&http, &opts, |host| {
-            let mut req = TranslateRequest::new("héllo \"quoted\"\nline", LangPair::new(LangId::ENGLISH, LangId::RUSSIAN));
+            let mut req =
+                TranslateRequest::new("héllo \"quoted\"\nline", LangPair::new(LangId::ENGLISH, LangId::RUSSIAN));
             req.style = Some("text: decoy".into());
             let t = provider.translate(host, &req).unwrap();
             assert_eq!(t.text, "HéLLO \"QUOTED\"\nLINE", "ASCII uppercased, escapes and UTF-8 intact");
@@ -723,7 +734,8 @@ mod tests {
              GLOSSA_EXPORT const GlossaModuleVTable *glossa_module_v1(void) { return &t; }\n",
         )
         .unwrap();
-        let (missing_lib, future_lib) = (dir.join(platform_library_name("missing")), dir.join(platform_library_name("future")));
+        let (missing_lib, future_lib) =
+            (dir.join(platform_library_name("missing")), dir.join(platform_library_name("future")));
         if compile_c(&missing, &missing_lib).is_none() || compile_c(&future, &future_lib).is_none() {
             return;
         }
@@ -731,7 +743,10 @@ mod tests {
         assert!(err.contains("does not export glossa_module_v1"), "{err}");
         let err = NativeTransport::open(&future_lib, Duration::from_secs(1)).err().unwrap();
         assert!(err.contains(&format!("protocol {}", PROTOCOL_VERSION + 1)), "{err}");
-        assert!(NativeTransport::open(&dir.join("absent.so"), Duration::from_secs(1)).err().unwrap().contains("cannot load"));
+        assert!(NativeTransport::open(&dir.join("absent.so"), Duration::from_secs(1))
+            .err()
+            .unwrap()
+            .contains("cannot load"));
         std::fs::remove_dir_all(&dir).ok();
     }
 

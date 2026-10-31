@@ -174,8 +174,7 @@ pub(crate) mod x11 {
 
     fn connect() -> Result<(RustConnection, Window)> {
         let (conn, screen) = x11rb::connect(None).map_err(x_err)?;
-        let root =
-            conn.setup().roots.get(screen).map(|s| s.root).ok_or_else(|| x_err("no screen"))?;
+        let root = conn.setup().roots.get(screen).map(|s| s.root).ok_or_else(|| x_err("no screen"))?;
         Ok((conn, root))
     }
 
@@ -183,13 +182,7 @@ pub(crate) mod x11 {
         conn.intern_atom(false, name.as_bytes()).ok()?.reply().ok().map(|r| r.atom)
     }
 
-    fn prop32(
-        conn: &RustConnection,
-        win: Window,
-        prop: u32,
-        ty: u32,
-        len: u32,
-    ) -> Option<Vec<u32>> {
+    fn prop32(conn: &RustConnection, win: Window, prop: u32, ty: u32, len: u32) -> Option<Vec<u32>> {
         let reply = conn.get_property(false, win, prop, ty, 0, len).ok()?.reply().ok()?;
         let values: Vec<u32> = reply.value32()?.collect();
         Some(values)
@@ -206,28 +199,14 @@ pub(crate) mod x11 {
             Ok(Ok(reply)) => reply
                 .monitors
                 .iter()
-                .map(|m| {
-                    bounds_monitor(
-                        m.x as i32,
-                        m.y as i32,
-                        m.width as u32,
-                        m.height as u32,
-                        m.primary,
-                    )
-                })
+                .map(|m| bounds_monitor(m.x as i32, m.y as i32, m.width as u32, m.height as u32, m.primary))
                 .collect(),
             _ => Vec::new(),
         };
         if out.is_empty() {
             // No RandR 1.5: the whole screen is one monitor.
             let s = &conn.setup().roots[0];
-            out.push(bounds_monitor(
-                0,
-                0,
-                s.width_in_pixels as u32,
-                s.height_in_pixels as u32,
-                true,
-            ));
+            out.push(bounds_monitor(0, 0, s.width_in_pixels as u32, s.height_in_pixels as u32, true));
         }
         // _NET_WORKAREA is one rectangle per desktop for the whole screen;
         // its overlap with each monitor is that monitor's work area.
@@ -289,33 +268,14 @@ pub(crate) mod x11 {
             .reply()
             .map_err(x_err)?;
         let setup = conn.setup();
-        let bpp = setup
-            .pixmap_formats
-            .iter()
-            .find(|f| f.depth == reply.depth)
-            .map(|f| f.bits_per_pixel)
-            .unwrap_or(0);
-        zpixmap_to_rgba(
-            &reply.data,
-            w as u32,
-            h as u32,
-            bpp,
-            setup.image_byte_order == ImageOrder::LSB_FIRST,
-        )
-        .ok_or_else(|| {
-            x_err(format!("unsupported screen format: depth {} at {bpp} bpp", reply.depth))
-        })
+        let bpp = setup.pixmap_formats.iter().find(|f| f.depth == reply.depth).map(|f| f.bits_per_pixel).unwrap_or(0);
+        zpixmap_to_rgba(&reply.data, w as u32, h as u32, bpp, setup.image_byte_order == ImageOrder::LSB_FIRST)
+            .ok_or_else(|| x_err(format!("unsupported screen format: depth {} at {bpp} bpp", reply.depth)))
     }
 
     /// Convert a 32-bit-per-pixel ZPixmap (the format of every 24- and
     /// 32-bit TrueColor screen) to RGBA.
-    pub(crate) fn zpixmap_to_rgba(
-        data: &[u8],
-        w: u32,
-        h: u32,
-        bpp: u8,
-        lsb_first: bool,
-    ) -> Option<RgbaImage> {
+    pub(crate) fn zpixmap_to_rgba(data: &[u8], w: u32, h: u32, bpp: u8, lsb_first: bool) -> Option<RgbaImage> {
         if bpp != 32 || data.len() < (w * h * 4) as usize {
             return None;
         }
@@ -377,11 +337,7 @@ pub(crate) mod x11 {
         std::fs::read_link(format!("/proc/{pid}/exe"))
             .ok()
             .and_then(|p| p.file_name().map(|n| n.to_string_lossy().into_owned()))
-            .or_else(|| {
-                std::fs::read_to_string(format!("/proc/{pid}/comm"))
-                    .ok()
-                    .map(|s| s.trim().to_owned())
-            })
+            .or_else(|| std::fs::read_to_string(format!("/proc/{pid}/comm")).ok().map(|s| s.trim().to_owned()))
     }
 
     #[cfg(test)]
@@ -440,10 +396,7 @@ mod grim {
             ))
         })?;
         if !out.status.success() {
-            return Err(platform_err(format!(
-                "grim failed: {}",
-                String::from_utf8_lossy(&out.stderr).trim()
-            )));
+            return Err(platform_err(format!("grim failed: {}", String::from_utf8_lossy(&out.stderr).trim())));
         }
         image::load_from_memory_with_format(&out.stdout, image::ImageFormat::Png)
             .map(|i| i.to_rgba8())

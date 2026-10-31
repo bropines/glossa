@@ -65,7 +65,8 @@ pub enum PotKind {
 impl PotPlugin {
     pub fn from_dir(dir: &Path) -> Result<PotPlugin, String> {
         let info_text = std::fs::read_to_string(dir.join("info.json")).map_err(|e| format!("info.json: {e}"))?;
-        let info: Info = serde_json::from_str(info_text.trim_start_matches('\u{feff}')).map_err(|e| format!("info.json: {e}"))?;
+        let info: Info =
+            serde_json::from_str(info_text.trim_start_matches('\u{feff}')).map_err(|e| format!("info.json: {e}"))?;
         let main = std::fs::read_to_string(dir.join("main.js")).map_err(|e| format!("main.js: {e}"))?;
         let kind = probe_kind(&main)?;
 
@@ -122,7 +123,10 @@ fn need_to_option(n: &Need) -> OptionSpec {
             spec.choices = n
                 .options
                 .iter()
-                .map(|(value, label)| Choice { value: value.clone(), label: label.as_str().unwrap_or(value).to_owned() })
+                .map(|(value, label)| Choice {
+                    value: value.clone(),
+                    label: label.as_str().unwrap_or(value).to_owned(),
+                })
                 .collect();
             if let Some(first) = spec.choices.first() {
                 spec.default = serde_json::Value::String(first.value.clone());
@@ -190,7 +194,10 @@ impl PotTransport {
             .zip(self.plugin.dir.canonicalize().ok())
             .is_some_and(|(t, root)| t.starts_with(root));
         if !inside {
-            return Reply::err(ModuleError::new(ErrorKind::BadRequest, format!("{path}: outside the plugin directory")));
+            return Reply::err(ModuleError::new(
+                ErrorKind::BadRequest,
+                format!("{path}: outside the plugin directory"),
+            ));
         }
         match method {
             "local:read_text" => match std::fs::read_to_string(&target) {
@@ -213,11 +220,18 @@ impl Transport for PotTransport {
         params: serde_json::Value,
         host: &dyn Fn(&str, serde_json::Value) -> Reply,
     ) -> Result<serde_json::Value, ModuleError> {
-        let routed = |m: &str, p: serde_json::Value| if m.starts_with("local:") { self.local(m, &p) } else { host(m, p) };
+        let routed =
+            |m: &str, p: serde_json::Value| if m.starts_with("local:") { self.local(m, &p) } else { host(m, p) };
         let _bridge = Bridge::install(&routed);
 
         let mut ctx = engine::new_context().map_err(ModuleError::other)?;
-        let os = if cfg!(windows) { "Windows_NT" } else if cfg!(target_os = "macos") { "Darwin" } else { "Linux" };
+        let os = if cfg!(windows) {
+            "Windows_NT"
+        } else if cfg!(target_os = "macos") {
+            "Darwin"
+        } else {
+            "Linux"
+        };
         engine::eval(&mut ctx, &format!("var __potOsType = '{os}';"), "os").map_err(ModuleError::other)?;
         engine::eval(&mut ctx, POT_JS, "pot.js").map_err(ModuleError::other)?;
         engine::eval(&mut ctx, &self.plugin.main, "main.js").map_err(engine::script_error)?;
@@ -238,8 +252,12 @@ impl Transport for PotTransport {
             ("translate", PotKind::Translate) => {
                 let (text, from, to) = (s("text"), s("from"), s("to"));
                 let opts = options(&mut ctx, &from)?;
-                let out = engine::call_global(&mut ctx, "translate", &[JsValue::from(js(&text)), JsValue::from(js(&from)), JsValue::from(js(&to)), opts])
-                    .map_err(engine::script_error)?;
+                let out = engine::call_global(
+                    &mut ctx,
+                    "translate",
+                    &[JsValue::from(js(&text)), JsValue::from(js(&from)), JsValue::from(js(&to)), opts],
+                )
+                .map_err(engine::script_error)?;
                 let mut value = engine::to_json(&mut ctx, &out).map_err(ModuleError::other)?;
                 if value.is_null() {
                     // Streaming plugins report through setResult and return
@@ -252,8 +270,12 @@ impl Transport for PotTransport {
             ("recognize", PotKind::Recognize) => {
                 let lang = s("lang");
                 let opts = options(&mut ctx, &lang)?;
-                let out = engine::call_global(&mut ctx, "recognize", &[JsValue::from(js(&s("image_base64"))), JsValue::from(js(&lang)), opts])
-                    .map_err(engine::script_error)?;
+                let out = engine::call_global(
+                    &mut ctx,
+                    "recognize",
+                    &[JsValue::from(js(&s("image_base64"))), JsValue::from(js(&lang)), opts],
+                )
+                .map_err(engine::script_error)?;
                 let text = engine::to_string(&mut ctx, &out);
                 if text.trim().is_empty() {
                     return Err(ModuleError::new(ErrorKind::NotFound, "no text recognised"));
@@ -263,12 +285,18 @@ impl Transport for PotTransport {
             ("speak", PotKind::Tts) => {
                 let lang = s("lang");
                 let opts = options(&mut ctx, &lang)?;
-                let out = engine::call_global(&mut ctx, "tts", &[JsValue::from(js(&s("text"))), JsValue::from(js(&lang)), opts])
-                    .map_err(engine::script_error)?;
+                let out = engine::call_global(
+                    &mut ctx,
+                    "tts",
+                    &[JsValue::from(js(&s("text"))), JsValue::from(js(&lang)), opts],
+                )
+                .map_err(engine::script_error)?;
                 let value = engine::to_json(&mut ctx, &out).map_err(ModuleError::other)?;
                 let bytes: Vec<u8> = match value {
                     serde_json::Value::Array(a) => a.iter().filter_map(|v| v.as_u64()).map(|b| b as u8).collect(),
-                    serde_json::Value::String(b64) => base64::engine::general_purpose::STANDARD.decode(b64).unwrap_or_default(),
+                    serde_json::Value::String(b64) => {
+                        base64::engine::general_purpose::STANDARD.decode(b64).unwrap_or_default()
+                    }
                     _ => Vec::new(),
                 };
                 if bytes.is_empty() {
@@ -411,7 +439,15 @@ mod tests {
         opts.insert("appid".into(), serde_json::json!("A1"));
         opts.insert("mode".into(), serde_json::json!("good"));
         with_test_host(&http, &opts, |host| {
-            let t = p.translate(host, &TranslateRequest::new("hello", LangPair::new(LangId::ENGLISH, LangId::from_code("zh-CN").unwrap()))).unwrap();
+            let t = p
+                .translate(
+                    host,
+                    &TranslateRequest::new(
+                        "hello",
+                        LangPair::new(LangId::ENGLISH, LangId::from_code("zh-CN").unwrap()),
+                    ),
+                )
+                .unwrap();
             assert_eq!(t.text, "你好|en|zh", "codes went out in the plugin's own spelling");
         });
         let req = &http.requests()[0];
@@ -440,7 +476,9 @@ mod tests {
         let http = MockHttp::new();
         let opts = OptionValues::new();
         with_test_host(&http, &opts, |host| {
-            let t = p.translate(host, &TranslateRequest::new("x", LangPair::new(LangId::ENGLISH, LangId::RUSSIAN))).unwrap();
+            let t = p
+                .translate(host, &TranslateRequest::new("x", LangPair::new(LangId::ENGLISH, LangId::RUSSIAN)))
+                .unwrap();
             let parts: Vec<&str> = t.text.split(',').collect();
             assert_eq!(parts[0], "900150983cd24fb0d6963f7d28e17f72");
             assert_eq!(parts[1], "ungWv48Bz+pBQUDeXa4iI7ADYaOWF3qctBD/YfIAFa0=");
@@ -500,4 +538,3 @@ mod tests {
         assert_eq!(pot_to_bcp47("yue"), None, "Cantonese has no slot of its own");
     }
 }
-

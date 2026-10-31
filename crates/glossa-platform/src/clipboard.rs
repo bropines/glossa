@@ -65,9 +65,7 @@ impl Clipboard {
     /// Open the clipboard. Fails without a display (a TTY, WSL without
     /// WSLg).
     pub fn new() -> Result<Self> {
-        arboard::Clipboard::new()
-            .map(|inner| Clipboard { inner })
-            .map_err(|e| err("open the clipboard", e))
+        arboard::Clipboard::new().map(|inner| Clipboard { inner }).map_err(|e| err("open the clipboard", e))
     }
 
     /// The clipboard's text; `None` when it is empty, holds no text, or
@@ -195,12 +193,9 @@ mod win {
 
     use windows::Win32::Foundation::{GlobalFree, HANDLE, HGLOBAL};
     use windows::Win32::System::DataExchange::{
-        CloseClipboard, EmptyClipboard, EnumClipboardFormats, GetClipboardData, OpenClipboard,
-        SetClipboardData,
+        CloseClipboard, EmptyClipboard, EnumClipboardFormats, GetClipboardData, OpenClipboard, SetClipboardData,
     };
-    use windows::Win32::System::Memory::{
-        GlobalAlloc, GlobalLock, GlobalSize, GlobalUnlock, GMEM_MOVEABLE,
-    };
+    use windows::Win32::System::Memory::{GlobalAlloc, GlobalLock, GlobalSize, GlobalUnlock, GMEM_MOVEABLE};
 
     pub const CF_UNICODETEXT: u32 = 13;
 
@@ -216,11 +211,8 @@ mod win {
     }
 
     pub fn utf16_bytes_to_string(bytes: &[u8]) -> String {
-        let units: Vec<u16> = bytes
-            .chunks_exact(2)
-            .map(|c| u16::from_le_bytes([c[0], c[1]]))
-            .take_while(|&u| u != 0)
-            .collect();
+        let units: Vec<u16> =
+            bytes.chunks_exact(2).map(|c| u16::from_le_bytes([c[0], c[1]])).take_while(|&u| u != 0).collect();
         String::from_utf16_lossy(&units)
     }
 

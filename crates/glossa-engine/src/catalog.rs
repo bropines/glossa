@@ -31,7 +31,9 @@ impl ThemeCatalog {
             let mut files: Vec<PathBuf> = rd
                 .flatten()
                 .map(|e| e.path())
-                .filter(|p| p.extension().is_some_and(|e| e.eq_ignore_ascii_case("json") || e.eq_ignore_ascii_case("toml")))
+                .filter(|p| {
+                    p.extension().is_some_and(|e| e.eq_ignore_ascii_case("json") || e.eq_ignore_ascii_case("toml"))
+                })
                 .collect();
             files.sort();
             for path in files {
@@ -130,7 +132,10 @@ impl LocaleCatalog {
             items.sort();
             for item in items {
                 let (file, folder) = if item.is_dir() {
-                    (item.join("lang.json"), item.file_name().map(|s| s.to_string_lossy().into_owned()).unwrap_or_default())
+                    (
+                        item.join("lang.json"),
+                        item.file_name().map(|s| s.to_string_lossy().into_owned()).unwrap_or_default(),
+                    )
                 } else if item.extension().is_some_and(|e| e.eq_ignore_ascii_case("json")) {
                     (item.clone(), String::new())
                 } else {
@@ -174,13 +179,15 @@ impl LocaleCatalog {
         let wanted = wanted.trim();
         let wanted = if wanted.is_empty() { system_language() } else { wanted.to_owned() };
         let base = wanted.split(['-', '_']).next().unwrap_or(&wanted).to_owned();
-        self.entries.iter().find(|e| {
-            e.code.eq_ignore_ascii_case(&wanted)
-                || e.name.eq_ignore_ascii_case(&wanted)
-                || e.folder.eq_ignore_ascii_case(&wanted)
-                || (!e.native_name.is_empty() && e.native_name.eq_ignore_ascii_case(&wanted))
-        })
-        .or_else(|| self.entries.iter().find(|e| e.code.eq_ignore_ascii_case(&base)))
+        self.entries
+            .iter()
+            .find(|e| {
+                e.code.eq_ignore_ascii_case(&wanted)
+                    || e.name.eq_ignore_ascii_case(&wanted)
+                    || e.folder.eq_ignore_ascii_case(&wanted)
+                    || (!e.native_name.is_empty() && e.native_name.eq_ignore_ascii_case(&wanted))
+            })
+            .or_else(|| self.entries.iter().find(|e| e.code.eq_ignore_ascii_case(&base)))
     }
 
     pub fn load(&self, wanted: &str) -> Locale {
@@ -214,7 +221,8 @@ fn windows_language() -> Option<String> {
     // The registry holds the user's locale name. Read it directly: running
     // `reg.exe` from a GUI process opens a console window, which steals the
     // focus from the program whose selection we are about to read.
-    let key = winreg::RegKey::predef(winreg::enums::HKEY_CURRENT_USER).open_subkey(r"Control Panel\International").ok()?;
+    let key =
+        winreg::RegKey::predef(winreg::enums::HKEY_CURRENT_USER).open_subkey(r"Control Panel\International").ok()?;
     key.get_value::<String, _>("LocaleName").ok().filter(|s| !s.is_empty())
 }
 
@@ -238,7 +246,11 @@ mod tests {
     fn themes_from_disk_join_the_builtins_and_user_files_win() {
         let classic = temp("classic-themes");
         let user = temp("user-themes");
-        std::fs::write(classic.join("Flat Dark.json"), r#"{ "Common": {}, "Window": { "Normal": { "Back": "20", "Text": "b" } }, "Button": {} }"#).unwrap();
+        std::fs::write(
+            classic.join("Flat Dark.json"),
+            r#"{ "Common": {}, "Window": { "Normal": { "Back": "20", "Text": "b" } }, "Button": {} }"#,
+        )
+        .unwrap();
         std::fs::write(user.join("Mine.toml"), "extends = \"Flat Dark\"\naccent = \"#ff0000\"\n").unwrap();
         let cat = ThemeCatalog::discover(&[user.clone()], &[classic.clone()]);
         let names = cat.names();

@@ -60,21 +60,11 @@ pub enum Cyrillic {
 // produces identically in both (digits, `!`, `%`, `*`, `(`, `)`, `-`, `=`,
 // `_`, `+`, space) are left out, so they pass through unchanged.
 
-const RU_EN: &str =
-    concat!("`qwertyuiop[]asdfghjkl;'zxcvbnm,./", "~QWERTYUIOP{}ASDFGHJKL:\"ZXCVBNM<>?", "@#$^&|",);
-const RU_RU: &str =
-    concat!("ёйцукенгшщзхъфывапролджэячсмитьбю.", "ЁЙЦУКЕНГШЩЗХЪФЫВАПРОЛДЖЭЯЧСМИТЬБЮ,", "\"№;:?/",);
+const RU_EN: &str = concat!("`qwertyuiop[]asdfghjkl;'zxcvbnm,./", "~QWERTYUIOP{}ASDFGHJKL:\"ZXCVBNM<>?", "@#$^&|",);
+const RU_RU: &str = concat!("ёйцукенгшщзхъфывапролджэячсмитьбю.", "ЁЙЦУКЕНГШЩЗХЪФЫВАПРОЛДЖЭЯЧСМИТЬБЮ,", "\"№;:?/",);
 
-const UK_EN: &str = concat!(
-    "`qwertyuiop[]asdfghjkl;'zxcvbnm,./\\",
-    "~QWERTYUIOP{}ASDFGHJKL:\"ZXCVBNM<>?|",
-    "@#$^&",
-);
-const UK_UK: &str = concat!(
-    "'йцукенгшщзхїфівапролджєячсмитьбю.ґ",
-    "₴ЙЦУКЕНГШЩЗХЇФІВАПРОЛДЖЄЯЧСМИТЬБЮ,Ґ",
-    "\"№;:?",
-);
+const UK_EN: &str = concat!("`qwertyuiop[]asdfghjkl;'zxcvbnm,./\\", "~QWERTYUIOP{}ASDFGHJKL:\"ZXCVBNM<>?|", "@#$^&",);
+const UK_UK: &str = concat!("'йцукенгшщзхїфівапролджєячсмитьбю.ґ", "₴ЙЦУКЕНГШЩЗХЇФІВАПРОЛДЖЄЯЧСМИТЬБЮ,Ґ", "\"№;:?",);
 
 fn table(cyr: Cyrillic) -> (&'static str, &'static str) {
     match cyr {
@@ -129,9 +119,7 @@ pub fn guess_direction_prefer(text: &str, preferred: Cyrillic) -> Option<Convers
     // (х, ж, б), so they count for the Latin side: "]]" is "її" mistyped.
     let latin = text
         .chars()
-        .filter(|&c| {
-            c.is_ascii_alphabetic() || (c.is_ascii() && is_cyrillic(map_char(c, RU_EN, RU_RU)))
-        })
+        .filter(|&c| c.is_ascii_alphabetic() || (c.is_ascii() && is_cyrillic(map_char(c, RU_EN, RU_RU))))
         .count();
     let cyrillic = text.chars().filter(|c| is_cyrillic(*c)).count();
     if latin == cyrillic {
@@ -227,9 +215,7 @@ pub fn switch_keyboard_layout_of_foreground() -> crate::Result<u16> {
 #[cfg(windows)]
 mod win {
     use windows::Win32::Foundation::{LPARAM, WPARAM};
-    use windows::Win32::UI::Input::KeyboardAndMouse::{
-        GetKeyboardLayout, GetKeyboardLayoutList, HKL,
-    };
+    use windows::Win32::UI::Input::KeyboardAndMouse::{GetKeyboardLayout, GetKeyboardLayoutList, HKL};
     use windows::Win32::UI::WindowsAndMessaging::{
         GetForegroundWindow, GetWindowThreadProcessId, PostMessageW, WM_INPUTLANGCHANGEREQUEST,
     };

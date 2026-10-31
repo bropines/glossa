@@ -110,7 +110,8 @@ impl Tray {
     pub fn new(wake: WakeFn, locale: &Locale) -> Result<Tray, String> {
         let events = install_handlers(wake);
         let (menu, hotkeys_item) = build_menu(locale);
-        let mut b = TrayIconBuilder::new().with_tooltip("Glossa").with_menu(Box::new(menu)).with_menu_on_left_click(false);
+        let mut b =
+            TrayIconBuilder::new().with_tooltip("Glossa").with_menu(Box::new(menu)).with_menu_on_left_click(false);
         if let Some(i) = icon() {
             b = b.with_icon(i);
         }

@@ -24,10 +24,10 @@ pub mod stardict;
 pub mod tsv;
 pub mod xdxf;
 
+pub use dsl::Dsl;
 pub use html::{to_blocks, to_plain_text, Block, Span};
 pub use offline::{open, OfflineDictionaries};
 pub use source::{Body, DictionarySource, RawEntry, MAX_PREFIX_RESULTS};
 pub use stardict::StarDict;
-pub use dsl::Dsl;
 pub use tsv::Tsv;
 pub use xdxf::Xdxf;

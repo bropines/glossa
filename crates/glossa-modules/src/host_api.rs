@@ -203,12 +203,18 @@ pub fn from_module_error(module: &str, name: &str, e: ModuleError) -> Error {
     match e.kind {
         ErrorKind::MissingCredential => Error::MissingCredential { provider: name.to_owned(), what: e.message },
         ErrorKind::Unsupported => Error::Unsupported { provider: name.to_owned(), capability: "this operation" },
-        ErrorKind::RateLimited => Error::RateLimited { provider: name.to_owned(), retry_after_secs: e.retry_after_secs },
+        ErrorKind::RateLimited => {
+            Error::RateLimited { provider: name.to_owned(), retry_after_secs: e.retry_after_secs }
+        }
         ErrorKind::Network => Error::Network(format!("{name}: {}", e.message)),
         ErrorKind::BadResponse => Error::BadResponse { provider: name.to_owned(), detail: e.message },
         ErrorKind::NotFound => Error::NoTextRecognised,
-        ErrorKind::SourceLanguage => Error::SourceLanguageUnsupported { provider: name.to_owned(), lang: glossa_core::LangId::UNKNOWN },
-        ErrorKind::TargetLanguage => Error::TargetLanguageUnsupported { provider: name.to_owned(), lang: glossa_core::LangId::UNKNOWN },
+        ErrorKind::SourceLanguage => {
+            Error::SourceLanguageUnsupported { provider: name.to_owned(), lang: glossa_core::LangId::UNKNOWN }
+        }
+        ErrorKind::TargetLanguage => {
+            Error::TargetLanguageUnsupported { provider: name.to_owned(), lang: glossa_core::LangId::UNKNOWN }
+        }
         _ => Error::Module { module: module.to_owned(), detail: e.message },
     }
 }

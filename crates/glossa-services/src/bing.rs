@@ -84,9 +84,8 @@ impl Bing {
                             and region switch it to the official, metered API."
             .into();
         info.homepage = "https://www.bing.com/translator".into();
-        info.languages = std::iter::once(LangId::AUTO)
-            .chain(LangId::all().filter(|l| !MISSING.contains(&l.bcp47())))
-            .collect();
+        info.languages =
+            std::iter::once(LangId::AUTO).chain(LangId::all().filter(|l| !MISSING.contains(&l.bcp47()))).collect();
         // The web endpoint refuses more than about a thousand characters.
         info.max_input_chars = Some(1000);
         let options = vec![
@@ -316,12 +315,12 @@ mod tests {
 
     #[test]
     fn a_stale_session_is_refreshed_once() {
-        let http = SeqHttp::new()
-            .then(200, PAGE)
-            .then(200, r#"{"statusCode":205}"#)
-            .then(200, PAGE)
-            .then(200, TRANSLATED);
-        let out = with_test_host(&http, &OptionValues::new(), |h| Bing::new().translate(h, &req(LangId::ENGLISH, LangId::RUSSIAN))).unwrap();
+        let http =
+            SeqHttp::new().then(200, PAGE).then(200, r#"{"statusCode":205}"#).then(200, PAGE).then(200, TRANSLATED);
+        let out = with_test_host(&http, &OptionValues::new(), |h| {
+            Bing::new().translate(h, &req(LangId::ENGLISH, LangId::RUSSIAN))
+        })
+        .unwrap();
         assert_eq!(out.text, "Привет, мир");
         assert_eq!(http.requests().len(), 4);
     }
@@ -329,7 +328,9 @@ mod tests {
     #[test]
     fn a_page_without_the_session_values_is_a_clear_error() {
         let http = MockHttp::new().on(Method::Get, PAGE_URL, 200, "<html>captcha</html>");
-        let r = with_test_host(&http, &OptionValues::new(), |h| Bing::new().translate(h, &req(LangId::ENGLISH, LangId::RUSSIAN)));
+        let r = with_test_host(&http, &OptionValues::new(), |h| {
+            Bing::new().translate(h, &req(LangId::ENGLISH, LangId::RUSSIAN))
+        });
         match r {
             Err(Error::BadResponse { detail, .. }) => assert!(detail.contains("IG"), "{detail}"),
             other => panic!("{other:?}"),
@@ -391,7 +392,10 @@ mod tests {
     #[ignore]
     fn live_keyless_translation() {
         let http = glossa_net::HttpClient::plain();
-        let out = with_test_host(&http, &OptionValues::new(), |h| Bing::new().translate(h, &req(LangId::AUTO, LangId::RUSSIAN))).unwrap();
+        let out = with_test_host(&http, &OptionValues::new(), |h| {
+            Bing::new().translate(h, &req(LangId::AUTO, LangId::RUSSIAN))
+        })
+        .unwrap();
         eprintln!("{out:?}");
         assert!(!out.text.is_empty());
     }

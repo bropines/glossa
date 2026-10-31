@@ -31,11 +31,8 @@ pub fn set_autostart(enabled: bool, exe_path: &Path, args: &[String]) -> Result<
     #[cfg(not(windows))]
     {
         let file = autostart_file()?;
-        let contents = if cfg!(target_os = "macos") {
-            launch_agent_plist(exe_path, args)
-        } else {
-            desktop_entry(exe_path, args)
-        };
+        let contents =
+            if cfg!(target_os = "macos") { launch_agent_plist(exe_path, args) } else { desktop_entry(exe_path, args) };
         set_file(&file, enabled.then_some(contents.as_str()))
     }
 }
@@ -59,8 +56,7 @@ fn autostart_file() -> Result<PathBuf> {
         let home = dirs::home_dir().ok_or_else(|| crate::platform_err("no home directory"))?;
         Ok(home.join("Library/LaunchAgents").join(format!("{LAUNCH_AGENT_LABEL}.plist")))
     } else {
-        let config =
-            dirs::config_dir().ok_or_else(|| crate::platform_err("no configuration directory"))?;
+        let config = dirs::config_dir().ok_or_else(|| crate::platform_err("no configuration directory"))?;
         Ok(config.join("autostart").join("glossa.desktop"))
     }
 }
@@ -89,10 +85,10 @@ fn set_file(file: &Path, contents: Option<&str>) -> Result<()> {
 #[cfg_attr(windows, allow(dead_code))]
 fn file_enables(file: &Path) -> bool {
     let Ok(text) = std::fs::read_to_string(file) else { return false };
-    !text.lines().map(str::trim).any(|l| {
-        l.eq_ignore_ascii_case("Hidden=true")
-            || l.eq_ignore_ascii_case("X-GNOME-Autostart-enabled=false")
-    })
+    !text
+        .lines()
+        .map(str::trim)
+        .any(|l| l.eq_ignore_ascii_case("Hidden=true") || l.eq_ignore_ascii_case("X-GNOME-Autostart-enabled=false"))
 }
 
 /// The `.desktop` file for XDG autostart.
@@ -121,10 +117,8 @@ pub fn desktop_entry(exe_path: &Path, args: &[String]) -> String {
 /// backslash once more, because the whole value is itself a string whose
 /// `\` is an escape character.
 fn desktop_exec_arg(arg: &str) -> String {
-    const RESERVED: &[char] = &[
-        ' ', '\t', '\n', '"', '\'', '\\', '>', '<', '~', '|', '&', ';', '$', '*', '?', '#', '(',
-        ')', '`',
-    ];
+    const RESERVED: &[char] =
+        &[' ', '\t', '\n', '"', '\'', '\\', '>', '<', '~', '|', '&', ';', '$', '*', '?', '#', '(', ')', '`'];
     let arg = arg.replace('%', "%%");
     let quoted = if arg.is_empty() || arg.contains(RESERVED) {
         let mut q = String::from("\"");
@@ -144,8 +138,7 @@ fn desktop_exec_arg(arg: &str) -> String {
 
 /// The launchd agent for macOS.
 pub fn launch_agent_plist(exe_path: &Path, args: &[String]) -> String {
-    let mut program_args =
-        format!("        <string>{}</string>\n", xml_escape(&exe_path.to_string_lossy()));
+    let mut program_args = format!("        <string>{}</string>\n", xml_escape(&exe_path.to_string_lossy()));
     for a in args {
         program_args.push_str(&format!("        <string>{}</string>\n", xml_escape(a)));
     }
@@ -229,15 +222,13 @@ mod win {
     use windows::core::{w, PCWSTR};
     use windows::Win32::Foundation::ERROR_SUCCESS;
     use windows::Win32::System::Registry::{
-        RegDeleteKeyValueW, RegGetValueW, RegSetKeyValueW, HKEY_CURRENT_USER, REG_SZ,
-        RRF_RT_REG_BINARY, RRF_RT_REG_SZ,
+        RegDeleteKeyValueW, RegGetValueW, RegSetKeyValueW, HKEY_CURRENT_USER, REG_SZ, RRF_RT_REG_BINARY, RRF_RT_REG_SZ,
     };
 
     use crate::{platform_err, Result};
 
     const RUN: PCWSTR = w!("Software\\Microsoft\\Windows\\CurrentVersion\\Run");
-    const APPROVED: PCWSTR =
-        w!("Software\\Microsoft\\Windows\\CurrentVersion\\Explorer\\StartupApproved\\Run");
+    const APPROVED: PCWSTR = w!("Software\\Microsoft\\Windows\\CurrentVersion\\Explorer\\StartupApproved\\Run");
     const VALUE: PCWSTR = w!("Glossa");
 
     pub fn set(enabled: bool, command: &str) -> Result<()> {
@@ -276,8 +267,7 @@ mod win {
     pub fn is_enabled() -> bool {
         // SAFETY: a size-only query; no buffer is written.
         let present =
-            unsafe { RegGetValueW(HKEY_CURRENT_USER, RUN, VALUE, RRF_RT_REG_SZ, None, None, None) }
-                == ERROR_SUCCESS;
+            unsafe { RegGetValueW(HKEY_CURRENT_USER, RUN, VALUE, RRF_RT_REG_SZ, None, None, None) } == ERROR_SUCCESS;
         if !present {
             return false;
         }
@@ -322,15 +312,10 @@ mod tests {
 
     #[test]
     fn desktop_exec_quoting() {
-        let text = desktop_entry(
-            Path::new("/opt/My Apps/glossa"),
-            &s(&["--name", "50% off", "say \"hi\"", "a\\b", ""]),
-        );
+        let text =
+            desktop_entry(Path::new("/opt/My Apps/glossa"), &s(&["--name", "50% off", "say \"hi\"", "a\\b", ""]));
         let exec = text.lines().find(|l| l.starts_with("Exec=")).unwrap();
-        assert_eq!(
-            exec,
-            r#"Exec="/opt/My Apps/glossa" --name "50%% off" "say \\"hi\\"" "a\\\\b" """#
-        );
+        assert_eq!(exec, r#"Exec="/opt/My Apps/glossa" --name "50%% off" "say \\"hi\\"" "a\\\\b" """#);
     }
 
     #[test]
@@ -351,25 +336,18 @@ mod tests {
     #[test]
     fn windows_command_lines() {
         assert_eq!(
-            windows_command_line(
-                Path::new(r"C:\Program Files\Glossa\glossa.exe"),
-                &s(&["--minimized"])
-            ),
+            windows_command_line(Path::new(r"C:\Program Files\Glossa\glossa.exe"), &s(&["--minimized"])),
             r#""C:\Program Files\Glossa\glossa.exe" --minimized"#
         );
         assert_eq!(
-            windows_command_line(
-                Path::new(r"C:\g.exe"),
-                &s(&["a b", r#"say "hi""#, r"C:\my dir\", r"C:\dir\", ""])
-            ),
+            windows_command_line(Path::new(r"C:\g.exe"), &s(&["a b", r#"say "hi""#, r"C:\my dir\", r"C:\dir\", ""])),
             r#""C:\g.exe" "a b" "say \"hi\"" "C:\my dir\\" C:\dir\ """#
         );
     }
 
     #[test]
     fn file_set_and_unset_round_trip() {
-        let dir =
-            std::env::temp_dir().join(format!("glossa-autostart-test-{}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!("glossa-autostart-test-{}", std::process::id()));
         let file = dir.join("autostart").join("glossa.desktop");
         let entry = desktop_entry(Path::new("/usr/bin/glossa"), &[]);
         set_file(&file, Some(&entry)).unwrap();

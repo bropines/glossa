@@ -159,10 +159,7 @@ mod tests {
         let out = with_test_host(&http, &o, |h| MyMemory::new().translate(h, &req(LangId::ENGLISH))).unwrap();
         assert_eq!(out.text, "Привет мир");
         assert_eq!(out.alternatives, vec!["Здравствуй, мир"]);
-        assert_eq!(
-            http.requests()[0].url,
-            format!("{API}?q=Hello%20world&langpair=en%7Cru&de=me%40example.com")
-        );
+        assert_eq!(http.requests()[0].url, format!("{API}?q=Hello%20world&langpair=en%7Cru&de=me%40example.com"));
     }
 
     #[test]

@@ -66,11 +66,7 @@ fn composite(shots: &[MonitorShot]) -> (RgbaImage, i32, i32) {
         .iter()
         .map(|s| {
             let r = s.ratio() as f64;
-            (
-                (s.monitor.x as f64 * r).round() as i64,
-                (s.monitor.y as f64 * r).round() as i64,
-                &s.image,
-            )
+            ((s.monitor.x as f64 * r).round() as i64, (s.monitor.y as f64 * r).round() as i64, &s.image)
         })
         .collect();
     let Some(min_x) = placed.iter().map(|p| p.0).min() else {
@@ -79,8 +75,7 @@ fn composite(shots: &[MonitorShot]) -> (RgbaImage, i32, i32) {
     let min_y = placed.iter().map(|p| p.1).min().unwrap_or(0);
     let max_x = placed.iter().map(|p| p.0 + p.2.width() as i64).max().unwrap_or(0);
     let max_y = placed.iter().map(|p| p.1 + p.2.height() as i64).max().unwrap_or(0);
-    let mut canvas =
-        RgbaImage::from_pixel((max_x - min_x) as u32, (max_y - min_y) as u32, Rgba([0, 0, 0, 255]));
+    let mut canvas = RgbaImage::from_pixel((max_x - min_x) as u32, (max_y - min_y) as u32, Rgba([0, 0, 0, 255]));
     for (x, y, img) in placed {
         image::imageops::replace(&mut canvas, img, x - min_x, y - min_y);
     }
@@ -101,10 +96,7 @@ pub fn capture_rect(rect: Rect) -> Result<RgbaImage> {
     // A rectangle wholly on one monitor needs only that monitor's pixels.
     if let Some(i) = shots.iter().position(|s| {
         let b = s.monitor.bounds();
-        rect.x >= b.x
-            && rect.y >= b.y
-            && rect.x + rect.width <= b.x + b.width
-            && rect.y + rect.height <= b.y + b.height
+        rect.x >= b.x && rect.y >= b.y && rect.x + rect.width <= b.x + b.width && rect.y + rect.height <= b.y + b.height
     }) {
         shots = vec![shots.swap_remove(i)];
     }
@@ -119,13 +111,7 @@ fn crop_from_shots(shots: &[MonitorShot], rect: Rect) -> Option<RgbaImage> {
             let r = one.ratio();
             let x = ((rect.x - one.monitor.x as f32) * r).round().max(0.0) as u32;
             let y = ((rect.y - one.monitor.y as f32) * r).round().max(0.0) as u32;
-            crop_clamped(
-                &one.image,
-                x,
-                y,
-                (rect.width * r).round() as u32,
-                (rect.height * r).round() as u32,
-            )
+            crop_clamped(&one.image, x, y, (rect.width * r).round() as u32, (rect.height * r).round() as u32)
         }
         many => {
             let (canvas, ox, oy) = composite(many);

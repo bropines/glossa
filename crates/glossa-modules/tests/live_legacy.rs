@@ -34,7 +34,10 @@ fn classic_services_load_and_translate() {
     for id in ["qt-google-translate", "qt-microsoft-translator", "qt-yandex", "qt-deeplx", "qt-lara"] {
         let Some(p) = reg.get(id) else { continue };
         let res = glossa_modules::provider::with_test_host(&http, &opts, |host| {
-            p.translate(host, &TranslateRequest::new("Hello, world! How are you?", LangPair::new(LangId::ENGLISH, LangId::RUSSIAN)))
+            p.translate(
+                host,
+                &TranslateRequest::new("Hello, world! How are you?", LangPair::new(LangId::ENGLISH, LangId::RUSSIAN)),
+            )
         });
         match res {
             Ok(t) => eprintln!("{id:28} OK   {:?}", t.text),

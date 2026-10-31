@@ -56,7 +56,14 @@ fn text(entries: &[&HistoryEntry]) -> String {
         out.push_str(&e.source);
         out.push('\n');
         for r in &e.results {
-            let _ = writeln!(out, "  [{} {} → {}] {}", r.provider_id, r.from.english_name(), r.to.english_name(), r.text.replace('\n', "\n  "));
+            let _ = writeln!(
+                out,
+                "  [{} {} → {}] {}",
+                r.provider_id,
+                r.from.english_name(),
+                r.to.english_name(),
+                r.text.replace('\n', "\n  ")
+            );
         }
         out.push('\n');
     }
@@ -128,7 +135,12 @@ mod tests {
         HistoryEntry {
             id: 1,
             source: "say \"hi\" <now>".into(),
-            results: vec![HistoryResult { provider_id: "google".into(), from: LangId::ENGLISH, to: LangId::RUSSIAN, text: "скажи \"привет\"".into() }],
+            results: vec![HistoryResult {
+                provider_id: "google".into(),
+                from: LangId::ENGLISH,
+                to: LangId::RUSSIAN,
+                text: "скажи \"привет\"".into(),
+            }],
             favorite: true,
             created: 0,
         }

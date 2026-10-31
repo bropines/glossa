@@ -190,14 +190,11 @@ fn fit_axis(start: f32, end: f32, len: f32, lo: f32, hi: f32) -> f32 {
 /// The monitor containing the anchor's centre, or the nearest one when the
 /// centre is off every monitor (a caret reported in a gap between displays).
 fn pick_monitor(anchor: Rect, monitors: &[Monitor]) -> Option<&Monitor> {
-    let (cx, cy) =
-        (anchor.x + anchor.width.max(0.0) / 2.0, anchor.y + anchor.height.max(0.0) / 2.0);
+    let (cx, cy) = (anchor.x + anchor.width.max(0.0) / 2.0, anchor.y + anchor.height.max(0.0) / 2.0);
     if let Some(m) = monitors.iter().find(|m| m.contains(cx, cy)) {
         return Some(m);
     }
-    monitors
-        .iter()
-        .min_by(|a, b| distance_sq(a.bounds(), cx, cy).total_cmp(&distance_sq(b.bounds(), cx, cy)))
+    monitors.iter().min_by(|a, b| distance_sq(a.bounds(), cx, cy).total_cmp(&distance_sq(b.bounds(), cx, cy)))
 }
 
 fn distance_sq(r: Rect, x: f32, y: f32) -> f32 {
@@ -216,13 +213,12 @@ mod win {
         EnumDisplayMonitors, GetMonitorInfoW, MapWindowPoints, HDC, HMONITOR, MONITORINFO,
     };
     use windows::Win32::System::Threading::{
-        OpenProcess, QueryFullProcessImageNameW, PROCESS_NAME_WIN32,
-        PROCESS_QUERY_LIMITED_INFORMATION,
+        OpenProcess, QueryFullProcessImageNameW, PROCESS_NAME_WIN32, PROCESS_QUERY_LIMITED_INFORMATION,
     };
     use windows::Win32::UI::HiDpi::{GetDpiForMonitor, MDT_EFFECTIVE_DPI};
     use windows::Win32::UI::WindowsAndMessaging::{
-        GetClassNameW, GetCursorPos, GetForegroundWindow, GetGUIThreadInfo, GetWindowTextLengthW,
-        GetWindowTextW, GetWindowThreadProcessId, GUITHREADINFO, MONITORINFOF_PRIMARY,
+        GetClassNameW, GetCursorPos, GetForegroundWindow, GetGUIThreadInfo, GetWindowTextLengthW, GetWindowTextW,
+        GetWindowThreadProcessId, GUITHREADINFO, MONITORINFOF_PRIMARY,
     };
 
     pub fn foreground_window() -> Option<WindowInfo> {
@@ -282,12 +278,7 @@ mod win {
             let handle = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, false, pid).ok()?;
             let mut buf = [0u16; 1024];
             let mut size = buf.len() as u32;
-            let ok = QueryFullProcessImageNameW(
-                handle,
-                PROCESS_NAME_WIN32,
-                PWSTR(buf.as_mut_ptr()),
-                &mut size,
-            );
+            let ok = QueryFullProcessImageNameW(handle, PROCESS_NAME_WIN32, PWSTR(buf.as_mut_ptr()), &mut size);
             let _ = CloseHandle(handle);
             ok.ok()?;
             let path = String::from_utf16_lossy(&buf[..size as usize]);
@@ -311,10 +302,7 @@ mod win {
                 return None;
             }
             let thread = GetWindowThreadProcessId(hwnd, None);
-            let mut info = GUITHREADINFO {
-                cbSize: std::mem::size_of::<GUITHREADINFO>() as u32,
-                ..Default::default()
-            };
+            let mut info = GUITHREADINFO { cbSize: std::mem::size_of::<GUITHREADINFO>() as u32, ..Default::default() };
             GetGUIThreadInfo(thread, &mut info).ok()?;
             if info.hwndCaret.is_invalid() {
                 return None;
@@ -325,12 +313,7 @@ mod win {
             }
             let mut pts = [POINT { x: rc.left, y: rc.top }, POINT { x: rc.right, y: rc.bottom }];
             MapWindowPoints(Some(info.hwndCaret), None, &mut pts);
-            Some(Rect::from_corners(
-                pts[0].x as f32,
-                pts[0].y as f32,
-                pts[1].x as f32,
-                pts[1].y as f32,
-            ))
+            Some(Rect::from_corners(pts[0].x as f32, pts[0].y as f32, pts[1].x as f32, pts[1].y as f32))
         }
     }
 
@@ -339,26 +322,15 @@ mod win {
         // SAFETY: the callback only runs during EnumDisplayMonitors, while
         // `out` is alive and exclusively borrowed through the LPARAM.
         unsafe {
-            let _ = EnumDisplayMonitors(
-                None,
-                None,
-                Some(enum_proc),
-                LPARAM(&mut out as *mut _ as isize),
-            );
+            let _ = EnumDisplayMonitors(None, None, Some(enum_proc), LPARAM(&mut out as *mut _ as isize));
         }
         out
     }
 
-    unsafe extern "system" fn enum_proc(
-        hmon: HMONITOR,
-        _: HDC,
-        _: *mut RECT,
-        data: LPARAM,
-    ) -> BOOL {
+    unsafe extern "system" fn enum_proc(hmon: HMONITOR, _: HDC, _: *mut RECT, data: LPARAM) -> BOOL {
         // SAFETY: `data` is the `&mut Vec<Monitor>` passed by `monitors`.
         let out = unsafe { &mut *(data.0 as *mut Vec<Monitor>) };
-        let mut mi =
-            MONITORINFO { cbSize: std::mem::size_of::<MONITORINFO>() as u32, ..Default::default() };
+        let mut mi = MONITORINFO { cbSize: std::mem::size_of::<MONITORINFO>() as u32, ..Default::default() };
         // SAFETY: `mi` is initialised with its size; the handle is the one
         // the enumeration handed us.
         if !unsafe { GetMonitorInfoW(hmon, &mut mi) }.as_bool() {
@@ -378,12 +350,7 @@ mod win {
             width: (r.right - r.left).max(0) as u32,
             height: (r.bottom - r.top).max(0) as u32,
             scale,
-            work_area: Rect::new(
-                w.left as f32,
-                w.top as f32,
-                (w.right - w.left) as f32,
-                (w.bottom - w.top) as f32,
-            ),
+            work_area: Rect::new(w.left as f32, w.top as f32, (w.right - w.left) as f32, (w.bottom - w.top) as f32),
             is_primary: mi.dwFlags & MONITORINFOF_PRIMARY != 0,
         });
         BOOL(1)

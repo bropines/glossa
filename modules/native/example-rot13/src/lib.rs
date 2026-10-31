@@ -47,7 +47,11 @@ impl Module for Rot13 {
         let rotated = rot13(word);
         Ok(ArticleResult {
             headword: word.to_owned(),
-            pronunciations: vec![Pronunciation { region: "ROT13".into(), symbol: format!("/{rotated}/"), audio_url: None }],
+            pronunciations: vec![Pronunciation {
+                region: "ROT13".into(),
+                symbol: format!("/{rotated}/"),
+                audio_url: None,
+            }],
             explanations: vec![Explanation { part_of_speech: "cipher".into(), definitions: vec![rotated.clone()] }],
             examples: vec![Example { source: word.to_owned(), target: rotated }],
             associations: vec!["Caesar cipher".into()],

@@ -95,15 +95,20 @@ impl Wake {
 fn main() -> eframe::Result<()> {
     let launch = parse_args();
     let paths = match &launch.home {
-        Some(h) => Paths::for_exe_dir(std::env::current_exe().ok().and_then(|p| p.parent().map(Into::into)).unwrap_or_default(), Some(h.clone())),
+        Some(h) => Paths::for_exe_dir(
+            std::env::current_exe().ok().and_then(|p| p.parent().map(Into::into)).unwrap_or_default(),
+            Some(h.clone()),
+        ),
         None => Paths::discover(),
     };
     init_logging(&paths);
     // Release builds abort on panic; leave a trace in the log first.
     std::panic::set_hook(Box::new(|info| {
         let bt = std::backtrace::Backtrace::force_capture();
-        tracing::error!("panic: {info}
-{bt}");
+        tracing::error!(
+            "panic: {info}
+{bt}"
+        );
     }));
 
     // A second launch hands over to the running instance through its control
@@ -139,8 +144,11 @@ fn main() -> eframe::Result<()> {
     let mut start_visible = !launch.hidden
         && (launch.screenshot.is_some()
             || match cfg.general.startup_action {
-                glossa_core::config::StartupAction::ShowWindow | glossa_core::config::StartupAction::RestorePrevious => true,
-                glossa_core::config::StartupAction::MinimizeToTray => slot.borrow().as_ref().is_some_and(|s| s.tray.is_none()),
+                glossa_core::config::StartupAction::ShowWindow
+                | glossa_core::config::StartupAction::RestorePrevious => true,
+                glossa_core::config::StartupAction::MinimizeToTray => {
+                    slot.borrow().as_ref().is_some_and(|s| s.tray.is_none())
+                }
             });
     let mut first = true;
 
@@ -162,7 +170,8 @@ fn main() -> eframe::Result<()> {
             if !woke || asked_to_quit {
                 break;
             }
-            start_visible = slot.borrow().as_ref().is_some_and(|s| s.pending.iter().any(tray::Pending::wants_main_window));
+            start_visible =
+                slot.borrow().as_ref().is_some_and(|s| s.pending.iter().any(tray::Pending::wants_main_window));
         }
         first = false;
 
@@ -183,7 +192,8 @@ fn main() -> eframe::Result<()> {
                 viewport = viewport.with_maximized(true);
             }
         }
-        let mut options = eframe::NativeOptions { viewport, run_and_return: can_unload, persist_window: false, ..Default::default() };
+        let mut options =
+            eframe::NativeOptions { viewport, run_and_return: can_unload, persist_window: false, ..Default::default() };
         choose_renderer(&mut options, cfg.appearance.renderer);
         let mut this_launch = launch.clone();
         this_launch.hidden = !start_visible;
@@ -238,7 +248,9 @@ fn build_shell(engine: Engine, wake: Arc<Wake>) -> Shell {
     };
     let tray = {
         let w = wake.clone();
-        tray::Tray::new(Arc::new(move || w.wake()), &engine.locale()).map_err(|e| tracing::warn!("no tray icon: {e}")).ok()
+        tray::Tray::new(Arc::new(move || w.wake()), &engine.locale())
+            .map_err(|e| tracing::warn!("no tray icon: {e}"))
+            .ok()
     };
     let (server, server_error) = if cfg.server.enabled {
         match glossa_engine::server::start(engine.clone()) {
@@ -349,25 +361,31 @@ fn choose_renderer(options: &mut eframe::NativeOptions, configured: glossa_core:
                 setup.instance_descriptor.backends = wgpu::Backends::DX12;
             }
             setup.power_preference = wgpu::PowerPreference::LowPower;
-            setup.native_adapter_selector = Some(std::sync::Arc::new(|adapters: &[wgpu::Adapter], _surface: Option<&wgpu::Surface<'_>>| {
-                let pick = |t: wgpu::DeviceType| adapters.iter().find(|a| a.get_info().device_type == t);
-                pick(wgpu::DeviceType::Cpu)
-                    .or_else(|| pick(wgpu::DeviceType::IntegratedGpu))
-                    .or(adapters.first())
-                    .cloned()
-                    .ok_or_else(|| "no graphics adapter".to_owned())
-            }));
+            setup.native_adapter_selector =
+                Some(std::sync::Arc::new(|adapters: &[wgpu::Adapter], _surface: Option<&wgpu::Surface<'_>>| {
+                    let pick = |t: wgpu::DeviceType| adapters.iter().find(|a| a.get_info().device_type == t);
+                    pick(wgpu::DeviceType::Cpu)
+                        .or_else(|| pick(wgpu::DeviceType::IntegratedGpu))
+                        .or(adapters.first())
+                        .cloned()
+                        .ok_or_else(|| "no graphics adapter".to_owned())
+                }));
             options.wgpu_options.wgpu_setup = egui_wgpu::WgpuSetup::CreateNew(setup);
         }
     }
 }
 
 fn init_logging(paths: &Paths) {
-    let filter = tracing_subscriber::EnvFilter::try_from_env("GLOSSA_LOG").unwrap_or_else(|_| "info,glossa=debug".into());
+    let filter =
+        tracing_subscriber::EnvFilter::try_from_env("GLOSSA_LOG").unwrap_or_else(|_| "info,glossa=debug".into());
     let _ = std::fs::create_dir_all(&paths.cache_dir);
     match std::fs::OpenOptions::new().create(true).append(true).open(paths.log_file()) {
         Ok(file) => {
-            let _ = tracing_subscriber::fmt().with_env_filter(filter).with_ansi(false).with_writer(std::sync::Mutex::new(file)).try_init();
+            let _ = tracing_subscriber::fmt()
+                .with_env_filter(filter)
+                .with_ansi(false)
+                .with_writer(std::sync::Mutex::new(file))
+                .try_init();
         }
         Err(_) => {
             let _ = tracing_subscriber::fmt().with_env_filter(filter).try_init();
@@ -387,7 +405,8 @@ fn hand_over_to_running_instance(paths: &Paths) -> bool {
     if std::net::TcpListener::bind(&cfg.server.bind).is_ok() {
         return false;
     }
-    let url = format!("http://{}/v1/action/{}?token={}", cfg.server.bind, Action::ShowMainWindow.id(), cfg.server.token);
+    let url =
+        format!("http://{}/v1/action/{}?token={}", cfg.server.bind, Action::ShowMainWindow.id(), cfg.server.token);
     let settings = glossa_core::config::Network {
         timeout_secs: 1,
         max_retries: 0,
@@ -426,12 +445,28 @@ pub fn app_icon(size: u32) -> egui::IconData {
             let t = y / n;
             over([0.16 - 0.06 * t, 0.55 - 0.12 * t, 0.89 - 0.10 * t], 0.5 - d);
             // Back bubble (light), offset up-left, with a tail.
-            let d1 = rounded(x, y, n * 0.14, n * 0.17, n * 0.62, n * 0.52, n * 0.08)
-                .min(tail(x, y, n * 0.22, n * 0.50, n * 0.32, n * 0.50, n * 0.20, n * 0.62));
+            let d1 = rounded(x, y, n * 0.14, n * 0.17, n * 0.62, n * 0.52, n * 0.08).min(tail(
+                x,
+                y,
+                n * 0.22,
+                n * 0.50,
+                n * 0.32,
+                n * 0.50,
+                n * 0.20,
+                n * 0.62,
+            ));
             over([0.85, 0.93, 1.0], 0.5 - d1);
             // Front bubble (white), offset down-right.
-            let d2 = rounded(x, y, n * 0.38, n * 0.42, n * 0.86, n * 0.77, n * 0.08)
-                .min(tail(x, y, n * 0.68, n * 0.75, n * 0.78, n * 0.75, n * 0.80, n * 0.88));
+            let d2 = rounded(x, y, n * 0.38, n * 0.42, n * 0.86, n * 0.77, n * 0.08).min(tail(
+                x,
+                y,
+                n * 0.68,
+                n * 0.75,
+                n * 0.78,
+                n * 0.75,
+                n * 0.80,
+                n * 0.88,
+            ));
             over([1.0, 1.0, 1.0], 0.5 - d2);
             // Two "text" bars on each bubble.
             for (bx0, by, bx1) in [(0.22, 0.29, 0.52), (0.22, 0.38, 0.44), (0.46, 0.55, 0.78), (0.46, 0.64, 0.70)] {

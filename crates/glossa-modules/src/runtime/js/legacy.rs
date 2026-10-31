@@ -240,7 +240,12 @@ impl LegacyTransport {
         serde_json::Value::Object(o)
     }
 
-    fn run(&self, method: &str, params: &serde_json::Value, host: &dyn Fn(&str, serde_json::Value) -> Reply) -> Result<serde_json::Value, ModuleError> {
+    fn run(
+        &self,
+        method: &str,
+        params: &serde_json::Value,
+        host: &dyn Fn(&str, serde_json::Value) -> Reply,
+    ) -> Result<serde_json::Value, ModuleError> {
         let mut user = params.get("options").and_then(|o| o.as_object()).cloned().unwrap_or_default();
         if self.script.needs_bing_session() {
             match bing_session(host) {
@@ -264,7 +269,8 @@ impl LegacyTransport {
                 if translation.trim().is_empty() {
                     return Err(ModuleError::new(ErrorKind::BadResponse, "the script returned no translation"));
                 }
-                let detected = resp.get("sourceLanguage").and_then(|v| v.as_i64()).filter(|n| *n > 1).map(|n| LangId(n as u16));
+                let detected =
+                    resp.get("sourceLanguage").and_then(|v| v.as_i64()).filter(|n| *n > 1).map(|n| LangId(n as u16));
                 Ok(serde_json::json!({
                     "text": translation.trim_end(),
                     "detected_from": detected.filter(|l| l.is_language()).map(|l| l.bcp47()),
@@ -278,7 +284,8 @@ impl LegacyTransport {
                 if html.trim().is_empty() {
                     return Err(ModuleError::new(ErrorKind::NotFound, format!("no article for {text:?}")));
                 }
-                let link = resp.get("data").and_then(|v| v.as_str()).filter(|s| s.starts_with("http")).map(str::to_owned);
+                let link =
+                    resp.get("data").and_then(|v| v.as_str()).filter(|s| s.starts_with("http")).map(str::to_owned);
                 Ok(serde_json::json!({ "headword": text, "html": html, "link": link }))
             }
             "detect" => {
@@ -286,8 +293,10 @@ impl LegacyTransport {
                     .map_err(engine::script_error)?;
                 let rd = read_request(&mut ctx, &rd)?;
                 let body = self.perform(&mut ctx, host, &rd, &text, 1, 0, false)?;
-                let handler = if rd.response_handler.is_empty() { "serviceDetectLanguageResponse" } else { &rd.response_handler };
-                let lang = engine::call_global(&mut ctx, handler, &[JsValue::from(js(&body.0))]).map_err(engine::script_error)?;
+                let handler =
+                    if rd.response_handler.is_empty() { "serviceDetectLanguageResponse" } else { &rd.response_handler };
+                let lang = engine::call_global(&mut ctx, handler, &[JsValue::from(js(&body.0))])
+                    .map_err(engine::script_error)?;
                 let n = engine::to_json(&mut ctx, &lang).ok().and_then(|v| v.as_i64()).unwrap_or(0);
                 let lang = LangId(n.max(0) as u16);
                 if !lang.is_language() {
@@ -296,7 +305,8 @@ impl LegacyTransport {
                 Ok(serde_json::json!({ "lang": lang.bcp47(), "confidence": 1.0 }))
             }
             "speak" => {
-                let lang = LangId::from_code(params.get("lang").and_then(|v| v.as_str()).unwrap_or("en")).unwrap_or(LangId::ENGLISH);
+                let lang = LangId::from_code(params.get("lang").and_then(|v| v.as_str()).unwrap_or("en"))
+                    .unwrap_or(LangId::ENGLISH);
                 let slow = params.get("slow").and_then(|v| v.as_bool()).unwrap_or(false);
                 let rd = engine::call_global(
                     &mut ctx,
@@ -338,7 +348,8 @@ impl LegacyTransport {
         for _ in 0..MAX_HOPS {
             let rd = read_request(ctx, &rd_value)?;
             let (body, _) = self.perform(ctx, host, &rd, &text, from, to, false)?;
-            let handler = if rd.response_handler.is_empty() { response_fn.to_owned() } else { rd.response_handler.clone() };
+            let handler =
+                if rd.response_handler.is_empty() { response_fn.to_owned() } else { rd.response_handler.clone() };
             let resp_value = engine::call_global(
                 ctx,
                 &handler,
@@ -350,8 +361,9 @@ impl LegacyTransport {
             if next.is_empty() {
                 return Ok(resp);
             }
-            rd_value = engine::call_global(ctx, &next, &[args[0].clone(), args[1].clone(), args[2].clone(), resp_value])
-                .map_err(engine::script_error)?;
+            rd_value =
+                engine::call_global(ctx, &next, &[args[0].clone(), args[1].clone(), args[2].clone(), resp_value])
+                    .map_err(engine::script_error)?;
         }
         Err(ModuleError::new(ErrorKind::BadResponse, "the script chained too many requests"))
     }
@@ -377,9 +389,13 @@ impl LegacyTransport {
         let url = if rd.uri.starts_with("http://") || rd.uri.starts_with("https://") {
             rd.uri.clone()
         } else {
-            let base = engine::call_global(ctx, "serviceHost", &[JsValue::from(js(text)), JsValue::from(from), JsValue::from(to)])
-                .map(|v| engine::to_string(ctx, &v))
-                .map_err(engine::script_error)?;
+            let base = engine::call_global(
+                ctx,
+                "serviceHost",
+                &[JsValue::from(js(text)), JsValue::from(from), JsValue::from(to)],
+            )
+            .map(|v| engine::to_string(ctx, &v))
+            .map_err(engine::script_error)?;
             join_url(&base, &rd.uri)
         };
         let codepage = Codepage::from_number(rd.codepage as u32).unwrap_or(Codepage::Utf8);
@@ -449,7 +465,8 @@ fn bing_session(
     }
     let resp = host("http", serde_json::json!({ "url": "https://www.bing.com/translator" })).into_result()?;
     let body = resp.get("body").and_then(|v| v.as_str()).unwrap_or("");
-    let ig = between(body, "IG:\"", "\"").ok_or_else(|| ModuleError::new(ErrorKind::BadResponse, "no IG on the Bing page"))?;
+    let ig = between(body, "IG:\"", "\"")
+        .ok_or_else(|| ModuleError::new(ErrorKind::BadResponse, "no IG on the Bing page"))?;
     let helper = between(body, "params_AbusePreventionHelper", "]")
         .ok_or_else(|| ModuleError::new(ErrorKind::BadResponse, "no anti-abuse parameters on the Bing page"))?;
     let helper = helper.trim_start_matches([' ', '=', '[']);
@@ -610,7 +627,9 @@ mod tests {
         let info = p.info();
         assert_eq!(info.id, "qt-test-service");
         assert_eq!(info.name, "Test Service");
-        assert!(info.capabilities.contains(Capabilities::TRANSLATE | Capabilities::DETECT_LANGUAGE | Capabilities::DICTIONARY));
+        assert!(info
+            .capabilities
+            .contains(Capabilities::TRANSLATE | Capabilities::DETECT_LANGUAGE | Capabilities::DICTIONARY));
         assert!(!info.capabilities.contains(Capabilities::LISTEN));
         // Slots 2 (af), 5 (ar), 11 (zh-CN), 17 (en), 46 (ru), plus auto.
         assert!(info.supports_language(LangId::ENGLISH));
@@ -630,12 +649,17 @@ mod tests {
         let mut opts = OptionValues::new();
         opts.insert("ApiKey".into(), serde_json::json!("K"));
         with_test_host(&http, &opts, |host| {
-            let t = p.translate(host, &TranslateRequest::new("привет мир", LangPair::new(LangId::AUTO, LangId::ENGLISH))).unwrap();
+            let t = p
+                .translate(host, &TranslateRequest::new("привет мир", LangPair::new(LangId::AUTO, LangId::ENGLISH)))
+                .unwrap();
             assert_eq!(t.text, "hello\nline2", "CRLF from the script is normalised");
             assert_eq!(t.detected_from, Some(LangId::RUSSIAN));
         });
         let req = &http.requests()[0];
-        assert_eq!(req.url, "https://svc.test/t?sl=auto&tl=en&q=%D0%BF%D1%80%D0%B8%D0%B2%D0%B5%D1%82%20%D0%BC%D0%B8%D1%80&k=K");
+        assert_eq!(
+            req.url,
+            "https://svc.test/t?sl=auto&tl=en&q=%D0%BF%D1%80%D0%B8%D0%B2%D0%B5%D1%82%20%D0%BC%D0%B8%D1%80&k=K"
+        );
         // The classic default headers went out, and the user's option reached
         // the script through Options.
         assert!(req.headers.iter().any(|(k, v)| k == "Accept-Language" && v.starts_with("ru;")));
@@ -652,16 +676,29 @@ mod tests {
         });
         let req = &http.requests()[0];
         assert_eq!(req.body.as_deref(), Some("q=%D9%85%D8%B1%D8%AD%D8%A8%D8%A7".as_bytes()));
-        assert!(req.headers.iter().any(|(k, v)| k == "Content-Type" && v.starts_with("application/x-www-form-urlencoded")));
+        assert!(req
+            .headers
+            .iter()
+            .any(|(k, v)| k == "Content-Type" && v.starts_with("application/x-www-form-urlencoded")));
     }
 
     #[test]
     fn dictionary_articles_carry_html_and_link() {
         let p = provider(SERVICE);
-        let http = MockHttp::new().on(Method::Get, "https://dict.test/w/", 200, "<html><article><b>run</b> — бежать</article></html>");
+        let http = MockHttp::new().on(
+            Method::Get,
+            "https://dict.test/w/",
+            200,
+            "<html><article><b>run</b> — бежать</article></html>",
+        );
         let opts = OptionValues::new();
         with_test_host(&http, &opts, |host| {
-            let a = p.dictionary(host, &DictRequest { text: "run".into(), from: LangId::ENGLISH, to: LangId::RUSSIAN, exact: true }).unwrap();
+            let a = p
+                .dictionary(
+                    host,
+                    &DictRequest { text: "run".into(), from: LangId::ENGLISH, to: LangId::RUSSIAN, exact: true },
+                )
+                .unwrap();
             assert_eq!(a.html.as_deref(), Some("<b>run</b> — бежать"));
             assert_eq!(a.link.as_deref(), Some("https://dict.test/w/run"));
         });
@@ -674,7 +711,9 @@ mod tests {
         let http = MockHttp::new().on(Method::Get, "https://svc.test/", 200, "{}");
         let opts = OptionValues::new();
         with_test_host(&http, &opts, |host| {
-            let err = p.translate(host, &TranslateRequest::new("x", LangPair::new(LangId::RUSSIAN, LangId::ENGLISH))).unwrap_err();
+            let err = p
+                .translate(host, &TranslateRequest::new("x", LangPair::new(LangId::RUSSIAN, LangId::ENGLISH)))
+                .unwrap_err();
             let msg = err.to_string();
             assert!(msg.contains("serviceTranslateResponse") && msg.contains("undefinedFunction"), "{msg}");
         });
@@ -695,8 +734,10 @@ mod tests {
         assert_eq!(check(&mut ctx, "trimString('  x  ')"), "x");
         assert_eq!(check(&mut ctx, "unquoteHtml('&lt;a&gt; &amp; &quot;q&quot; &#39;')"), "<a> & \"q\" '");
         assert_eq!(check(&mut ctx, "removeEmptyLines('a\\n\\n\\n\\nb\\n')"), "a\r\n\r\nb");
-        assert_eq!(check(&mut ctx, "updateHtmlLinks('<a href=\"/x\"><img src=\"//cdn/y\">', 'https://site.org')"),
-            "<a href=\"https://site.org/x\"><img src=\"https://cdn/y\">");
+        assert_eq!(
+            check(&mut ctx, "updateHtmlLinks('<a href=\"/x\"><img src=\"//cdn/y\">', 'https://site.org')"),
+            "<a href=\"https://site.org/x\"><img src=\"https://cdn/y\">"
+        );
         // A long query is cut at the last encoded space.
         let cut = check(&mut ctx, "encodeGetParam(new Array(400).join('word ')).length");
         assert!(cut.as_u64().unwrap() <= 1800);
@@ -716,12 +757,17 @@ mod tests {
         );
         // Probing does not touch the network (there is no host to ask).
         let p = provider(&service);
-        let http = MockHttp::new()
-            .on(Method::Get, "https://cookie.test/", 200, "")
-            .on(Method::Get, "https://svc.test/t?", 200, r#"{"text":"hi","src":"ru"}"#);
+        let http = MockHttp::new().on(Method::Get, "https://cookie.test/", 200, "").on(
+            Method::Get,
+            "https://svc.test/t?",
+            200,
+            r#"{"text":"hi","src":"ru"}"#,
+        );
         let opts = OptionValues::new();
         with_test_host(&http, &opts, |host| {
-            let t = p.translate(host, &TranslateRequest::new("x", LangPair::new(LangId::RUSSIAN, LangId::ENGLISH))).unwrap();
+            let t = p
+                .translate(host, &TranslateRequest::new("x", LangPair::new(LangId::RUSSIAN, LangId::ENGLISH)))
+                .unwrap();
             assert_eq!(t.text, "hi/application/json; charset=utf-8");
         });
         assert_eq!(http.requests()[0].url, "https://cookie.test/");

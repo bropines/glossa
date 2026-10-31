@@ -155,11 +155,7 @@ pub(crate) fn strip_tags(s: &str) -> String {
             _ => {}
         }
     }
-    out.replace("&quot;", "\"")
-        .replace("&#39;", "'")
-        .replace("&lt;", "<")
-        .replace("&gt;", ">")
-        .replace("&amp;", "&")
+    out.replace("&quot;", "\"").replace("&#39;", "'").replace("&lt;", "<").replace("&gt;", ">").replace("&amp;", "&")
 }
 
 #[cfg(test)]
@@ -269,10 +265,7 @@ mod tests {
         let mut info = ProviderInfo::new("x", "X", Capabilities::TRANSLATE);
         info.languages = langs_from_codes(&["en", "ru"]);
         assert!(check_pair(&info, LangId::ENGLISH, LangId::RUSSIAN).is_ok());
-        assert!(matches!(
-            check_pair(&info, LangId::ENGLISH, LangId(33)),
-            Err(Error::TargetLanguageUnsupported { .. })
-        ));
+        assert!(matches!(check_pair(&info, LangId::ENGLISH, LangId(33)), Err(Error::TargetLanguageUnsupported { .. })));
         // No `auto` in the list: the engine must detect first.
         assert!(matches!(
             check_pair(&info, LangId::AUTO, LangId::RUSSIAN),
@@ -293,7 +286,12 @@ mod tests {
 
     #[test]
     fn non_success_statuses_carry_the_api_message() {
-        let resp = HttpResponse { status: 400, headers: vec![], body: br#"{"error":{"message":"bad"}}"#.to_vec(), codepage: None };
+        let resp = HttpResponse {
+            status: 400,
+            headers: vec![],
+            body: br#"{"error":{"message":"bad"}}"#.to_vec(),
+            codepage: None,
+        };
         match check_status(resp, "P") {
             Err(Error::HttpStatus { status: 400, body, .. }) => assert_eq!(body, "bad"),
             other => panic!("{other:?}"),

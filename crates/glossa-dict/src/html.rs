@@ -28,11 +28,18 @@ use glossa_core::Color;
 #[derive(Debug, Clone, PartialEq)]
 pub enum Block {
     /// `<h1>`…`<h6>`; `level` is 1–6.
-    Heading { level: u8, spans: Vec<Span> },
+    Heading {
+        level: u8,
+        spans: Vec<Span>,
+    },
     Paragraph(Vec<Span>),
     /// A `<li>`. `depth` is 0 for a top-level list; `ordered_index` is the
     /// item's number in an `<ol>`, `None` for a bullet.
-    ListItem { depth: u32, ordered_index: Option<u32>, spans: Vec<Span> },
+    ListItem {
+        depth: u32,
+        ordered_index: Option<u32>,
+        spans: Vec<Span>,
+    },
     /// `<hr>`.
     Rule,
     /// Text inside `<blockquote>`.
@@ -369,26 +376,25 @@ impl<'a> Iterator for Tokenizer<'a> {
 
 /// Names for U+00A0…U+00FF, in order.
 const LATIN1_NAMES: [&str; 96] = [
-    "nbsp", "iexcl", "cent", "pound", "curren", "yen", "brvbar", "sect", "uml", "copy", "ordf", "laquo", "not",
-    "shy", "reg", "macr", "deg", "plusmn", "sup2", "sup3", "acute", "micro", "para", "middot", "cedil", "sup1",
-    "ordm", "raquo", "frac14", "frac12", "frac34", "iquest", "Agrave", "Aacute", "Acirc", "Atilde", "Auml",
-    "Aring", "AElig", "Ccedil", "Egrave", "Eacute", "Ecirc", "Euml", "Igrave", "Iacute", "Icirc", "Iuml", "ETH",
-    "Ntilde", "Ograve", "Oacute", "Ocirc", "Otilde", "Ouml", "times", "Oslash", "Ugrave", "Uacute", "Ucirc",
-    "Uuml", "Yacute", "THORN", "szlig", "agrave", "aacute", "acirc", "atilde", "auml", "aring", "aelig",
-    "ccedil", "egrave", "eacute", "ecirc", "euml", "igrave", "iacute", "icirc", "iuml", "eth", "ntilde",
-    "ograve", "oacute", "ocirc", "otilde", "ouml", "divide", "oslash", "ugrave", "uacute", "ucirc", "uuml",
-    "yacute", "thorn", "yuml",
+    "nbsp", "iexcl", "cent", "pound", "curren", "yen", "brvbar", "sect", "uml", "copy", "ordf", "laquo", "not", "shy",
+    "reg", "macr", "deg", "plusmn", "sup2", "sup3", "acute", "micro", "para", "middot", "cedil", "sup1", "ordm",
+    "raquo", "frac14", "frac12", "frac34", "iquest", "Agrave", "Aacute", "Acirc", "Atilde", "Auml", "Aring", "AElig",
+    "Ccedil", "Egrave", "Eacute", "Ecirc", "Euml", "Igrave", "Iacute", "Icirc", "Iuml", "ETH", "Ntilde", "Ograve",
+    "Oacute", "Ocirc", "Otilde", "Ouml", "times", "Oslash", "Ugrave", "Uacute", "Ucirc", "Uuml", "Yacute", "THORN",
+    "szlig", "agrave", "aacute", "acirc", "atilde", "auml", "aring", "aelig", "ccedil", "egrave", "eacute", "ecirc",
+    "euml", "igrave", "iacute", "icirc", "iuml", "eth", "ntilde", "ograve", "oacute", "ocirc", "otilde", "ouml",
+    "divide", "oslash", "ugrave", "uacute", "ucirc", "uuml", "yacute", "thorn", "yuml",
 ];
 
 /// Greek capitals from U+0391 (U+03A2 is unassigned) and small letters from
 /// U+03B1; dictionaries use them in etymologies and maths.
 const GREEK_UPPER: [&str; 24] = [
-    "Alpha", "Beta", "Gamma", "Delta", "Epsilon", "Zeta", "Eta", "Theta", "Iota", "Kappa", "Lambda", "Mu", "Nu",
-    "Xi", "Omicron", "Pi", "Rho", "Sigma", "Tau", "Upsilon", "Phi", "Chi", "Psi", "Omega",
+    "Alpha", "Beta", "Gamma", "Delta", "Epsilon", "Zeta", "Eta", "Theta", "Iota", "Kappa", "Lambda", "Mu", "Nu", "Xi",
+    "Omicron", "Pi", "Rho", "Sigma", "Tau", "Upsilon", "Phi", "Chi", "Psi", "Omega",
 ];
 const GREEK_LOWER: [&str; 25] = [
-    "alpha", "beta", "gamma", "delta", "epsilon", "zeta", "eta", "theta", "iota", "kappa", "lambda", "mu", "nu",
-    "xi", "omicron", "pi", "rho", "sigmaf", "sigma", "tau", "upsilon", "phi", "chi", "psi", "omega",
+    "alpha", "beta", "gamma", "delta", "epsilon", "zeta", "eta", "theta", "iota", "kappa", "lambda", "mu", "nu", "xi",
+    "omicron", "pi", "rho", "sigmaf", "sigma", "tau", "upsilon", "phi", "chi", "psi", "omega",
 ];
 
 const OTHER_ENTITIES: &[(&str, char)] = &[
@@ -791,14 +797,42 @@ struct TableState {
 const MAX_STACK: usize = 256;
 
 const VOID: &[&str] = &[
-    "br", "hr", "img", "input", "meta", "link", "area", "base", "col", "embed", "param", "source", "track",
-    "wbr", "keygen", "frame", "basefont",
+    "br", "hr", "img", "input", "meta", "link", "area", "base", "col", "embed", "param", "source", "track", "wbr",
+    "keygen", "frame", "basefont",
 ];
 
 const BLOCK: &[&str] = &[
-    "p", "div", "section", "article", "header", "footer", "nav", "aside", "main", "dl", "dt", "dd", "center",
-    "address", "figure", "figcaption", "form", "fieldset", "details", "summary", "caption", "body", "html",
-    "legend", "menu", "dir", "hgroup", "frameset", "noframes", "option", "select",
+    "p",
+    "div",
+    "section",
+    "article",
+    "header",
+    "footer",
+    "nav",
+    "aside",
+    "main",
+    "dl",
+    "dt",
+    "dd",
+    "center",
+    "address",
+    "figure",
+    "figcaption",
+    "form",
+    "fieldset",
+    "details",
+    "summary",
+    "caption",
+    "body",
+    "html",
+    "legend",
+    "menu",
+    "dir",
+    "hgroup",
+    "frameset",
+    "noframes",
+    "option",
+    "select",
 ];
 
 struct Builder {
@@ -1204,8 +1238,7 @@ fn apply_tag_style(name: &str, attrs: &[(String, String)], style: &mut Style) {
                 }
             }
             "weight" if name == "span" => {
-                style.bold =
-                    matches!(value.trim(), "bold" | "heavy" | "ultrabold" | "600" | "700" | "800" | "900");
+                style.bold = matches!(value.trim(), "bold" | "heavy" | "ultrabold" | "600" | "700" | "800" | "900");
             }
             "underline" if name == "span" => style.underline = value.trim() != "none",
             "font_family" | "face" if value.to_ascii_lowercase().contains("mono") => style.monospace = true,
@@ -1289,14 +1322,10 @@ mod tests {
 
     #[test]
     fn links_carry_their_target() {
-        let blocks =
-            to_blocks(r#"see <a href="dict://run">run</a> and <a href=http://x.org/a?b=1&amp;c=2>this</a>"#);
+        let blocks = to_blocks(r#"see <a href="dict://run">run</a> and <a href=http://x.org/a?b=1&amp;c=2>this</a>"#);
         let spans = para(&blocks[0]);
         assert_eq!(spans.iter().find(|s| s.text == "run").unwrap().link.as_deref(), Some("dict://run"));
-        assert_eq!(
-            spans.iter().find(|s| s.text == "this").unwrap().link.as_deref(),
-            Some("http://x.org/a?b=1&c=2")
-        );
+        assert_eq!(spans.iter().find(|s| s.text == "this").unwrap().link.as_deref(), Some("http://x.org/a?b=1&c=2"));
         assert_eq!(spans[0].link, None);
     }
 
@@ -1319,8 +1348,7 @@ mod tests {
 
     #[test]
     fn lists_nest_and_number() {
-        let blocks =
-            to_blocks("<ol start=3><li>three<li>four<ul><li>bullet</li></ul></li><li>five</ol><p>after</p>");
+        let blocks = to_blocks("<ol start=3><li>three<li>four<ul><li>bullet</li></ul></li><li>five</ol><p>after</p>");
         assert_eq!(blocks[0], Block::ListItem { depth: 0, ordered_index: Some(3), spans: vec![Span::plain("three")] });
         assert_eq!(blocks[1], Block::ListItem { depth: 0, ordered_index: Some(4), spans: vec![Span::plain("four")] });
         assert_eq!(blocks[2], Block::ListItem { depth: 1, ordered_index: None, spans: vec![Span::plain("bullet")] });
@@ -1331,8 +1359,7 @@ mod tests {
 
     #[test]
     fn tables_become_rows_of_cells() {
-        let blocks =
-            to_blocks("<table><tr><th>word</th><td>слово</td></tr><tr><td>a<br>b</td><td></td></tr></table>");
+        let blocks = to_blocks("<table><tr><th>word</th><td>слово</td></tr><tr><td>a<br>b</td><td></td></tr></table>");
         match &blocks[0] {
             Block::Table(rows) => {
                 assert_eq!(rows.len(), 2);
@@ -1349,8 +1376,7 @@ mod tests {
 
     #[test]
     fn nested_tables_flatten_into_the_outer_cell() {
-        let blocks =
-            to_blocks("<table><tr><td>x<table><tr><td>in1</td><td>in2</td></tr></table></td></tr></table>");
+        let blocks = to_blocks("<table><tr><td>x<table><tr><td>in1</td><td>in2</td></tr></table></td></tr></table>");
         assert_eq!(blocks.len(), 1);
         match &blocks[0] {
             Block::Table(rows) => {
@@ -1480,12 +1506,68 @@ mod tests {
     #[test]
     fn random_tag_soup_never_panics() {
         const PIECES: &[&str] = &[
-            "<", ">", "</", "/>", "<b>", "</b>", "<i", "<p>", "</p>", "<table>", "<tr>", "<td>", "</td>", "</table>",
-            "<ul>", "<ol>", "<li>", "</li>", "</ul>", "<pre>", "</pre>", "<br>", "<hr>", "<!--", "-->", "<![CDATA[",
-            "]]>", "<script>", "</script>", "&", "&amp", "&#", "&#x", "&#1234567;", ";", "\"", "'", "=", " ", "\n",
-            "\t", "a", "слово", "日本", "é", "🦀", "<a href=", "<font color=", "#zzz", "style=\"color:", "<h1>",
-            "</h7>", "<blockquote>", "<!DOCTYPE", "<?xml", "<sup>", "<span hidden>", "&nbsp;", "\u{a0}",
-            "<img alt=x>", "</tr>", "<th>",
+            "<",
+            ">",
+            "</",
+            "/>",
+            "<b>",
+            "</b>",
+            "<i",
+            "<p>",
+            "</p>",
+            "<table>",
+            "<tr>",
+            "<td>",
+            "</td>",
+            "</table>",
+            "<ul>",
+            "<ol>",
+            "<li>",
+            "</li>",
+            "</ul>",
+            "<pre>",
+            "</pre>",
+            "<br>",
+            "<hr>",
+            "<!--",
+            "-->",
+            "<![CDATA[",
+            "]]>",
+            "<script>",
+            "</script>",
+            "&",
+            "&amp",
+            "&#",
+            "&#x",
+            "&#1234567;",
+            ";",
+            "\"",
+            "'",
+            "=",
+            " ",
+            "\n",
+            "\t",
+            "a",
+            "слово",
+            "日本",
+            "é",
+            "🦀",
+            "<a href=",
+            "<font color=",
+            "#zzz",
+            "style=\"color:",
+            "<h1>",
+            "</h7>",
+            "<blockquote>",
+            "<!DOCTYPE",
+            "<?xml",
+            "<sup>",
+            "<span hidden>",
+            "&nbsp;",
+            "\u{a0}",
+            "<img alt=x>",
+            "</tr>",
+            "<th>",
         ];
         let mut state: u64 = 0x2545_f491_4f6c_dd1d;
         let mut next = || {

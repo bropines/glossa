@@ -39,12 +39,7 @@ impl Paths {
     /// The same decision, with the inputs made explicit for testing.
     pub fn for_exe_dir(exe_dir: PathBuf, home_override: Option<PathBuf>) -> Paths {
         if let Some(home) = home_override.filter(|p| !p.as_os_str().is_empty()) {
-            return Paths {
-                portable: true,
-                cache_dir: home.join("cache"),
-                data_dir: home,
-                exe_dir,
-            };
+            return Paths { portable: true, cache_dir: home.join("cache"), data_dir: home, exe_dir };
         }
         let marker = std::fs::read_dir(&exe_dir)
             .map(|rd| {
@@ -58,12 +53,8 @@ impl Paths {
             let data = exe_dir.join("data");
             return Paths { portable: true, cache_dir: data.join("cache"), data_dir: data, exe_dir };
         }
-        let data_dir = dirs::config_dir()
-            .map(|d| d.join(app_dir_name()))
-            .unwrap_or_else(|| exe_dir.join("data"));
-        let cache_dir = dirs::cache_dir()
-            .map(|d| d.join(app_dir_name()))
-            .unwrap_or_else(|| data_dir.join("cache"));
+        let data_dir = dirs::config_dir().map(|d| d.join(app_dir_name())).unwrap_or_else(|| exe_dir.join("data"));
+        let cache_dir = dirs::cache_dir().map(|d| d.join(app_dir_name())).unwrap_or_else(|| data_dir.join("cache"));
         Paths { portable: false, exe_dir, data_dir, cache_dir }
     }
 

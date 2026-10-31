@@ -117,7 +117,11 @@ pub struct GlossaApp {
 }
 
 impl GlossaApp {
-    pub fn new(cc: &eframe::CreationContext<'_>, slot: Rc<RefCell<Option<crate::Shell>>>, launch: crate::Launch) -> Self {
+    pub fn new(
+        cc: &eframe::CreationContext<'_>,
+        slot: Rc<RefCell<Option<crate::Shell>>>,
+        launch: crate::Launch,
+    ) -> Self {
         let ctx = cc.egui_ctx.clone();
         let shell = slot.borrow_mut().take().expect("the shell is handed to each GUI run");
         let engine = shell.engine.clone();
@@ -298,7 +302,11 @@ impl GlossaApp {
             self.main.stacked.clear();
             self.main.stacked_jobs.clear();
             for id in self.cfg.services.enabled.clone() {
-                let o = glossa_engine::TranslateOptions { provider: Some(id.clone()), fail_over: Some(false), ..opts.clone() };
+                let o = glossa_engine::TranslateOptions {
+                    provider: Some(id.clone()),
+                    fail_over: Some(false),
+                    ..opts.clone()
+                };
                 let job = self.engine.translate_async(Slot::Detached, text.clone(), pair, o);
                 self.main.stacked_jobs.insert(job, id);
             }
@@ -454,7 +462,13 @@ impl GlossaApp {
         }
         let delay = self.cfg.appearance.unload_graphics_after_secs;
         let busy = self.main.busy || self.watch.is_some() || self.toast.is_some();
-        if !glossa_platform::idle::IdlePump::supported() || self.launch.screenshot.is_some() || delay == 0 || self.main_visible || needs_ui || busy {
+        if !glossa_platform::idle::IdlePump::supported()
+            || self.launch.screenshot.is_some()
+            || delay == 0
+            || self.main_visible
+            || needs_ui
+            || busy
+        {
             self.hidden_since = None;
             return;
         }
@@ -623,7 +637,11 @@ pub fn open_with_system(target: &str) -> std::io::Result<()> {
     {
         use std::os::windows::process::CommandExt;
         const CREATE_NO_WINDOW: u32 = 0x0800_0000;
-        std::process::Command::new("rundll32").args(["url.dll,FileProtocolHandler", target]).creation_flags(CREATE_NO_WINDOW).spawn().map(|_| ())
+        std::process::Command::new("rundll32")
+            .args(["url.dll,FileProtocolHandler", target])
+            .creation_flags(CREATE_NO_WINDOW)
+            .spawn()
+            .map(|_| ())
     }
     #[cfg(target_os = "macos")]
     {

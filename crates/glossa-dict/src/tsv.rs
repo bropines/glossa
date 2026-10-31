@@ -51,10 +51,13 @@ impl Tsv {
             if line.trim().is_empty() || line.trim_start().starts_with('#') {
                 continue;
             }
-            let split = line
-                .split_once('\t')
-                .or_else(|| line.split_once(';'))
-                .or_else(|| if allow_comma { line.split_once(',') } else { None });
+            let split = line.split_once('\t').or_else(|| line.split_once(';')).or_else(|| {
+                if allow_comma {
+                    line.split_once(',')
+                } else {
+                    None
+                }
+            });
             let Some((word, translation)) = split else { continue };
             let word = unquote(word);
             let translation = unquote(translation).replace("\\n", "\n").replace('\t', "; ");
@@ -117,7 +120,11 @@ impl DictionarySource for Tsv {
     }
 
     fn suggest(&self, prefix: &str, limit: usize) -> Vec<String> {
-        self.index.prefixed(prefix, limit).into_iter().map(|id| self.entries[id as usize].headword.to_string()).collect()
+        self.index
+            .prefixed(prefix, limit)
+            .into_iter()
+            .map(|id| self.entries[id as usize].headword.to_string())
+            .collect()
     }
 }
 

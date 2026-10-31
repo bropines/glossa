@@ -68,10 +68,13 @@ fn table() -> &'static ModuleVTable {
 /// own `free`.
 fn call(host: Option<&FakeHost>, method: &str, params: &str) -> Reply {
     let t = table();
-    let vtable = host.map(|h| HostVTable { ctx: h as *const FakeHost as *mut c_void, call: fake_call, free: fake_free });
+    let vtable =
+        host.map(|h| HostVTable { ctx: h as *const FakeHost as *mut c_void, call: fake_call, free: fake_free });
     let (m, p) = (CString::new(method).unwrap(), CString::new(params).unwrap());
     // SAFETY: valid strings and an optional live host table, as the ABI requires.
-    let raw = unsafe { (t.call)(m.as_ptr(), p.as_ptr(), vtable.as_ref().map_or(std::ptr::null(), |v| v as *const HostVTable)) };
+    let raw = unsafe {
+        (t.call)(m.as_ptr(), p.as_ptr(), vtable.as_ref().map_or(std::ptr::null(), |v| v as *const HostVTable))
+    };
     assert!(!raw.is_null());
     let text = unsafe { CStr::from_ptr(raw) }.to_str().unwrap().to_owned();
     unsafe { (t.free)(raw) };
@@ -106,7 +109,11 @@ fn bad_input_and_panics_become_error_replies() {
     assert_eq!(kind(call(Some(&host), "translate", r#"{"from":"en"}"#)), ErrorKind::BadRequest, "missing text");
     assert_eq!(kind(call(Some(&host), "detect", r#"{"text":"x"}"#)), ErrorKind::Unsupported, "default method");
     assert_eq!(kind(call(Some(&host), "teleport", "{}")), ErrorKind::Unsupported);
-    assert_eq!(kind(call(None, "translate", r#"{"text":"x","from":"en","to":"ru"}"#)), ErrorKind::BadRequest, "null host");
+    assert_eq!(
+        kind(call(None, "translate", r#"{"text":"x","from":"en","to":"ru"}"#)),
+        ErrorKind::BadRequest,
+        "null host"
+    );
 
     let e = call(Some(&host), "translate", r#"{"text":"panic","from":"en","to":"ru"}"#).into_result().unwrap_err();
     assert_eq!(e.kind, ErrorKind::Other);

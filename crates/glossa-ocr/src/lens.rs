@@ -140,7 +140,8 @@ pub fn lens_dirs(
         }
         Os::Linux => {
             let cache = home.map(|h| h.join(".cache").join(APP_DIR));
-            let state = var("XDG_RUNTIME_DIR").filter(|p| p.is_dir()).map(|r| r.join(APP_DIR)).or_else(|| cache.clone());
+            let state =
+                var("XDG_RUNTIME_DIR").filter(|p| p.is_dir()).map(|r| r.join(APP_DIR)).or_else(|| cache.clone());
             (state, cache)
         }
     }
@@ -277,9 +278,16 @@ impl LensProvider {
     pub fn new(cfg: LensConfig) -> Self {
         let mut info = ProviderInfo::new(LENS_ID, NAME, Capabilities::OCR);
         info.description =
-            "Google Lens text recognition and translation through chrome-lens-py (its daemon or its lens_scan CLI).".into();
+            "Google Lens text recognition and translation through chrome-lens-py (its daemon or its lens_scan CLI)."
+                .into();
         info.homepage = "https://github.com/bropines/chrome-lens-py".into();
-        Self { info, cfg, locator: OnceLock::new(), loopback_http: OnceLock::new(), state: Mutex::new(State::default()) }
+        Self {
+            info,
+            cfg,
+            locator: OnceLock::new(),
+            loopback_http: OnceLock::new(),
+            state: Mutex::new(State::default()),
+        }
     }
 
     /// Use these locations instead of the real ones (tests, a portable setup).
@@ -370,7 +378,9 @@ impl LensProvider {
             out.push(ep);
         }
         if let Some(ep) = read(&loc.service_file).as_deref().and_then(parse_service_file) {
-            let duplicate = out.iter().any(|e| matches!((e, &ep), (Endpoint::Http { base: a, .. }, Endpoint::Http { base: b, .. }) if a == b));
+            let duplicate = out.iter().any(
+                |e| matches!((e, &ep), (Endpoint::Http { base: a, .. }, Endpoint::Http { base: b, .. }) if a == b),
+            );
             if !duplicate {
                 out.push(ep);
             }
@@ -478,7 +488,13 @@ impl LensProvider {
         }
     }
 
-    fn via_daemon(&self, ep: &Endpoint, bytes: &[u8], req: &OcrRequest, host: &Host) -> std::result::Result<OcrResult, Failure> {
+    fn via_daemon(
+        &self,
+        ep: &Endpoint,
+        bytes: &[u8],
+        req: &OcrRequest,
+        host: &Host,
+    ) -> std::result::Result<OcrResult, Failure> {
         let body = request_body(req, bytes);
         let resp = match self.send(ep, host, Method::Post, "/v1/ocr", Some(&body), OCR_TIMEOUT) {
             Ok(r) => r,
@@ -494,8 +510,9 @@ impl LensProvider {
             }));
         }
         let resp = resp.error_for_status(NAME).map_err(|e| Failure::Fatal(readable_error(e)))?;
-        let value: Value =
-            resp.json().map_err(|e| Failure::Fatal(Error::BadResponse { provider: NAME.into(), detail: e.to_string() }))?;
+        let value: Value = resp
+            .json()
+            .map_err(|e| Failure::Fatal(Error::BadResponse { provider: NAME.into(), detail: e.to_string() }))?;
         map_daemon_result(&value, req).map_err(Failure::Fatal)
     }
 
@@ -653,11 +670,8 @@ fn size_from(w: Option<&Value>, h: Option<&Value>) -> Option<(u32, u32)> {
 /// are.
 fn bounds_of(node: &Value, size: Option<(u32, u32)>) -> (Option<Rect>, f32) {
     let geometry = node.get("geometry").filter(|g| g.is_object());
-    let angle = geometry
-        .and_then(|g| g.get("angle_deg"))
-        .and_then(Value::as_f64)
-        .map(|d| d.to_radians() as f32)
-        .unwrap_or(0.0);
+    let angle =
+        geometry.and_then(|g| g.get("angle_deg")).and_then(Value::as_f64).map(|d| d.to_radians() as f32).unwrap_or(0.0);
     if let Some(b) = node.get("bbox").filter(|b| b.is_object()) {
         let f = |k: &str| b.get(k).and_then(Value::as_f64);
         if let (Some(x), Some(y), Some(w), Some(h)) = (f("left"), f("top"), f("width"), f("height")) {
@@ -761,12 +775,9 @@ fn map_cli_page(v: &Value, req: &OcrRequest) -> Result<OcrResult> {
     let blocks: Vec<OcrBlock> = match req.granularity {
         OcrGranularity::FullText => Vec::new(),
         OcrGranularity::Blocks => tree.iter().map(|b| block_of(b, size, 1)).collect(),
-        OcrGranularity::Lines => tree
-            .iter()
-            .filter_map(|b| arr(b, "lines"))
-            .flatten()
-            .map(|l| block_of(l, size, 0))
-            .collect(),
+        OcrGranularity::Lines => {
+            tree.iter().filter_map(|b| arr(b, "lines")).flatten().map(|l| block_of(l, size, 0)).collect()
+        }
         OcrGranularity::Words => tree.iter().map(|b| block_of(b, size, 2)).collect(),
     };
     Ok(OcrResult {
@@ -843,10 +854,8 @@ fn parse_http_response(buf: &[u8]) -> std::result::Result<HttpResponse, String> 
         .and_then(|l| l.split_whitespace().nth(1))
         .and_then(|s| s.parse::<u16>().ok())
         .ok_or("malformed status line")?;
-    let headers: Vec<(String, String)> = lines
-        .filter_map(|l| l.split_once(':'))
-        .map(|(k, v)| (k.trim().to_owned(), v.trim().to_owned()))
-        .collect();
+    let headers: Vec<(String, String)> =
+        lines.filter_map(|l| l.split_once(':')).map(|(k, v)| (k.trim().to_owned(), v.trim().to_owned())).collect();
     let mut body = buf[split + 4..].to_vec();
     if let Some(len) = headers.iter().find(|(k, _)| k.eq_ignore_ascii_case("content-length")) {
         let len: usize = len.1.parse().map_err(|_| "malformed content-length")?;
@@ -1042,7 +1051,9 @@ mod tests {
     #[test]
     fn cli_arguments() {
         let mut q = req();
-        let args = |q: &OcrRequest| cli_args(Path::new("/t/i.png"), q).into_iter().map(|a| a.into_string().unwrap()).collect::<Vec<_>>();
+        let args = |q: &OcrRequest| {
+            cli_args(Path::new("/t/i.png"), q).into_iter().map(|a| a.into_string().unwrap()).collect::<Vec<_>>()
+        };
         assert_eq!(args(&q), ["/t/i.png", "--format", "json", "-q"]);
         q.lang = LangId::from_code("ja").unwrap();
         q.translate_to = Some(LangId::RUSSIAN);
@@ -1146,11 +1157,19 @@ mod tests {
         }
 
         fn service(&self, port: u16, token: &str) {
-            std::fs::write(self.dir.join("service.json"), serde_json::json!({"port": port, "token": token}).to_string()).unwrap();
+            std::fs::write(
+                self.dir.join("service.json"),
+                serde_json::json!({"port": port, "token": token}).to_string(),
+            )
+            .unwrap();
         }
 
         fn locator(&self, cli: Option<PathBuf>) -> Locator {
-            Locator { daemon_file: Some(self.dir.join("daemon.json")), service_file: Some(self.dir.join("service.json")), cli }
+            Locator {
+                daemon_file: Some(self.dir.join("daemon.json")),
+                service_file: Some(self.dir.join("service.json")),
+                cli,
+            }
         }
     }
 
@@ -1174,7 +1193,12 @@ mod tests {
 
     fn mock_daemon(port: u16) -> MockHttp {
         MockHttp::new()
-            .on(Method::Get, &format!("http://127.0.0.1:{port}/health"), 200, r#"{"status": "ok", "service": "chrome-lens-py", "version": "3.8.2"}"#)
+            .on(
+                Method::Get,
+                &format!("http://127.0.0.1:{port}/health"),
+                200,
+                r#"{"status": "ok", "service": "chrome-lens-py", "version": "3.8.2"}"#,
+            )
             .on(Method::Post, &format!("http://127.0.0.1:{port}/v1/ocr"), 200, FULL_TEXT)
     }
 
@@ -1214,7 +1238,8 @@ mod tests {
         assert_eq!(post.url, "http://127.0.0.1:8765/v1/ocr");
         assert!(post.headers.iter().any(|(_, v)| v == "Bearer stok"));
 
-        let configured = LensConfig { endpoint: "127.0.0.1:7000/".into(), token: "mine".into(), ..cfg(LensMode::Daemon) };
+        let configured =
+            LensConfig { endpoint: "127.0.0.1:7000/".into(), token: "mine".into(), ..cfg(LensMode::Daemon) };
         let http = Arc::new(mock_daemon(7000).on(Method::Get, "http://127.0.0.1:8765/health", 200, "{}"));
         let p = LensProvider::with_locator(configured, fx.locator(None)).with_loopback_http(http.clone());
         recognize(&p).unwrap();
@@ -1226,11 +1251,16 @@ mod tests {
     #[test]
     fn daemon_mode_without_a_daemon_says_so() {
         let fx = Fixture::new("nodaemon");
-        let p = LensProvider::with_locator(cfg(LensMode::Daemon), fx.locator(None)).with_loopback_http(Arc::new(MockHttp::new()));
+        let p = LensProvider::with_locator(cfg(LensMode::Daemon), fx.locator(None))
+            .with_loopback_http(Arc::new(MockHttp::new()));
         let err = recognize(&p).unwrap_err();
         assert!(err.to_string().contains("lens_scan daemon start"), "{err}");
-        let p = LensProvider::with_locator(cfg(LensMode::Auto), fx.locator(None)).with_loopback_http(Arc::new(MockHttp::new()));
-        assert!(recognize(&p).unwrap_err().to_string().contains("uv tool install"), "auto without a CLI explains how to get one");
+        let p = LensProvider::with_locator(cfg(LensMode::Auto), fx.locator(None))
+            .with_loopback_http(Arc::new(MockHttp::new()));
+        assert!(
+            recognize(&p).unwrap_err().to_string().contains("uv tool install"),
+            "auto without a CLI explains how to get one"
+        );
         let p = LensProvider::with_locator(cfg(LensMode::Cli), fx.locator(None));
         assert!(recognize(&p).is_err());
     }
@@ -1244,10 +1274,13 @@ mod tests {
     impl Http for Switch {
         fn send(&self, request: HttpRequest) -> Result<HttpResponse> {
             self.seen.lock().unwrap().push(request.url.clone());
-            let ok = |body: &str| Ok(HttpResponse { status: 200, body: body.as_bytes().to_vec(), ..Default::default() });
+            let ok =
+                |body: &str| Ok(HttpResponse { status: 200, body: body.as_bytes().to_vec(), ..Default::default() });
             let a = self.a_alive.load(Ordering::SeqCst);
             match request.url.as_str() {
-                u if u.starts_with("http://127.0.0.1:5003/") && a => ok(if u.ends_with("/health") { "{}" } else { FULL_TEXT }),
+                u if u.starts_with("http://127.0.0.1:5003/") && a => {
+                    ok(if u.ends_with("/health") { "{}" } else { FULL_TEXT })
+                }
                 u if u.starts_with("http://127.0.0.1:8765/") => ok(if u.ends_with("/health") { "{}" } else { BLOCKS }),
                 u => Err(Error::Network(format!("connection refused: {u}"))),
             }
@@ -1370,7 +1403,8 @@ mod tests {
         });
         let record = serde_json::json!({"version": "3.8.2", "pid": 1, "transport": "unix", "address": sock, "token": "sock-token", "started_at": 0.0, "managed": "auto"});
         std::fs::write(fx.dir.join("daemon.json"), record.to_string()).unwrap();
-        let p = LensProvider::with_locator(cfg(LensMode::Daemon), fx.locator(None)).with_loopback_http(Arc::new(MockHttp::new()));
+        let p = LensProvider::with_locator(cfg(LensMode::Daemon), fx.locator(None))
+            .with_loopback_http(Arc::new(MockHttp::new()));
         let r = recognize(&p).unwrap();
         assert_eq!(r.translation.as_deref(), Some("Привет, мир"));
         assert!(server.join().unwrap(), "the token was sent");
@@ -1378,7 +1412,8 @@ mod tests {
 
     #[test]
     fn raw_http_replies_parse() {
-        let r = parse_http_response(b"HTTP/1.1 401 Unauthorized\r\nContent-Length: 5\r\nX: y\r\n\r\nhello-extra").unwrap();
+        let r =
+            parse_http_response(b"HTTP/1.1 401 Unauthorized\r\nContent-Length: 5\r\nX: y\r\n\r\nhello-extra").unwrap();
         assert_eq!(r.status, 401);
         assert_eq!(r.body, b"hello");
         assert_eq!(r.header("x"), Some("y"));
@@ -1388,7 +1423,11 @@ mod tests {
 
     #[test]
     fn error_bodies_are_unwrapped() {
-        let e = readable_error(Error::HttpStatus { provider: "p".into(), status: 400, body: r#"{"error": "'image_b64' is not valid base64", "request_id": "x"}"#.into() });
+        let e = readable_error(Error::HttpStatus {
+            provider: "p".into(),
+            status: 400,
+            body: r#"{"error": "'image_b64' is not valid base64", "request_id": "x"}"#.into(),
+        });
         assert!(matches!(e, Error::HttpStatus { ref body, .. } if body == "'image_b64' is not valid base64"));
     }
 }

@@ -146,8 +146,7 @@ pub(crate) fn merge_into(out: &mut Article, a: Article, html_out: &mut String) {
 }
 
 fn plain_article(headword: &str, text: &str) -> Article {
-    let definitions: Vec<String> =
-        text.lines().map(str::trim).filter(|l| !l.is_empty()).map(str::to_owned).collect();
+    let definitions: Vec<String> = text.lines().map(str::trim).filter(|l| !l.is_empty()).map(str::to_owned).collect();
     let html = text.trim().lines().map(html::escape).collect::<Vec<_>>().join("<br>");
     Article {
         headword: headword.to_owned(),
@@ -163,8 +162,7 @@ fn plain_article(headword: &str, text: &str) -> Article {
 
 fn html_article(headword: &str, fragment: &str) -> Article {
     let text = html::to_plain_text(fragment);
-    let definitions: Vec<String> =
-        text.lines().map(str::trim).filter(|l| !l.is_empty()).map(str::to_owned).collect();
+    let definitions: Vec<String> = text.lines().map(str::trim).filter(|l| !l.is_empty()).map(str::to_owned).collect();
     Article {
         headword: headword.to_owned(),
         explanations: if definitions.is_empty() {
@@ -229,7 +227,13 @@ const CP1251_HIGH: [u16; 128] = [
 /// never an error, because a slightly mis-decoded dictionary beats none.
 pub(crate) fn decode_text(bytes: &[u8], cyrillic_fallback: bool) -> String {
     fn utf16(bytes: &[u8], le: bool) -> String {
-        let units = bytes.chunks_exact(2).map(|c| if le { u16::from_le_bytes([c[0], c[1]]) } else { u16::from_be_bytes([c[0], c[1]]) });
+        let units = bytes.chunks_exact(2).map(|c| {
+            if le {
+                u16::from_le_bytes([c[0], c[1]])
+            } else {
+                u16::from_be_bytes([c[0], c[1]])
+            }
+        });
         char::decode_utf16(units).map(|r| r.unwrap_or('\u{fffd}')).collect()
     }
     if let Some(rest) = bytes.strip_prefix(&[0xEF, 0xBB, 0xBF]) {
@@ -258,7 +262,13 @@ pub(crate) fn decode_text(bytes: &[u8], cyrillic_fallback: bool) -> String {
         Ok(s) => s.to_owned(),
         Err(_) if cyrillic_fallback => bytes
             .iter()
-            .map(|&b| if b < 0x80 { b as char } else { char::from_u32(CP1251_HIGH[(b - 0x80) as usize] as u32).unwrap_or('\u{fffd}') })
+            .map(|&b| {
+                if b < 0x80 {
+                    b as char
+                } else {
+                    char::from_u32(CP1251_HIGH[(b - 0x80) as usize] as u32).unwrap_or('\u{fffd}')
+                }
+            })
             .collect(),
         Err(_) => bytes.iter().map(|&b| b as char).collect(),
     }
@@ -466,18 +476,86 @@ pub(crate) fn tidy(s: &str) -> String {
 /// ISO 639-2 codes (XDXF and file names use them) for the languages
 /// dictionaries are commonly made for.
 const ISO639_2: &[(&str, &str)] = &[
-    ("eng", "en"), ("rus", "ru"), ("deu", "de"), ("ger", "de"), ("fra", "fr"), ("fre", "fr"), ("spa", "es"),
-    ("ita", "it"), ("por", "pt"), ("ukr", "uk"), ("pol", "pl"), ("jpn", "ja"), ("chi", "zh-CN"), ("zho", "zh-CN"),
-    ("kor", "ko"), ("nld", "nl"), ("dut", "nl"), ("swe", "sv"), ("fin", "fi"), ("ces", "cs"), ("cze", "cs"),
-    ("tur", "tr"), ("ara", "ar"), ("heb", "he"), ("lat", "la"), ("ell", "el"), ("gre", "el"), ("hun", "hu"),
-    ("ron", "ro"), ("rum", "ro"), ("bul", "bg"), ("srp", "sr"), ("hrv", "hr"), ("slk", "sk"), ("slo", "sk"),
-    ("slv", "sl"), ("dan", "da"), ("nor", "no"), ("nob", "no"), ("est", "et"), ("lav", "lv"), ("lit", "lt"),
-    ("bel", "be"), ("kaz", "kk"), ("tat", "tt"), ("hin", "hi"), ("vie", "vi"), ("tha", "th"), ("ind", "id"),
-    ("fas", "fa"), ("per", "fa"), ("epo", "eo"), ("cat", "ca"), ("eus", "eu"), ("baq", "eu"), ("glg", "gl"),
-    ("isl", "is"), ("ice", "is"), ("gle", "ga"), ("cym", "cy"), ("wel", "cy"), ("sqi", "sq"), ("alb", "sq"),
-    ("mkd", "mk"), ("mac", "mk"), ("hye", "hy"), ("arm", "hy"), ("kat", "ka"), ("geo", "ka"), ("aze", "az"),
-    ("uzb", "uz"), ("afr", "af"), ("mlt", "mt"), ("msa", "ms"), ("may", "ms"), ("swa", "sw"), ("urd", "ur"),
-    ("yid", "yi"), ("mon", "mn"), ("tgk", "tg"),
+    ("eng", "en"),
+    ("rus", "ru"),
+    ("deu", "de"),
+    ("ger", "de"),
+    ("fra", "fr"),
+    ("fre", "fr"),
+    ("spa", "es"),
+    ("ita", "it"),
+    ("por", "pt"),
+    ("ukr", "uk"),
+    ("pol", "pl"),
+    ("jpn", "ja"),
+    ("chi", "zh-CN"),
+    ("zho", "zh-CN"),
+    ("kor", "ko"),
+    ("nld", "nl"),
+    ("dut", "nl"),
+    ("swe", "sv"),
+    ("fin", "fi"),
+    ("ces", "cs"),
+    ("cze", "cs"),
+    ("tur", "tr"),
+    ("ara", "ar"),
+    ("heb", "he"),
+    ("lat", "la"),
+    ("ell", "el"),
+    ("gre", "el"),
+    ("hun", "hu"),
+    ("ron", "ro"),
+    ("rum", "ro"),
+    ("bul", "bg"),
+    ("srp", "sr"),
+    ("hrv", "hr"),
+    ("slk", "sk"),
+    ("slo", "sk"),
+    ("slv", "sl"),
+    ("dan", "da"),
+    ("nor", "no"),
+    ("nob", "no"),
+    ("est", "et"),
+    ("lav", "lv"),
+    ("lit", "lt"),
+    ("bel", "be"),
+    ("kaz", "kk"),
+    ("tat", "tt"),
+    ("hin", "hi"),
+    ("vie", "vi"),
+    ("tha", "th"),
+    ("ind", "id"),
+    ("fas", "fa"),
+    ("per", "fa"),
+    ("epo", "eo"),
+    ("cat", "ca"),
+    ("eus", "eu"),
+    ("baq", "eu"),
+    ("glg", "gl"),
+    ("isl", "is"),
+    ("ice", "is"),
+    ("gle", "ga"),
+    ("cym", "cy"),
+    ("wel", "cy"),
+    ("sqi", "sq"),
+    ("alb", "sq"),
+    ("mkd", "mk"),
+    ("mac", "mk"),
+    ("hye", "hy"),
+    ("arm", "hy"),
+    ("kat", "ka"),
+    ("geo", "ka"),
+    ("aze", "az"),
+    ("uzb", "uz"),
+    ("afr", "af"),
+    ("mlt", "mt"),
+    ("msa", "ms"),
+    ("may", "ms"),
+    ("swa", "sw"),
+    ("urd", "ur"),
+    ("yid", "yi"),
+    ("mon", "mn"),
+    ("tgk", "tg"),
 ];
 
 /// A language from whatever a dictionary file wrote: a two-letter code, an
@@ -682,10 +760,7 @@ mod tests {
 
     #[test]
     fn multi_part_bodies_merge() {
-        let e = RawEntry::new(
-            "cat",
-            Body::Parts(vec![Body::Phonetic("kæt".into()), Body::Plain("кошка\nкот".into())]),
-        );
+        let e = RawEntry::new("cat", Body::Parts(vec![Body::Phonetic("kæt".into()), Body::Plain("кошка\nкот".into())]));
         let a = e.to_article();
         assert_eq!(a.pronunciations[0].symbol, "kæt");
         assert_eq!(a.explanations[0].definitions, vec!["кошка", "кот"]);

@@ -56,7 +56,13 @@ fn lookup(app: &mut GlossaApp, st: &mut DictState) {
 }
 
 impl DictState {
-    pub fn on_result(&mut self, job: u64, _query: String, result: Result<Arc<Article>, Arc<Error>>, message: Option<String>) {
+    pub fn on_result(
+        &mut self,
+        job: u64,
+        _query: String,
+        result: Result<Arc<Article>, Arc<Error>>,
+        message: Option<String>,
+    ) {
         if job != self.job {
             return;
         }
@@ -76,7 +82,11 @@ impl DictState {
 
 pub fn show(app: &mut GlossaApp, ctx: &egui::Context) {
     let Some(mut st) = app.dictionary.take() else { return };
-    let builder = egui::ViewportBuilder::default().with_title(app.t("dict.title")).with_inner_size([820.0, 560.0]).with_min_inner_size([480.0, 320.0]).with_icon(crate::app_icon(32));
+    let builder = egui::ViewportBuilder::default()
+        .with_title(app.t("dict.title"))
+        .with_inner_size([820.0, 560.0])
+        .with_min_inner_size([480.0, 320.0])
+        .with_icon(crate::app_icon(32));
     let mut open = true;
     ctx.show_viewport_immediate(egui::ViewportId::from_hash_of("glossa-dictionary"), builder, |ui, _| {
         if ui.input(|i| i.viewport().close_requested()) {
@@ -96,7 +106,12 @@ fn body(app: &mut GlossaApp, ui: &mut egui::Ui, st: &mut DictState) {
     egui::Panel::top("dict-top").show(ui, |ui| {
         ui.add_space(4.0);
         ui.horizontal(|ui| {
-            let r = ui.add(egui::TextEdit::singleline(&mut st.query).desired_width(ui.available_width() - 330.0).hint_text(app.t("dict.title")).font(look.text_font()));
+            let r = ui.add(
+                egui::TextEdit::singleline(&mut st.query)
+                    .desired_width(ui.available_width() - 330.0)
+                    .hint_text(app.t("dict.title"))
+                    .font(look.text_font()),
+            );
             if st.focus {
                 r.request_focus();
                 st.focus = false;
@@ -142,7 +157,8 @@ fn body(app: &mut GlossaApp, ui: &mut egui::Ui, st: &mut DictState) {
         egui::Panel::left("dict-left").default_size(200.0).resizable(true).show(ui, |ui| {
             ui.label(RichText::new(app.t("options.services.dictionaries")).small().color(look.weak_text()));
             let providers = app.engine.providers(Capabilities::DICTIONARY);
-            let shown: Vec<_> = providers.iter().filter(|p| p.enabled || st.service.as_deref() == Some(&p.info.id)).cloned().collect();
+            let shown: Vec<_> =
+                providers.iter().filter(|p| p.enabled || st.service.as_deref() == Some(&p.info.id)).cloned().collect();
             for p in &shown {
                 let sel = st.service.as_deref() == Some(&p.info.id);
                 ui.horizontal(|ui| {
@@ -174,7 +190,8 @@ fn body(app: &mut GlossaApp, ui: &mut egui::Ui, st: &mut DictState) {
                 ui.add_space(20.0);
                 ui.vertical_centered(|ui| ui.add(egui::Spinner::new().size(24.0)));
             } else if let Some(e) = &st.error {
-                let msg = if e.contains("no results") { app.locale.fmt("dict.no_results", &st.query) } else { e.clone() };
+                let msg =
+                    if e.contains("no results") { app.locale.fmt("dict.no_results", &st.query) } else { e.clone() };
                 ui.label(RichText::new(msg).color(look.error()));
             } else if let Some(a) = st.article.clone() {
                 app.fonts.ensure(&app.ctx, &a.to_plain_text());
@@ -183,7 +200,9 @@ fn body(app: &mut GlossaApp, ui: &mut egui::Ui, st: &mut DictState) {
                 }
                 click = crate::rich::article(ui, &look, &a, zoom);
                 ui.add_space(8.0);
-                ui.label(RichText::new(format!("{} · {} ms", a.provider_id, a.elapsed_ms)).small().color(look.weak_text()));
+                ui.label(
+                    RichText::new(format!("{} · {} ms", a.provider_id, a.elapsed_ms)).small().color(look.weak_text()),
+                );
             } else {
                 ui.add_space(30.0);
                 ui.vertical_centered(|ui| {

@@ -9,15 +9,17 @@ use glossa_modules::{Host, OptionSpec, Provider};
 use glossa_net::HttpRequest;
 use serde_json::{json, Value};
 
-use crate::common::{api_message, base_url, check_pair, check_status, detected, is_auto, langs_from_codes, parse_json, require_str};
+use crate::common::{
+    api_message, base_url, check_pair, check_status, detected, is_auto, langs_from_codes, parse_json, require_str,
+};
 use crate::deepl::source_code;
 
 const DEFAULT_URL: &str = "http://127.0.0.1:1188/translate";
 
 /// The same languages as DeepL proper.
 const LANGS: &[&str] = &[
-    "auto", "ar", "bg", "cs", "da", "de", "el", "en", "es", "et", "fi", "fr", "he", "hu", "id", "it", "ja", "ko",
-    "lt", "lv", "nb", "nl", "pl", "pt", "ro", "ru", "sk", "sl", "sv", "th", "tr", "uk", "vi", "zh-Hans", "zh-Hant",
+    "auto", "ar", "bg", "cs", "da", "de", "el", "en", "es", "et", "fi", "fr", "he", "hu", "id", "it", "ja", "ko", "lt",
+    "lv", "nb", "nl", "pl", "pt", "ro", "ru", "sk", "sl", "sv", "th", "tr", "uk", "vi", "zh-Hans", "zh-Hant",
 ];
 
 /// DeepLX takes the bare language for targets (it picks DeepL's default
@@ -138,7 +140,8 @@ mod tests {
     #[test]
     fn posts_to_the_default_url_and_parses_alternatives() {
         let http = MockHttp::new().on(Method::Post, DEFAULT_URL, 200, OK);
-        let out = with_test_host(&http, &OptionValues::new(), |h| DeepLx::new().translate(h, &req(LangId::AUTO))).unwrap();
+        let out =
+            with_test_host(&http, &OptionValues::new(), |h| DeepLx::new().translate(h, &req(LangId::AUTO))).unwrap();
         assert_eq!(out.text, "Hallo, Welt!");
         assert_eq!(out.alternatives, vec!["Hallo Welt!", "Hallo, Welt"]);
         assert_eq!(out.detected_from, Some(LangId::ENGLISH));
@@ -175,7 +178,8 @@ mod tests {
 
     #[test]
     fn unauthorised_without_a_token_asks_for_one() {
-        let http = MockHttp::new().on(Method::Post, DEFAULT_URL, 401, r#"{"code":401,"message":"Invalid access token"}"#);
+        let http =
+            MockHttp::new().on(Method::Post, DEFAULT_URL, 401, r#"{"code":401,"message":"Invalid access token"}"#);
         let r = with_test_host(&http, &OptionValues::new(), |h| DeepLx::new().translate(h, &req(LangId::AUTO)));
         assert!(matches!(r, Err(Error::MissingCredential { ref what, .. }) if what == "token"), "{r:?}");
     }

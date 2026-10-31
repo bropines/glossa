@@ -52,15 +52,13 @@ pub fn selected_text() -> Option<String> {
     // SAFETY: COM is initialised on this thread for the duration; every
     // interface pointer is reference-counted by the windows crate.
     unsafe {
-        let automation: IUIAutomation =
-            CoCreateInstance(&CUIAutomation, None, CLSCTX_INPROC_SERVER).ok()?;
+        let automation: IUIAutomation = CoCreateInstance(&CUIAutomation, None, CLSCTX_INPROC_SERVER).ok()?;
         if let Ok(a2) = automation.cast::<IUIAutomation2>() {
             let _ = a2.SetConnectionTimeout(TIMEOUT_MS);
             let _ = a2.SetTransactionTimeout(TIMEOUT_MS);
         }
         let element = automation.GetFocusedElement().ok()?;
-        let pattern: IUIAutomationTextPattern =
-            element.GetCurrentPatternAs(UIA_TextPatternId).ok()?;
+        let pattern: IUIAutomationTextPattern = element.GetCurrentPatternAs(UIA_TextPatternId).ok()?;
         let ranges = pattern.GetSelection().ok()?;
         let count = ranges.Length().ok()?;
         let mut parts = Vec::new();

@@ -16,7 +16,8 @@ pub fn unpack(archive: &Path, cache_dir: &Path) -> Result<PathBuf, String> {
         return Ok(target);
     }
     let file = std::fs::File::open(archive).map_err(|e| format!("{}: {e}", archive.display()))?;
-    let mut zip = zip::ZipArchive::new(file).map_err(|e| format!("{}: not a pot plugin archive: {e}", archive.display()))?;
+    let mut zip =
+        zip::ZipArchive::new(file).map_err(|e| format!("{}: not a pot plugin archive: {e}", archive.display()))?;
     std::fs::create_dir_all(&target).map_err(|e| format!("{}: {e}", target.display()))?;
     for i in 0..zip.len() {
         let mut entry = zip.by_index(i).map_err(|e| e.to_string())?;

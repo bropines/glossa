@@ -30,9 +30,13 @@ impl Script {
         Some(match u {
             0x3040..=0x30FF | 0x31F0..=0x31FF | 0xFF66..=0xFF9F => Script::Kana,
             0x1100..=0x11FF | 0x3130..=0x318F | 0xAC00..=0xD7AF => Script::Hangul,
-            0x2E80..=0x2FDF | 0x3000..=0x303F | 0x3400..=0x4DBF | 0x4E00..=0x9FFF | 0xF900..=0xFAFF | 0xFF00..=0xFF65 | 0x20000..=0x2FA1F => {
-                Script::Han
-            }
+            0x2E80..=0x2FDF
+            | 0x3000..=0x303F
+            | 0x3400..=0x4DBF
+            | 0x4E00..=0x9FFF
+            | 0xF900..=0xFAFF
+            | 0xFF00..=0xFF65
+            | 0x20000..=0x2FA1F => Script::Han,
             0x0900..=0x0DFF => Script::Indic,
             0x0E00..=0x0EFF | 0x1780..=0x17FF => Script::Thai,
             0x0590..=0x08FF | 0xFB1D..=0xFDFF | 0xFE70..=0xFEFF => Script::ArabicHebrew,
@@ -200,7 +204,9 @@ fn script_font(s: Script) -> Option<(PathBuf, u32)> {
         return Some(found);
     }
     let mac: &[&str] = match s {
-        Script::Han | Script::Kana => &["/System/Library/Fonts/PingFang.ttc", "/System/Library/Fonts/Hiragino Sans GB.ttc"],
+        Script::Han | Script::Kana => {
+            &["/System/Library/Fonts/PingFang.ttc", "/System/Library/Fonts/Hiragino Sans GB.ttc"]
+        }
         Script::Hangul => &["/System/Library/Fonts/AppleSDGothicNeo.ttc"],
         Script::Indic => &["/System/Library/Fonts/Kohinoor.ttc"],
         Script::Thai => &["/System/Library/Fonts/Thonburi.ttc"],

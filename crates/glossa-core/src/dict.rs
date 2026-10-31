@@ -177,10 +177,7 @@ mod tests {
         let a = Article {
             headword: "run".into(),
             pronunciations: vec![Pronunciation { region: "US".into(), symbol: "rʌn".into(), audio_url: None }],
-            explanations: vec![Explanation {
-                part_of_speech: "verb".into(),
-                definitions: vec!["move fast".into()],
-            }],
+            explanations: vec![Explanation { part_of_speech: "verb".into(), definitions: vec!["move fast".into()] }],
             examples: vec![Example { source: "run fast".into(), target: "бежать".into() }],
             ..Default::default()
         };

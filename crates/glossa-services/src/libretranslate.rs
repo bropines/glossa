@@ -2,9 +2,7 @@
 //! Translate. The public instance at libretranslate.com wants a key; a
 //! self-hosted one usually does not.
 
-use glossa_core::{
-    Capabilities, Detection, Error, LangId, ProviderInfo, Result, TranslateRequest, Translation,
-};
+use glossa_core::{Capabilities, Detection, Error, LangId, ProviderInfo, Result, TranslateRequest, Translation};
 use glossa_modules::{Host, OptionSpec, Provider};
 use glossa_net::{HttpRequest, HttpResponse};
 use serde_json::{json, Value};
@@ -16,9 +14,9 @@ const DEFAULT_URL: &str = "https://libretranslate.com";
 /// LibreTranslate's codes, which are ISO 639-1 apart from Chinese: `zh` for
 /// Simplified and `zt` for Traditional.
 const LANGS: &[&str] = &[
-    "ar", "az", "bg", "bn", "ca", "cs", "da", "de", "el", "en", "eo", "es", "et", "eu", "fa", "fi", "fr", "ga",
-    "gl", "he", "hi", "hu", "id", "it", "ja", "ko", "lt", "lv", "ms", "nb", "nl", "pl", "pt", "ro", "ru", "sk",
-    "sl", "sq", "sv", "th", "tl", "tr", "uk", "ur", "vi", "zh", "zt",
+    "ar", "az", "bg", "bn", "ca", "cs", "da", "de", "el", "en", "eo", "es", "et", "eu", "fa", "fi", "fr", "ga", "gl",
+    "he", "hi", "hu", "id", "it", "ja", "ko", "lt", "lv", "ms", "nb", "nl", "pl", "pt", "ro", "ru", "sk", "sl", "sq",
+    "sv", "th", "tl", "tr", "uk", "ur", "vi", "zh", "zt",
 ];
 
 fn code(lang: LangId) -> &'static str {
@@ -64,7 +62,8 @@ impl LibreTranslate {
         info.max_input_chars = Some(5000);
         let options = vec![
             OptionSpec::url("url", "Server URL", DEFAULT_URL).help("Your own instance, e.g. http://localhost:5000."),
-            OptionSpec::secret("api_key", "API key").help("Needed for libretranslate.com; most self-hosted servers do not ask for one."),
+            OptionSpec::secret("api_key", "API key")
+                .help("Needed for libretranslate.com; most self-hosted servers do not ask for one."),
         ];
         Self { info, options }
     }
@@ -156,7 +155,8 @@ mod tests {
         );
         let o = opts(&[("url", json!("http://localhost:5000/"))]);
         let out = with_test_host(&http, &o, |h| {
-            LibreTranslate::new().translate(h, &TranslateRequest::new("Bonjour!", LangPair::new(LangId::AUTO, LangId::ENGLISH)))
+            LibreTranslate::new()
+                .translate(h, &TranslateRequest::new("Bonjour!", LangPair::new(LangId::AUTO, LangId::ENGLISH)))
         })
         .unwrap();
         assert_eq!(out.text, "Hello!");
@@ -190,7 +190,8 @@ mod tests {
             r#"{"error":"Visit https://portal.libretranslate.com to get an API key"}"#,
         );
         let r = with_test_host(&http, &OptionValues::new(), |h| {
-            LibreTranslate::new().translate(h, &TranslateRequest::new("hi", LangPair::new(LangId::ENGLISH, LangId::RUSSIAN)))
+            LibreTranslate::new()
+                .translate(h, &TranslateRequest::new("hi", LangPair::new(LangId::ENGLISH, LangId::RUSSIAN)))
         });
         assert!(matches!(r, Err(Error::MissingCredential { .. })), "{r:?}");
     }
@@ -200,7 +201,8 @@ mod tests {
         let http = MockHttp::new().on(Method::Post, DEFAULT_URL, 400, r#"{"error":"ru is not supported"}"#);
         let o = opts(&[("api_key", json!("k"))]);
         match with_test_host(&http, &o, |h| {
-            LibreTranslate::new().translate(h, &TranslateRequest::new("hi", LangPair::new(LangId::ENGLISH, LangId::RUSSIAN)))
+            LibreTranslate::new()
+                .translate(h, &TranslateRequest::new("hi", LangPair::new(LangId::ENGLISH, LangId::RUSSIAN)))
         }) {
             Err(Error::HttpStatus { status: 400, body, .. }) => assert_eq!(body, "ru is not supported"),
             other => panic!("{other:?}"),
@@ -229,7 +231,10 @@ mod tests {
     fn unsupported_target_is_rejected() {
         let http = MockHttp::new();
         let r = with_test_host(&http, &OptionValues::new(), |h| {
-            LibreTranslate::new().translate(h, &TranslateRequest::new("x", LangPair::new(LangId::ENGLISH, LangId::from_code("km").unwrap())))
+            LibreTranslate::new().translate(
+                h,
+                &TranslateRequest::new("x", LangPair::new(LangId::ENGLISH, LangId::from_code("km").unwrap())),
+            )
         });
         assert!(matches!(r, Err(Error::TargetLanguageUnsupported { .. })));
     }

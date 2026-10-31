@@ -26,8 +26,8 @@ use std::time::{Duration, Instant};
 use glossa_core::history::{HistoryEntry, HistoryResult};
 use glossa_core::ocr::{ImageSource, OcrRequest};
 use glossa_core::{
-    Action, Article, Audio, Capabilities, Config, Detection, DictRequest, Error, History, LangId,
-    LangPair, Locale, OcrResult, Paths, ProviderInfo, Result, SpeakRequest, Theme,
+    Action, Article, Audio, Capabilities, Config, Detection, DictRequest, Error, History, LangId, LangPair, Locale,
+    OcrResult, Paths, ProviderInfo, Result, SpeakRequest, Theme,
 };
 use glossa_modules::host_api::ModuleCache;
 use glossa_modules::{CancelToken, Host, OptionSpec, Origin, Provider, Registry, RuntimeContext};
@@ -53,18 +53,41 @@ pub enum Slot {
 /// What the engine tells a front end.
 #[derive(Debug, Clone)]
 pub enum Event {
-    Translated { slot: Slot, job: u64, result: std::result::Result<Arc<TranslationOutcome>, Arc<Error>> },
-    Dictionary { slot: Slot, job: u64, query: String, result: std::result::Result<Arc<Article>, Arc<Error>> },
-    Recognized { slot: Slot, job: u64, result: std::result::Result<Arc<OcrOutcome>, Arc<Error>> },
-    Spoken { slot: Slot, job: u64, result: std::result::Result<Arc<Audio>, Arc<Error>> },
+    Translated {
+        slot: Slot,
+        job: u64,
+        result: std::result::Result<Arc<TranslationOutcome>, Arc<Error>>,
+    },
+    Dictionary {
+        slot: Slot,
+        job: u64,
+        query: String,
+        result: std::result::Result<Arc<Article>, Arc<Error>>,
+    },
+    Recognized {
+        slot: Slot,
+        job: u64,
+        result: std::result::Result<Arc<OcrOutcome>, Arc<Error>>,
+    },
+    Spoken {
+        slot: Slot,
+        job: u64,
+        result: std::result::Result<Arc<Audio>, Arc<Error>>,
+    },
     /// A job started (for a busy indicator).
-    Started { slot: Slot, job: u64 },
+    Started {
+        slot: Slot,
+        job: u64,
+    },
     HistoryChanged,
     ConfigChanged,
     ModulesReloaded,
     /// Someone outside the UI (the control API) asked for an action, with
     /// optional text to act on instead of the selection.
-    Action { action: Action, text: Option<String> },
+    Action {
+        action: Action,
+        text: Option<String>,
+    },
 }
 
 /// OCR, plus a translation when one was asked for.
@@ -497,7 +520,11 @@ impl Engine {
         let cfg = self.config();
         self.with_pipeline(cancel, |p| {
             let text = p.prepare(text)?;
-            let from = if pair.from.is_language() { pair.from } else { p.detect(&text, None).map(|d| d.lang).unwrap_or(cfg.general.second_language) };
+            let from = if pair.from.is_language() {
+                pair.from
+            } else {
+                p.detect(&text, None).map(|d| d.lang).unwrap_or(cfg.general.second_language)
+            };
             let to = if pair.to.is_language() && pair.to != from { pair.to } else { cfg.smart_target(from) };
             let req = DictRequest { text: text.clone(), from, to, exact: cfg.dictionary.exact_search };
             let mut last = Error::NoProvider("dictionary lookup");
@@ -518,7 +545,12 @@ impl Engine {
                         a.elapsed_ms = started.elapsed().as_millis() as u64;
                         return Ok(a);
                     }
-                    Ok(_) => last = Error::Module { module: provider.info().id.clone(), detail: format!("no results for {text:?}") },
+                    Ok(_) => {
+                        last = Error::Module {
+                            module: provider.info().id.clone(),
+                            detail: format!("no results for {text:?}"),
+                        }
+                    }
                     Err(e) if e.should_try_next_provider() => last = e,
                     Err(e) => return Err(e),
                 }
@@ -550,7 +582,13 @@ impl Engine {
         self.recognize_with(image, lang, translate_to, &CancelToken::new())
     }
 
-    fn recognize_with(&self, image: Vec<u8>, lang: LangId, translate_to: Option<LangId>, cancel: &CancelToken) -> Result<OcrOutcome> {
+    fn recognize_with(
+        &self,
+        image: Vec<u8>,
+        lang: LangId,
+        translate_to: Option<LangId>,
+        cancel: &CancelToken,
+    ) -> Result<OcrOutcome> {
         let cfg = self.config();
         if let Some(dir) = &cfg.ocr.save_image_dir {
             let name = format!("glossa-{}.png", glossa_core::now_unix());
@@ -561,7 +599,9 @@ impl Engine {
         let registry = self.registry();
         let http = self.inner.http.read().clone();
         let mut providers: Vec<Arc<dyn Provider>> = registry.get(&cfg.ocr.provider).into_iter().collect();
-        providers.extend(registry.with_capability(Capabilities::OCR).into_iter().filter(|p| p.info().id != cfg.ocr.provider));
+        providers.extend(
+            registry.with_capability(Capabilities::OCR).into_iter().filter(|p| p.info().id != cfg.ocr.provider),
+        );
         if providers.is_empty() {
             return Err(Error::NoProvider("text recognition"));
         }
@@ -574,7 +614,10 @@ impl Engine {
             if cancel.is_cancelled() {
                 return Err(Error::Cancelled);
             }
-            let opts = glossa_modules::provider::resolve_options(provider.options(), cfg.services.options.get(&provider.info().id));
+            let opts = glossa_modules::provider::resolve_options(
+                provider.options(),
+                cfg.services.options.get(&provider.info().id),
+            );
             let host = Host {
                 http: http.as_ref(),
                 options: &opts,
@@ -594,9 +637,11 @@ impl Engine {
                     let translation = match translate_to {
                         Some(to) if ocr.translation.as_deref().map_or(true, |t| t.trim().is_empty()) => {
                             let from = ocr.detected_lang.filter(|l| l.is_language()).unwrap_or(LangId::AUTO);
-                            self.with_pipeline(cancel, |p| p.translate(&ocr.text, LangPair::new(from, to), &TranslateOptions::default()))
-                                .map_err(|e| tracing::debug!("translating the OCR text failed: {e}"))
-                                .ok()
+                            self.with_pipeline(cancel, |p| {
+                                p.translate(&ocr.text, LangPair::new(from, to), &TranslateOptions::default())
+                            })
+                            .map_err(|e| tracing::debug!("translating the OCR text failed: {e}"))
+                            .ok()
                         }
                         _ => None,
                     };
@@ -651,12 +696,23 @@ impl Engine {
         let registry = self.registry();
         let http = self.inner.http.read().clone();
         let mut providers: Vec<Arc<dyn Provider>> = registry.get(&cfg.services.tts).into_iter().collect();
-        providers.extend(registry.with_capability(Capabilities::LISTEN).into_iter().filter(|p| p.info().id != cfg.services.tts));
+        providers.extend(
+            registry.with_capability(Capabilities::LISTEN).into_iter().filter(|p| p.info().id != cfg.services.tts),
+        );
         let req = SpeakRequest { text: text.to_owned(), lang, slow };
         let mut last = Error::NoProvider("speech");
         for provider in providers.into_iter().filter(|p| p.info().capabilities.contains(Capabilities::LISTEN)) {
-            let opts = glossa_modules::provider::resolve_options(provider.options(), cfg.services.options.get(&provider.info().id));
-            let host = Host { http: http.as_ref(), options: &opts, ui_language: LangId::ENGLISH, preferred_domain: &cfg.advanced.preferred_domain, cancel };
+            let opts = glossa_modules::provider::resolve_options(
+                provider.options(),
+                cfg.services.options.get(&provider.info().id),
+            );
+            let host = Host {
+                http: http.as_ref(),
+                options: &opts,
+                ui_language: LangId::ENGLISH,
+                preferred_domain: &cfg.advanced.preferred_domain,
+                cancel,
+            };
             match provider.speak(&host, &req) {
                 Ok(a) if !a.bytes.is_empty() => return Ok(a),
                 Ok(_) => last = Error::bad_response(&provider.info().name, "no audio"),
@@ -688,7 +744,12 @@ impl Engine {
         let t = &out.translation;
         let id = self.inner.history.lock().record(
             &out.source,
-            HistoryResult { provider_id: t.provider_id.clone(), from: out.pair.from, to: out.pair.to, text: t.text.clone() },
+            HistoryResult {
+                provider_id: t.provider_id.clone(),
+                from: out.pair.from,
+                to: out.pair.to,
+                text: t.text.clone(),
+            },
             glossa_core::now_unix(),
         );
         if id != 0 {
@@ -840,7 +901,9 @@ pub fn random_token() -> String {
     for i in 0..4u64 {
         let mut h = RandomState::new().build_hasher();
         h.write_u64(i);
-        h.write_u128(std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_nanos()).unwrap_or(0));
+        h.write_u128(
+            std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_nanos()).unwrap_or(0),
+        );
         h.write_u32(std::process::id());
         out.push_str(&format!("{:016x}", h.finish()));
     }
@@ -921,7 +984,11 @@ mod tests {
         // The classic service is now a provider.
         assert!(e.registry().get("qt-echo").is_some(), "{:?}", e.module_status());
         let out = e
-            .translate("hello", LangPair::new(LangId::ENGLISH, LangId::RUSSIAN), &TranslateOptions { provider: Some("qt-echo".into()), fail_over: Some(false), ..Default::default() })
+            .translate(
+                "hello",
+                LangPair::new(LangId::ENGLISH, LangId::RUSSIAN),
+                &TranslateOptions { provider: Some("qt-echo".into()), fail_over: Some(false), ..Default::default() },
+            )
             .unwrap();
         assert_eq!(out.translation.text, "hello");
         std::fs::remove_dir_all(&dir).ok();
@@ -946,7 +1013,11 @@ mod tests {
     fn history_round_trip_through_shutdown() {
         let (e, dir) = engine("history");
         let out = TranslationOutcome {
-            translation: glossa_core::Translation { text: "мир".into(), provider_id: "google".into(), ..Default::default() },
+            translation: glossa_core::Translation {
+                text: "мир".into(),
+                provider_id: "google".into(),
+                ..Default::default()
+            },
             pair: LangPair::new(LangId::ENGLISH, LangId::RUSSIAN),
             source: "world".into(),
             detected: None,

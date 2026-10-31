@@ -72,8 +72,7 @@ impl HotkeyService {
             };
             return Err(HotkeyError::Unsupported { reason: reason.into() });
         }
-        let manager = GlobalHotKeyManager::new()
-            .map_err(|e| HotkeyError::Unsupported { reason: e.to_string() })?;
+        let manager = GlobalHotKeyManager::new().map_err(|e| HotkeyError::Unsupported { reason: e.to_string() })?;
         Ok(HotkeyService { manager, registered: HashMap::new(), queue: VecDeque::new(), events: None })
     }
 
@@ -88,9 +87,7 @@ impl HotkeyService {
         }
         self.unregister(action);
         self.manager.register(hk).map_err(|e| match e {
-            global_hotkey::Error::AlreadyRegistered(_) => {
-                HotkeyError::Taken { hotkey: hotkey.to_string() }
-            }
+            global_hotkey::Error::AlreadyRegistered(_) => HotkeyError::Taken { hotkey: hotkey.to_string() },
             other => HotkeyError::Failed { hotkey: hotkey.to_string(), detail: other.to_string() },
         })?;
         self.registered.insert(hk.id(), (hk, action));
@@ -99,8 +96,7 @@ impl HotkeyService {
 
     /// Remove the hotkey bound to `action`, if any.
     pub fn unregister(&mut self, action: Action) {
-        let ids: Vec<u32> =
-            self.registered.iter().filter(|(_, (_, a))| *a == action).map(|(id, _)| *id).collect();
+        let ids: Vec<u32> = self.registered.iter().filter(|(_, (_, a))| *a == action).map(|(id, _)| *id).collect();
         for id in ids {
             if let Some((hk, _)) = self.registered.remove(&id) {
                 if let Err(e) = self.manager.unregister(hk) {
@@ -170,8 +166,7 @@ impl Drop for HotkeyService {
 
 /// Convert our hotkey to global-hotkey's.
 pub fn to_global(hotkey: &Hotkey) -> Result<HotKey, HotkeyError> {
-    let code =
-        key_code(&hotkey.key.0).ok_or_else(|| HotkeyError::UnknownKey(hotkey.key.0.clone()))?;
+    let code = key_code(&hotkey.key.0).ok_or_else(|| HotkeyError::UnknownKey(hotkey.key.0.clone()))?;
     let mut mods = Modifiers::empty();
     if hotkey.mods.ctrl {
         mods |= Modifiers::CONTROL;

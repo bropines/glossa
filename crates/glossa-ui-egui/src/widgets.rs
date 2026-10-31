@@ -37,8 +37,15 @@ pub fn service_badge(ui: &mut Ui, id: &str, name: &str, size: f32) {
     let (rect, _) = ui.allocate_exact_size(vec2(size, size), Sense::hover());
     let col = service_color(id);
     ui.painter().rect_filled(rect, size * 0.2, col);
-    let initial = name.trim_start_matches("qt-").chars().find(|c| c.is_alphanumeric()).unwrap_or('?').to_uppercase().to_string();
-    ui.painter().text(rect.center(), egui::Align2::CENTER_CENTER, initial, egui::FontId::proportional(size * 0.62), Color32::WHITE);
+    let initial =
+        name.trim_start_matches("qt-").chars().find(|c| c.is_alphanumeric()).unwrap_or('?').to_uppercase().to_string();
+    ui.painter().text(
+        rect.center(),
+        egui::Align2::CENTER_CENTER,
+        initial,
+        egui::FontId::proportional(size * 0.62),
+        Color32::WHITE,
+    );
 }
 
 /// One tab of the service strip: badge + name, the name truncating when
@@ -58,13 +65,22 @@ pub fn service_tab(ui: &mut Ui, look: &Look, id: &str, name: &str, selected: boo
         let p = ui.painter();
         p.rect_filled(rect, look.theme.metrics.button_radius, c(b.back()));
         if selected {
-            p.line_segment([rect.left_bottom() + vec2(2.0, -1.0), rect.right_bottom() + vec2(-2.0, -1.0)], egui::Stroke::new(2.0, look.accent()));
+            p.line_segment(
+                [rect.left_bottom() + vec2(2.0, -1.0), rect.right_bottom() + vec2(-2.0, -1.0)],
+                egui::Stroke::new(2.0, look.accent()),
+            );
         }
         let badge = h - 10.0;
         let badge_rect = egui::Rect::from_min_size(rect.min + vec2(5.0, 5.0), vec2(badge, badge));
         p.rect_filled(badge_rect, badge * 0.2, service_color(id));
         let initial = name.chars().find(|c| c.is_alphanumeric()).unwrap_or('?').to_uppercase().to_string();
-        p.text(badge_rect.center(), egui::Align2::CENTER_CENTER, initial, egui::FontId::proportional(badge * 0.62), Color32::WHITE);
+        p.text(
+            badge_rect.center(),
+            egui::Align2::CENTER_CENTER,
+            initial,
+            egui::FontId::proportional(badge * 0.62),
+            Color32::WHITE,
+        );
         let text_left = badge_rect.right() + 6.0;
         let room = rect.right() - text_left - 4.0;
         if room > 8.0 {
@@ -74,8 +90,15 @@ pub fn service_tab(ui: &mut Ui, look: &Look, id: &str, name: &str, selected: boo
                 c(b.text),
                 f32::INFINITY,
             );
-            let clip = egui::Rect::from_min_max(egui::pos2(text_left, rect.top()), egui::pos2(rect.right() - 2.0, rect.bottom()));
-            ui.painter().with_clip_rect(clip).galley(egui::pos2(text_left, rect.center().y - galley.size().y / 2.0), galley, c(b.text));
+            let clip = egui::Rect::from_min_max(
+                egui::pos2(text_left, rect.top()),
+                egui::pos2(rect.right() - 2.0, rect.bottom()),
+            );
+            ui.painter().with_clip_rect(clip).galley(
+                egui::pos2(text_left, rect.center().y - galley.size().y / 2.0),
+                galley,
+                c(b.text),
+            );
         }
     }
     resp.on_hover_text(name)
@@ -103,7 +126,10 @@ pub fn lang_combo(
         }
         ui.data_mut(|d| d.insert_temp(search_id, search.clone()));
         let needle = search.to_lowercase();
-        if allow_auto && (needle.is_empty() || auto_label.to_lowercase().contains(&needle)) && ui.selectable_label(current == LangId::AUTO, auto_label).clicked() {
+        if allow_auto
+            && (needle.is_empty() || auto_label.to_lowercase().contains(&needle))
+            && ui.selectable_label(current == LangId::AUTO, auto_label).clicked()
+        {
             picked = Some(LangId::AUTO);
         }
         let mut langs: Vec<LangId> = LangId::all().filter(|l| !disabled.contains(l)).collect();
@@ -118,7 +144,8 @@ pub fn lang_combo(
             {
                 continue;
             }
-            let text = if native.is_empty() || native == name { name.to_owned() } else { format!("{name}  ·  {native}") };
+            let text =
+                if native.is_empty() || native == name { name.to_owned() } else { format!("{name}  ·  {native}") };
             if ui.selectable_label(current == l, text).clicked() {
                 picked = Some(l);
             }
@@ -134,11 +161,22 @@ pub fn lang_combo(
 pub fn icon_toggle(ui: &mut Ui, look: &Look, icon: crate::icons::Icon, value: &mut bool, tooltip: &str) {
     let size = 26.0;
     let (rect, resp) = ui.allocate_exact_size(vec2(size, size), Sense::click());
-    let state = if *value { WidgetState::Pressed } else if resp.hovered() { WidgetState::Hover } else { WidgetState::Normal };
+    let state = if *value {
+        WidgetState::Pressed
+    } else if resp.hovered() {
+        WidgetState::Hover
+    } else {
+        WidgetState::Normal
+    };
     let b = look.theme.button.get(state);
     ui.painter().rect_filled(rect, look.theme.metrics.button_radius, c(b.back()));
     if *value {
-        ui.painter().rect_stroke(rect, look.theme.metrics.button_radius, egui::Stroke::new(1.5, look.accent()), egui::StrokeKind::Inside);
+        ui.painter().rect_stroke(
+            rect,
+            look.theme.metrics.button_radius,
+            egui::Stroke::new(1.5, look.accent()),
+            egui::StrokeKind::Inside,
+        );
     }
     crate::icons::paint(ui.painter(), rect.shrink(5.0), icon, if *value { look.text() } else { look.weak_text() });
     if resp.on_hover_text(tooltip).clicked() {
@@ -159,9 +197,17 @@ pub fn group<R>(ui: &mut Ui, look: &Look, title: &str, add: impl FnOnce(&mut Ui)
     });
     // The title sits on the top border, over a patch of background.
     let rect = resp.response.rect;
-    let galley = ui.painter().layout_no_wrap(title.to_owned(), egui::FontId::proportional(look.theme.fonts.size * 1.3), look.text());
+    let galley = ui.painter().layout_no_wrap(
+        title.to_owned(),
+        egui::FontId::proportional(look.theme.fonts.size * 1.3),
+        look.text(),
+    );
     let pos = rect.left_top() + vec2(10.0, -galley.size().y / 2.0);
-    ui.painter().rect_filled(egui::Rect::from_min_size(pos - vec2(4.0, 0.0), galley.size() + vec2(8.0, 0.0)), 0.0, c(look.theme.window.back));
+    ui.painter().rect_filled(
+        egui::Rect::from_min_size(pos - vec2(4.0, 0.0), galley.size() + vec2(8.0, 0.0)),
+        0.0,
+        c(look.theme.window.back),
+    );
     ui.painter().galley(pos, galley, look.text());
     resp.inner
 }
@@ -177,7 +223,8 @@ pub fn row(ui: &mut Ui, label: &str, add: impl FnOnce(&mut Ui)) {
 /// A colour swatch that opens a picker.
 pub fn color_edit(ui: &mut Ui, color: &mut glossa_core::Color) -> bool {
     let mut c32 = c(*color);
-    let changed = egui::color_picker::color_edit_button_srgba(ui, &mut c32, egui::color_picker::Alpha::Opaque).changed();
+    let changed =
+        egui::color_picker::color_edit_button_srgba(ui, &mut c32, egui::color_picker::Alpha::Opaque).changed();
     if changed {
         *color = crate::style::from32(c32);
     }
@@ -190,7 +237,11 @@ pub fn color_edit(ui: &mut Ui, color: &mut glossa_core::Color) -> bool {
 pub fn hotkey_field(ui: &mut Ui, id_salt: &str, current: Option<&Hotkey>, prompt: &str) -> Option<Option<Hotkey>> {
     let id = ui.make_persistent_id(("hotkey", id_salt));
     let capturing = ui.data(|d| d.get_temp::<bool>(id).unwrap_or(false));
-    let text = if capturing { prompt.to_owned() } else { current.map(|h| h.to_string().replace('+', " + ")).unwrap_or_default() };
+    let text = if capturing {
+        prompt.to_owned()
+    } else {
+        current.map(|h| h.to_string().replace('+', " + ")).unwrap_or_default()
+    };
     let resp = ui.add(egui::Button::new(RichText::new(text).italics_if(capturing)).min_size(vec2(170.0, 0.0)));
     if resp.clicked() {
         ui.data_mut(|d| d.insert_temp(id, !capturing));
@@ -208,7 +259,11 @@ pub fn hotkey_field(ui: &mut Ui, id_salt: &str, current: Option<&Hotkey>, prompt
                     k => {
                         if let Ok(hk) = format!(
                             "{}{}{}{}{}",
-                            if modifiers.ctrl || modifiers.command && !cfg!(target_os = "macos") { "Ctrl+" } else { "" },
+                            if modifiers.ctrl || modifiers.command && !cfg!(target_os = "macos") {
+                                "Ctrl+"
+                            } else {
+                                ""
+                            },
                             if modifiers.alt { "Alt+" } else { "" },
                             if modifiers.shift { "Shift+" } else { "" },
                             if modifiers.mac_cmd { "Meta+" } else { "" },

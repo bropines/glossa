@@ -3,9 +3,7 @@
 //! The key decides the host: DeepL issues free-plan keys with a `:fx`
 //! suffix, and those only work against `api-free.deepl.com`.
 
-use glossa_core::{
-    Capabilities, Error, LangId, LangPair, ProviderInfo, Result, TranslateRequest, Translation,
-};
+use glossa_core::{Capabilities, Error, LangId, LangPair, ProviderInfo, Result, TranslateRequest, Translation};
 use glossa_modules::{Host, OptionSpec, Provider};
 use glossa_net::{url_encode, HttpRequest};
 use serde_json::{json, Value};
@@ -18,8 +16,8 @@ const PRO_HOST: &str = "https://api.deepl.com";
 /// What DeepL translates, as table codes. Chinese is one source language
 /// (`ZH`) but two targets (`ZH-HANS`, `ZH-HANT`).
 const LANGS: &[&str] = &[
-    "auto", "ar", "bg", "cs", "da", "de", "el", "en", "es", "et", "fi", "fr", "he", "hu", "id", "it", "ja", "ko",
-    "lt", "lv", "nb", "nl", "pl", "pt", "ro", "ru", "sk", "sl", "sv", "th", "tr", "uk", "vi", "zh-Hans", "zh-Hant",
+    "auto", "ar", "bg", "cs", "da", "de", "el", "en", "es", "et", "fi", "fr", "he", "hu", "id", "it", "ja", "ko", "lt",
+    "lv", "nb", "nl", "pl", "pt", "ro", "ru", "sk", "sl", "sv", "th", "tr", "uk", "vi", "zh-Hans", "zh-Hant",
 ];
 
 /// Targets that accept a `formality` setting other than the `prefer_*` ones.
@@ -89,9 +87,9 @@ impl DeepL {
         info.max_input_chars = Some(30_000);
         info.needs_credentials = true;
         let options = vec![
-            OptionSpec::secret("api_key", "API key")
-                .required()
-                .help("From your DeepL account page. Free-plan keys end in \":fx\" and are routed to api-free.deepl.com."),
+            OptionSpec::secret("api_key", "API key").required().help(
+                "From your DeepL account page. Free-plan keys end in \":fx\" and are routed to api-free.deepl.com.",
+            ),
             OptionSpec::select(
                 "formality",
                 "Formality",
@@ -105,7 +103,12 @@ impl DeepL {
                 ],
             )
             .help("Only some target languages (German, French, Spanish, Russian, Japanese, …) distinguish formality."),
-            OptionSpec::select("english_variant", "English variant", "EN-US", &[("EN-US", "American"), ("EN-GB", "British")]),
+            OptionSpec::select(
+                "english_variant",
+                "English variant",
+                "EN-US",
+                &[("EN-US", "American"), ("EN-GB", "British")],
+            ),
             OptionSpec::select(
                 "portuguese_variant",
                 "Portuguese variant",
@@ -160,7 +163,11 @@ impl Provider for DeepL {
             _ => None,
         };
         if let Some(message) = quirk {
-            return Err(Error::HttpStatus { provider: self.name().to_owned(), status: resp.status, body: message.into() });
+            return Err(Error::HttpStatus {
+                provider: self.name().to_owned(),
+                status: resp.status,
+                body: message.into(),
+            });
         }
         let resp = check_status(resp, self.name())?;
         let v = parse_json(&resp, self.name())?;

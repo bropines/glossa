@@ -19,10 +19,10 @@
 use std::cell::RefCell;
 
 use base64::Engine as _;
+use boa_engine::builtins::promise::PromiseState;
 use boa_engine::object::builtins::JsPromise;
 use boa_engine::property::Attribute;
 use boa_engine::{js_string, Context, JsError, JsNativeError, JsResult, JsValue, NativeFunction, Source};
-use boa_engine::builtins::promise::PromiseState;
 use glossa_module_sdk::wire::{ErrorKind, ModuleError, Reply};
 
 /// How far a script may run before it is stopped: generous for real work,
@@ -55,7 +55,8 @@ impl<'a> Bridge<'a> {
         // thread-local. The pointer is only dereferenced by `host_call`
         // while this `Bridge` is alive (it is cleared in `Drop`), and the
         // `Bridge` borrows `host` for `'a`, so the referent outlives every use.
-        let ptr: *const HostFn<'static> = unsafe { std::mem::transmute::<*const HostFn<'a>, *const HostFn<'static>>(host as *const HostFn<'a>) };
+        let ptr: *const HostFn<'static> =
+            unsafe { std::mem::transmute::<*const HostFn<'a>, *const HostFn<'static>>(host as *const HostFn<'a>) };
         BRIDGE.with(|b| *b.borrow_mut() = Some(ptr));
         Bridge { _host: std::marker::PhantomData }
     }
@@ -118,10 +119,7 @@ pub fn set_global_json(ctx: &mut Context, name: &str, value: &serde_json::Value)
 
 /// Whether a global function of this name exists.
 pub fn has_function(ctx: &mut Context, name: &str) -> bool {
-    ctx.global_object()
-        .get(js_string!(name), ctx)
-        .ok()
-        .is_some_and(|v| v.as_callable().is_some())
+    ctx.global_object().get(js_string!(name), ctx).ok().is_some_and(|v| v.as_callable().is_some())
 }
 
 pub fn get_global(ctx: &mut Context, name: &str) -> JsValue {
@@ -134,7 +132,8 @@ pub fn call_global(ctx: &mut Context, name: &str, args: &[JsValue]) -> Result<Js
     let Some(callable) = f.as_callable() else {
         return Err(format!("the script has no function `{name}`"));
     };
-    let value = callable.call(&JsValue::undefined(), args, ctx).map_err(|e| format!("{name}: {}", describe(&e, ctx)))?;
+    let value =
+        callable.call(&JsValue::undefined(), args, ctx).map_err(|e| format!("{name}: {}", describe(&e, ctx)))?;
     settle(ctx, value).map_err(|e| format!("{name}: {e}"))
 }
 
@@ -164,10 +163,7 @@ pub fn to_json(ctx: &mut Context, value: &JsValue) -> Result<serde_json::Value, 
     if value.is_undefined() {
         return Ok(serde_json::Value::Null);
     }
-    value
-        .to_json(ctx)
-        .map(|v| v.unwrap_or(serde_json::Value::Null))
-        .map_err(|e| describe(&e, ctx))
+    value.to_json(ctx).map(|v| v.unwrap_or(serde_json::Value::Null)).map_err(|e| describe(&e, ctx))
 }
 
 pub fn from_json(ctx: &mut Context, value: &serde_json::Value) -> Result<JsValue, String> {
@@ -235,7 +231,8 @@ fn native_host_call(_: &JsValue, args: &[JsValue], ctx: &mut Context) -> JsResul
             .map_err(|e| JsNativeError::typ().with_message(format!("__host_call: bad params: {e}")))?
     };
     let reply = host_call(&method, params);
-    let text = serde_json::to_string(&reply).unwrap_or_else(|_| r#"{"error":{"kind":"other","message":"bad reply"}}"#.into());
+    let text =
+        serde_json::to_string(&reply).unwrap_or_else(|_| r#"{"error":{"kind":"other","message":"bad reply"}}"#.into());
     Ok(JsValue::from(js_string!(text)))
 }
 
@@ -261,7 +258,9 @@ fn native_b64decode(_: &JsValue, args: &[JsValue], ctx: &mut Context) -> JsResul
     let s = arg_string(args, 0, ctx)?;
     let cleaned: String = s.chars().filter(|c| !c.is_whitespace()).collect();
     let bytes = base64::engine::general_purpose::STANDARD
-        .decode(cleaned.trim_end_matches('=').to_owned() + &"=".repeat((4 - cleaned.trim_end_matches('=').len() % 4) % 4))
+        .decode(
+            cleaned.trim_end_matches('=').to_owned() + &"=".repeat((4 - cleaned.trim_end_matches('=').len() % 4) % 4),
+        )
         .map_err(|e| JsNativeError::typ().with_message(format!("atob: {e}")))?;
     let units: Vec<u16> = bytes.into_iter().map(u16::from).collect();
     Ok(JsValue::from(boa_engine::JsString::from(&units[..])))
@@ -287,8 +286,8 @@ fn native_digest(_: &JsValue, args: &[JsValue], ctx: &mut Context) -> JsResult<J
     };
     macro_rules! hmac_with {
         ($h:ty, $k:expr) => {{
-            let mut m = <Hmac<$h> as Mac>::new_from_slice($k)
-                .map_err(|e| JsNativeError::typ().with_message(e.to_string()))?;
+            let mut m =
+                <Hmac<$h> as Mac>::new_from_slice($k).map_err(|e| JsNativeError::typ().with_message(e.to_string()))?;
             m.update(&data);
             m.finalize().into_bytes().to_vec()
         }};
@@ -354,7 +353,10 @@ mod tests {
     #[test]
     fn digests_match_known_vectors() {
         assert_eq!(run("__digest('md5', '')"), "d41d8cd98f00b204e9800998ecf8427e");
-        assert_eq!(run("__digest('sha256', '616263')"), "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad");
+        assert_eq!(
+            run("__digest('sha256', '616263')"),
+            "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"
+        );
         // RFC 4231 test case 2: key "Jefe", data "what do ya want for nothing?".
         assert_eq!(
             run("__digest('sha256', '7768617420646f2079612077616e7420666f72206e6f7468696e673f', '4a656665')"),

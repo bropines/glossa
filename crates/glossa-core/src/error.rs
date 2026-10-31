@@ -119,10 +119,7 @@ impl Error {
     pub fn is_configuration_fault(&self) -> bool {
         matches!(
             self,
-            Error::MissingCredential { .. }
-                | Error::Config(_)
-                | Error::FileNotFound(_)
-                | Error::NoSuchModule(_)
+            Error::MissingCredential { .. } | Error::Config(_) | Error::FileNotFound(_) | Error::NoSuchModule(_)
         )
     }
 
@@ -176,8 +173,7 @@ mod tests {
     fn transient_errors_are_the_ones_worth_retrying() {
         assert!(Error::Timeout(10_000).is_transient());
         assert!(Error::Network("reset".into()).is_transient());
-        assert!(Error::RateLimited { provider: "G".into(), retry_after_secs: Some(3) }
-            .is_transient());
+        assert!(Error::RateLimited { provider: "G".into(), retry_after_secs: Some(3) }.is_transient());
         for status in [429, 500, 502, 503, 504] {
             let e = Error::HttpStatus { provider: "G".into(), status, body: String::new() };
             assert!(e.is_transient(), "HTTP {status} should be transient");
@@ -222,10 +218,7 @@ mod tests {
 
     #[test]
     fn language_errors_name_the_language_in_english() {
-        let e = Error::TargetLanguageUnsupported {
-            provider: "DeepL".into(),
-            lang: crate::lang::LangId::RUSSIAN,
-        };
+        let e = Error::TargetLanguageUnsupported { provider: "DeepL".into(), lang: crate::lang::LangId::RUSSIAN };
         assert_eq!(e.to_string(), "DeepL does not support Russian as a target language");
     }
 }

@@ -92,7 +92,9 @@ pub fn start(engine: Engine) -> Result<ServerHandle, Error> {
                         let engine = engine.clone();
                         // Each request on its own thread: a slow translation
                         // must not hold up a key binding.
-                        let _ = std::thread::Builder::new().name("glossa-api-req".into()).spawn(move || handle(&engine, req));
+                        let _ = std::thread::Builder::new()
+                            .name("glossa-api-req".into())
+                            .spawn(move || handle(&engine, req));
                     }
                     Ok(None) => {}
                     Err(_) => break,
@@ -245,7 +247,9 @@ fn route(engine: &Engine, req: &mut Request) -> Reply {
 
     match (method, path.as_str()) {
         (Method::Get, "/v1/services") => {
-            let cap = query_param(&url, "capability").and_then(|c| Capabilities::from_name(&c)).unwrap_or(Capabilities::TRANSLATE);
+            let cap = query_param(&url, "capability")
+                .and_then(|c| Capabilities::from_name(&c))
+                .unwrap_or(Capabilities::TRANSLATE);
             let list: Vec<Value> = engine
                 .providers(cap)
                 .into_iter()
@@ -262,7 +266,10 @@ fn route(engine: &Engine, req: &mut Request) -> Reply {
                 Err(r) => return r,
             };
             let Some(text) = field(&body, &url, "text") else { return Reply::error(400, "text is required") };
-            let pair = LangPair::new(lang(field(&body, &url, "from"), LangId::AUTO), lang(field(&body, &url, "to"), LangId::AUTO));
+            let pair = LangPair::new(
+                lang(field(&body, &url, "from"), LangId::AUTO),
+                lang(field(&body, &url, "to"), LangId::AUTO),
+            );
             let opts = TranslateOptions {
                 provider: field(&body, &url, "service"),
                 back_translate: body.get("back").and_then(|v| v.as_bool()).unwrap_or(false),
@@ -292,7 +299,10 @@ fn route(engine: &Engine, req: &mut Request) -> Reply {
             };
             let Some(text) = field(&body, &url, "text") else { return Reply::error(400, "text is required") };
             match engine.detect(&text) {
-                Ok(d) => Reply::json(200, json!({ "lang": d.lang.bcp47(), "name": d.lang.english_name(), "confidence": d.confidence })),
+                Ok(d) => Reply::json(
+                    200,
+                    json!({ "lang": d.lang.bcp47(), "name": d.lang.english_name(), "confidence": d.confidence }),
+                ),
                 Err(e) => Reply::from_error(&e),
             }
         }
@@ -302,14 +312,18 @@ fn route(engine: &Engine, req: &mut Request) -> Reply {
                 Err(r) => return r,
             };
             let Some(text) = field(&body, &url, "text") else { return Reply::error(400, "text is required") };
-            let pair = LangPair::new(lang(field(&body, &url, "from"), LangId::AUTO), lang(field(&body, &url, "to"), LangId::AUTO));
+            let pair = LangPair::new(
+                lang(field(&body, &url, "from"), LangId::AUTO),
+                lang(field(&body, &url, "to"), LangId::AUTO),
+            );
             match engine.dictionary(&text, pair, field(&body, &url, "service").as_deref()) {
                 Ok(a) => Reply::json(200, serde_json::to_value(&a).unwrap_or_default()),
                 Err(e) => Reply::from_error(&e),
             }
         }
         (Method::Post, "/v1/ocr") => {
-            let is_image = header(req, "Content-Type").is_some_and(|c| c.starts_with("image/") || c.starts_with("application/octet-stream"));
+            let is_image = header(req, "Content-Type")
+                .is_some_and(|c| c.starts_with("image/") || c.starts_with("application/octet-stream"));
             let (image, lang_code, to) = if is_image {
                 match read_body(req) {
                     Ok(b) => (b, query_param(&url, "lang"), query_param(&url, "translate_to")),
@@ -350,7 +364,11 @@ fn route(engine: &Engine, req: &mut Request) -> Reply {
             let Some(text) = field(&body, &url, "text") else { return Reply::error(400, "text is required") };
             let slow = body.get("slow").and_then(|v| v.as_bool());
             match engine.speak(&text, lang(field(&body, &url, "lang"), LangId::AUTO), slow) {
-                Ok(audio) => Reply { status: 200, body: audio.bytes, content_type: if audio.mime == "audio/wav" { "audio/wav" } else { "audio/mpeg" } },
+                Ok(audio) => Reply {
+                    status: 200,
+                    body: audio.bytes,
+                    content_type: if audio.mime == "audio/wav" { "audio/wav" } else { "audio/mpeg" },
+                },
                 Err(e) => Reply::from_error(&e),
             }
         }
@@ -426,7 +444,8 @@ mod tests {
 
         let (status, _) = request(server.addr, "GET /v1/services HTTP/1.1\r\nHost: x\r\nConnection: close\r\n\r\n");
         assert_eq!(status, 401);
-        let (status, body) = request(server.addr, "GET /v1/services?token=secret HTTP/1.1\r\nHost: x\r\nConnection: close\r\n\r\n");
+        let (status, body) =
+            request(server.addr, "GET /v1/services?token=secret HTTP/1.1\r\nHost: x\r\nConnection: close\r\n\r\n");
         assert_eq!(status, 200);
         assert!(body.contains("\"google\""));
         let (status, _) = request(
@@ -465,10 +484,16 @@ mod tests {
             _ => None,
         });
         assert_eq!(got, Some((Action::ShowPopup, Some("hello world".into()))));
-        let (status, _) = request(server.addr, "GET /v1/action/self_destruct?token=secret HTTP/1.1\r\nHost: x\r\nConnection: close\r\n\r\n");
+        let (status, _) = request(
+            server.addr,
+            "GET /v1/action/self_destruct?token=secret HTTP/1.1\r\nHost: x\r\nConnection: close\r\n\r\n",
+        );
         assert_eq!(status, 404);
         // pot-app's endpoint maps onto the same action.
-        let (status, _) = request(server.addr, "GET /selection_translate?token=secret HTTP/1.1\r\nHost: x\r\nConnection: close\r\n\r\n");
+        let (status, _) = request(
+            server.addr,
+            "GET /selection_translate?token=secret HTTP/1.1\r\nHost: x\r\nConnection: close\r\n\r\n",
+        );
         assert_eq!(status, 202);
         std::fs::remove_dir_all(&dir).ok();
     }

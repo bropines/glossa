@@ -233,8 +233,7 @@ mod tests {
             parts_of_speech: vec![PartOfSpeechEntry {
                 part_of_speech: "noun".into(),
                 senses: vec![Sense {
-                    word: "привет".into(),
-                    back_translations: vec!["hi".into(), "hello".into()],
+                    word: "привет".into(), back_translations: vec!["hi".into(), "hello".into()]
                 }],
             }],
             ..Default::default()

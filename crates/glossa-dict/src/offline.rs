@@ -363,7 +363,10 @@ mod tests {
             "lingvo.dsl",
             &utf16le_with_bom("#NAME \"Lingvo\"\n#INDEX_LANGUAGE \"English\"\n#CONTENTS_LANGUAGE \"Russian\"\ncat\n\t[trn]кот[/trn]\n"),
         );
-        let xdxf = dir.write("x.xdxf", "<xdxf lang_from=\"ENG\" lang_to=\"RUS\"><full_name>X</full_name><ar><k>cat</k>киса</ar></xdxf>".as_bytes());
+        let xdxf = dir.write(
+            "x.xdxf",
+            "<xdxf lang_from=\"ENG\" lang_to=\"RUS\"><full_name>X</full_name><ar><k>cat</k>киса</ar></xdxf>".as_bytes(),
+        );
         let tsv = dir.write("words.tsv", "cat\tкотик\n".as_bytes());
         let sniffed = dir.write("mystery.dict-file", "#NAME \"Sniffed\"\ncat\n\tкошара\n".as_bytes());
 

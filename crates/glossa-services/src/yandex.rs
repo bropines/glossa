@@ -51,9 +51,8 @@ impl Yandex {
                             the languages of the former USSR. Needs a Yandex Cloud API key."
             .into();
         info.homepage = "https://yandex.cloud/en/services/translate".into();
-        info.languages = std::iter::once(LangId::AUTO)
-            .chain(LangId::all().filter(|l| !MISSING.contains(&l.bcp47())))
-            .collect();
+        info.languages =
+            std::iter::once(LangId::AUTO).chain(LangId::all().filter(|l| !MISSING.contains(&l.bcp47()))).collect();
         info.max_input_chars = Some(10_000);
         info.needs_credentials = true;
         let options = vec![
@@ -153,7 +152,8 @@ mod tests {
             r#"{"translations":[{"text":"Привет, мир","detectedLanguageCode":"en"}]}"#,
         );
         let o = opts(&[("api_key", json!("AQVN-key")), ("folder_id", json!("b1gfolder"))]);
-        let out = with_test_host(&http, &o, |h| Yandex::new().translate(h, &req(LangId::AUTO, LangId::RUSSIAN))).unwrap();
+        let out =
+            with_test_host(&http, &o, |h| Yandex::new().translate(h, &req(LangId::AUTO, LangId::RUSSIAN))).unwrap();
         assert_eq!(out.text, "Привет, мир");
         assert_eq!(out.detected_from, Some(LangId::ENGLISH));
         let r = &http.requests()[0];
@@ -180,7 +180,9 @@ mod tests {
     #[test]
     fn missing_key_and_unsupported_target() {
         let http = MockHttp::new();
-        let r = with_test_host(&http, &OptionValues::new(), |h| Yandex::new().translate(h, &req(LangId::AUTO, LangId::RUSSIAN)));
+        let r = with_test_host(&http, &OptionValues::new(), |h| {
+            Yandex::new().translate(h, &req(LangId::AUTO, LangId::RUSSIAN))
+        });
         assert!(matches!(r, Err(Error::MissingCredential { .. })));
         let o = opts(&[("api_key", json!("k"))]);
         let r = with_test_host(&http, &o, |h| Yandex::new().translate(h, &req(LangId::AUTO, LangId(12))));

@@ -44,10 +44,8 @@ fn extra_translations(v: &Value) -> Vec<PartOfSpeechEntry> {
                     Some(Sense { word, back_translations: back })
                 })
                 .collect();
-            (!senses.is_empty()).then(|| PartOfSpeechEntry {
-                part_of_speech: group["type"].as_str().unwrap_or("").to_owned(),
-                senses,
-            })
+            (!senses.is_empty())
+                .then(|| PartOfSpeechEntry { part_of_speech: group["type"].as_str().unwrap_or("").to_owned(), senses })
         })
         .collect()
 }
@@ -161,7 +159,12 @@ mod tests {
 
     #[test]
     fn error_status_and_bad_body() {
-        let http = MockHttp::new().on(Method::Get, DEFAULT_URL, 500, r#"{"error":"An error occurred while retrieving the translation"}"#);
+        let http = MockHttp::new().on(
+            Method::Get,
+            DEFAULT_URL,
+            500,
+            r#"{"error":"An error occurred while retrieving the translation"}"#,
+        );
         let r = with_test_host(&http, &OptionValues::new(), |h| {
             Lingva::new().translate(h, &TranslateRequest::new("x", LangPair::new(LangId::ENGLISH, LangId::RUSSIAN)))
         });

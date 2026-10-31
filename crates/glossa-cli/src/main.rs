@@ -88,7 +88,23 @@ impl Args {
 }
 
 /// Flags that take a value.
-const VALUED: &[&str] = &["-f", "--from", "-t", "--to", "-s", "--service", "-l", "--lang", "-o", "--out", "-c", "--capability", "--search", "--export", "--home"];
+const VALUED: &[&str] = &[
+    "-f",
+    "--from",
+    "-t",
+    "--to",
+    "-s",
+    "--service",
+    "-l",
+    "--lang",
+    "-o",
+    "--out",
+    "-c",
+    "--capability",
+    "--search",
+    "--export",
+    "--home",
+];
 
 fn parse(argv: Vec<String>) -> Result<Args, String> {
     let mut a = Args { json: false, home: None, verbose: false, command: String::new(), flags: vec![], rest: vec![] };
@@ -105,7 +121,10 @@ fn parse(argv: Vec<String>) -> Result<Args, String> {
             "-v" | "--verbose" => a.verbose = true,
             "-h" | "--help" => a.command = "help".into(),
             "--home" => a.home = Some(it.next().ok_or("--home needs a directory")?.into()),
-            flag if flag.starts_with('-') && flag.len() > 1 && !flag.chars().nth(1).is_some_and(|c| c.is_ascii_digit()) => {
+            flag if flag.starts_with('-')
+                && flag.len() > 1
+                && !flag.chars().nth(1).is_some_and(|c| c.is_ascii_digit()) =>
+            {
                 let (name, inline) = match flag.split_once('=') {
                     Some((n, v)) => (n.to_owned(), Some(v.to_owned())),
                     None => (flag.to_owned(), None),
@@ -177,7 +196,10 @@ impl From<std::io::Error> for Fail {
 
 fn paths(args: &Args) -> Paths {
     match &args.home {
-        Some(home) => Paths::for_exe_dir(std::env::current_exe().ok().and_then(|p| p.parent().map(Into::into)).unwrap_or_default(), Some(home.clone())),
+        Some(home) => Paths::for_exe_dir(
+            std::env::current_exe().ok().and_then(|p| p.parent().map(Into::into)).unwrap_or_default(),
+            Some(home.clone()),
+        ),
         None => Paths::discover(),
     }
 }
@@ -214,7 +236,10 @@ fn run(args: &Args) -> Result<(), Fail> {
         }
         "translate" | "tr" => {
             let e = engine(args)?;
-            let pair = LangPair::new(lang(args.flag(&["-f", "--from"]), LangId::AUTO)?, lang(args.flag(&["-t", "--to"]), LangId::AUTO)?);
+            let pair = LangPair::new(
+                lang(args.flag(&["-f", "--from"]), LangId::AUTO)?,
+                lang(args.flag(&["-t", "--to"]), LangId::AUTO)?,
+            );
             let opts = TranslateOptions {
                 provider: args.flag(&["-s", "--service"]).map(str::to_owned),
                 back_translate: args.has(&["--back"]),
@@ -254,7 +279,10 @@ fn run(args: &Args) -> Result<(), Fail> {
             let e = engine(args)?;
             let d = e.detect(&text(args)?)?;
             if args.json {
-                out!("{}", json!({ "lang": d.lang.bcp47(), "name": d.lang.english_name(), "confidence": d.confidence }));
+                out!(
+                    "{}",
+                    json!({ "lang": d.lang.bcp47(), "name": d.lang.english_name(), "confidence": d.confidence })
+                );
             } else {
                 out!("{} ({})", d.lang.english_name(), d.lang.bcp47());
             }
@@ -262,7 +290,10 @@ fn run(args: &Args) -> Result<(), Fail> {
         }
         "dict" | "dictionary" => {
             let e = engine(args)?;
-            let pair = LangPair::new(lang(args.flag(&["-f", "--from"]), LangId::AUTO)?, lang(args.flag(&["-t", "--to"]), LangId::AUTO)?);
+            let pair = LangPair::new(
+                lang(args.flag(&["-f", "--from"]), LangId::AUTO)?,
+                lang(args.flag(&["-t", "--to"]), LangId::AUTO)?,
+            );
             let a = e.dictionary(&text(args)?, pair, args.flag(&["-s", "--service"]))?;
             if args.json {
                 out!("{}", serde_json::to_string_pretty(&a).unwrap_or_default());
@@ -298,7 +329,8 @@ fn run(args: &Args) -> Result<(), Fail> {
         "speak" => {
             let out_path = args.flag(&["-o", "--out"]).ok_or_else(|| Fail::Usage("speak needs -o OUT.mp3".into()))?;
             let e = engine(args)?;
-            let audio = e.speak(&text(args)?, lang(args.flag(&["-l", "--lang"]), LangId::AUTO)?, Some(args.has(&["--slow"])))?;
+            let audio =
+                e.speak(&text(args)?, lang(args.flag(&["-l", "--lang"]), LangId::AUTO)?, Some(args.has(&["--slow"])))?;
             std::fs::write(out_path, &audio.bytes)?;
             eprintln!("{} bytes of {} written to {out_path}", audio.bytes.len(), audio.mime);
             Ok(())
@@ -307,7 +339,9 @@ fn run(args: &Args) -> Result<(), Fail> {
             let e = engine(args)?;
             let cap = match args.flag(&["-c", "--capability"]) {
                 None => Capabilities::TRANSLATE,
-                Some(c) => Capabilities::from_name(c).ok_or_else(|| Fail::Usage(format!("unknown capability {c:?}")))?,
+                Some(c) => {
+                    Capabilities::from_name(c).ok_or_else(|| Fail::Usage(format!("unknown capability {c:?}")))?
+                }
             };
             let list = e.providers(cap);
             if args.json {
@@ -363,7 +397,8 @@ fn run(args: &Args) -> Result<(), Fail> {
             let favorites = args.has(&["--favorites"]);
             if let Some(path) = args.flag(&["--export"]) {
                 let ext = std::path::Path::new(path).extension().and_then(|x| x.to_str()).unwrap_or("txt");
-                let format = ExportFormat::from_extension(ext).ok_or_else(|| Fail::Usage(format!("unknown export format .{ext}")))?;
+                let format = ExportFormat::from_extension(ext)
+                    .ok_or_else(|| Fail::Usage(format!("unknown export format .{ext}")))?;
                 let n = e.export_history(std::path::Path::new(path), format, favorites)?;
                 eprintln!("{n} entries written to {path}");
                 return Ok(());
@@ -381,9 +416,14 @@ fn run(args: &Args) -> Result<(), Fail> {
             Ok(())
         }
         "import-classic" => {
-            let dir = PathBuf::from(args.rest.first().ok_or_else(|| Fail::Usage("import-classic needs the classic folder".into()))?);
+            let dir = PathBuf::from(
+                args.rest.first().ok_or_else(|| Fail::Usage("import-classic needs the classic folder".into()))?,
+            );
             if !glossa_core::config::ClassicInstall::looks_like_install(&dir) {
-                return Err(Fail::Op(format!("{} does not look like a classic installation (no Services/Data)", dir.display())));
+                return Err(Fail::Op(format!(
+                    "{} does not look like a classic installation (no Services/Data)",
+                    dir.display()
+                )));
             }
             let e = engine(args)?;
             let r = e.import_classic(&dir)?;
@@ -426,7 +466,8 @@ fn run(args: &Args) -> Result<(), Fail> {
                 "convert" => {
                     let file = args.rest.get(1).ok_or_else(|| Fail::Usage("theme convert FILE".into()))?;
                     let text = std::fs::read_to_string(file)?;
-                    let theme = glossa_core::Theme::load(&text, file, &|_| None).map_err(|e| Fail::Op(e.to_string()))?;
+                    let theme =
+                        glossa_core::Theme::load(&text, file, &|_| None).map_err(|e| Fail::Op(e.to_string()))?;
                     outp!("{}", theme.to_toml());
                     Ok(())
                 }
@@ -476,7 +517,11 @@ fn run(args: &Args) -> Result<(), Fail> {
             loop {
                 match rx.recv() {
                     Ok(glossa_engine::Event::Action { action, text }) => {
-                        eprintln!("action requested: {}{}", action.id(), text.map(|t| format!(" ({t})")).unwrap_or_default());
+                        eprintln!(
+                            "action requested: {}{}",
+                            action.id(),
+                            text.map(|t| format!(" ({t})")).unwrap_or_default()
+                        );
                     }
                     Ok(_) => {}
                     Err(_) => break,

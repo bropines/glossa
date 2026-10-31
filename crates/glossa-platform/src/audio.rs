@@ -71,11 +71,7 @@ impl AudioPlayer {
     /// A player that releases the device after `idle` of silence.
     pub fn with_idle_timeout(idle: Duration) -> Self {
         AudioPlayer {
-            shared: Arc::new(Shared {
-                tx: Mutex::new(None),
-                playing: AtomicBool::new(false),
-                idle_timeout: idle,
-            }),
+            shared: Arc::new(Shared { tx: Mutex::new(None), playing: AtomicBool::new(false), idle_timeout: idle }),
         }
     }
 
@@ -117,9 +113,7 @@ impl AudioPlayer {
         };
         let (tx, rx) = mpsc::channel();
         let shared = Arc::clone(&self.shared);
-        let spawned = std::thread::Builder::new()
-            .name("glossa-audio".into())
-            .spawn(move || worker(shared, rx));
+        let spawned = std::thread::Builder::new().name("glossa-audio".into()).spawn(move || worker(shared, rx));
         match spawned {
             Ok(_) => {
                 let _ = tx.send(cmd);
@@ -127,8 +121,7 @@ impl AudioPlayer {
             }
             Err(e) => {
                 if let Command::Play(_, reply) = cmd {
-                    let _ =
-                        reply.send(Err(platform_err(format!("cannot start audio thread: {e}"))));
+                    let _ = reply.send(Err(platform_err(format!("cannot start audio thread: {e}"))));
                 }
             }
         }

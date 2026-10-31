@@ -17,8 +17,7 @@ use std::sync::Arc;
 use std::time::Instant;
 
 use glossa_core::{
-    text, Capabilities, Config, Detection, Error, LangId, LangPair, Result, TranslateRequest,
-    Translation,
+    text, Capabilities, Config, Detection, Error, LangId, LangPair, Result, TranslateRequest, Translation,
 };
 use glossa_modules::{CancelToken, Host, OptionValues, Provider, Registry};
 use glossa_net::Http;
@@ -98,11 +97,8 @@ impl Pipeline<'_> {
                 push(id);
             }
         }
-        let mut out: Vec<Arc<dyn Provider>> = ids
-            .iter()
-            .filter_map(|id| self.registry.get(id))
-            .filter(|p| p.info().capabilities.contains(cap))
-            .collect();
+        let mut out: Vec<Arc<dyn Provider>> =
+            ids.iter().filter_map(|id| self.registry.get(id)).filter(|p| p.info().capabilities.contains(cap)).collect();
         if out.is_empty() {
             // Nothing configured can do it: fall back to anything that can,
             // rather than failing a fresh install whose config names nothing.
@@ -124,7 +120,10 @@ impl Pipeline<'_> {
     /// The option values for one provider: its declared defaults overlaid
     /// with the user's settings.
     pub fn options_for(&self, provider: &dyn Provider) -> OptionValues {
-        glossa_modules::provider::resolve_options(provider.options(), self.config.services.options.get(&provider.info().id))
+        glossa_modules::provider::resolve_options(
+            provider.options(),
+            self.config.services.options.get(&provider.info().id),
+        )
     }
 
     /// Detect the language of `text` with the first provider that can.
@@ -143,9 +142,15 @@ impl Pipeline<'_> {
     }
 
     /// Work out the direction for `text`, detecting when needed.
-    pub fn resolve_direction(&self, text: &str, pair: LangPair, preferred: Option<&str>) -> (LangPair, Option<Detection>) {
+    pub fn resolve_direction(
+        &self,
+        text: &str,
+        pair: LangPair,
+        preferred: Option<&str>,
+    ) -> (LangPair, Option<Detection>) {
         let g = &self.config.general;
-        let must_detect = (pair.from == LangId::AUTO && (pair.to == LangId::AUTO || g.smart_direction)) || g.always_detect_language;
+        let must_detect =
+            (pair.from == LangId::AUTO && (pair.to == LangId::AUTO || g.smart_direction)) || g.always_detect_language;
         if !must_detect {
             return (pair, None);
         }
@@ -186,7 +191,10 @@ impl Pipeline<'_> {
             self.cancel_check()?;
             let info = provider.info();
             if !info.supports_language(pair.to) {
-                failed.push((info.id.clone(), Error::TargetLanguageUnsupported { provider: info.name.clone(), lang: pair.to }.to_string()));
+                failed.push((
+                    info.id.clone(),
+                    Error::TargetLanguageUnsupported { provider: info.name.clone(), lang: pair.to }.to_string(),
+                ));
                 continue;
             }
             // A provider that cannot take `auto` gets the detected language,
@@ -196,7 +204,10 @@ impl Pipeline<'_> {
             } else if info.supports_language(LangId::AUTO) {
                 LangId::AUTO
             } else {
-                failed.push((info.id.clone(), Error::SourceLanguageUnsupported { provider: info.name.clone(), lang: pair.from }.to_string()));
+                failed.push((
+                    info.id.clone(),
+                    Error::SourceLanguageUnsupported { provider: info.name.clone(), lang: pair.from }.to_string(),
+                ));
                 continue;
             };
             let text = match info.max_input_chars {
@@ -275,7 +286,13 @@ mod tests {
     fn echo(id: &str) -> FnProvider {
         let id_owned = id.to_owned();
         FnProvider::translator(id, move |_, req| {
-            Ok(Translation::plain(format!("{}:{}->{}:{}", id_owned, req.from.legacy_code(), req.to.legacy_code(), req.text)))
+            Ok(Translation::plain(format!(
+                "{}:{}->{}:{}",
+                id_owned,
+                req.from.legacy_code(),
+                req.to.legacy_code(),
+                req.text
+            )))
         })
     }
 
@@ -298,7 +315,11 @@ mod tests {
     fn run(reg: &Registry, cfg: &Config, text: &str, pair: LangPair) -> Result<TranslationOutcome> {
         let http = MockHttp::new();
         let cancel = CancelToken::new();
-        Pipeline { registry: reg, config: cfg, http: &http, cancel: &cancel }.translate(text, pair, &TranslateOptions::default())
+        Pipeline { registry: reg, config: cfg, http: &http, cancel: &cancel }.translate(
+            text,
+            pair,
+            &TranslateOptions::default(),
+        )
     }
 
     #[test]
@@ -363,7 +384,10 @@ mod tests {
     fn fail_over_can_be_switched_off() {
         let (reg, mut cfg) = setup(vec![failing("a", || Error::Timeout(5)), echo("b")], "a", &["a", "b"]);
         cfg.services.fail_over = false;
-        assert!(matches!(run(&reg, &cfg, "x", LangPair::new(LangId::ENGLISH, LangId::RUSSIAN)), Err(Error::Timeout(_))));
+        assert!(matches!(
+            run(&reg, &cfg, "x", LangPair::new(LangId::ENGLISH, LangId::RUSSIAN)),
+            Err(Error::Timeout(_))
+        ));
     }
 
     #[test]
@@ -378,10 +402,16 @@ mod tests {
     #[test]
     fn empty_input_and_same_language_are_refused() {
         let (reg, cfg) = setup(vec![echo("a")], "a", &["a"]);
-        assert!(matches!(run(&reg, &cfg, "  \n ", LangPair::new(LangId::AUTO, LangId::ENGLISH)), Err(Error::EmptyInput)));
+        assert!(matches!(
+            run(&reg, &cfg, "  \n ", LangPair::new(LangId::AUTO, LangId::ENGLISH)),
+            Err(Error::EmptyInput)
+        ));
         let (reg, mut cfg) = setup(vec![echo("a")], "a", &["a"]);
         cfg.general.smart_direction = false;
-        assert!(matches!(run(&reg, &cfg, "x", LangPair::new(LangId::ENGLISH, LangId::ENGLISH)), Err(Error::SameLanguage)));
+        assert!(matches!(
+            run(&reg, &cfg, "x", LangPair::new(LangId::ENGLISH, LangId::ENGLISH)),
+            Err(Error::SameLanguage)
+        ));
     }
 
     #[test]
@@ -408,7 +438,11 @@ mod tests {
         let cancel = CancelToken::new();
         let p = Pipeline { registry: &reg, config: &cfg, http: &http, cancel: &cancel };
         let out = p
-            .translate("x", LangPair::new(LangId::ENGLISH, LangId::RUSSIAN), &TranslateOptions { back_translate: true, ..Default::default() })
+            .translate(
+                "x",
+                LangPair::new(LangId::ENGLISH, LangId::RUSSIAN),
+                &TranslateOptions { back_translate: true, ..Default::default() },
+            )
             .unwrap();
         assert_eq!(out.back.unwrap().text, "a:ru->en:a:en->ru:x");
     }
@@ -420,7 +454,11 @@ mod tests {
         let cancel = CancelToken::new();
         let p = Pipeline { registry: &reg, config: &cfg, http: &http, cancel: &cancel };
         let out = p
-            .translate("x", LangPair::new(LangId::ENGLISH, LangId::RUSSIAN), &TranslateOptions { provider: Some("b".into()), ..Default::default() })
+            .translate(
+                "x",
+                LangPair::new(LangId::ENGLISH, LangId::RUSSIAN),
+                &TranslateOptions { provider: Some("b".into()), ..Default::default() },
+            )
             .unwrap();
         assert_eq!(out.translation.provider_id, "b");
     }
@@ -440,6 +478,9 @@ mod tests {
         let cancel = CancelToken::new();
         cancel.cancel();
         let p = Pipeline { registry: &reg, config: &cfg, http: &http, cancel: &cancel };
-        assert!(matches!(p.translate("x", LangPair::new(LangId::ENGLISH, LangId::RUSSIAN), &TranslateOptions::default()), Err(Error::Cancelled)));
+        assert!(matches!(
+            p.translate("x", LangPair::new(LangId::ENGLISH, LangId::RUSSIAN), &TranslateOptions::default()),
+            Err(Error::Cancelled)
+        ));
     }
 }

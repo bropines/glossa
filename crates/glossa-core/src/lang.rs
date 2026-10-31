@@ -110,8 +110,7 @@ impl LangId {
         }
         // Exact, case-insensitive, on either spelling.
         for (i, row) in TABLE.iter().enumerate() {
-            if needle.eq_ignore_ascii_case(row.legacy_code) || needle.eq_ignore_ascii_case(row.bcp47)
-            {
+            if needle.eq_ignore_ascii_case(row.legacy_code) || needle.eq_ignore_ascii_case(row.bcp47) {
                 return Some(LangId(i as u16));
             }
         }
@@ -120,8 +119,7 @@ impl LangId {
         let base = needle.split(['-', '_']).next().unwrap_or(needle);
         if !base.eq_ignore_ascii_case("zh") {
             for (i, row) in TABLE.iter().enumerate() {
-                if base.eq_ignore_ascii_case(row.legacy_code) || base.eq_ignore_ascii_case(row.bcp47)
-                {
+                if base.eq_ignore_ascii_case(row.legacy_code) || base.eq_ignore_ascii_case(row.bcp47) {
                     return Some(LangId(i as u16));
                 }
             }
@@ -191,8 +189,7 @@ impl<'de> Deserialize<'de> for LangId {
                 Ok(LangId(v.max(0) as u16))
             }
             fn visit_str<E: serde::de::Error>(self, v: &str) -> Result<LangId, E> {
-                LangId::from_code(v)
-                    .ok_or_else(|| E::custom(format!("unknown language code {v:?}")))
+                LangId::from_code(v).ok_or_else(|| E::custom(format!("unknown language code {v:?}")))
             }
         }
         d.deserialize_any(V)

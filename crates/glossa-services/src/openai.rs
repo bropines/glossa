@@ -181,7 +181,11 @@ impl Provider for OpenAi {
         let v = parse_json(&resp, self.name())?;
         // Some proxies report failures in a 200.
         if let Some(msg) = v["error"]["message"].as_str() {
-            return Err(Error::HttpStatus { provider: self.name().to_owned(), status: resp.status, body: msg.to_owned() });
+            return Err(Error::HttpStatus {
+                provider: self.name().to_owned(),
+                status: resp.status,
+                body: msg.to_owned(),
+            });
         }
         let content = message_text(&v["choices"][0]["message"]["content"])
             .ok_or_else(|| Error::bad_response(self.name(), "missing choices[0].message.content"))?;
@@ -260,7 +264,10 @@ mod tests {
 
     #[test]
     fn full_endpoint_urls_are_accepted() {
-        assert_eq!(endpoint("https://openrouter.ai/api/v1/chat/completions"), "https://openrouter.ai/api/v1/chat/completions");
+        assert_eq!(
+            endpoint("https://openrouter.ai/api/v1/chat/completions"),
+            "https://openrouter.ai/api/v1/chat/completions"
+        );
         assert_eq!(endpoint(""), "https://api.openai.com/v1/chat/completions");
     }
 
@@ -271,7 +278,8 @@ mod tests {
         let out = with_test_host(&http, &OptionValues::new(), |h| OpenAi::new().translate(h, &req())).unwrap();
         assert_eq!(out.text, "Привет");
 
-        let body = r#"{"choices":[{"message":{"content":[{"type":"text","text":"При"},{"type":"text","text":"вет"}]}}]}"#;
+        let body =
+            r#"{"choices":[{"message":{"content":[{"type":"text","text":"При"},{"type":"text","text":"вет"}]}}]}"#;
         let http = MockHttp::new().on(Method::Post, DEFAULT_BASE, 200, body);
         let out = with_test_host(&http, &OptionValues::new(), |h| OpenAi::new().translate(h, &req())).unwrap();
         assert_eq!(out.text, "Привет");
@@ -280,12 +288,22 @@ mod tests {
     #[test]
     fn errors_are_reported() {
         // No key against a server that wants one.
-        let http = MockHttp::new().on(Method::Post, DEFAULT_BASE, 401, r#"{"error":{"message":"You didn't provide an API key.","type":"invalid_request_error"}}"#);
+        let http = MockHttp::new().on(
+            Method::Post,
+            DEFAULT_BASE,
+            401,
+            r#"{"error":{"message":"You didn't provide an API key.","type":"invalid_request_error"}}"#,
+        );
         let r = with_test_host(&http, &OptionValues::new(), |h| OpenAi::new().translate(h, &req()));
         assert!(matches!(r, Err(Error::MissingCredential { .. })), "{r:?}");
 
         // A wrong key: the API's message.
-        let http = MockHttp::new().on(Method::Post, DEFAULT_BASE, 401, r#"{"error":{"message":"Incorrect API key provided"}}"#);
+        let http = MockHttp::new().on(
+            Method::Post,
+            DEFAULT_BASE,
+            401,
+            r#"{"error":{"message":"Incorrect API key provided"}}"#,
+        );
         let o = opts(&[("api_key", json!("sk-bad"))]);
         match with_test_host(&http, &o, |h| OpenAi::new().translate(h, &req())) {
             Err(Error::HttpStatus { status: 401, body, .. }) => assert_eq!(body, "Incorrect API key provided"),

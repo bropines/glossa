@@ -307,13 +307,7 @@ pub struct Fonts {
 
 impl Default for Fonts {
     fn default() -> Self {
-        Self {
-            family: String::new(),
-            size: 10.0,
-            text_family: String::new(),
-            text_size: 11.0,
-            fallbacks: Vec::new(),
-        }
+        Self { family: String::new(), size: 10.0, text_family: String::new(), text_size: 11.0, fallbacks: Vec::new() }
     }
 }
 
@@ -334,14 +328,12 @@ impl Theme {
     ) -> Result<Theme, ThemeError> {
         let lower = file_name_hint.to_ascii_lowercase();
         if lower.ends_with(".toml") {
-            let value: toml::Value =
-                toml::from_str(text).map_err(|e| ThemeError::Parse(e.to_string()))?;
+            let value: toml::Value = toml::from_str(text).map_err(|e| ThemeError::Parse(e.to_string()))?;
             let json = serde_json::to_value(value).map_err(|e| ThemeError::Parse(e.to_string()))?;
             return Theme::from_native_value(json, file_name_hint, resolve, 0);
         }
 
-        let value: Value = serde_json::from_str(&jsonc::strip(text))
-            .map_err(|e| ThemeError::Parse(e.to_string()))?;
+        let value: Value = serde_json::from_str(&jsonc::strip(text)).map_err(|e| ThemeError::Parse(e.to_string()))?;
         if is_classic(&value) {
             let mut theme = Theme::from_classic_value(&value)?;
             if theme.name.is_empty() {
@@ -369,11 +361,9 @@ impl Theme {
                     Some(text) => {
                         // Recursion through `load` handles both formats.
                         let v: Value = if text.trim_start().starts_with('{') {
-                            serde_json::from_str(&jsonc::strip(&text))
-                                .map_err(|e| ThemeError::Parse(e.to_string()))?
+                            serde_json::from_str(&jsonc::strip(&text)).map_err(|e| ThemeError::Parse(e.to_string()))?
                         } else {
-                            let t: toml::Value = toml::from_str(&text)
-                                .map_err(|e| ThemeError::Parse(e.to_string()))?;
+                            let t: toml::Value = toml::from_str(&text).map_err(|e| ThemeError::Parse(e.to_string()))?;
                             serde_json::to_value(t).map_err(|e| ThemeError::Parse(e.to_string()))?
                         };
                         if is_classic(&v) {
@@ -382,13 +372,11 @@ impl Theme {
                             Theme::from_native_value(v, parent, resolve, depth + 1)?
                         }
                     }
-                    None => builtin::by_name(parent)
-                        .ok_or_else(|| ThemeError::UnknownParent(parent.clone()))?,
+                    None => builtin::by_name(parent).ok_or_else(|| ThemeError::UnknownParent(parent.clone()))?,
                 };
                 serde_json::to_value(parent_theme).map_err(|e| ThemeError::Parse(e.to_string()))?
             }
-            None => serde_json::to_value(Theme::default())
-                .map_err(|e| ThemeError::Parse(e.to_string()))?,
+            None => serde_json::to_value(Theme::default()).map_err(|e| ThemeError::Parse(e.to_string()))?,
         };
 
         let mut merged = base_value;
@@ -396,8 +384,7 @@ impl Theme {
             obj.remove("extends");
         }
         merge(&mut merged, value);
-        let mut theme: Theme =
-            serde_json::from_value(merged).map_err(|e| ThemeError::Parse(e.to_string()))?;
+        let mut theme: Theme = serde_json::from_value(merged).map_err(|e| ThemeError::Parse(e.to_string()))?;
         theme.extends = parent_name;
         if theme.name.is_empty() || theme.name == Theme::default().name && depth == 0 {
             let s = stem(file_name_hint);
@@ -426,9 +413,7 @@ impl Theme {
                 None => Ok(None),
             }
         };
-        let req = |path: &[&str], fallback: Color| -> Result<Color, ThemeError> {
-            Ok(get(path)?.unwrap_or(fallback))
-        };
+        let req = |path: &[&str], fallback: Color| -> Result<Color, ThemeError> { Ok(get(path)?.unwrap_or(fallback)) };
 
         let window_back = req(&["Window", "Normal", "Back"], Color::grey(0x20))?;
         let window_text = req(&["Window", "Normal", "Text"], Color::grey(0xbb))?;
@@ -491,8 +476,7 @@ impl Theme {
 
         let button_states: States<ButtonStyle> = states_of(&button, ButtonStyle::default())?;
         let edit_states: States<EditStyle> = states_of(&edit, EditStyle::default())?;
-        let window_button: States<GlyphStyle> =
-            states_of(&|s| glyph("WindowButton", s), GlyphStyle::default())?;
+        let window_button: States<GlyphStyle> = states_of(&|s| glyph("WindowButton", s), GlyphStyle::default())?;
         let icon: States<GlyphStyle> = states_of(&|s| glyph("Icon", s), GlyphStyle::default())?;
 
         let client_back = get(&["Common", "ClientBackColor"])?.unwrap_or(window_back);
@@ -599,10 +583,7 @@ fn merge(base: &mut Value, overlay: Value) {
 }
 
 fn stem(path: &str) -> String {
-    std::path::Path::new(path)
-        .file_stem()
-        .map(|s| s.to_string_lossy().into_owned())
-        .unwrap_or_default()
+    std::path::Path::new(path).file_stem().map(|s| s.to_string_lossy().into_owned()).unwrap_or_default()
 }
 
 /// The themes compiled into the binary, so a fresh install has something to
@@ -686,11 +667,7 @@ pub mod builtin {
             }),
             window_button: States {
                 normal: GlyphStyle { main: Color::grey(0x96), ..GlyphStyle::default() },
-                hover: Some(GlyphStyle {
-                    main: Color::WHITE,
-                    back: Some(Color::grey(0x48)),
-                    ..GlyphStyle::default()
-                }),
+                hover: Some(GlyphStyle { main: Color::WHITE, back: Some(Color::grey(0x48)), ..GlyphStyle::default() }),
                 pressed: Some(GlyphStyle {
                     main: Color::WHITE,
                     back: Some(Color::grey(0x1c)),
@@ -776,16 +753,8 @@ pub mod builtin {
         });
         t.window_button = States {
             normal: GlyphStyle { main: Color::grey(0x50), ..GlyphStyle::default() },
-            hover: Some(GlyphStyle {
-                main: Color::BLACK,
-                back: Some(Color::grey(0xe0)),
-                ..GlyphStyle::default()
-            }),
-            pressed: Some(GlyphStyle {
-                main: Color::BLACK,
-                back: Some(Color::grey(0xcc)),
-                ..GlyphStyle::default()
-            }),
+            hover: Some(GlyphStyle { main: Color::BLACK, back: Some(Color::grey(0xe0)), ..GlyphStyle::default() }),
+            pressed: Some(GlyphStyle { main: Color::BLACK, back: Some(Color::grey(0xcc)), ..GlyphStyle::default() }),
             disabled: None,
             focused: None,
         };
@@ -944,10 +913,7 @@ mod tests {
     #[test]
     fn unknown_parent_is_an_error() {
         let child = r#"extends = "Nope""#;
-        assert!(matches!(
-            Theme::load(child, "x.toml", &no_resolver),
-            Err(ThemeError::UnknownParent(_))
-        ));
+        assert!(matches!(Theme::load(child, "x.toml", &no_resolver), Err(ThemeError::UnknownParent(_))));
     }
 
     #[test]

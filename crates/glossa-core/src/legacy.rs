@@ -9,8 +9,7 @@ use serde_json::Value;
 
 use crate::color::Color;
 use crate::config::{
-    Config, CopyAction, ExceptionMode, ExceptionRule, MouseBehaviour, PopupIcons, ProxyMode,
-    ProxyScheme, StartupAction,
+    Config, CopyAction, ExceptionMode, ExceptionRule, MouseBehaviour, PopupIcons, ProxyMode, ProxyScheme, StartupAction,
 };
 use crate::history::{History, HistoryEntry, HistoryResult};
 use crate::hotkey::{Action, Hotkey};
@@ -119,10 +118,7 @@ pub fn import_options(text: &str, config: &mut Config) -> Result<Vec<String>, St
             .iter()
             .filter_map(|p| {
                 let a = p.as_array()?;
-                Some(LangPair::new(
-                    LangId(a.first()?.as_u64()? as u16),
-                    LangId(a.get(1)?.as_u64()? as u16),
-                ))
+                Some(LangPair::new(LangId(a.first()?.as_u64()? as u16), LangId(a.get(1)?.as_u64()? as u16)))
             })
             .collect();
         if !parsed.is_empty() {
@@ -220,8 +216,7 @@ pub fn import_options(text: &str, config: &mut Config) -> Result<Vec<String>, St
     }
     if let Some(order) = ids(&["DictionariesOrder"]) {
         let disabled = ids(&["DisabledDictionaries"]).unwrap_or_default();
-        config.services.dictionary_enabled =
-            order.iter().filter(|id| !disabled.contains(id)).cloned().collect();
+        config.services.dictionary_enabled = order.iter().filter(|id| !disabled.contains(id)).cloned().collect();
         config.services.dictionary_order = order;
     }
     if let Some(active) = ids(&["General", "ActiveDictionaryServices"]).and_then(|a| a.into_iter().next()) {
@@ -264,8 +259,7 @@ pub fn import_options(text: &str, config: &mut Config) -> Result<Vec<String>, St
     // -- Exceptions --------------------------------------------------------------------------
     if let Some(ex) = get(&v, &["Exceptions"]) {
         let disabled_mode = ex.get("DisabledMode").and_then(Value::as_bool).unwrap_or(true);
-        config.exceptions.mode =
-            if disabled_mode { ExceptionMode::DisabledFor } else { ExceptionMode::EnabledFor };
+        config.exceptions.mode = if disabled_mode { ExceptionMode::DisabledFor } else { ExceptionMode::EnabledFor };
         let list = if disabled_mode { "Disabled" } else { "Enabled" };
         if let Some(rules) = ex.get(list).and_then(Value::as_array) {
             config.exceptions.rules = rules

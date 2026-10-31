@@ -221,11 +221,23 @@ fn overlay(app: &mut GlossaApp, ui: &mut egui::Ui, st: &mut OcrState) -> bool {
                 }
                 p.rect_stroke(sel, 0.0, egui::Stroke::new(1.5, look.accent()), egui::StrokeKind::Outside);
                 let px = format!("{} × {}", (sel.width() * st.scale) as i32, (sel.height() * st.scale) as i32);
-                p.text(sel.left_top() - vec2(0.0, 4.0), egui::Align2::LEFT_BOTTOM, px, egui::FontId::proportional(12.0), Color32::WHITE);
+                p.text(
+                    sel.left_top() - vec2(0.0, 4.0),
+                    egui::Align2::LEFT_BOTTOM,
+                    px,
+                    egui::FontId::proportional(12.0),
+                    Color32::WHITE,
+                );
             }
             None => {
                 p.rect_filled(full, 0.0, dim);
-                p.text(full.center_top() + vec2(0.0, 40.0), egui::Align2::CENTER_CENTER, app.t("ocr.hint"), egui::FontId::proportional(16.0), Color32::WHITE);
+                p.text(
+                    full.center_top() + vec2(0.0, 40.0),
+                    egui::Align2::CENTER_CENTER,
+                    app.t("ocr.hint"),
+                    egui::FontId::proportional(16.0),
+                    Color32::WHITE,
+                );
             }
         }
 
@@ -296,97 +308,127 @@ fn result_panel(app: &mut GlossaApp, ui: &mut egui::Ui, st: &mut OcrState, sel: 
     let mut keep = true;
     let width = sel.width().clamp(320.0, 560.0);
     let below = sel.max.y + 8.0;
-    let pos = if below + 160.0 < full.max.y { pos2(sel.min.x.min(full.max.x - width - 8.0), below) } else { pos2(sel.min.x.min(full.max.x - width - 8.0), (sel.min.y - 230.0).max(8.0)) };
-    egui::Area::new(egui::Id::unique("ocr-result")).fixed_pos(pos).order(egui::Order::Foreground).show(ui.ctx(), |ui| {
-        egui::Frame::popup(ui.style()).fill(look.popup_back).stroke(egui::Stroke::new(look.popup_frame_width.max(1.0), look.popup_frame)).show(ui, |ui| {
-            ui.set_width(width);
-            match &st.phase {
-                Phase::Recognizing => {
-                    ui.horizontal(|ui| {
-                        ui.add(egui::Spinner::new());
-                        ui.label(app.t("msg.recognizing"));
-                    });
-                }
-                Phase::Failed(e) => {
-                    ui.label(RichText::new(e).color(look.error()));
-                    ui.horizontal(|ui| {
-                        if ui.button(app.t("ocr.clear_selection")).clicked() {
-                            st.selection = None;
-                            st.phase = Phase::Selecting;
+    let pos = if below + 160.0 < full.max.y {
+        pos2(sel.min.x.min(full.max.x - width - 8.0), below)
+    } else {
+        pos2(sel.min.x.min(full.max.x - width - 8.0), (sel.min.y - 230.0).max(8.0))
+    };
+    egui::Area::new(egui::Id::unique("ocr-result")).fixed_pos(pos).order(egui::Order::Foreground).show(
+        ui.ctx(),
+        |ui| {
+            egui::Frame::popup(ui.style())
+                .fill(look.popup_back)
+                .stroke(egui::Stroke::new(look.popup_frame_width.max(1.0), look.popup_frame))
+                .show(ui, |ui| {
+                    ui.set_width(width);
+                    match &st.phase {
+                        Phase::Recognizing => {
+                            ui.horizontal(|ui| {
+                                ui.add(egui::Spinner::new());
+                                ui.label(app.t("msg.recognizing"));
+                            });
                         }
-                        if ui.button(app.t("ocr.close")).clicked() {
-                            keep = false;
+                        Phase::Failed(e) => {
+                            ui.label(RichText::new(e).color(look.error()));
+                            ui.horizontal(|ui| {
+                                if ui.button(app.t("ocr.clear_selection")).clicked() {
+                                    st.selection = None;
+                                    st.phase = Phase::Selecting;
+                                }
+                                if ui.button(app.t("ocr.close")).clicked() {
+                                    keep = false;
+                                }
+                            });
                         }
-                    });
-                }
-                Phase::Done(o) => {
-                    let o = o.clone();
-                    let text = st.edited_text.get_or_insert_with(|| o.ocr.text.clone());
-                    egui::ScrollArea::vertical().id_salt("ocr-text").max_height(140.0).show(ui, |ui| {
-                        ui.add(egui::TextEdit::multiline(text).desired_width(f32::INFINITY).font(look.text_font()));
-                    });
-                    if let Some(t) = o.translated_text() {
-                        ui.separator();
-                        egui::ScrollArea::vertical().id_salt("ocr-tr").max_height(140.0).show(ui, |ui| {
-                            ui.add(egui::Label::new(RichText::new(t).font(look.text_font()).color(look.popup_text)).selectable(true).wrap());
-                        });
+                        Phase::Done(o) => {
+                            let o = o.clone();
+                            let text = st.edited_text.get_or_insert_with(|| o.ocr.text.clone());
+                            egui::ScrollArea::vertical().id_salt("ocr-text").max_height(140.0).show(ui, |ui| {
+                                ui.add(
+                                    egui::TextEdit::multiline(text).desired_width(f32::INFINITY).font(look.text_font()),
+                                );
+                            });
+                            if let Some(t) = o.translated_text() {
+                                ui.separator();
+                                egui::ScrollArea::vertical().id_salt("ocr-tr").max_height(140.0).show(ui, |ui| {
+                                    ui.add(
+                                        egui::Label::new(
+                                            RichText::new(t).font(look.text_font()).color(look.popup_text),
+                                        )
+                                        .selectable(true)
+                                        .wrap(),
+                                    );
+                                });
+                            }
+                            let text = text.clone();
+                            ui.horizontal_wrapped(|ui| {
+                                if ui.button(app.t("ocr.copy_text")).clicked() {
+                                    app.copy_text(&text);
+                                }
+                                if let Some(t) = o.translated_text() {
+                                    if ui.button(app.t("history.copy_translation")).clicked() {
+                                        let t = t.to_owned();
+                                        app.copy_text(&t);
+                                    }
+                                }
+                                if ui.button(app.t("ocr.translate")).clicked() {
+                                    app.main.source = text.clone();
+                                    app.main.translated_source.clear();
+                                    app.translate_main();
+                                    app.show_main();
+                                    keep = false;
+                                }
+                                if ui.button(app.t("ocr.copy_image")).clicked() {
+                                    if let Some(img) = crop_of(st, sel) {
+                                        if let Some(cb) = app.clipboard.as_mut() {
+                                            let _ = cb.set_image(&img);
+                                        }
+                                    }
+                                }
+                                if ui.button(app.t("ocr.save_image")).clicked() {
+                                    if let (Some(img), Some(path)) = (
+                                        crop_of(st, sel),
+                                        rfd::FileDialog::new()
+                                            .add_filter("PNG", &["png"])
+                                            .set_file_name("glossa-ocr.png")
+                                            .save_file(),
+                                    ) {
+                                        if let Err(e) = img.save(&path) {
+                                            app.notify(e.to_string(), true);
+                                        }
+                                    }
+                                }
+                                if ui.button(app.t("ocr.clear_selection")).clicked() {
+                                    st.selection = None;
+                                    st.edited_text = None;
+                                    st.phase = Phase::Selecting;
+                                }
+                                if ui.button(app.t("ocr.close")).clicked() {
+                                    keep = false;
+                                }
+                            });
+                            ui.horizontal(|ui| {
+                                ui.label(RichText::new(app.t("ocr.language")).small());
+                                let disabled = app.cfg.languages.disabled.clone();
+                                let auto = app.t("main.auto_detect");
+                                if let Some(l) =
+                                    crate::widgets::lang_combo(ui, "ocr-lang", st.lang, true, &auto, &disabled, 160.0)
+                                {
+                                    st.lang = l;
+                                    let _ = app.engine.update_config(move |c| c.ocr.language = l);
+                                }
+                                ui.label(
+                                    RichText::new(format!("{} · {} ms", o.ocr.provider_id, o.ocr.elapsed_ms))
+                                        .small()
+                                        .color(look.weak_text()),
+                                );
+                            });
+                        }
+                        Phase::Selecting => {}
                     }
-                    let text = text.clone();
-                    ui.horizontal_wrapped(|ui| {
-                        if ui.button(app.t("ocr.copy_text")).clicked() {
-                            app.copy_text(&text);
-                        }
-                        if let Some(t) = o.translated_text() {
-                            if ui.button(app.t("history.copy_translation")).clicked() {
-                                let t = t.to_owned();
-                                app.copy_text(&t);
-                            }
-                        }
-                        if ui.button(app.t("ocr.translate")).clicked() {
-                            app.main.source = text.clone();
-                            app.main.translated_source.clear();
-                            app.translate_main();
-                            app.show_main();
-                            keep = false;
-                        }
-                        if ui.button(app.t("ocr.copy_image")).clicked() {
-                            if let Some(img) = crop_of(st, sel) {
-                                if let Some(cb) = app.clipboard.as_mut() {
-                                    let _ = cb.set_image(&img);
-                                }
-                            }
-                        }
-                        if ui.button(app.t("ocr.save_image")).clicked() {
-                            if let (Some(img), Some(path)) = (crop_of(st, sel), rfd::FileDialog::new().add_filter("PNG", &["png"]).set_file_name("glossa-ocr.png").save_file()) {
-                                if let Err(e) = img.save(&path) {
-                                    app.notify(e.to_string(), true);
-                                }
-                            }
-                        }
-                        if ui.button(app.t("ocr.clear_selection")).clicked() {
-                            st.selection = None;
-                            st.edited_text = None;
-                            st.phase = Phase::Selecting;
-                        }
-                        if ui.button(app.t("ocr.close")).clicked() {
-                            keep = false;
-                        }
-                    });
-                    ui.horizontal(|ui| {
-                        ui.label(RichText::new(app.t("ocr.language")).small());
-                        let disabled = app.cfg.languages.disabled.clone();
-                        let auto = app.t("main.auto_detect");
-                        if let Some(l) = crate::widgets::lang_combo(ui, "ocr-lang", st.lang, true, &auto, &disabled, 160.0) {
-                            st.lang = l;
-                            let _ = app.engine.update_config(move |c| c.ocr.language = l);
-                        }
-                        ui.label(RichText::new(format!("{} · {} ms", o.ocr.provider_id, o.ocr.elapsed_ms)).small().color(look.weak_text()));
-                    });
-                }
-                Phase::Selecting => {}
-            }
-        });
-    });
+                });
+        },
+    );
     let _ = LangPair::new(LangId::AUTO, LangId::AUTO);
     keep
 }
@@ -431,7 +473,8 @@ impl Watch {
                 let mut last: Option<image::RgbaImage> = None;
                 while !stop.load(Ordering::SeqCst) {
                     if let Ok(img) = glossa_platform::capture::capture_rect(region) {
-                        let changed = last.as_ref().map_or(true, |l| glossa_platform::capture::images_differ(l, &img, 0.02));
+                        let changed =
+                            last.as_ref().map_or(true, |l| glossa_platform::capture::images_differ(l, &img, 0.02));
                         if changed {
                             *pending.lock() = Some(glossa_platform::capture::encode_png(&img));
                             last = Some(img);

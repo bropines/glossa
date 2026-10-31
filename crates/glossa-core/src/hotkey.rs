@@ -259,12 +259,7 @@ impl Hotkey {
         }
         let vk = (value & 0xff) as u8;
         let flags = (value >> 8) & 0xff;
-        let mods = Modifiers {
-            alt: flags & 1 != 0,
-            ctrl: flags & 2 != 0,
-            shift: flags & 4 != 0,
-            meta: flags & 8 != 0,
-        };
+        let mods = Modifiers { alt: flags & 1 != 0, ctrl: flags & 2 != 0, shift: flags & 4 != 0, meta: flags & 8 != 0 };
         Some(Hotkey { mods, key: Key(vk_name(vk)?.to_owned()) })
     }
 
@@ -335,8 +330,7 @@ impl FromStr for Hotkey {
                 "meta" | "win" | "super" | "cmd" | "command" | "logo" => mods.meta = true,
                 "" => {}
                 _ => {
-                    let canonical = canonical_key(part)
-                        .ok_or_else(|| HotkeyParseError::UnknownKey(part.to_owned()))?;
+                    let canonical = canonical_key(part).ok_or_else(|| HotkeyParseError::UnknownKey(part.to_owned()))?;
                     key = Some(canonical.to_owned());
                 }
             }

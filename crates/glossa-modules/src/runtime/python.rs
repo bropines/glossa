@@ -159,8 +159,9 @@ impl PythonTransport {
 
     fn spawn(&self) -> Result<Proc, ModuleError> {
         let cfg = &self.cfg;
-        let (program, pre_args) = interpreter(&cfg.interpreter)
-            .ok_or_else(|| ModuleError::other("no Python 3 interpreter found; install Python or set its path in the settings"))?;
+        let (program, pre_args) = interpreter(&cfg.interpreter).ok_or_else(|| {
+            ModuleError::other("no Python 3 interpreter found; install Python or set its path in the settings")
+        })?;
         let mut cmd = Command::new(&program);
         cmd.args(&pre_args)
             .arg(&cfg.script)
@@ -185,10 +186,11 @@ impl PythonTransport {
         }
         hide_window(&mut cmd);
 
-        let mut child = cmd.spawn().map_err(|e| {
-            ModuleError::other(format!("cannot start {}: {e}", Path::new(&program).display()))
-        })?;
-        let (Some(stdin), Some(stdout), Some(stderr)) = (child.stdin.take(), child.stdout.take(), child.stderr.take()) else {
+        let mut child = cmd
+            .spawn()
+            .map_err(|e| ModuleError::other(format!("cannot start {}: {e}", Path::new(&program).display())))?;
+        let (Some(stdin), Some(stdout), Some(stderr)) = (child.stdin.take(), child.stdout.take(), child.stderr.take())
+        else {
             let _ = child.kill();
             return Err(ModuleError::other("the module process has no stdio"));
         };
@@ -204,7 +206,12 @@ impl PythonTransport {
         let proc = self.spawn()?;
         inner.generation += 1;
         if !self.cfg.idle_timeout.is_zero() {
-            watch_idle(Arc::downgrade(&self.inner), inner.generation, self.cfg.idle_timeout, self.cfg.module_id.clone());
+            watch_idle(
+                Arc::downgrade(&self.inner),
+                inner.generation,
+                self.cfg.idle_timeout,
+                self.cfg.module_id.clone(),
+            );
         }
         Ok(proc)
     }
@@ -229,7 +236,10 @@ impl PythonTransport {
             let wait = deadline.saturating_duration_since(Instant::now());
             match proc.frames.recv_timeout(wait) {
                 Ok(Frame::Oversize) => {
-                    return (Err(ModuleError::bad_response(format!("the module sent a line over {MAX_FRAME} bytes"))), false);
+                    return (
+                        Err(ModuleError::bad_response(format!("the module sent a line over {MAX_FRAME} bytes"))),
+                        false,
+                    );
                 }
                 Ok(Frame::Message(msg)) => {
                     if msg.get("id").and_then(Value::as_u64) == Some(id) {
@@ -251,7 +261,10 @@ impl PythonTransport {
                         obj.insert("id".into(), Value::String(call_id));
                     }
                     if let Err(e) = write_frame(&mut proc.stdin, &answer) {
-                        return (Err(ModuleError::other(format!("cannot reach the module: {e}{}", proc.exit_detail()))), false);
+                        return (
+                            Err(ModuleError::other(format!("cannot reach the module: {e}{}", proc.exit_detail()))),
+                            false,
+                        );
                     }
                 }
                 Err(RecvTimeoutError::Timeout) => {
@@ -262,7 +275,10 @@ impl PythonTransport {
                     );
                 }
                 Err(RecvTimeoutError::Disconnected) => {
-                    return (Err(ModuleError::other(format!("the module process exited{}", proc.exit_detail()))), false);
+                    return (
+                        Err(ModuleError::other(format!("the module process exited{}", proc.exit_detail()))),
+                        false,
+                    );
                 }
             }
         }
@@ -270,12 +286,7 @@ impl PythonTransport {
 }
 
 impl Transport for PythonTransport {
-    fn call(
-        &self,
-        method: &str,
-        params: Value,
-        host: &dyn Fn(&str, Value) -> Reply,
-    ) -> Result<Value, ModuleError> {
+    fn call(&self, method: &str, params: Value, host: &dyn Fn(&str, Value) -> Reply) -> Result<Value, ModuleError> {
         let mut inner = self.inner.lock();
         inner.last_used = Instant::now();
 
@@ -367,7 +378,11 @@ fn parse_reply(msg: &Value) -> Result<Value, ModuleError> {
 
 /// Read stdout on a thread: protocol frames go to the channel, other lines to
 /// the log.
-fn read_frames(stdout: impl Read + Send + 'static, module: String, recent: Arc<Mutex<VecDeque<String>>>) -> Receiver<Frame> {
+fn read_frames(
+    stdout: impl Read + Send + 'static,
+    module: String,
+    recent: Arc<Mutex<VecDeque<String>>>,
+) -> Receiver<Frame> {
     let (tx, rx) = mpsc::channel();
     let spawned = std::thread::Builder::new().name(format!("py-out-{module}")).spawn(move || {
         let mut reader = BufReader::with_capacity(64 * 1024, stdout);
@@ -406,7 +421,11 @@ fn read_frames(stdout: impl Read + Send + 'static, module: String, recent: Arc<M
 }
 
 /// Drain stderr into the log so the pipe never fills; signal when it closes.
-fn drain_stderr(stderr: impl Read + Send + 'static, module: String, recent: Arc<Mutex<VecDeque<String>>>) -> Receiver<()> {
+fn drain_stderr(
+    stderr: impl Read + Send + 'static,
+    module: String,
+    recent: Arc<Mutex<VecDeque<String>>>,
+) -> Receiver<()> {
     let (tx, rx) = mpsc::channel();
     let spawned = std::thread::Builder::new().name(format!("py-err-{module}")).spawn(move || {
         let mut reader = BufReader::new(stderr);
@@ -724,8 +743,12 @@ mod.run()
             calls.lock().unwrap().push((method.to_owned(), params.clone()));
             match method {
                 "http" => match params["url"].as_str().unwrap_or("") {
-                    "https://api.test/t" => Reply::ok(serde_json::json!({"status": 201, "headers": {}, "body": format!("got {}", params["body"].as_str().unwrap_or(""))})),
-                    "https://api.test/json" => Reply::ok(serde_json::json!({"status": 200, "headers": {}, "body": "{\"v\": 42}"})),
+                    "https://api.test/t" => Reply::ok(
+                        serde_json::json!({"status": 201, "headers": {}, "body": format!("got {}", params["body"].as_str().unwrap_or(""))}),
+                    ),
+                    "https://api.test/json" => {
+                        Reply::ok(serde_json::json!({"status": 200, "headers": {}, "body": "{\"v\": 42}"}))
+                    }
                     _ => Reply::err(ModuleError::new(ErrorKind::Network, "not in the module's permissions")),
                 },
                 "cache_set" => {
@@ -736,7 +759,9 @@ mod.run()
                 _ => Reply::ok(Value::Null),
             }
         };
-        let out = t.call("translate", serde_json::json!({"text": "hi", "from": "en", "to": "ru", "options": {}}), &host).unwrap();
+        let out = t
+            .call("translate", serde_json::json!({"text": "hi", "from": "en", "to": "ru", "options": {}}), &host)
+            .unwrap();
         assert_eq!(out["text"], "201|got q=hi|42|1|network");
         let calls = calls.lock().unwrap();
         let methods: Vec<&str> = calls.iter().map(|(m, _)| m.as_str()).collect();

@@ -329,7 +329,10 @@ impl DictZip {
         for flag in [0x08u8, 0x10] {
             // FNAME, FCOMMENT: NUL-terminated.
             if flags & flag != 0 {
-                let nul = head.get(pos..).and_then(|r| r.iter().position(|&b| b == 0)).ok_or_else(|| bad("unterminated name"))?;
+                let nul = head
+                    .get(pos..)
+                    .and_then(|r| r.iter().position(|&b| b == 0))
+                    .ok_or_else(|| bad("unterminated name"))?;
                 pos += nul + 1;
             }
         }
@@ -463,11 +466,11 @@ impl StarDict {
         let text = std::fs::read(ifo_path)?;
         let ifo = Ifo::parse(&String::from_utf8_lossy(&text), ifo_path)?;
         let base = ifo_path.with_extension("");
-        let not_found = |what: &str| {
-            io::Error::new(io::ErrorKind::NotFound, format!("{}: {what} not found", ifo_path.display()))
-        };
+        let not_found =
+            |what: &str| io::Error::new(io::ErrorKind::NotFound, format!("{}: {what} not found", ifo_path.display()));
         let idx_path = sibling(&base, &[".idx", ".idx.gz", ".IDX"]).ok_or_else(|| not_found(".idx"))?;
-        let dict_path = sibling(&base, &[".dict", ".dict.dz", ".DICT", ".DICT.DZ"]).ok_or_else(|| not_found(".dict"))?;
+        let dict_path =
+            sibling(&base, &[".dict", ".dict.dz", ".DICT", ".DICT.DZ"]).ok_or_else(|| not_found(".dict"))?;
 
         let idx_bytes = read_maybe_gzip(&idx_path)?;
         if ifo.idxfilesize != 0 && ifo.idxfilesize != idx_bytes.len() as u64 {
@@ -993,8 +996,10 @@ mod tests {
         let dir = TempDir::new("sd-dz");
         // Enough entries that articles straddle 50-byte chunks.
         let words: Vec<String> = (0..200).map(|i| format!("word{i:03}")).collect();
-        let entries: Vec<(&str, Vec<u8>)> =
-            words.iter().map(|w| (w.as_str(), format!("definition of {w}, with some padding text").into_bytes())).collect();
+        let entries: Vec<(&str, Vec<u8>)> = words
+            .iter()
+            .map(|w| (w.as_str(), format!("definition of {w}, with some padding text").into_bytes()))
+            .collect();
         let mut fx = Fixture::new("dz", entries);
         fx.dictzip_chunk = Some(50);
         let ifo = fx.write(dir.path(), "dz");

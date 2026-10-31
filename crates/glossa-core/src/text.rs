@@ -63,13 +63,9 @@ pub fn unwrap_hard_breaks(text: &str) -> String {
             continue;
         }
 
-        let ends_sentence = trimmed
-            .chars()
-            .last()
-            .is_some_and(|c| matches!(c, '.' | '!' | '?' | ':' | ';' | '。' | '！' | '？' | '؟'));
-        let next_starts_list = next
-            .trim_start()
-            .starts_with(|c: char| matches!(c, '-' | '*' | '•' | '–' | '—'));
+        let ends_sentence =
+            trimmed.chars().last().is_some_and(|c| matches!(c, '.' | '!' | '?' | ':' | ';' | '。' | '！' | '？' | '؟'));
+        let next_starts_list = next.trim_start().starts_with(|c: char| matches!(c, '-' | '*' | '•' | '–' | '—'));
 
         if ends_sentence || next_starts_list {
             out.push('\n');
@@ -345,10 +341,7 @@ mod tests {
         assert_eq!(guessed_direction("hello world"), Direction::LeftToRight);
         assert_eq!(guessed_direction("\u{5e9}\u{5dc}\u{5d5}\u{5dd}"), Direction::RightToLeft);
         // One stray Latin word does not flip a Hebrew sentence.
-        assert_eq!(
-            guessed_direction("\u{5e9}\u{5dc}\u{5d5}\u{5dd} \u{5d7}\u{5d1}\u{5e8} ok"),
-            Direction::RightToLeft
-        );
+        assert_eq!(guessed_direction("\u{5e9}\u{5dc}\u{5d5}\u{5dd} \u{5d7}\u{5d1}\u{5e8} ok"), Direction::RightToLeft);
         assert!(Direction::RightToLeft.is_rtl());
     }
 

@@ -50,7 +50,11 @@ pub fn perform(app: &mut GlossaApp, action: Action, text: Option<String>) {
         Action::NextService => {
             let enabled = app.cfg.services.enabled.clone();
             if !enabled.is_empty() {
-                let i = enabled.iter().position(|s| *s == app.cfg.services.active).map(|i| (i + 1) % enabled.len()).unwrap_or(0);
+                let i = enabled
+                    .iter()
+                    .position(|s| *s == app.cfg.services.active)
+                    .map(|i| (i + 1) % enabled.len())
+                    .unwrap_or(0);
                 app.set_active_service(&enabled[i]);
             }
         }
@@ -68,7 +72,8 @@ pub fn perform(app: &mut GlossaApp, action: Action, text: Option<String>) {
                 app.notify(m, true);
                 return;
             };
-            if action == Action::TranslateClipboardInMain || (action == Action::TranslateClipboard && app.main_visible) {
+            if action == Action::TranslateClipboardInMain || (action == Action::TranslateClipboard && app.main_visible)
+            {
                 app.main.source = clip;
                 app.translate_main();
                 app.show_main();
@@ -80,7 +85,10 @@ pub fn perform(app: &mut GlossaApp, action: Action, text: Option<String>) {
             let clip = app.clipboard_text();
             crate::dictionary::open(app, clip);
         }
-        Action::TextRecognition | Action::RecognizeAndTranslate | Action::RecognizeToClipboard | Action::WatchRegion => {
+        Action::TextRecognition
+        | Action::RecognizeAndTranslate
+        | Action::RecognizeToClipboard
+        | Action::WatchRegion => {
             if let Some(w) = app.watch.take() {
                 // Pressing the watch hotkey again stops watching.
                 w.stop();
@@ -145,7 +153,12 @@ pub fn read_selection(cfg: &glossa_core::Config, action: Action) -> Option<Task>
         Ok(t) => (t.filter(|s| !s.trim().is_empty()), None),
         Err(e) => (None, Some(e.to_string())),
     };
-    tracing::debug!(chars = text.as_ref().map(|t| t.chars().count()), ?error, ms = started.elapsed().as_millis() as u64, "selection captured");
+    tracing::debug!(
+        chars = text.as_ref().map(|t| t.chars().count()),
+        ?error,
+        ms = started.elapsed().as_millis() as u64,
+        "selection captured"
+    );
     Some(Task::Selection { action, text, cursor, error })
 }
 
@@ -170,7 +183,12 @@ fn grab_screen(app: &mut GlossaApp, action: Action) {
         std::thread::sleep(Duration::from_millis(120));
         let task = match glossa_platform::capture::capture_virtual_desktop() {
             Ok((image, x, y)) => Task::Screenshot { action, image, origin: (x, y), error: None },
-            Err(e) => Task::Screenshot { action, image: image::RgbaImage::new(1, 1), origin: (0, 0), error: Some(e.to_string()) },
+            Err(e) => Task::Screenshot {
+                action,
+                image: image::RgbaImage::new(1, 1),
+                origin: (0, 0),
+                error: Some(e.to_string()),
+            },
         };
         let _ = tx.send(task);
         ctx.request_repaint();
@@ -245,7 +263,10 @@ fn with_selection(app: &mut GlossaApp, action: Action, text: String, cursor: Opt
             let engine = app.engine.clone();
             let tx = app.tasks_tx.clone();
             let ctx = app.ctx.clone();
-            let opts = TranslateOptions { provider: Some(app.cfg.services.active.clone()).filter(|s| !s.is_empty()), ..Default::default() };
+            let opts = TranslateOptions {
+                provider: Some(app.cfg.services.active.clone()).filter(|s| !s.is_empty()),
+                ..Default::default()
+            };
             std::thread::spawn(move || {
                 let task = match engine.translate(&text, LangPair::new(LangId::AUTO, LangId::AUTO), &opts) {
                     Ok(out) => Task::Translated { action, text: out.translation.text, error: None },

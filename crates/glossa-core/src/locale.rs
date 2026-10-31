@@ -82,13 +82,7 @@ impl Locale {
                 strings: HashMap<String, String>,
             }
             let n: Native = serde_json::from_value(value).map_err(|e| e.to_string())?;
-            Ok(Locale {
-                code: n.code,
-                name: n.name,
-                native_name: n.native_name,
-                author: n.author,
-                strings: n.strings,
-            })
+            Ok(Locale { code: n.code, name: n.name, native_name: n.native_name, author: n.author, strings: n.strings })
         }
     }
 
@@ -109,13 +103,7 @@ impl Locale {
         if native_name.is_empty() {
             native_name = s("LanguageName");
         }
-        Locale {
-            code: s("LanguageCode"),
-            name: s("LanguageName"),
-            native_name,
-            author: s("Author"),
-            strings,
-        }
+        Locale { code: s("LanguageCode"), name: s("LanguageName"), native_name, author: s("Author"), strings }
     }
 
     /// Serialise in the native format, e.g. to convert a classic file.

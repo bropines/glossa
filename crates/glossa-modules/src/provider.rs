@@ -16,8 +16,8 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
 use glossa_core::{
-    Article, Audio, Capabilities, Detection, DictRequest, Error, LangId, LangPair, OcrRequest,
-    OcrResult, ProviderInfo, Result, SpeakRequest, TranslateRequest, Translation,
+    Article, Audio, Capabilities, Detection, DictRequest, Error, LangId, LangPair, OcrRequest, OcrResult, ProviderInfo,
+    Result, SpeakRequest, TranslateRequest, Translation,
 };
 use glossa_net::Http;
 use serde::{Deserialize, Serialize};
@@ -251,11 +251,8 @@ pub struct Choice {
 
 /// Overlay user values on the declared defaults.
 pub fn resolve_options(specs: &[OptionSpec], user: Option<&OptionValues>) -> OptionValues {
-    let mut out: OptionValues = specs
-        .iter()
-        .filter(|s| !s.default.is_null())
-        .map(|s| (s.key.clone(), s.default.clone()))
-        .collect();
+    let mut out: OptionValues =
+        specs.iter().filter(|s| !s.default.is_null()).map(|s| (s.key.clone(), s.default.clone())).collect();
     if let Some(user) = user {
         for (k, v) in user {
             out.insert(k.clone(), v.clone());
@@ -276,11 +273,7 @@ impl FnProvider {
         id: &str,
         f: impl Fn(&Host, &TranslateRequest) -> Result<Translation> + Send + Sync + 'static,
     ) -> Self {
-        Self {
-            info: ProviderInfo::new(id, id, Capabilities::TRANSLATE),
-            translate: Some(Box::new(f)),
-            detect: None,
-        }
+        Self { info: ProviderInfo::new(id, id, Capabilities::TRANSLATE), translate: Some(Box::new(f)), detect: None }
     }
 }
 

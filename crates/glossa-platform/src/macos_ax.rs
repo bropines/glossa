@@ -22,11 +22,7 @@ const K_AX_ERROR_SUCCESS: i32 = 0;
 extern "C" {
     fn AXIsProcessTrusted() -> Boolean;
     fn AXUIElementCreateSystemWide() -> AXUIElementRef;
-    fn AXUIElementCopyAttributeValue(
-        element: AXUIElementRef,
-        attribute: CFStringRef,
-        value: *mut CFTypeRef,
-    ) -> i32;
+    fn AXUIElementCopyAttributeValue(element: AXUIElementRef, attribute: CFStringRef, value: *mut CFTypeRef) -> i32;
 }
 
 #[link(name = "CoreFoundation", kind = "framework")]
@@ -40,12 +36,7 @@ extern "C" {
     ) -> CFStringRef;
     fn CFStringGetLength(s: CFStringRef) -> CFIndex;
     fn CFStringGetMaximumSizeForEncoding(len: CFIndex, encoding: u32) -> CFIndex;
-    fn CFStringGetCString(
-        s: CFStringRef,
-        buf: *mut c_char,
-        size: CFIndex,
-        encoding: u32,
-    ) -> Boolean;
+    fn CFStringGetCString(s: CFStringRef, buf: *mut c_char, size: CFIndex, encoding: u32) -> Boolean;
     fn CFGetTypeID(cf: CFTypeRef) -> usize;
     fn CFStringGetTypeID() -> usize;
     fn CFRelease(cf: CFTypeRef);
@@ -67,13 +58,7 @@ fn cfstr(s: &str) -> Owned {
     // SAFETY: the bytes are valid UTF-8 for the given length; the result is
     // owned by the returned guard.
     Owned(unsafe {
-        CFStringCreateWithBytes(
-            std::ptr::null(),
-            s.as_ptr(),
-            s.len() as CFIndex,
-            K_CF_STRING_ENCODING_UTF8,
-            0,
-        )
+        CFStringCreateWithBytes(std::ptr::null(), s.as_ptr(), s.len() as CFIndex, K_CF_STRING_ENCODING_UTF8, 0)
     })
 }
 

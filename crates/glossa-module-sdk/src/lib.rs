@@ -74,7 +74,12 @@ pub trait Module: Send {
 
     /// Route one call. The generated glue calls this; a module overrides it
     /// only to support methods beyond the standard five.
-    fn dispatch(&mut self, host: &Host, method: &str, params: serde_json::Value) -> Result<serde_json::Value, ModuleError> {
+    fn dispatch(
+        &mut self,
+        host: &Host,
+        method: &str,
+        params: serde_json::Value,
+    ) -> Result<serde_json::Value, ModuleError> {
         fn parse<T: serde::de::DeserializeOwned>(v: serde_json::Value) -> Result<T, ModuleError> {
             serde_json::from_value(v).map_err(|e| ModuleError::new(ErrorKind::BadRequest, e.to_string()))
         }
@@ -126,9 +131,7 @@ impl<'a> Host<'a> {
     /// A value from the module's small persistent cache, if present and not
     /// expired.
     pub fn cache_get(&self, key: &str) -> Option<serde_json::Value> {
-        self.call_host("cache_get", &serde_json::json!({ "key": key }))
-            .ok()
-            .filter(|v| !v.is_null())
+        self.call_host("cache_get", &serde_json::json!({ "key": key })).ok().filter(|v| !v.is_null())
     }
 
     pub fn cache_set(&self, key: &str, value: serde_json::Value, ttl_secs: u64) {

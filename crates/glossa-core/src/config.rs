@@ -266,11 +266,7 @@ impl HotkeysConfig {
     pub fn conflicts(&self) -> Vec<(Hotkey, Vec<Action>)> {
         let mut by_key: BTreeMap<String, (Hotkey, Vec<Action>)> = BTreeMap::new();
         for (action, hk) in &self.bindings {
-            by_key
-                .entry(hk.to_string())
-                .or_insert_with(|| (hk.clone(), Vec::new()))
-                .1
-                .push(*action);
+            by_key.entry(hk.to_string()).or_insert_with(|| (hk.clone(), Vec::new())).1.push(*action);
         }
         by_key.into_values().filter(|(_, actions)| actions.len() > 1).collect()
     }
@@ -291,12 +287,7 @@ pub struct Network {
 
 impl Default for Network {
     fn default() -> Self {
-        Self {
-            timeout_secs: 10,
-            proxy: Proxy::default(),
-            user_agent: String::new(),
-            max_retries: 1,
-        }
+        Self { timeout_secs: 10, proxy: Proxy::default(), user_agent: String::new(), max_retries: 1 }
     }
 }
 
@@ -417,9 +408,7 @@ pub struct Services {
 impl Default for Services {
     fn default() -> Self {
         Self {
-            order: ["google", "bing", "yandex", "deepl", "libretranslate", "mymemory"]
-                .map(String::from)
-                .to_vec(),
+            order: ["google", "bing", "yandex", "deepl", "libretranslate", "mymemory"].map(String::from).to_vec(),
             enabled: ["google", "bing", "yandex", "deepl"].map(String::from).to_vec(),
             active: "google".into(),
             popup_active: String::new(),
@@ -609,12 +598,7 @@ impl PopupIcons {
     /// The classic options stored these as a bit mask: 2 dictionary, 4
     /// listen, 8 copy, 16 replace. (A full set was 30.)
     pub fn from_legacy(mask: u32) -> Self {
-        Self {
-            dictionary: mask & 2 != 0,
-            listen: mask & 4 != 0,
-            copy: mask & 8 != 0,
-            replace: mask & 16 != 0,
-        }
+        Self { dictionary: mask & 2 != 0, listen: mask & 4 != 0, copy: mask & 8 != 0, replace: mask & 16 != 0 }
     }
 }
 
@@ -666,9 +650,10 @@ impl Exceptions {
         if self.smart_detection && is_non_text_control(program, focus_class) {
             return false;
         }
-        let hit = self.rules.iter().any(|r| {
-            r.matches(program, window_class) || (!focus_class.is_empty() && r.matches(program, focus_class))
-        });
+        let hit = self
+            .rules
+            .iter()
+            .any(|r| r.matches(program, window_class) || (!focus_class.is_empty() && r.matches(program, focus_class)));
         match self.mode {
             ExceptionMode::DisabledFor => !hit,
             ExceptionMode::EnabledFor => hit,
@@ -806,12 +791,7 @@ pub struct MouseMode {
 
 impl Default for MouseMode {
     fn default() -> Self {
-        Self {
-            enabled: false,
-            behaviour: MouseBehaviour::ShowIcon,
-            ctrl_only: false,
-            tray_click_toggles: true,
-        }
+        Self { enabled: false, behaviour: MouseBehaviour::ShowIcon, ctrl_only: false, tray_click_toggles: true }
     }
 }
 
@@ -879,12 +859,7 @@ pub struct LensConfig {
 
 impl Default for LensConfig {
     fn default() -> Self {
-        Self {
-            mode: LensMode::Auto,
-            endpoint: String::new(),
-            token: String::new(),
-            cli_path: String::new(),
-        }
+        Self { mode: LensMode::Auto, endpoint: String::new(), token: String::new(), cli_path: String::new() }
     }
 }
 
@@ -911,13 +886,7 @@ pub struct DictionaryConfig {
 
 impl Default for DictionaryConfig {
     fn default() -> Self {
-        Self {
-            show_services_pane: true,
-            zoom: 100,
-            exact_search: true,
-            offline: Vec::new(),
-            language: LangId::RUSSIAN,
-        }
+        Self { show_services_pane: true, zoom: 100, exact_search: true, offline: Vec::new(), language: LangId::RUSSIAN }
     }
 }
 
@@ -1008,8 +977,7 @@ impl Config {
     }
 
     pub fn from_toml(text: &str) -> crate::Result<Config> {
-        let mut config: Config = toml::from_str(text)
-            .map_err(|e| crate::Error::Config(format!("config file: {e}")))?;
+        let mut config: Config = toml::from_str(text).map_err(|e| crate::Error::Config(format!("config file: {e}")))?;
         config.sanitise();
         Ok(config)
     }
@@ -1148,10 +1116,8 @@ mod tests {
         c.general.pair = LangPair::new(LangId::ENGLISH, LangId::RUSSIAN);
         c.services.set_option("deepl", "api_key", serde_json::json!("secret"));
         c.hotkeys.bindings.insert(Action::WatchRegion, "Ctrl+Alt+W".parse().unwrap());
-        c.windows.insert(
-            "main".into(),
-            WindowGeometry { x: 10.0, y: 20.0, width: 640.0, height: 480.0, maximized: false },
-        );
+        c.windows
+            .insert("main".into(), WindowGeometry { x: 10.0, y: 20.0, width: 640.0, height: 480.0, maximized: false });
         let back = Config::from_toml(&c.to_toml()).unwrap();
         assert_eq!(back, c);
         assert_eq!(back.services.option("deepl", "api_key"), Some(&serde_json::json!("secret")));

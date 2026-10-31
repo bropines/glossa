@@ -70,11 +70,10 @@ fn ensure_supported() -> Result<()> {
 mod imp {
     use glossa_core::config::CopyAction;
     use windows::Win32::UI::Input::KeyboardAndMouse::{
-        GetAsyncKeyState, MapVirtualKeyW, SendInput, INPUT, INPUT_0, INPUT_KEYBOARD, KEYBDINPUT,
-        KEYBD_EVENT_FLAGS, KEYEVENTF_EXTENDEDKEY, KEYEVENTF_KEYUP, KEYEVENTF_UNICODE,
-        MAPVK_VK_TO_VSC, VIRTUAL_KEY, VK_C, VK_DELETE, VK_DOWN, VK_END, VK_HOME, VK_INSERT,
-        VK_LCONTROL, VK_LEFT, VK_LMENU, VK_LSHIFT, VK_LWIN, VK_NEXT, VK_PRIOR, VK_RCONTROL,
-        VK_RETURN, VK_RIGHT, VK_RMENU, VK_RSHIFT, VK_RWIN, VK_TAB, VK_UP, VK_V,
+        GetAsyncKeyState, MapVirtualKeyW, SendInput, INPUT, INPUT_0, INPUT_KEYBOARD, KEYBDINPUT, KEYBD_EVENT_FLAGS,
+        KEYEVENTF_EXTENDEDKEY, KEYEVENTF_KEYUP, KEYEVENTF_UNICODE, MAPVK_VK_TO_VSC, VIRTUAL_KEY, VK_C, VK_DELETE,
+        VK_DOWN, VK_END, VK_HOME, VK_INSERT, VK_LCONTROL, VK_LEFT, VK_LMENU, VK_LSHIFT, VK_LWIN, VK_NEXT, VK_PRIOR,
+        VK_RCONTROL, VK_RETURN, VK_RIGHT, VK_RMENU, VK_RSHIFT, VK_RWIN, VK_TAB, VK_UP, VK_V,
     };
 
     use super::INJECTED_TAG;
@@ -118,13 +117,7 @@ mod imp {
         if is_extended(vk) {
             flags |= KEYEVENTF_EXTENDEDKEY;
         }
-        keyboard(KEYBDINPUT {
-            wVk: vk,
-            wScan: scan,
-            dwFlags: flags,
-            time: 0,
-            dwExtraInfo: INJECTED_TAG,
-        })
+        keyboard(KEYBDINPUT { wVk: vk, wScan: scan, dwFlags: flags, time: 0, dwExtraInfo: INJECTED_TAG })
     }
 
     fn unicode(unit: u16, up: bool) -> INPUT {
@@ -132,13 +125,7 @@ mod imp {
         if up {
             flags |= KEYEVENTF_KEYUP;
         }
-        keyboard(KEYBDINPUT {
-            wVk: VIRTUAL_KEY(0),
-            wScan: unit,
-            dwFlags: flags,
-            time: 0,
-            dwExtraInfo: INJECTED_TAG,
-        })
+        keyboard(KEYBDINPUT { wVk: VIRTUAL_KEY(0), wScan: unit, dwFlags: flags, time: 0, dwExtraInfo: INJECTED_TAG })
     }
 
     fn send(inputs: &[INPUT]) -> Result<()> {
@@ -235,8 +222,7 @@ mod imp {
 
     fn enigo() -> Result<Enigo> {
         super::ensure_supported()?;
-        Enigo::new(&Settings::default())
-            .map_err(|e| platform_err(format!("cannot simulate input: {e}")))
+        Enigo::new(&Settings::default()).map_err(|e| platform_err(format!("cannot simulate input: {e}")))
     }
 
     fn input_err(e: enigo::InputError) -> glossa_core::Error {

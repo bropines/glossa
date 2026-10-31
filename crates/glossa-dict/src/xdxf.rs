@@ -26,8 +26,8 @@ use glossa_core::{Article, LangId};
 
 use crate::html::{decode_entities, escape, Token, Tokenizer};
 use crate::source::{
-    decode_text, guess_lang_pair, invalid, lang_from_any, read_maybe_gzip, split_example, strip_numbering, tidy,
-    Body, CardIndex, DictionarySource, RawEntry,
+    decode_text, guess_lang_pair, invalid, lang_from_any, read_maybe_gzip, split_example, strip_numbering, tidy, Body,
+    CardIndex, DictionarySource, RawEntry,
 };
 
 /// An opened XDXF dictionary, held in memory.

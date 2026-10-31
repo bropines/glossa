@@ -102,8 +102,7 @@ impl HttpRequest {
 
     /// A form body, with the content type set.
     pub fn form(self, fields: &[(&str, &str)]) -> Self {
-        self.header("Content-Type", "application/x-www-form-urlencoded; charset=utf-8")
-            .body(form_encode(fields))
+        self.header("Content-Type", "application/x-www-form-urlencoded; charset=utf-8").body(form_encode(fields))
     }
 
     pub fn provider(mut self, provider: impl Into<String>) -> Self {
@@ -238,9 +237,7 @@ impl HttpClient {
 
     fn send_once(&self, request: &HttpRequest) -> Result<HttpResponse, Error> {
         let provider = if request.provider.is_empty() { "http" } else { &request.provider };
-        let mut builder = ureq::http::Request::builder()
-            .method(request.method.as_str())
-            .uri(request.url.as_str());
+        let mut builder = ureq::http::Request::builder().method(request.method.as_str()).uri(request.url.as_str());
         for (name, value) in &request.headers {
             // ureq negotiates compression itself and only undoes what it
             // asked for; a caller-supplied Accept-Encoding (the classic
@@ -267,9 +264,7 @@ impl HttpClient {
         };
 
         let mut response = call.map_err(|e| match e {
-            ureq::Error::Timeout(_) => {
-                Error::Timeout(request.timeout.unwrap_or(self.timeout).as_millis() as u64)
-            }
+            ureq::Error::Timeout(_) => Error::Timeout(request.timeout.unwrap_or(self.timeout).as_millis() as u64),
             other => Error::Network(format!("{provider}: {other}")),
         })?;
 
@@ -352,9 +347,7 @@ fn resolve_proxy(settings: &Network) -> Result<Option<ureq::Proxy>, Error> {
         ProxyMode::System | ProxyMode::Auto => system_proxy(),
     };
     match url {
-        Some(u) => ureq::Proxy::new(&u)
-            .map(Some)
-            .map_err(|e| Error::Config(format!("proxy {u:?}: {e}"))),
+        Some(u) => ureq::Proxy::new(&u).map(Some).map_err(|e| Error::Config(format!("proxy {u:?}: {e}"))),
         None => Ok(None),
     }
 }
@@ -500,13 +493,19 @@ mod tests {
         assert_eq!(hinted.text(), "привет");
 
         // Neither: UTF-8.
-        let utf8 = HttpResponse { status: 200, headers: vec![], body: "привет".as_bytes().to_vec(), codepage: None };
+        let utf8 =
+            HttpResponse { status: 200, headers: vec![], body: "привет".as_bytes().to_vec(), codepage: None };
         assert_eq!(utf8.text(), "привет");
     }
 
     #[test]
     fn statuses_map_to_the_right_errors() {
-        let r = |status: u16, headers: Vec<(String, String)>| HttpResponse { status, headers, body: b"nope".to_vec(), codepage: None };
+        let r = |status: u16, headers: Vec<(String, String)>| HttpResponse {
+            status,
+            headers,
+            body: b"nope".to_vec(),
+            codepage: None,
+        };
         assert!(r(200, vec![]).error_for_status("p").is_ok());
         match r(429, vec![("Retry-After".into(), "7".into())]).error_for_status("p") {
             Err(Error::RateLimited { retry_after_secs: Some(7), .. }) => {}
@@ -523,10 +522,7 @@ mod tests {
     #[test]
     fn wininet_proxy_strings() {
         assert_eq!(parse_wininet_proxy("127.0.0.1:8080").as_deref(), Some("http://127.0.0.1:8080"));
-        assert_eq!(
-            parse_wininet_proxy("http=h:1;https=h:2;socks=s:3").as_deref(),
-            Some("http://h:2")
-        );
+        assert_eq!(parse_wininet_proxy("http=h:1;https=h:2;socks=s:3").as_deref(), Some("http://h:2"));
         assert_eq!(parse_wininet_proxy("socks=s:1080").as_deref(), Some("socks5://s:1080"));
         assert_eq!(parse_wininet_proxy("").as_deref(), None);
     }
@@ -551,7 +547,13 @@ mod tests {
         use glossa_core::config::{Proxy, ProxyScheme};
         for mode in [ProxyMode::None, ProxyMode::System, ProxyMode::Manual, ProxyMode::Auto] {
             let settings = Network {
-                proxy: Proxy { mode, scheme: ProxyScheme::Socks5, host: "127.0.0.1".into(), port: 9, ..Default::default() },
+                proxy: Proxy {
+                    mode,
+                    scheme: ProxyScheme::Socks5,
+                    host: "127.0.0.1".into(),
+                    port: 9,
+                    ..Default::default()
+                },
                 ..Default::default()
             };
             assert!(HttpClient::new(&settings).is_ok(), "{mode:?}");

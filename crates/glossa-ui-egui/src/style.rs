@@ -107,8 +107,18 @@ impl Look {
         v.warn_fg_color = c(t.warning);
         v.selection.bg_fill = c(t.selection);
         v.selection.stroke = Stroke::new(1.0, c(t.accent));
-        v.window_shadow = Shadow { offset: [0, 4], blur: 12, spread: 0, color: Color32::from_black_alpha(if t.dark { 110 } else { 50 }) };
-        v.popup_shadow = Shadow { offset: [0, 3], blur: 8, spread: 0, color: Color32::from_black_alpha(if t.dark { 90 } else { 40 }) };
+        v.window_shadow = Shadow {
+            offset: [0, 4],
+            blur: 12,
+            spread: 0,
+            color: Color32::from_black_alpha(if t.dark { 110 } else { 50 }),
+        };
+        v.popup_shadow = Shadow {
+            offset: [0, 3],
+            blur: 8,
+            spread: 0,
+            color: Color32::from_black_alpha(if t.dark { 90 } else { 40 }),
+        };
 
         let set = |w: &mut egui::style::WidgetVisuals, state: WidgetState| {
             let b = t.button.get(state);
