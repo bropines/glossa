@@ -9,6 +9,7 @@ members = [
     "crates/glossa-dict",
     "crates/glossa-ocr",
     "crates/glossa-platform",
+    "crates/glossa-engine",
     "modules/native/example-rot13",
 ]
 

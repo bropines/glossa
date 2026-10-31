@@ -1,0 +1,28 @@
+[package]
+name = "glossa-engine"
+description = "The UI-independent core of Glossa: jobs, the translation pipeline, history, catalogues, the control API."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+
+[features]
+default = ["js", "python", "native"]
+js = ["glossa-modules/js"]
+python = ["glossa-modules/python"]
+native = ["glossa-modules/native"]
+
+[dependencies]
+glossa-core = { workspace = true }
+glossa-net = { workspace = true }
+glossa-modules = { workspace = true }
+glossa-services = { workspace = true }
+glossa-ocr = { workspace = true }
+glossa-dict = { workspace = true }
+parking_lot = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+tracing = { workspace = true }
+base64 = { workspace = true }
+tiny_http = "0.12"
