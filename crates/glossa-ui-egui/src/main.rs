@@ -510,7 +510,35 @@ mod tests {
     #[ignore]
     fn export_icon() {
         let Some(out) = std::env::var_os("GLOSSA_ICON_OUT") else { return };
-        let icon = super::app_icon(256);
-        image::RgbaImage::from_raw(icon.width, icon.height, icon.rgba).unwrap().save(out).unwrap();
+        let out = std::path::PathBuf::from(out);
+        let png = |size: u32| {
+            let icon = super::app_icon(size);
+            let mut bytes = Vec::new();
+            image::RgbaImage::from_raw(icon.width, icon.height, icon.rgba)
+                .unwrap()
+                .write_to(&mut std::io::Cursor::new(&mut bytes), image::ImageFormat::Png)
+                .unwrap();
+            bytes
+        };
+        std::fs::write(&out, png(256)).unwrap();
+        // The same as a Windows .ico (PNG frames), for the executable's
+        // resources (build.rs).
+        let sizes = [16u32, 24, 32, 48, 64, 128, 256];
+        let frames: Vec<Vec<u8>> = sizes.iter().map(|&s| png(s)).collect();
+        let mut ico = Vec::new();
+        ico.extend_from_slice(&[0, 0, 1, 0]);
+        ico.extend_from_slice(&(sizes.len() as u16).to_le_bytes());
+        let mut offset = 6 + 16 * sizes.len() as u32;
+        for (size, frame) in sizes.iter().zip(&frames) {
+            let side = if *size >= 256 { 0 } else { *size as u8 };
+            ico.extend_from_slice(&[side, side, 0, 0, 1, 0, 32, 0]);
+            ico.extend_from_slice(&(frame.len() as u32).to_le_bytes());
+            ico.extend_from_slice(&offset.to_le_bytes());
+            offset += frame.len() as u32;
+        }
+        for frame in &frames {
+            ico.extend_from_slice(frame);
+        }
+        std::fs::write(out.with_extension("ico"), ico).unwrap();
     }
 }
