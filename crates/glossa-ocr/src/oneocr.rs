@@ -313,6 +313,9 @@ mod sys {
         word: unsafe extern "C" fn(Handle, i64, *mut Handle) -> Status,
         word_content: unsafe extern "C" fn(Handle, *mut *const c_char) -> Status,
         word_box: unsafe extern "C" fn(Handle, *mut *const BoundingBox) -> Status,
+        /// Optional: a version without it still reads text, just without
+        /// confidences.
+        word_confidence: Option<unsafe extern "C" fn(Handle, *mut f32) -> Status>,
         release_init_options: unsafe extern "C" fn(Handle) -> Status,
         release_pipeline: unsafe extern "C" fn(Handle) -> Status,
         release_process_options: unsafe extern "C" fn(Handle) -> Status,
@@ -378,6 +381,10 @@ mod sys {
                 word: sym!("GetOcrWord"),
                 word_content: sym!("GetOcrWordContent"),
                 word_box: sym!("GetOcrWordBoundingBox"),
+                // SAFETY: as for `sym!`; the signature is
+                // `int64 GetOcrWordConfidence(int64 word, float *out)`.
+                word_confidence: unsafe { GetProcAddress(module, windows::core::s!("GetOcrWordConfidence")) }
+                    .map(|f| unsafe { fn_cast(f) }),
                 release_init_options: sym!("ReleaseOcrInitOptions"),
                 release_pipeline: sym!("ReleaseOcrPipeline"),
                 release_process_options: sym!("ReleaseOcrProcessOptions"),
@@ -520,7 +527,11 @@ mod sys {
                     let mut wbox = std::ptr::null();
                     let wshape =
                         if unsafe { (api.word_box)(word, &mut wbox) } == 0 { unsafe { shape_of(wbox) } } else { None };
-                    words.push(RawWord { text: unsafe { text_of(wtext) }, shape: wshape });
+                    let confidence = api.word_confidence.and_then(|f| {
+                        let mut c = 0f32;
+                        (unsafe { f(word, &mut c) } == 0 && c.is_finite()).then_some(c.clamp(0.0, 1.0))
+                    });
+                    words.push(RawWord { text: unsafe { text_of(wtext) }, shape: wshape, confidence });
                 }
             }
             lines.push(RawLine { text: unsafe { text_of(text) }, shape, words });
