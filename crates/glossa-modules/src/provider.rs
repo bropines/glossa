@@ -158,6 +158,12 @@ pub trait Provider: Send + Sync {
     /// with being called again afterwards.
     fn suspend(&self) {}
 
+    /// Get ready for a call that is about to come (the user is choosing a
+    /// screen region to recognise), for engines whose first call is slow.
+    /// Blocks; the engine calls it on a worker thread. Must be cheap when
+    /// there is nothing to do, as it may be called before every call.
+    fn warm_up(&self) {}
+
     #[doc(hidden)]
     fn unsupported(&self, what: &'static str) -> Error {
         Error::Unsupported { provider: self.info().name.clone(), capability: what }
