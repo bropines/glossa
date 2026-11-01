@@ -311,6 +311,7 @@ pub fn screenshot_flow(app: &mut GlossaApp, ctx: &egui::Context, what: &str, _pa
         "dictionary" => crate::dictionary::open(app, Some("serendipity".into())),
         "history" => crate::history::open(app),
         "about" => app.about_open = true,
+        "welcome" => crate::welcome::open(app),
         "keyboard" => app.keyboard_open = true,
         "popup" => crate::popup::open(app, "The quick brown fox jumps over the lazy dog.".into(), Some((400, 300))),
         _ => {

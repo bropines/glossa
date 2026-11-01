@@ -688,7 +688,7 @@ development aids used by tests.
 | `--hidden`, `--tray` | Start in the tray, whatever `[general] startup_action` says. Autostart uses this. |
 | `--home DIR` | The data folder, as `GLOSSA_HOME`. |
 | `--popup TEXT` | Show `TEXT` translated in the popup at start. |
-| `--screenshot WHAT [FILE]` | Development aid: draw one window (`main`, `options`, `dictionary`, `history`…) to a PNG and exit. |
+| `--screenshot WHAT [FILE]` | Development aid: draw one window (`main`, `options`, `dictionary`, `history`, `welcome`…) to a PNG and exit. |
 
 Starting `glossa` while it is already running shows the running program's
 main window instead of starting a second copy (with `--popup TEXT`, the
