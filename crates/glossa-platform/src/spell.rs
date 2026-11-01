@@ -99,9 +99,48 @@ pub fn check(text: &str, lang: LangId) -> Vec<Misspelling> {
     }
     let Some(tag) = locale_for(lang) else { return Vec::new() };
     let mut found = imp::check(text, &tag);
-    found.retain(|m| text.get(m.range.clone()) == Some(m.word.as_str()) && !m.word.trim().is_empty());
+    let script = lang_script(lang);
+    found.retain(|m| {
+        text.get(m.range.clone()) == Some(m.word.as_str())
+            && !m.word.trim().is_empty()
+            && script.is_none_or(|s| in_script(&m.word, s))
+    });
     found.sort_by_key(|m| m.range.start);
     found
+}
+
+/// A rough script for a letter: enough to tell a Russian word in English
+/// text (which the Windows checker would flag) from an English one.
+fn script(c: char) -> u32 {
+    match c as u32 {
+        0x41..=0x5A | 0x61..=0x7A | 0xC0..=0x24F | 0x1E00..=0x1EFF | 0x2C60..=0x2C7F | 0xA720..=0xA7FF => 1,
+        0x370..=0x3FF | 0x1F00..=0x1FFF => 2,
+        0x400..=0x52F | 0x1C80..=0x1C8F | 0x2DE0..=0x2DFF | 0xA640..=0xA69F => 3,
+        0x590..=0x5FF | 0xFB1D..=0xFB4F => 4,
+        0x600..=0x6FF | 0x750..=0x77F | 0x8A0..=0x8FF | 0xFB50..=0xFDFF | 0xFE70..=0xFEFF => 5,
+        0x10A0..=0x10FF | 0x2D00..=0x2D2F => 6,
+        // Elsewhere, the 128-character block will do.
+        u => 0x1000 + (u >> 7),
+    }
+}
+
+/// The script `lang` is written in, judged from its own name ("Русский"
+/// is Cyrillic); `None` when that says nothing.
+fn lang_script(lang: LangId) -> Option<u32> {
+    let mut counts: Vec<(u32, usize)> = Vec::new();
+    for c in lang.native_name().chars().filter(|c| c.is_alphabetic()) {
+        let s = script(c);
+        match counts.iter_mut().find(|(k, _)| *k == s) {
+            Some((_, n)) => *n += 1,
+            None => counts.push((s, 1)),
+        }
+    }
+    counts.into_iter().max_by_key(|&(_, n)| n).map(|(s, _)| s)
+}
+
+/// Whether `word` has a letter in script `s`.
+fn in_script(word: &str, s: u32) -> bool {
+    word.chars().filter(|c| c.is_alphabetic()).any(|c| script(c) == s)
 }
 
 /// What `word` might have been meant to be, best first.
@@ -256,6 +295,17 @@ mod tests {
     }
 
     #[test]
+    fn words_in_another_script_are_not_the_languages_business() {
+        let en = lang_script(LangId::ENGLISH).unwrap();
+        let ru = lang_script(LangId::RUSSIAN).unwrap();
+        assert_ne!(en, ru);
+        assert!(in_script("Helo", en) && !in_script("мирр", en));
+        assert!(in_script("мирр", ru) && !in_script("Helo", ru));
+        assert!(in_script("café", en));
+        assert_eq!(lang_script(LangId::from_code("el").unwrap()), Some(2));
+    }
+
+    #[test]
     fn utf16_offsets_land_on_characters() {
         // "П" is 2 bytes and 1 unit; "😀" is 4 bytes and 2 units.
         let text = "Пр 😀 ok";
@@ -282,6 +332,8 @@ mod tests {
         let words: Vec<&str> = found.iter().map(|m| m.word.as_str()).collect();
         assert_eq!(words, ["Helo", "wrld"]);
         assert_eq!(found[0].range, 0..4);
+        // Russian words are not English misspellings.
+        assert!(check("Привет мирр", lang).is_empty());
         let guesses = suggest("Helo", lang);
         eprintln!("suggestions: {guesses:?}");
         assert!(guesses.iter().any(|g| g == "Hello"), "{guesses:?}");
