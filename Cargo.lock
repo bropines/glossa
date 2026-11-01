@@ -2117,7 +2117,6 @@ dependencies = [
  "time",
  "toml 0.9.12+spec-1.1.0",
  "tracing",
- "unicode-bidi",
  "unicode-segmentation",
 ]
 
@@ -2279,6 +2278,7 @@ dependencies = [
  "tracing",
  "tracing-subscriber",
  "tray-icon",
+ "unicode-bidi",
 ]
 
 [[package]]

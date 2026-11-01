@@ -3,17 +3,10 @@
 //! Two jobs live here. One is the small set of cleanups the old program applied
 //! to a selection before sending it anywhere — normalising line endings,
 //! stripping the hard wraps a PDF or a mail client leaves behind, capping the
-//! length. The other is bidirectional reordering.
-//!
-//! On bidi: the GUI toolkit shapes Arabic and Indic text correctly (it runs
-//! HarfBuzz) but lays runs out in logical order, so a line that mixes Hebrew
-//! and Latin comes out in the wrong visual order. Until that is fixed upstream
-//! we run the Unicode bidi algorithm ourselves and hand the toolkit a string
-//! that is already in visual order. [`for_display`] is therefore a *display*
-//! transform only: never store its output, never send it to a provider, and
-//! never put it on the clipboard.
+//! length. The other is telling which way text runs ([`needs_bidi`],
+//! [`guessed_direction`]); laying right-to-left text out is the front end's
+//! business (the desktop app's `bidi` module).
 
-use unicode_bidi::{BidiInfo, Level};
 use unicode_segmentation::UnicodeSegmentation;
 
 /// Collapse every line ending to `\n`.
@@ -131,32 +124,6 @@ pub fn char_count(text: &str) -> usize {
     text.chars().count()
 }
 
-/// Reorder `text` into visual order for a toolkit that lays runs out
-/// logically.
-///
-/// `rtl_context` says which way the surrounding paragraph runs, which decides
-/// where neutral characters at the edges end up: pass `true` for a line of
-/// Hebrew or Arabic, `false` for a line of Latin or Cyrillic.
-///
-/// A string with nothing bidirectional in it comes back untouched, so this is
-/// cheap to call unconditionally on the way to the screen.
-pub fn for_display(text: &str, rtl_context: bool) -> String {
-    if !needs_bidi(text) {
-        return text.to_owned();
-    }
-    let base = if rtl_context { Level::rtl() } else { Level::ltr() };
-    let info = BidiInfo::new(text, Some(base));
-    let mut out = String::with_capacity(text.len());
-    for (i, para) in info.paragraphs.iter().enumerate() {
-        if i > 0 {
-            out.push('\n');
-        }
-        let line = para.range.clone();
-        out.push_str(info.reorder_line(para, line).trim_end_matches('\n'));
-    }
-    out
-}
-
 /// Whether the text contains anything the bidi algorithm would move.
 ///
 /// Checks for strong right-to-left characters: Hebrew, Arabic, Syriac, Thaana,
@@ -166,7 +133,9 @@ pub fn needs_bidi(text: &str) -> bool {
     text.chars().any(is_strong_rtl)
 }
 
-fn is_strong_rtl(c: char) -> bool {
+/// Whether `c` is a letter of a right-to-left script (or a character from
+/// one of their blocks: Arabic-Indic digits and Arabic punctuation count).
+pub fn is_strong_rtl(c: char) -> bool {
     matches!(c as u32,
         0x0590..=0x05FF   // Hebrew
         | 0x0600..=0x06FF // Arabic
@@ -298,33 +267,11 @@ mod tests {
     }
 
     #[test]
-    fn bidi_is_skipped_when_there_is_nothing_to_reorder() {
-        let plain = "Hello, мир!";
-        assert!(!needs_bidi(plain));
-        assert_eq!(for_display(plain, false), plain);
-    }
-
-    #[test]
-    fn rtl_text_comes_back_in_visual_order() {
-        // Hebrew word, logical order in the source string.
-        let hebrew = "\u{5e9}\u{5dc}\u{5d5}\u{5dd}";
-        assert!(needs_bidi(hebrew));
-        let visual = for_display(hebrew, true);
-        // Reordering reverses the run, so the first logical character ends up
-        // last.
-        assert_eq!(visual.chars().rev().collect::<String>(), hebrew);
-        assert_eq!(visual.chars().count(), hebrew.chars().count());
-    }
-
-    #[test]
-    fn mixed_direction_lines_keep_every_character() {
-        let mixed = "abc \u{5e9}\u{5dc}\u{5d5}\u{5dd} def";
-        let visual = for_display(mixed, false);
-        let mut a: Vec<char> = mixed.chars().collect();
-        let mut b: Vec<char> = visual.chars().collect();
-        a.sort_unstable();
-        b.sort_unstable();
-        assert_eq!(a, b, "reordering must not add or drop characters");
+    fn right_to_left_text_is_recognised() {
+        assert!(!needs_bidi("Hello, мир!"));
+        assert!(needs_bidi("abc \u{5e9}\u{5dc}\u{5d5}\u{5dd} def"));
+        assert!(needs_bidi("مرحبا"));
+        assert!(is_strong_rtl('\u{5d0}') && is_strong_rtl('ب') && !is_strong_rtl('a'));
     }
 
     #[test]
