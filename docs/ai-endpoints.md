@@ -27,7 +27,7 @@ deletes it and its settings at once.
 | OpenAI | `https://api.openai.com/v1` | [platform.openai.com](https://platform.openai.com/api-keys) | `gpt-4o-mini` |
 | OpenRouter | `https://openrouter.ai/api/v1` | [openrouter.ai/keys](https://openrouter.ai/keys) | `openai/gpt-4o-mini` |
 | DeepSeek | `https://api.deepseek.com/v1` | [platform.deepseek.com](https://platform.deepseek.com/api_keys) | `deepseek-chat` |
-| Google Gemini | `https://generativelanguage.googleapis.com/v1beta/openai` | [aistudio.google.com](https://aistudio.google.com/apikey) | `gemini-2.0-flash` |
+| Google Gemini | `https://generativelanguage.googleapis.com/v1beta/openai` | [aistudio.google.com](https://aistudio.google.com/apikey) | `gemini-flash-lite-latest` (Google's alias for the current Flash-Lite: works with free and paid keys) |
 | Groq | `https://api.groq.com/openai/v1` | [console.groq.com](https://console.groq.com/keys) | `llama-3.3-70b-versatile` |
 | Mistral | `https://api.mistral.ai/v1` | [console.mistral.ai](https://console.mistral.ai/api-keys) | `mistral-small-latest` |
 | Ollama (local) | `http://localhost:11434/v1` | none | `qwen2.5:7b` |
@@ -47,7 +47,7 @@ models* shows what is really there.
 | Stream the answer | On: the translation appears as the model writes it (server-sent events). Off: one request, one answer. |
 | System prompt | The instructions; `{from}` and `{to}` become language names. The text to translate is always sent as the user message, never mixed into the instructions, so text that reads like an instruction is still only translated. |
 | Temperature | 0–2; 0–0.3 suits translation. Not sent when a reasoning effort is set. |
-| Reasoning effort | Sent as `reasoning_effort` for reasoning models (OpenAI o-series and GPT-5, DeepSeek R1, Gemini 2.5…). "Not sent" for ordinary models. |
+| Reasoning effort | Sent as `reasoning_effort` for reasoning models (OpenAI o-series and GPT-5, DeepSeek R1, Gemini…). "Not sent" for ordinary models. Models differ in the levels they take (Gemini 3.8 Flash refuses `minimal`); when a model turns the level down, Glossa asks again without it and stops sending it to that model until it restarts. |
 | Hide `<think>` blocks | Drops the reasoning that some local models write before the answer. While a model is still thinking, the popup shows nothing rather than its thoughts. |
 | Max answer tokens | 0 sends no limit. |
 | Token limit field | `max_tokens`, or `max_completion_tokens` for OpenAI's newer models (the OpenAI preset's default). |

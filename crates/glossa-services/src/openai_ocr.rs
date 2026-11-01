@@ -89,8 +89,14 @@ impl OpenAi {
         if format == BoxFormat::Gemini && units == Units::Auto {
             units = Units::ThousandYx;
         }
-        let http_req = self.ocr_request(host, req, &bytes, size, mode, &model, format)?;
-        let resp = self.check(host.http.send(http_req)?, host)?;
+        let send = || -> Result<_> {
+            let http_req = self.ocr_request(host, req, &bytes, size, mode, &model, format)?;
+            self.check(host.http.send(http_req)?, host)
+        };
+        let resp = match send() {
+            Err(e) if self.drop_effort_after(host, &model, &e) => send(),
+            r => r,
+        }?;
         let v = super::parse_json(&resp, self.name())?;
         let content = self.completion_text(&v, resp.status)?;
         let strip = host.option("strip_thinking").and_then(Value::as_bool).unwrap_or(true);
@@ -144,10 +150,10 @@ impl OpenAi {
         // than their default, so a reasoning effort replaces it. Gemini 3
         // and other thinking models otherwise think at length over a
         // screenshot (a minute and more) before transcribing it.
-        match host.option_str("reasoning_effort").trim() {
+        match self.effort(host, model) {
             // Transcription wants the most likely reading, not variety.
-            "" => body["temperature"] = json!(0),
-            effort => body["reasoning_effort"] = json!(effort),
+            None => body["temperature"] = json!(0),
+            Some(effort) => body["reasoning_effort"] = json!(effort),
         }
         let max = host.option_f64("max_tokens").unwrap_or(0.0);
         if max >= 1.0 {

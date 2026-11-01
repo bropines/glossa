@@ -107,7 +107,12 @@ pub const PRESETS: &[AiPreset] = &[
         id: "gemini",
         name: "Google Gemini",
         base_url: "https://generativelanguage.googleapis.com/v1beta/openai",
-        model: "gemini-2.0-flash",
+        // Google's alias for the current Flash-Lite: on free keys and paid
+        // ones, fast at any reasoning effort (about two seconds for a page),
+        // and it follows new releases instead of being retired like a
+        // numbered model (2.0 Flash is gone, 2.5 Flash-Lite closed to new
+        // users).
+        model: "gemini-flash-lite-latest",
         needs_key: true,
         keys_url: "https://aistudio.google.com/apikey",
         headers: "",
@@ -285,6 +290,10 @@ pub struct OpenAi {
     info: ProviderInfo,
     options: Vec<OptionSpec>,
     preset: &'static AiPreset,
+    /// Models that turned down the reasoning effort the settings ask for
+    /// (Gemini 3.8 Flash refuses "minimal"): it is left out for them from
+    /// then on, rather than failing every request.
+    no_effort: std::sync::Mutex<std::collections::HashSet<String>>,
 }
 
 impl Default for OpenAi {
@@ -324,7 +333,7 @@ impl OpenAi {
         };
         info.max_input_chars = Some(20_000);
         info.needs_credentials = p.needs_key;
-        Self { info, options: options_for(p), preset: p }
+        Self { info, options: options_for(p), preset: p, no_effort: Default::default() }
     }
 
     pub fn preset(&self) -> &'static AiPreset {
@@ -367,12 +376,12 @@ impl OpenAi {
         });
         // Reasoning models reject a temperature other than the default, so
         // asking for an effort level means leaving temperature out.
-        match host.option_str("reasoning_effort").trim() {
-            "" => {
+        match self.effort(host, &model) {
+            None => {
                 let t = host.option_f64("temperature").unwrap_or(DEFAULT_TEMPERATURE).clamp(0.0, 2.0);
                 body["temperature"] = json!(t);
             }
-            effort => body["reasoning_effort"] = json!(effort),
+            Some(effort) => body["reasoning_effort"] = json!(effort),
         }
         let max = host.option_f64("max_tokens").unwrap_or(0.0);
         if max >= 1.0 {
@@ -388,6 +397,112 @@ impl OpenAi {
         merge_extra_body(&mut body, host, self.name())?;
         let url = format!("{}/chat/completions", self.root(host));
         Ok(self.with_headers(HttpRequest::post(url).json(&body), host))
+    }
+
+    fn translate_once(&self, host: &Host, req: &TranslateRequest) -> Result<Translation> {
+        let http_req = self.chat_request(host, req, false)?;
+        let resp = self.check(host.http.send(http_req)?, host)?;
+        let v = parse_json(&resp, self.name())?;
+        let content = self.completion_text(&v, resp.status)?;
+        self.finish(&content, host)
+    }
+
+    fn translate_stream_once(
+        &self,
+        host: &Host,
+        req: &TranslateRequest,
+        progress: &dyn Fn(&str),
+    ) -> Result<Translation> {
+        // `stream` defaults to on through the declared options; a bare test
+        // host without them reads it as off.
+        if !host.option("stream").and_then(Value::as_bool).unwrap_or(false) {
+            return self.translate(host, req);
+        }
+        let strip = host.option("strip_thinking").and_then(Value::as_bool).unwrap_or(true);
+        let http_req = self.chat_request(host, req, true)?;
+
+        let mut parser = SseParser::default();
+        let mut text = String::new();
+        let mut events = 0usize;
+        // A server that ignores `stream` answers with plain JSON: keep the
+        // start of the body to read it that way.
+        let mut raw: Vec<u8> = Vec::new();
+        let mut api_error: Option<String> = None;
+        let mut done = false;
+        let mut shown = String::new();
+        let apply =
+            |data: &str, text: &mut String, api_error: &mut Option<String>, done: &mut bool| match stream_event(data) {
+                Event::Text(t) => text.push_str(&t),
+                Event::Error(m) => *api_error = Some(m),
+                Event::Done => *done = true,
+                Event::Nothing => {}
+            };
+        let resp = host.http.send_streaming(http_req, &mut |chunk| {
+            if host.cancel.is_cancelled() {
+                return false;
+            }
+            if events == 0 && raw.len() < 1 << 20 {
+                raw.extend_from_slice(chunk);
+            }
+            for data in parser.feed(chunk) {
+                events += 1;
+                apply(&data, &mut text, &mut api_error, &mut done);
+            }
+            let visible = if strip { strip_thinking(&text) } else { text.as_str() };
+            let visible = visible.trim_start_matches(['\n', '\r']);
+            if visible != shown {
+                shown = visible.to_owned();
+                progress(&shown);
+            }
+            !done && api_error.is_none()
+        })?;
+        if host.cancel.is_cancelled() {
+            return Err(glossa_core::Error::Cancelled);
+        }
+        // A refusal arrives as the streamed body; keep it for the error.
+        let mut resp = resp;
+        if resp.body.is_empty() && !(200..300).contains(&resp.status) {
+            resp.body = raw.clone();
+        }
+        let resp = self.check(resp, host)?;
+        for data in parser.finish() {
+            events += 1;
+            apply(&data, &mut text, &mut api_error, &mut done);
+        }
+        if let Some(body) = api_error {
+            return Err(Error::HttpStatus { provider: self.name().to_owned(), status: resp.status, body });
+        }
+        if events == 0 {
+            let v: Value = serde_json::from_slice(&raw)
+                .map_err(|e| Error::bad_response(self.name(), format!("neither events nor JSON: {e}")))?;
+            text = self.completion_text(&v, resp.status)?;
+        }
+        self.finish(&text, host)
+    }
+
+    /// The reasoning effort to send to `model`: the setting, unless the
+    /// model turned it down before.
+    fn effort(&self, host: &Host, model: &str) -> Option<String> {
+        let effort = host.option_str("reasoning_effort").trim();
+        if effort.is_empty() || self.no_effort.lock().map(|s| s.contains(model)).unwrap_or(false) {
+            None
+        } else {
+            Some(effort.to_owned())
+        }
+    }
+
+    /// After `err` from `model`: whether it was the model turning down the
+    /// reasoning effort, in which case it is not sent to that model again
+    /// and the request is worth repeating once.
+    fn drop_effort_after(&self, host: &Host, model: &str, err: &Error) -> bool {
+        if self.effort(host, model).is_none() || !rejects_effort(err) {
+            return false;
+        }
+        tracing::info!(model, "{}: the model refuses the reasoning effort; asking without it", self.name());
+        if let Ok(mut set) = self.no_effort.lock() {
+            set.insert(model.to_owned());
+        }
+        true
     }
 
     /// Turn a failed answer into the right error: no key against a server
@@ -417,6 +532,19 @@ impl OpenAi {
         }
         message_text(&v["choices"][0]["message"]["content"])
             .ok_or_else(|| Error::bad_response(self.name(), "missing choices[0].message.content"))
+    }
+}
+
+/// Whether a failed request was turned down for its reasoning effort: a
+/// model without that level (Gemini: "Thinking level MINIMAL is not
+/// supported for this model"), or without reasoning at all.
+fn rejects_effort(err: &Error) -> bool {
+    match err {
+        Error::HttpStatus { status: 400, body, .. } => {
+            let b = body.to_ascii_lowercase();
+            b.contains("thinking") || b.contains("reasoning")
+        }
+        _ => false,
     }
 }
 
@@ -572,74 +700,19 @@ impl Provider for OpenAi {
     }
 
     fn translate(&self, host: &Host, req: &TranslateRequest) -> Result<Translation> {
-        let http_req = self.chat_request(host, req, false)?;
-        let resp = self.check(host.http.send(http_req)?, host)?;
-        let v = parse_json(&resp, self.name())?;
-        let content = self.completion_text(&v, resp.status)?;
-        self.finish(&content, host)
+        match self.translate_once(host, req) {
+            Err(e) if self.drop_effort_after(host, &model_for(host, self.preset), &e) => self.translate_once(host, req),
+            r => r,
+        }
     }
 
     fn translate_stream(&self, host: &Host, req: &TranslateRequest, progress: &dyn Fn(&str)) -> Result<Translation> {
-        // `stream` defaults to on through the declared options; a bare test
-        // host without them reads it as off.
-        if !host.option("stream").and_then(Value::as_bool).unwrap_or(false) {
-            return self.translate(host, req);
-        }
-        let strip = host.option("strip_thinking").and_then(Value::as_bool).unwrap_or(true);
-        let http_req = self.chat_request(host, req, true)?;
-
-        let mut parser = SseParser::default();
-        let mut text = String::new();
-        let mut events = 0usize;
-        // A server that ignores `stream` answers with plain JSON: keep the
-        // start of the body to read it that way.
-        let mut raw: Vec<u8> = Vec::new();
-        let mut api_error: Option<String> = None;
-        let mut done = false;
-        let mut shown = String::new();
-        let apply =
-            |data: &str, text: &mut String, api_error: &mut Option<String>, done: &mut bool| match stream_event(data) {
-                Event::Text(t) => text.push_str(&t),
-                Event::Error(m) => *api_error = Some(m),
-                Event::Done => *done = true,
-                Event::Nothing => {}
-            };
-        let resp = host.http.send_streaming(http_req, &mut |chunk| {
-            if host.cancel.is_cancelled() {
-                return false;
+        match self.translate_stream_once(host, req, progress) {
+            Err(e) if self.drop_effort_after(host, &model_for(host, self.preset), &e) => {
+                self.translate_stream_once(host, req, progress)
             }
-            if events == 0 && raw.len() < 1 << 20 {
-                raw.extend_from_slice(chunk);
-            }
-            for data in parser.feed(chunk) {
-                events += 1;
-                apply(&data, &mut text, &mut api_error, &mut done);
-            }
-            let visible = if strip { strip_thinking(&text) } else { text.as_str() };
-            let visible = visible.trim_start_matches(['\n', '\r']);
-            if visible != shown {
-                shown = visible.to_owned();
-                progress(&shown);
-            }
-            !done && api_error.is_none()
-        })?;
-        if host.cancel.is_cancelled() {
-            return Err(glossa_core::Error::Cancelled);
+            r => r,
         }
-        let resp = self.check(resp, host)?;
-        for data in parser.finish() {
-            events += 1;
-            apply(&data, &mut text, &mut api_error, &mut done);
-        }
-        if let Some(body) = api_error {
-            return Err(Error::HttpStatus { provider: self.name().to_owned(), status: resp.status, body });
-        }
-        if events == 0 {
-            let v: Value = serde_json::from_slice(&raw)
-                .map_err(|e| Error::bad_response(self.name(), format!("neither events nor JSON: {e}")))?;
-            text = self.completion_text(&v, resp.status)?;
-        }
-        self.finish(&text, host)
     }
 
     fn list_models(&self, host: &Host) -> Result<Vec<String>> {
@@ -678,6 +751,59 @@ mod tests {
 
     fn req() -> TranslateRequest {
         TranslateRequest::new("Hello,\nworld!", LangPair::new(LangId::ENGLISH, LangId::RUSSIAN))
+    }
+
+    #[test]
+    fn a_model_that_refuses_the_reasoning_effort_is_asked_again_without_it() {
+        let url = "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions";
+        let refusal = r#"[{"error":{"code":400,"message":"Thinking level MINIMAL is not supported for this model. Please retry with other thinking level.","status":"INVALID_ARGUMENT"}}]"#;
+        let http = MockHttp::new().on_once(Method::Post, url, 400, refusal).on(Method::Post, url, 200, OK);
+        let o = opts(&[
+            ("api_key", json!("k")),
+            ("model", json!("gemini-3.8-flash")),
+            ("reasoning_effort", json!("minimal")),
+        ]);
+        let p = OpenAi::endpoint("ai-gemini", "Gemini", "gemini");
+        let out = with_test_host(&http, &o, |h| p.translate(h, &req())).unwrap();
+        assert_eq!(out.text, "Привет,\nмир!");
+        let sent = http.requests();
+        assert_eq!(sent.len(), 2);
+        assert_eq!(body_json(&sent[0])["reasoning_effort"], "minimal");
+        let retry = body_json(&sent[1]);
+        assert!(retry.get("reasoning_effort").is_none());
+        assert_eq!(retry["temperature"], 0.2);
+        // Remembered: the next request goes without it at once.
+        with_test_host(&http, &o, |h| p.translate(h, &req())).unwrap();
+        let sent = http.requests();
+        assert_eq!(sent.len(), 3);
+        assert!(body_json(&sent[2]).get("reasoning_effort").is_none());
+    }
+
+    #[test]
+    fn a_streamed_request_is_asked_again_without_the_effort_too() {
+        let url = "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions";
+        let refusal = r#"[{"error":{"code":400,"message":"Thinking level MINIMAL is not supported for this model."}}]"#;
+        let http = MockHttp::new().on_once(Method::Post, url, 400, refusal).on(Method::Post, url, 200, OK);
+        let o = opts(&[
+            ("model", json!("gemini-3.8-flash")),
+            ("reasoning_effort", json!("minimal")),
+            ("stream", json!(true)),
+        ]);
+        let p = OpenAi::endpoint("ai-gemini", "Gemini", "gemini");
+        let out = with_test_host(&http, &o, |h| p.translate_stream(h, &req(), &|_| {})).unwrap();
+        assert_eq!(out.text, "Привет,\nмир!");
+        let sent = http.requests();
+        assert_eq!(sent.len(), 2);
+        assert!(body_json(&sent[1]).get("reasoning_effort").is_none());
+    }
+
+    #[test]
+    fn other_refusals_are_not_retried() {
+        let url = "https://api.openai.com/v1/chat/completions";
+        let http = MockHttp::new().on(Method::Post, url, 400, r#"{"error":{"message":"bad model id"}}"#);
+        let o = opts(&[("api_key", json!("k")), ("reasoning_effort", json!("low"))]);
+        assert!(with_test_host(&http, &o, |h| OpenAi::new().translate(h, &req())).is_err());
+        assert_eq!(http.requests().len(), 1);
     }
 
     #[test]
