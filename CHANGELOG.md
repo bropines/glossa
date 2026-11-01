@@ -30,10 +30,6 @@ for Windows, macOS and Linux.
   desktop.
 - **Snap Layouts** on Windows 11: resting the pointer on the maximise
   button of Glossa's own title bar offers the system's window layouts.
-- **Themes that follow the system's light or dark mode**
-  (`appearance.follow_system_theme`, with `theme_light` and `theme_dark`):
-  on for a new configuration, Fluent on Windows and macOS's own themes on
-  macOS, switching as the system does.
 - **Google Lens built in**: Glossa talks to Lens itself (through
   [chrome-lens-rs](https://github.com/bropines/chrome-lens-rs), on Chromium's
   own protocol definitions), so Lens
@@ -65,8 +61,11 @@ for Windows, macOS and Linux.
   translation in the same request when asked. A vision model, the answer
   format, the box coordinates and the instructions are in the endpoint's
   settings. Endpoints never serve as a quiet fallback for another engine.
-- **Light and dark themes that follow the system**: *Options → Appearance*
-  has a switch to follow the system's mode, with a light and a dark theme to
+- **Light and dark themes that follow the system**
+  (`appearance.follow_system_theme`, with `theme_light` and `theme_dark`;
+  on for a new configuration, Fluent on Windows and macOS's own themes on
+  macOS, switching as the system does): *Options → Appearance* has a switch
+  to follow the system's mode, with a light and a dark theme to
   pick (one theme when it is off, or when the system does not tell); the
   preview shows the one in effect. In the welcome guide, a theme for the
   mode the system is in becomes that mode's theme; one for the other mode
