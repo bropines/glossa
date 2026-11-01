@@ -312,7 +312,8 @@ glossa-cli speak [-l LANG] [--slow] -o OUT TEXT…
 | `--slow` | off | Ask for slow speech. |
 
 The speech service is `[services] tts`, then any other service that can
-speak. The file holds what the service sends, usually MP3 (`audio/mpeg`).
+speak. The file holds what the service sends: MP3 (`audio/mpeg`) from
+Google, WAV (`audio/wav`) from the system voice (`system-tts`).
 
 ```console
 $ glossa-cli speak -l en -o hi.mp3 Hello there

@@ -210,7 +210,7 @@ setup, otherwise only listed.
 | `dictionary_order` | array of ids | `[]` | Options → Services → Dictionaries | Dictionary services in order. |
 | `dictionary_enabled` | array of ids | `[]` | Options → Services → Dictionaries | The dictionary services in use. |
 | `dictionary_active` | id | `""` | dictionary window, service list | The selected dictionary service. |
-| `tts` | id | `""` | Options → Services → Speech | The speech service for "listen". Empty, or one that fails, falls back to any service that can speak. |
+| `tts` | id | `""` | Options → Services → Speech | The speech service for "listen": `google` on a fresh install, `system-tts` for the system's own voices offline, or a module. Empty, or one that fails, falls back to any service that can speak. |
 | `fail_over` | bool | `true` | Options → Services | When the active service fails, try the next enabled one. |
 | `options` | table: service id → table | `{}` | Options → Services, the selected service's settings | Each service's settings, by option key, as its manifest declares them (keys, models, URLs, prompts…). See below. |
 | `seen` | array of ids | `[]` | kept by the program | Every service offered once, so one you switched off stays off. |

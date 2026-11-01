@@ -57,7 +57,9 @@
   Oxford Learner's, Wiktionary, Youdao, Academic, Wikipedia, Urban
   Dictionary, and the classic dictionary scripts) and offline (StarDict, DSL,
   XDXF, TSV).
-- **Listen**: text to speech for the source and the translation.
+- **Listen**: text to speech for the source and the translation, online
+  (Google) or offline with the system's own voices (the Windows voices,
+  macOS's `say`, espeak-ng on Linux).
 - **Replace, copy, convert layout**: translate the selection in place, copy
   the translation, fix text typed in the wrong keyboard layout.
 - **Many services, built in**: Google, Bing, Yandex, DeepL, Lara, ModernMT

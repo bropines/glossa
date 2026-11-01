@@ -1,18 +1,18 @@
 //! Running a helper program with a deadline.
 //!
-//! Both the chrome-lens CLI and a user's OCR command are external programs
-//! that may hang (a stuck network call, a prompt nobody will answer). They run
-//! with stdin closed, their output collected on threads so a chatty stderr
-//! cannot fill a pipe and stall them, and they are killed when the deadline
-//! passes or the user cancels.
+//! Providers built on an external program (the chrome-lens CLI, Tesseract, a
+//! user's OCR command, the system voice) must not hang on it: a stuck network
+//! call, a prompt nobody will answer. The program runs with stdin closed,
+//! its output collected on threads so a chatty stderr cannot fill a pipe and
+//! stall it, and it is killed when the deadline passes or the user cancels.
 
 use std::io::Read;
 use std::process::{Child, Command, Stdio};
 use std::sync::mpsc::{self, Receiver};
 use std::time::{Duration, Instant};
 
+use crate::CancelToken;
 use glossa_core::{Error, Result};
-use glossa_modules::CancelToken;
 
 /// A finished program.
 #[derive(Debug, Default)]
@@ -34,8 +34,8 @@ impl Output {
     }
 }
 
-/// Output beyond this is dropped: OCR text is never this large, and a runaway
-/// program must not take our memory with it.
+/// Output beyond this is dropped: OCR text and speech are never this large,
+/// and a runaway program must not take our memory with it.
 const MAX_OUTPUT: u64 = 32 * 1024 * 1024;
 
 /// Keep consoles from flashing up on Windows.
