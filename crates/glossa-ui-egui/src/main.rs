@@ -117,7 +117,9 @@ fn main() -> eframe::Result<()> {
     };
     init_logging(&paths);
     glossa_platform::crash::install(&paths.log_file());
-    // Release builds abort on panic; leave a trace in the log first.
+    // Log every panic with its frames. Panics unwind afterwards (release
+    // builds too) to the `catch_unwind` around providers, engine jobs and
+    // API requests, which fail that one request instead of the program.
     std::panic::set_hook(Box::new(|info| {
         let thread = std::thread::current();
         let thread = thread.name().unwrap_or("unnamed");

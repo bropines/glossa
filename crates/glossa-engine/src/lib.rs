@@ -26,6 +26,7 @@ use std::sync::mpsc::{self, Receiver, Sender};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
+use glossa_core::error::catch_panic;
 use glossa_core::config::OcrTranslateWith;
 use glossa_core::history::{HistoryEntry, HistoryResult};
 use glossa_core::ocr::{ImageSource, OcrGranularity, OcrRequest};
@@ -678,6 +679,16 @@ impl Engine {
         // 8 MB of address space, committed only as used: module scripts
         // run here, and turning a deeply nested result (an OCR layout) into
         // JSON recurses through the JavaScript engine.
+        // Jobs turn their own panics into error results (`catch_panic`);
+        // this catches whatever is left (emitting the event, say) so a bug
+        // costs one job, not the program.
+        let job = name.to_owned();
+        let f = move || {
+            if let Err(payload) = std::panic::catch_unwind(std::panic::AssertUnwindSafe(f)) {
+                let msg = glossa_core::error::panic_message(payload.as_ref());
+                tracing::error!("worker thread for {job} panicked: {msg}");
+            }
+        };
         if let Err(e) = std::thread::Builder::new().name(format!("glossa-{name}")).stack_size(8 << 20).spawn(f) {
             tracing::error!("could not start a worker thread: {e}");
         }
@@ -799,7 +810,7 @@ impl Engine {
         }
         let me = self.clone();
         self.spawn("translate", move || {
-            let result = me.with_pipeline(&cancel, |p| p.translate(&text, pair, &opts));
+            let result = catch_panic("translation", || me.with_pipeline(&cancel, |p| p.translate(&text, pair, &opts)));
             if cancel.is_cancelled() || !me.current(slot, job) {
                 return;
             }
@@ -881,7 +892,7 @@ impl Engine {
         let (job, cancel) = self.begin(slot);
         let me = self.clone();
         self.spawn("dictionary", move || {
-            let result = me.lookup(&text, pair, provider.as_deref(), &cancel);
+            let result = catch_panic("dictionary lookup", || me.lookup(&text, pair, provider.as_deref(), &cancel));
             if cancel.is_cancelled() || !me.current(slot, job) {
                 return;
             }
@@ -1171,7 +1182,7 @@ impl Engine {
         let (job, cancel) = self.begin(slot);
         let me = self.clone();
         self.spawn("ocr", move || {
-            let result = me.recognize_with(image, &opts, &cancel);
+            let result = catch_panic("text recognition", || me.recognize_with(image, &opts, &cancel));
             if cancel.is_cancelled() || !me.current(slot, job) {
                 return;
             }
@@ -1238,7 +1249,7 @@ impl Engine {
         let (job, cancel) = self.begin(slot);
         let me = self.clone();
         self.spawn("speech", move || {
-            let result = me.speak_with(&text, lang, slow, &cancel);
+            let result = catch_panic("speech", || me.speak_with(&text, lang, slow, &cancel));
             if cancel.is_cancelled() || !me.current(slot, job) {
                 return;
             }
