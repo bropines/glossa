@@ -487,10 +487,13 @@ mod tests {
     #[test]
     fn the_warm_up_picture_is_a_small_png() {
         assert_eq!(crate::imagesize::dimensions(WARM_UP_PNG), Some((92, 61)));
-        // Elsewhere it does nothing, and only once anywhere.
-        let p = MacVision::new(VisionConfig::default());
-        p.warm_up();
-        assert!(p.warmed_up.load(Ordering::Relaxed));
+        // Off macOS it only notes that it ran. (On a Mac every new test
+        // binary would wait out Vision's 25-second first call.)
+        if cfg!(not(target_os = "macos")) {
+            let p = MacVision::new(VisionConfig::default());
+            p.warm_up();
+            assert!(p.warmed_up.load(Ordering::Relaxed));
+        }
     }
 
     #[test]
