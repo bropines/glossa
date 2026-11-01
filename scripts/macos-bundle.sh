@@ -35,7 +35,12 @@ done
 iconutil -c icns "$ICONSET" -o "$APP/Contents/Resources/glossa.icns"
 
 if security find-identity -p codesigning 2>/dev/null | grep -q '"Glossa Dev"'; then
-  codesign --force --deep -s "Glossa Dev" "$APP"
+  if ! codesign --force --deep -s "Glossa Dev" "$APP"; then
+    # errSecInternalComponent: the keychain will not hand the key to a
+    # session that cannot show its prompt, such as one over SSH.
+    echo "Signing failed. Over SSH the keychain refuses the key: run this script in Terminal on the Mac." >&2
+    exit 1
+  fi
   echo "Signed with \"Glossa Dev\"."
 else
   codesign --force --deep -s - "$APP"
