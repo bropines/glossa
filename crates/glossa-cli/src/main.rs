@@ -55,7 +55,7 @@ COMMANDS
     translate  [-f FROM] [-t TO] [-s SERVICE] [--back] [TEXT…]   (stdin if no text)
     detect     [TEXT…]
     dict       [-f FROM] [-t TO] [-s SERVICE] WORD
-    ocr        IMAGE [-l LANG] [-t TO]
+    ocr        IMAGE [-l LANG] [-t TO] [-e ENGINE]   ENGINE: lens, windows-ocr, oneocr, command-ocr…
     speak      [-l LANG] [--slow] -o OUT.mp3 TEXT…
     services   [-c CAPABILITY]        translate | dictionary | listen | ocr | detect_language
     modules                           what loaded, what failed and why
@@ -97,6 +97,8 @@ const VALUED: &[&str] = &[
     "--to",
     "-s",
     "--service",
+    "-e",
+    "--engine",
     "-l",
     "--lang",
     "-o",
@@ -341,7 +343,11 @@ fn run(args: &Args) -> Result<(), Fail> {
             let image = std::fs::read(path)?;
             let e = engine(args)?;
             let to = args.flag(&["-t", "--to"]).map(|c| lang(Some(c), LangId::ENGLISH)).transpose()?;
-            let out = e.recognize(image, lang(args.flag(&["-l", "--lang"]), LangId::AUTO)?, to)?;
+            let from = lang(args.flag(&["-l", "--lang"]), LangId::AUTO)?;
+            let out = match args.flag(&["-e", "--engine", "-s", "--service"]) {
+                Some(engine) => e.recognize_using(engine, image, from, to)?,
+                None => e.recognize(image, from, to)?,
+            };
             if args.json {
                 out!(
                     "{}",

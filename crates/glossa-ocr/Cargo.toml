@@ -1,6 +1,6 @@
 [package]
 name = "glossa-ocr"
-description = "Text recognition providers: chrome-lens (daemon, CLI), external commands."
+description = "Text recognition providers: chrome-lens (daemon, CLI), Windows OCR, OneOCR, external commands."
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -16,3 +16,18 @@ serde_json = { workspace = true }
 tracing = { workspace = true }
 base64 = { workspace = true }
 dirs = "7"
+
+# Windows OCR (WinRT) and OneOCR (the Snipping Tool's DLL, loaded at run time).
+[target.'cfg(windows)'.dependencies]
+windows = { workspace = true, features = [
+    "Foundation",
+    "Foundation_Collections",
+    "Globalization",
+    "Graphics_Imaging",
+    "Media_Ocr",
+    "Storage_Streams",
+    "Win32_Foundation",
+    "Win32_Storage_Packaging_Appx",
+    "Win32_System_Com",
+    "Win32_System_LibraryLoader",
+] }

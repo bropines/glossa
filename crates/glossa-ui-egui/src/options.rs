@@ -1351,6 +1351,27 @@ fn ocr(app: &mut GlossaApp, ui: &mut egui::Ui, st: &mut OptionsState) {
         });
         ui.label(RichText::new(app.t("options.ocr.lens_install")).small().color(look.weak_text()));
     });
+    if cfg!(windows) {
+        group(ui, &look, &app.t("options.ocr.windows_title"), |ui| {
+            ui.label(RichText::new(app.t("options.ocr.windows_note")).small().color(look.weak_text()));
+        });
+        group(ui, &look, &app.t("options.ocr.oneocr_title"), |ui| {
+            let o = &mut d.oneocr;
+            row(ui, &app.t("options.ocr.oneocr_folder"), |ui| {
+                ui.add(
+                    egui::TextEdit::singleline(&mut o.folder)
+                        .hint_text(app.t("options.ocr.oneocr_folder_hint"))
+                        .desired_width(250.0),
+                );
+                if ui.button("…").clicked() {
+                    if let Some(dir) = rfd::FileDialog::new().pick_folder() {
+                        o.folder = dir.display().to_string();
+                    }
+                }
+            });
+            ui.label(RichText::new(app.t("options.ocr.oneocr_note")).small().color(look.weak_text()));
+        });
+    }
 }
 
 fn modules(app: &mut GlossaApp, ui: &mut egui::Ui, st: &mut OptionsState) {

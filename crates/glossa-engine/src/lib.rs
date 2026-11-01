@@ -168,6 +168,9 @@ struct Inner {
     last_spoken: Mutex<Option<(String, Instant)>>,
     /// Built-in providers are created once; modules are reloaded around them.
     builtins: Vec<Arc<dyn Provider>>,
+    /// The built-in OCR providers and the settings they were made from:
+    /// remade when the OCR settings change, so those apply without a restart.
+    ocr_builtins: Mutex<(glossa_core::config::OcrConfig, Vec<Arc<dyn Provider>>)>,
     /// The JavaScript modules compiled into the program, also created once.
     bundled: Vec<Arc<dyn Provider>>,
 }
@@ -210,8 +213,9 @@ impl Engine {
             .and_then(|t| serde_json::from_str(&t).ok())
             .unwrap_or_default();
 
-        let mut builtins = glossa_services::builtin_providers();
-        builtins.extend(glossa_ocr::builtin_providers(&config.ocr));
+        let builtins = glossa_services::builtin_providers();
+        let ocr_builtins =
+            Mutex::new((config.ocr.clone(), glossa_ocr::builtin_providers(&config.ocr, &paths.cache_dir)));
         let module_cache = ModuleCache::new();
         #[cfg(feature = "js")]
         let bundled = bundled::providers(&module_cache);
@@ -236,6 +240,7 @@ impl Engine {
             next_job: AtomicU64::new(1),
             last_spoken: Mutex::new(None),
             builtins,
+            ocr_builtins,
             bundled,
         };
         let engine = Engine { inner: Arc::new(inner) };
@@ -321,7 +326,14 @@ impl Engine {
             ui_language_code: self.locale().code.clone(),
         };
         let mut reg = Registry::new();
-        for p in &self.inner.builtins {
+        let ocr_builtins = {
+            let mut ocr = self.inner.ocr_builtins.lock();
+            if ocr.0 != cfg.ocr {
+                *ocr = (cfg.ocr.clone(), glossa_ocr::builtin_providers(&cfg.ocr, &paths.cache_dir));
+            }
+            ocr.1.clone()
+        };
+        for p in self.inner.builtins.iter().chain(&ocr_builtins) {
             if !cfg.modules.disabled.contains(&p.info().id) {
                 reg.add_builtin(p.clone());
             }
@@ -782,7 +794,19 @@ impl Engine {
     /// (by the OCR provider itself if it can, else by the translation
     /// pipeline). Blocking.
     pub fn recognize(&self, image: Vec<u8>, lang: LangId, translate_to: Option<LangId>) -> Result<OcrOutcome> {
-        self.recognize_with(image, lang, translate_to, &CancelToken::new())
+        self.recognize_with(image, lang, translate_to, None, &CancelToken::new())
+    }
+
+    /// [`Engine::recognize`] with one OCR provider (`windows-ocr`, `oneocr`,
+    /// a module's id…) and no fail-over to the others. Blocking.
+    pub fn recognize_using(
+        &self,
+        provider: &str,
+        image: Vec<u8>,
+        lang: LangId,
+        translate_to: Option<LangId>,
+    ) -> Result<OcrOutcome> {
+        self.recognize_with(image, lang, translate_to, Some(provider), &CancelToken::new())
     }
 
     fn recognize_with(
@@ -790,6 +814,7 @@ impl Engine {
         image: Vec<u8>,
         lang: LangId,
         translate_to: Option<LangId>,
+        only: Option<&str>,
         cancel: &CancelToken,
     ) -> Result<OcrOutcome> {
         let cfg = self.config();
@@ -801,10 +826,22 @@ impl Engine {
         }
         let registry = self.registry();
         let http = self.inner.http.read().clone();
-        let mut providers: Vec<Arc<dyn Provider>> = registry.get(&cfg.ocr.provider).into_iter().collect();
-        providers.extend(
-            registry.with_capability(Capabilities::OCR).into_iter().filter(|p| p.info().id != cfg.ocr.provider),
-        );
+        let providers: Vec<Arc<dyn Provider>> = match only {
+            Some(id) => {
+                let p = registry.get(id).ok_or_else(|| Error::NoSuchModule(id.to_owned()))?;
+                if !p.info().capabilities.contains(Capabilities::OCR) {
+                    return Err(Error::Unsupported { provider: p.info().name.clone(), capability: "text recognition" });
+                }
+                vec![p]
+            }
+            None => {
+                let mut v: Vec<Arc<dyn Provider>> = registry.get(&cfg.ocr.provider).into_iter().collect();
+                v.extend(
+                    registry.with_capability(Capabilities::OCR).into_iter().filter(|p| p.info().id != cfg.ocr.provider),
+                );
+                v
+            }
+        };
         if providers.is_empty() {
             return Err(Error::NoProvider("text recognition"));
         }
@@ -867,7 +904,7 @@ impl Engine {
         let (job, cancel) = self.begin(slot);
         let me = self.clone();
         self.spawn("ocr", move || {
-            let result = me.recognize_with(image, lang, translate_to, &cancel);
+            let result = me.recognize_with(image, lang, translate_to, None, &cancel);
             if cancel.is_cancelled() || !me.current(slot, job) {
                 return;
             }
