@@ -13,6 +13,9 @@
 //!   it, 0–1000 (Qwen2-VL), 0–1000 with y first (Gemini) or fractions. The
 //!   `ocr_box_units` setting says which; `auto` takes values up to 1 as
 //!   fractions, values beyond the image as 0–1000, and pixels otherwise.
+//!   Gemini answers in its own `box_2d` (`[ymin, xmin, ymax, xmax]`,
+//!   0–1000) whatever it is asked for, so a Gemini model is asked for that
+//!   and read that way.
 //!
 //! When the request asks for a translation too, the model is asked to give
 //! it in the same answer, so one call does both. Models wrap JSON in prose
@@ -80,13 +83,18 @@ impl OpenAi {
         let bytes = req.image.to_bytes()?;
         let size = glossa_modules::protocol::image_dimensions(&bytes);
         let mode = mode(host, req);
-        let http_req = self.ocr_request(host, req, &bytes, size, mode)?;
+        let model = self.ocr_model(host);
+        let mut units = Units::from_option(host.option_str("ocr_box_units"));
+        let format = box_format(&model, units);
+        if format == BoxFormat::Gemini && units == Units::Auto {
+            units = Units::ThousandYx;
+        }
+        let http_req = self.ocr_request(host, req, &bytes, size, mode, &model, format)?;
         let resp = self.check(host.http.send(http_req)?, host)?;
         let v = super::parse_json(&resp, self.name())?;
         let content = self.completion_text(&v, resp.status)?;
         let strip = host.option("strip_thinking").and_then(Value::as_bool).unwrap_or(true);
         let content = if strip { super::strip_thinking(&content) } else { content.as_str() };
-        let units = Units::from_option(host.option_str("ocr_box_units"));
         let mut out = match mode {
             Mode::Text => parse_text(content, req.translate_to.is_some()),
             Mode::Lines => parse_lines(content, size, units).ok_or_else(|| {
@@ -99,6 +107,15 @@ impl OpenAi {
         Ok(out)
     }
 
+    /// The model that reads pictures: the vision model, else the endpoint's.
+    fn ocr_model(&self, host: &Host) -> String {
+        match host.option_str("ocr_model").trim() {
+            "" => super::model_for(host, self.preset),
+            m => m.to_owned(),
+        }
+    }
+
+    #[allow(clippy::too_many_arguments)]
     fn ocr_request(
         &self,
         host: &Host,
@@ -106,14 +123,12 @@ impl OpenAi {
         bytes: &[u8],
         size: Option<(u32, u32)>,
         mode: Mode,
+        model: &str,
+        format: BoxFormat,
     ) -> Result<HttpRequest> {
-        let model = match host.option_str("ocr_model").trim() {
-            "" => super::model_for(host, self.preset),
-            m => m.to_owned(),
-        };
         let custom = host.option_str("ocr_prompt").trim();
         let instructions =
-            if custom.is_empty() { prompt(mode, req.lang, req.translate_to, size) } else { custom.to_owned() };
+            if custom.is_empty() { prompt(mode, req.lang, req.translate_to, size, format) } else { custom.to_owned() };
         let url = format!("data:{};base64,{}", mime(bytes), base64::engine::general_purpose::STANDARD.encode(bytes));
         let mut body = json!({
             "model": model,
@@ -148,9 +163,35 @@ impl OpenAi {
     }
 }
 
+/// How the instructions ask for boxes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum BoxFormat {
+    /// `box`: `[x1, y1, x2, y2]` in pixels of the image.
+    Pixels,
+    /// Gemini's own `box_2d`: `[ymin, xmin, ymax, xmax]`, 0–1000.
+    Gemini,
+}
+
+/// Gemini's format for a Gemini model, unless the settings name units that
+/// are not Gemini's.
+fn box_format(model: &str, units: Units) -> BoxFormat {
+    let gemini = model.to_ascii_lowercase().contains("gemini");
+    if gemini && matches!(units, Units::Auto | Units::ThousandYx) {
+        BoxFormat::Gemini
+    } else {
+        BoxFormat::Pixels
+    }
+}
+
 /// The instructions for `mode`, in English: models follow it best, and the
 /// answer is the text in the picture either way.
-fn prompt(mode: Mode, lang: LangId, translate_to: Option<LangId>, size: Option<(u32, u32)>) -> String {
+fn prompt(
+    mode: Mode,
+    lang: LangId,
+    translate_to: Option<LangId>,
+    size: Option<(u32, u32)>,
+    format: BoxFormat,
+) -> String {
     let mut p = String::new();
     let lang_hint =
         if lang.is_language() { format!(" The text is in {}.", lang.english_name()) } else { String::new() };
@@ -174,11 +215,18 @@ fn prompt(mode: Mode, lang: LangId, translate_to: Option<LangId>, size: Option<(
         }
         (Mode::Lines, to) => {
             let (w, h) = size.unwrap_or((0, 0));
-            p.push_str(&format!(
-                "Find every line of text in this image, in reading order. Answer with JSON only: {{\"lines\": \
-                 [{{\"text\": \"<the line exactly as written>\", \"box\": [x1, y1, x2, y2]}}]}}, where box is the \
-                 line's bounding box in pixels of this {w}x{h} image, x to the right, y down."
-            ));
+            p.push_str(&match format {
+                BoxFormat::Pixels => format!(
+                    "Find every line of text in this image, in reading order. Answer with JSON only: {{\"lines\": \
+                     [{{\"text\": \"<the line exactly as written>\", \"box\": [x1, y1, x2, y2]}}]}}, where box is \
+                     the line's bounding box in pixels of this {w}x{h} image, x to the right, y down."
+                ),
+                BoxFormat::Gemini => "Find every line of text in this image, in reading order. Answer with JSON only: \
+                                      {\"lines\": [{\"text\": \"<the line exactly as written>\", \"box_2d\": [ymin, \
+                                      xmin, ymax, xmax]}]}, where box_2d is the line's bounding box normalised to \
+                                      0-1000."
+                    .to_owned(),
+            });
             if let Some(to) = to {
                 p.push_str(&format!(
                     " Give each line a \"translation\" field too, translating it into {} in the context of the \
@@ -413,6 +461,37 @@ mod tests {
         let parts = &b["messages"][0]["content"];
         assert!(parts[0]["text"].as_str().unwrap().contains("in English"));
         assert!(parts[1]["image_url"]["url"].as_str().unwrap().starts_with("data:image/png;base64,"));
+    }
+
+    #[test]
+    fn gemini_is_asked_for_its_own_boxes_and_read_that_way() {
+        assert_eq!(box_format("gemini-2.5-flash", Units::Auto), BoxFormat::Gemini);
+        assert_eq!(box_format("models/Gemini-3.8-flash", Units::ThousandYx), BoxFormat::Gemini);
+        assert_eq!(box_format("gemini-2.5-flash", Units::Pixels), BoxFormat::Pixels);
+        assert_eq!(box_format("Qwen2.5-VL-7B", Units::Auto), BoxFormat::Pixels);
+
+        // What gemini-2.5-flash answered for a 1800x800 test page, whatever
+        // it was asked: y first, 0-1000.
+        let url = "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions";
+        let reply = answer(
+            r#"```json
+{"lines": [{"text": "The quick brown fox", "box_2d": [326, 66, 401, 665]}]}
+```"#,
+        );
+        let http = MockHttp::new().on(Method::Post, url, 200, &reply);
+        let o = opts(&[
+            ("base_url", json!("https://generativelanguage.googleapis.com/v1beta/openai")),
+            ("ocr_model", json!("gemini-2.5-flash")),
+            ("ocr_mode", json!("lines")),
+        ]);
+        let req = OcrRequest::new(ImageSource::Bytes(png(1800, 800)));
+        let out = with_test_host(&http, &o, |h| OpenAi::new().recognize(h, &req)).unwrap();
+        let prompt = body_json(&http.requests()[0])["messages"][0]["content"][0]["text"].as_str().unwrap().to_owned();
+        assert!(prompt.contains("box_2d") && prompt.contains("0-1000"), "{prompt}");
+        let b = out.blocks[0].bounds.unwrap();
+        // The line is drawn at x 120..1190, y 265..315 on the page.
+        assert!((b.x - 118.8).abs() < 0.1 && (b.y - 260.8).abs() < 0.1, "{b:?}");
+        assert!((b.x + b.width - 1197.0).abs() < 0.1 && (b.y + b.height - 320.8).abs() < 0.1, "{b:?}");
     }
 
     #[test]
