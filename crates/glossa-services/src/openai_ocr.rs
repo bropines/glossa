@@ -124,9 +124,16 @@ impl OpenAi {
                     { "type": "image_url", "image_url": { "url": url } },
                 ],
             }],
-            // Transcription wants the most likely reading, not variety.
-            "temperature": 0,
         });
+        // As for translation: reasoning models reject a temperature other
+        // than their default, so a reasoning effort replaces it. Gemini 3
+        // and other thinking models otherwise think at length over a
+        // screenshot (a minute and more) before transcribing it.
+        match host.option_str("reasoning_effort").trim() {
+            // Transcription wants the most likely reading, not variety.
+            "" => body["temperature"] = json!(0),
+            effort => body["reasoning_effort"] = json!(effort),
+        }
         let max = host.option_f64("max_tokens").unwrap_or(0.0);
         if max >= 1.0 {
             let param = match host.option_str("max_tokens_param").trim() {
@@ -402,9 +409,22 @@ mod tests {
         let b = body_json(r);
         assert_eq!(b["model"], "Qwen/Qwen2.5-VL-7B-Instruct");
         assert_eq!(b["temperature"], 0);
+        assert!(b.get("reasoning_effort").is_none());
         let parts = &b["messages"][0]["content"];
         assert!(parts[0]["text"].as_str().unwrap().contains("in English"));
         assert!(parts[1]["image_url"]["url"].as_str().unwrap().starts_with("data:image/png;base64,"));
+    }
+
+    #[test]
+    fn a_reasoning_effort_is_sent_instead_of_a_temperature() {
+        let url = "https://api.openai.com/v1/chat/completions";
+        let http = MockHttp::new().on(Method::Post, url, 200, &answer("text"));
+        let o = opts(&[("reasoning_effort", json!("minimal"))]);
+        let req = OcrRequest::new(ImageSource::Bytes(png(10, 10)));
+        with_test_host(&http, &o, |h| OpenAi::new().recognize(h, &req)).unwrap();
+        let b = body_json(&http.requests()[0]);
+        assert_eq!(b["reasoning_effort"], "minimal");
+        assert!(b.get("temperature").is_none());
     }
 
     #[test]
