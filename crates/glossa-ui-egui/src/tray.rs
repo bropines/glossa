@@ -188,7 +188,14 @@ impl Tray {
             .with_menu_on_left_click(cfg!(target_os = "macos"));
         if let Some(i) = tray_icon_image([0.16, 0.55, 0.89], false) {
             // macOS paints a template icon to suit the menu bar.
-            b = if cfg!(target_os = "macos") { b.with_icon_templated(i) } else { b.with_icon(i) };
+            #[cfg(target_os = "macos")]
+            {
+                b = b.with_icon_templated(i);
+            }
+            #[cfg(not(target_os = "macos"))]
+            {
+                b = b.with_icon(i);
+            }
         }
         let icon = b.build().map_err(|e| e.to_string())?;
         Ok(Tray { events, icon, hotkeys_item, mouse_item })
