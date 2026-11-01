@@ -541,6 +541,13 @@ Useful for scripts on a machine without a desktop session, and for trying
 the API. If the desktop program is running with the API on, the port is
 taken and `serve` fails with exit 1.
 
+On Linux and the BSDs `serve` also offers the [D-Bus
+service](control-api.md#d-bus) (unless `[server] dbus` is false), printing
+`D-Bus: io.github.bropines.Glossa on the session bus` and a `gdbus` example.
+If the desktop program already owns the name, `serve` notes it and runs the
+HTTP API alone. With no session bus at all (a server, an ssh login),
+`dbus-run-session glossa-cli serve` provides a private one.
+
 ### action
 
 ```

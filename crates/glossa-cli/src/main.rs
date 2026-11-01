@@ -75,7 +75,7 @@ COMMANDS
     theme      list | show NAME | convert FILE    (classic JSON -> native TOML)
     locale     list | convert FILE                (classic lang.json -> native JSON)
     config     path | show
-    serve                             run the control API until Ctrl+C
+    serve                             run the control API (and on Linux the D-Bus service) until Ctrl+C
     action     ACTION [TEXT]          ask a running Glossa to act (show_popup, text_recognition…)
     doctor                            what works here: session, hotkeys, selection, OCR engines,
                                       modules, permissions, files, proxy, control API
@@ -724,6 +724,26 @@ fn run(args: &Args) -> Result<(), Fail> {
             let token = e.config().server.token;
             eprintln!("control API on http://{}  (token: {token})", handle.addr);
             eprintln!("try: curl -s 'http://{}/v1/translate?text=hello&to=ru&token={token}'", handle.addr);
+            // Linux and the BSDs: the D-Bus service too, unless switched off.
+            let _dbus = if glossa_engine::dbus::SUPPORTED && e.config().server.dbus {
+                match glossa_engine::dbus::start(e.clone()) {
+                    Ok(h) => {
+                        use glossa_engine::dbus::{BUS_NAME, INTERFACE, OBJECT_PATH};
+                        eprintln!("D-Bus: {BUS_NAME} on the session bus");
+                        eprintln!(
+                            "try: gdbus call --session --dest {BUS_NAME} --object-path {OBJECT_PATH} \
+                             --method {INTERFACE}.Translate hello '' ru ''"
+                        );
+                        Some(h)
+                    }
+                    Err(err) => {
+                        eprintln!("note: no D-Bus service: {err}");
+                        None
+                    }
+                }
+            } else {
+                None
+            };
             let rx = e.subscribe();
             loop {
                 match rx.recv() {

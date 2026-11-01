@@ -211,6 +211,16 @@ fn main() -> eframe::Result<()> {
     // Engine events seen while no GUI is loaded (the control API asking for
     // an action).
     let idle_events = engine.subscribe();
+    // Linux and the BSDs: the same actions on the session bus. Like the
+    // instance lock it lives as long as the process, GUI loaded or not;
+    // its calls arrive as engine events, as the control API's do.
+    let mut dbus = None;
+    if cfg_dbus(&engine) {
+        match glossa_engine::dbus::start(engine.clone()) {
+            Ok(handle) => dbus = Some(handle),
+            Err(e) => tracing::warn!("D-Bus service not started: {e}"),
+        }
+    }
 
     let cfg = engine.config();
     let can_unload = glossa_platform::idle::IdlePump::supported() && launch.screenshot.is_none();
@@ -310,6 +320,7 @@ fn main() -> eframe::Result<()> {
         // control port free and starts for real instead of handing over to
         // this one.
         drop(instance.take());
+        drop(dbus.take());
         let args: Vec<String> = std::env::args().skip(1).filter(|a| a != "--hidden").collect();
         match std::env::current_exe().map(|exe| std::process::Command::new(exe).args(&args).spawn()) {
             Ok(Ok(_)) => tracing::info!("restarting"),
@@ -317,6 +328,11 @@ fn main() -> eframe::Result<()> {
         }
     }
     Ok(())
+}
+
+/// Whether to offer the D-Bus service: the setting, where there is one.
+fn cfg_dbus(engine: &Engine) -> bool {
+    glossa_engine::dbus::SUPPORTED && engine.config().server.dbus
 }
 
 fn launch_once_only(start_visible: &mut bool) {
