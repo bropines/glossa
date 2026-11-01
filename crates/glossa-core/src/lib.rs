@@ -38,6 +38,10 @@ pub use paths::Paths;
 pub use theme::Theme;
 pub use translate::{Detection, ProviderInfo, TranslateRequest, Translation};
 
+/// Where to support the project: the author's Boosty page. Shown in the
+/// about box, the menus and the command-line help.
+pub const SUPPORT_URL: &str = "https://boosty.to/pinus";
+
 /// The program's version, for the about box and the control API.
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");
 

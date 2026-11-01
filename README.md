@@ -375,6 +375,11 @@ Glossa reads them from an existing installation. See [NOTICE](NOTICE).
 
 Not affiliated with or endorsed by QTranslate or its author.
 
+## Support the project
+
+Glossa is free. If it helps you, you can support its development on
+[Boosty](https://boosty.to/pinus).
+
 ## License
 
 MIT ([LICENSE-MIT](LICENSE-MIT)) or Apache-2.0

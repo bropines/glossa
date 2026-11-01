@@ -7,6 +7,12 @@ the notes of its GitHub release.
 
 ## [Unreleased]
 
+### Added
+
+- **Support the project**: a link to the author's Boosty page in the About
+  window, the main window's menu, the tray menu, the macOS app menu, the
+  command-line help and the README.
+
 ### Fixed
 
 - macOS: *Options → Exceptions* listed Windows controls (`SysListView32`…)

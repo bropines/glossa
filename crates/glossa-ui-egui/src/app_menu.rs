@@ -34,6 +34,7 @@ fn labels(l: &Locale) -> MenuLabels {
     let t = |k: &str| l.get(k).to_owned();
     MenuLabels {
         about: t("menu.about"),
+        support: t("menu.support"),
         settings: t("macmenu.settings"),
         hide: t("macmenu.hide"),
         hide_others: t("macmenu.hide_others"),
@@ -58,6 +59,7 @@ pub fn poll(app: &mut GlossaApp) {
     for c in commands {
         match c {
             MenuCommand::About => app.open_about(),
+            MenuCommand::Support => app.open_url(glossa_core::SUPPORT_URL),
             MenuCommand::Settings => crate::options::open(app),
             MenuCommand::Quit => app.quit(),
             MenuCommand::CloseWindow => close_focused(&app.ctx),

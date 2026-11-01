@@ -82,6 +82,8 @@ COMMANDS
                                       modules, permissions, files, proxy, control API
 
 Languages are codes (en, ru, zh-CN, he, auto). SERVICE is a provider id from `services`.
+
+Support the project: https://boosty.to/pinus
 ";
 
 struct Args {
@@ -817,6 +819,11 @@ fn one_line(s: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_help_names_the_support_page() {
+        assert!(USAGE.contains(glossa_core::SUPPORT_URL));
+    }
 
     fn p(args: &[&str]) -> Args {
         parse(args.iter().map(|s| s.to_string()).collect()).unwrap()

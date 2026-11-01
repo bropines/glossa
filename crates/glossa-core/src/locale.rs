@@ -409,6 +409,7 @@ pub static STRINGS: &[(&str, &str, Option<&str>)] = &[
     ("about.open_online", "Open on GitHub", None),
     ("about.back", "Back", None),
     ("about.not_affiliated", "Not affiliated with QTranslate or its author.", None),
+    ("about.support_hint", "Glossa is free. If it helps you, you can support its development on Boosty.", None),
     // -- popup --------------------------------------------------------------
     ("popup.dictionary", "Dictionary search for", Some("w:6:10:20")),
     ("popup.listen", "Listen to selected text", Some("w:6:10:30")),
@@ -1000,6 +1001,7 @@ pub static STRINGS: &[(&str, &str, Option<&str>)] = &[
     ("menu.options", "Options", Some("m:1:120")),
     ("menu.about", "About Glossa", Some("m:1:125")),
     ("menu.help", "Help", Some("m:1:130")),
+    ("menu.support", "Support the project", None),
     ("menu.exit", "Exit", Some("m:1:140")),
     ("menu.stacked_results", "Show all services at once", None),
     // -- text field context menu -------------------------------------------------------------
@@ -1040,6 +1042,7 @@ pub static STRINGS: &[(&str, &str, Option<&str>)] = &[
     ("tray.mouse_translation_read", "Show translation and read", Some("m:5:71")),
     ("tray.options", "Options", Some("m:5:80")),
     ("tray.about", "About Glossa", Some("m:5:90")),
+    ("tray.support", "Support the project", None),
     ("tray.exit", "Exit", Some("m:5:100")),
     ("tray.show", "Show Glossa", None),
     // -- dictionary article menu --------------------------------------------------------------------
