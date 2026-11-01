@@ -1,39 +1,41 @@
 name: release
 
 # Tag v1.2.3 (matching the workspace version in Cargo.toml) -> a draft GitHub
-# release with archives and packages for every platform and SHA256SUMS.
-# Review the draft and publish it by hand. To redo a failed run, delete the
-# draft first. The packaging scripts live in packaging/ (see docs/install.md).
+# release with installers, portable archives and packages for every platform
+# and processor, and SHA256SUMS. Review the draft and publish it by hand. To
+# redo a failed run, delete the draft first. Run it by hand (Actions → release
+# → Run workflow) to build everything without a release: the files are then
+# the run's artifacts. The packaging scripts live in packaging/ (see
+# docs/install.md).
 #
-# Packages:
-#   glossa-1.2.3-x86_64-windows-setup.exe  per-user installer (Inno Setup,
-#                                         packaging/windows/glossa.iss)
-#   glossa_1.2.3_amd64.deb                 Debian, Ubuntu (build-deb.sh)
-#   glossa-1.2.3-x86_64.AppImage           any x86-64 Linux with GTK 3
-#   glossa-1.2.3-arm64-macos.dmg           Glossa.app and an Applications
-#   glossa-1.2.3-universal-macos.dmg       link to drag it to
-#   Bropines.Glossa*.yaml, glossa.json     winget and Scoop manifests for this
-#                                         release (packaging/fill-manifests.sh)
+# <arch> is x86_64 or arm64 (AppImage: aarch64; Debian: amd64 or arm64).
 #
-# Archives:
-#   glossa-1.2.3-x86_64-linux.tar.gz
-#   glossa-1.2.3-x86_64-windows.zip
-#     glossa(.exe), glossa-cli(.exe)
-#     README.md, CHANGELOG.md, LICENSE-MIT, LICENSE-APACHE, NOTICE
-#     examples/modules/{js,python}/...   example modules, as source
-#     sdk/python/                        glossa_module.py; Python modules
-#                                        import it, and Glossa looks for it
-#                                        beside the executable
-#   glossa-1.2.3-arm64-macos.zip         Apple silicon
-#   glossa-1.2.3-universal-macos.zip     Apple silicon and Intel
-#     Glossa.app                         menu-bar app (LSUIElement), ad-hoc
-#                                        signed; sdk/python in Resources
-#     glossa-cli
-#     the same documents and examples as above
+# Windows (x86_64, arm64):
+#   glossa-1.2.3-<arch>-windows-setup.exe     installer (Inno Setup,
+#                                              packaging/windows/glossa.iss)
+#   glossa-1.2.3-<arch>-windows-portable.zip  the same files and a
+#                                              portable.txt marker: the data
+#                                              stays in data/ beside it
+# macOS (arm64 = Apple silicon, x86_64 = Intel):
+#   glossa-1.2.3-<arch>-macos.dmg             Glossa.app and an Applications
+#                                              link to drag it to
+#   glossa-1.2.3-<arch>-macos.zip             Glossa.app, glossa-cli, docs
+# Linux (x86_64, arm64), not tested on real hardware yet:
+#   glossa_1.2.3_<amd64|arm64>.deb            Debian 12, Ubuntu 22.04+
+#   glossa-1.2.3-<x86_64|aarch64>.AppImage    any distribution with GTK 3
+#   glossa-1.2.3-<arch>-linux-portable.tar.gz with portable.txt, as on Windows
+# Bropines.Glossa*.yaml, glossa.json          winget and Scoop manifests
+#                                              (packaging/fill-manifests.sh)
+#
+# Every archive also holds README.md, CHANGELOG.md, the licences, NOTICE,
+# examples/modules/ (example modules, as source; they load once copied into
+# a module folder) and sdk/python/ (glossa_module.py, which Python modules
+# import; Glossa looks for it beside the executable or in the app bundle).
 
 on:
   push:
     tags: ['v*']
+  workflow_dispatch:
 
 permissions:
   contents: read
@@ -47,52 +49,99 @@ env:
 
 jobs:
   version:
-    name: tag matches Cargo.toml
+    name: version
     runs-on: ubuntu-latest
     outputs:
       version: ${{ steps.v.outputs.version }}
+      numeric: ${{ steps.v.outputs.numeric }}
     steps:
       - uses: actions/checkout@v4
       - id: v
         run: |
           version="$(cargo metadata --no-deps --format-version 1 | jq -r '.packages[] | select(.name == "glossa-cli") | .version')"
-          if [ "v$version" != "$GITHUB_REF_NAME" ]; then
+          if [ "$GITHUB_REF_TYPE" = tag ] && [ "v$version" != "$GITHUB_REF_NAME" ]; then
             echo "::error::tag $GITHUB_REF_NAME does not match the workspace version $version"
             exit 1
           fi
           echo "version=$version" >> "$GITHUB_OUTPUT"
+          # 0.1.0-beta.1 -> 0.1.0, for fields that take numbers only.
+          echo "numeric=${version%%-*}" >> "$GITHUB_OUTPUT"
 
   linux:
-    name: build (x86_64-unknown-linux-gnu)
+    name: build (linux ${{ matrix.arch }})
     needs: version
     runs-on: ubuntu-latest
     # Built on Debian 12 rather than the runner's Ubuntu so the binaries ask
     # for glibc 2.36 at most and start on Debian 12, Ubuntu 22.04 and newer.
+    # arm64 is cross-compiled there, against Debian's arm64 libraries.
     container: debian:bookworm
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: x86_64
+            target: x86_64-unknown-linux-gnu
+            deb: amd64
+            appimage: x86_64
+            runtime_sha256: 2fca8b443c92510f1483a883f60061ad09b46b978b2631c807cd873a47ec260d
+          - arch: arm64
+            target: aarch64-unknown-linux-gnu
+            deb: arm64
+            appimage: aarch64
+            runtime_sha256: 00cbdfcf917cc6c0ff6d3347d59e0ca1f7f45a6df1a428a0d6d8a78664d87444
     env:
-      TARGET: x86_64-unknown-linux-gnu
+      TARGET: ${{ matrix.target }}
       VERSION: ${{ needs.version.outputs.version }}
-      NAME: glossa-${{ needs.version.outputs.version }}-x86_64-linux
+      NAME: glossa-${{ needs.version.outputs.version }}-${{ matrix.arch }}-linux
     steps:
       # GTK 3 and ALSA are the only libraries linked at build time (see
-      # ci.yml); the rest is tooling the bare container lacks.
+      # ci.yml); the rest is tooling the bare container lacks. For arm64:
+      # the cross compiler, the arm64 builds of those libraries, and qemu to
+      # run the result once.
       - name: Build dependencies
         run: |
-          apt-get update
-          apt-get install -y --no-install-recommends \
-            build-essential pkg-config curl ca-certificates git \
-            libgtk-3-dev libasound2-dev
+          if [ "${{ matrix.arch }}" = arm64 ]; then
+            dpkg --add-architecture arm64
+            apt-get update
+            apt-get install -y --no-install-recommends \
+              build-essential pkg-config curl ca-certificates git file \
+              crossbuild-essential-arm64 libgtk-3-dev:arm64 libasound2-dev:arm64 qemu-user
+            {
+              echo "CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER=aarch64-linux-gnu-gcc"
+              echo "CC_aarch64_unknown_linux_gnu=aarch64-linux-gnu-gcc"
+              echo "CXX_aarch64_unknown_linux_gnu=aarch64-linux-gnu-g++"
+              echo "PKG_CONFIG_ALLOW_CROSS=1"
+              echo "PKG_CONFIG_LIBDIR=/usr/lib/aarch64-linux-gnu/pkgconfig:/usr/share/pkgconfig"
+              # dpkg-shlibdeps looks the libraries up for this architecture.
+              echo "DEB_HOST_ARCH=arm64"
+            } >> "$GITHUB_ENV"
+          else
+            apt-get update
+            apt-get install -y --no-install-recommends \
+              build-essential pkg-config curl ca-certificates git file \
+              libgtk-3-dev libasound2-dev
+          fi
       - uses: actions/checkout@v4
       # No build cache in release builds: a fresh, reproducible build from the
       # tag is worth the extra minutes.
       - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
       - name: Build
-        run: cargo build --release --locked --target "$TARGET" -p glossa-ui-egui -p glossa-cli
-      - name: Package
+        run: |
+          cargo build --release --locked --target "$TARGET" -p glossa-ui-egui -p glossa-cli
+          file "target/$TARGET/release/glossa" "target/$TARGET/release/glossa-cli"
+      # The engine starts and lists its services (under qemu for arm64).
+      - name: Smoke test
+        run: |
+          run=""
+          [ "${{ matrix.arch }}" = arm64 ] && run="qemu-aarch64"
+          $run "target/$TARGET/release/glossa-cli" --home "$RUNNER_TEMP/glossa-smoke" services -c translate
+      - name: Portable archive
         run: |
           mkdir -p "dist/$NAME/examples/modules" "dist/$NAME/sdk"
           cp "target/$TARGET/release/glossa" "target/$TARGET/release/glossa-cli" "dist/$NAME/"
-          cp README.md CHANGELOG.md LICENSE-MIT LICENSE-APACHE NOTICE "dist/$NAME/"
+          cp README.md CHANGELOG.md LICENSE-MIT LICENSE-APACHE NOTICE packaging/portable.txt "dist/$NAME/"
           # The menu entry, its icon and a script that installs both for the
           # user (desktops and the portal's shortcut settings name the app
           # from it).
@@ -104,46 +153,56 @@ jobs:
           cp -r modules/js modules/python "dist/$NAME/examples/modules/"
           cp -r sdk/python "dist/$NAME/sdk/"
           find "dist/$NAME" -name __pycache__ -prune -exec rm -rf {} +
-          tar -C dist -czf "dist/$NAME.tar.gz" "$NAME"
+          tar -C dist -czf "dist/$NAME-portable.tar.gz" "$NAME"
       # dpkg-shlibdeps (dpkg-dev, from build-essential) reads the library
       # dependencies off the binaries built on this Debian 12.
       - name: Debian package
         run: |
-          packaging/linux/build-deb.sh "target/$TARGET/release" "$VERSION" dist
-          dpkg-deb --info "dist/glossa_${VERSION}_amd64.deb"
-          dpkg-deb --contents "dist/glossa_${VERSION}_amd64.deb"
+          DEB_ARCH=${{ matrix.deb }} packaging/linux/build-deb.sh "target/$TARGET/release" "$VERSION" dist
+          deb="$(ls dist/glossa_*_${{ matrix.deb }}.deb)"
+          dpkg-deb --info "$deb"
+          dpkg-deb --contents "$deb"
       # Install it the way a user would: apt resolves the dependencies, and
-      # the installed glossa-cli runs.
+      # the installed glossa-cli runs. (x86_64 only: the runner cannot run
+      # an installed arm64 system.)
       - name: Debian package smoke test
+        if: matrix.arch == 'x86_64'
         run: |
-          apt-get install -y "./dist/glossa_${VERSION}_amd64.deb"
+          apt-get install -y ./dist/glossa_*_amd64.deb
           glossa-cli --home "$RUNNER_TEMP/glossa-deb" services -c translate
           test -f /usr/share/glossa/sdk/python/glossa_module.py
       # Pinned releases, checked against the digests GitHub lists for them.
       # The runtime is embedded as is, so appimagetool fetches nothing.
+      # appimagetool runs on this x86-64 machine for both images.
       - name: AppImage tools
         env:
           APPIMAGETOOL_VERSION: '1.9.1'
           APPIMAGETOOL_SHA256: ed4ce84f0d9caff66f50bcca6ff6f35aae54ce8135408b3fa33abfc3cb384eb0
           RUNTIME_VERSION: '20251108'
-          RUNTIME_SHA256: 2fca8b443c92510f1483a883f60061ad09b46b978b2631c807cd873a47ec260d
+          RUNTIME: runtime-${{ matrix.appimage }}
+          RUNTIME_SHA256: ${{ matrix.runtime_sha256 }}
         run: |
           mkdir -p "$RUNNER_TEMP/appimage"
           cd "$RUNNER_TEMP/appimage"
           curl -fsSL -o appimagetool "https://github.com/AppImage/appimagetool/releases/download/$APPIMAGETOOL_VERSION/appimagetool-x86_64.AppImage"
-          curl -fsSL -o runtime-x86_64 "https://github.com/AppImage/type2-runtime/releases/download/$RUNTIME_VERSION/runtime-x86_64"
-          printf '%s  %s\n' "$APPIMAGETOOL_SHA256" appimagetool "$RUNTIME_SHA256" runtime-x86_64 | sha256sum -c -
+          curl -fsSL -o "$RUNTIME" "https://github.com/AppImage/type2-runtime/releases/download/$RUNTIME_VERSION/$RUNTIME"
+          printf '%s  %s\n' "$APPIMAGETOOL_SHA256" appimagetool "$RUNTIME_SHA256" "$RUNTIME" | sha256sum -c -
           chmod +x appimagetool
       - name: AppImage
         run: |
-          APPIMAGETOOL="$RUNNER_TEMP/appimage/appimagetool" APPIMAGE_RUNTIME="$RUNNER_TEMP/appimage/runtime-x86_64" \
+          APPIMAGETOOL="$RUNNER_TEMP/appimage/appimagetool" \
+          APPIMAGE_RUNTIME="$RUNNER_TEMP/appimage/runtime-${{ matrix.appimage }}" \
+          APPIMAGE_ARCH=${{ matrix.appimage }} \
             packaging/linux/build-appimage.sh "target/$TARGET/release" "$VERSION" dist
-          # No FUSE in a container: the runtime unpacks itself instead.
-          APPIMAGE_EXTRACT_AND_RUN=1 "dist/glossa-$VERSION-x86_64.AppImage" cli \
-            --home "$RUNNER_TEMP/glossa-appimage" services -c translate
+          image="dist/glossa-$VERSION-${{ matrix.appimage }}.AppImage"
+          file "$image"
+          if [ "${{ matrix.arch }}" = x86_64 ]; then
+            # No FUSE in a container: the runtime unpacks itself instead.
+            APPIMAGE_EXTRACT_AND_RUN=1 "$image" cli --home "$RUNNER_TEMP/glossa-appimage" services -c translate
+          fi
       - uses: actions/upload-artifact@v4
         with:
-          name: linux
+          name: linux-${{ matrix.arch }}
           path: |
             dist/*.tar.gz
             dist/*.deb
@@ -151,28 +210,42 @@ jobs:
           if-no-files-found: error
 
   windows:
-    name: build (x86_64-pc-windows-msvc)
+    name: build (windows ${{ matrix.arch }})
     needs: version
+    # arm64 cross-compiles here with Visual Studio's ARM64 tools (ring's
+    # assembly needs the runner's clang, which is on PATH).
     runs-on: windows-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: x86_64
+            target: x86_64-pc-windows-msvc
+            inno: x64
+          - arch: arm64
+            target: aarch64-pc-windows-msvc
+            inno: arm64
     defaults:
       run:
         shell: bash
     env:
-      TARGET: x86_64-pc-windows-msvc
+      TARGET: ${{ matrix.target }}
       VERSION: ${{ needs.version.outputs.version }}
-      NAME: glossa-${{ needs.version.outputs.version }}-x86_64-windows
+      NAME: glossa-${{ needs.version.outputs.version }}-${{ matrix.arch }}-windows
       # Link the C runtime statically, so the executables start on a system
       # without the Visual C++ redistributable installed. With an explicit
       # --target, RUSTFLAGS leave build scripts and proc macros alone.
       RUSTFLAGS: -C target-feature=+crt-static
       # Code signing, when the repository has a certificate in its secrets:
       # WINDOWS_SIGN_PFX (the .pfx, base64) and WINDOWS_SIGN_PASSWORD.
-      # Without them the release is built unsigned, as before.
+      # Without them the release is built unsigned.
       WINDOWS_SIGN_PFX: ${{ secrets.WINDOWS_SIGN_PFX }}
       WINDOWS_SIGN_PASSWORD: ${{ secrets.WINDOWS_SIGN_PASSWORD }}
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
       - name: Build
         run: cargo build --release --locked --target "$TARGET" -p glossa-ui-egui -p glossa-cli
       - name: Sign the executables
@@ -187,7 +260,15 @@ jobs:
           & $signtool.FullName sign /fd SHA256 /f $pfx /p $env:WINDOWS_SIGN_PASSWORD /tr http://timestamp.digicert.com /td SHA256 `
             "target\$env:TARGET\release\glossa.exe" "target\$env:TARGET\release\glossa-cli.exe"
           if ($LASTEXITCODE) { exit $LASTEXITCODE }
-      - name: Package
+      # The engine starts and lists its services (x86_64: this runner cannot
+      # run arm64 programs).
+      - name: Smoke test
+        if: matrix.arch == 'x86_64'
+        run: '"target/$TARGET/release/glossa-cli.exe" --home "$RUNNER_TEMP/glossa-smoke" services -c translate'
+      # The installer and the portable zip hold the same files; only the zip
+      # has portable.txt (glossa.iss leaves it out), which keeps the data in
+      # data/ beside glossa.exe.
+      - name: Stage
         run: |
           mkdir -p "dist/$NAME/examples/modules" "dist/$NAME/sdk"
           cp "target/$TARGET/release/glossa.exe" "target/$TARGET/release/glossa-cli.exe" "dist/$NAME/"
@@ -195,15 +276,17 @@ jobs:
           cp -r modules/js modules/python "dist/$NAME/examples/modules/"
           cp -r sdk/python "dist/$NAME/sdk/"
           find "dist/$NAME" -name __pycache__ -prune -exec rm -rf {} +
-          cd dist && 7z a -tzip "$NAME.zip" "$NAME" > /dev/null
-      # Inno Setup 6 comes with the runner image. The installer takes the
-      # folder the zip was made from, so both hold the same files.
+      - name: Portable zip
+        run: |
+          cp packaging/portable.txt "dist/$NAME/"
+          cd dist && 7z a -tzip "$NAME-portable.zip" "$NAME" > /dev/null
+      # Inno Setup 6 comes with the runner image.
       - name: Installer
         shell: pwsh
         run: |
           $iscc = (Get-Command iscc -ErrorAction SilentlyContinue).Source
           if (-not $iscc) { $iscc = "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe" }
-          & $iscc "/DMyAppVersion=$env:VERSION" "/DStageDir=$PWD\dist\$env:NAME" "/O$PWD\dist" packaging\windows\glossa.iss
+          & $iscc "/DMyAppVersion=$env:VERSION" "/DArch=${{ matrix.inno }}" "/DStageDir=$PWD\dist\$env:NAME" "/O$PWD\dist" packaging\windows\glossa.iss
           if ($LASTEXITCODE) { exit $LASTEXITCODE }
       - name: Sign the installer
         if: env.WINDOWS_SIGN_PFX != ''
@@ -214,8 +297,10 @@ jobs:
           if ($LASTEXITCODE) { exit $LASTEXITCODE }
           Remove-Item $env:SIGN_PFX
       # Install silently for this user, run the installed CLI, uninstall, and
-      # check that nothing is left in the folder.
+      # check that nothing is left in the folder. (x86_64 only: the arm64
+      # installer refuses an x64 machine.)
       - name: Installer smoke test
+        if: matrix.arch == 'x86_64'
         shell: pwsh
         run: |
           $dir = "$env:RUNNER_TEMP\glossa-installed"
@@ -225,6 +310,7 @@ jobs:
           foreach ($f in 'glossa.exe', 'glossa-cli.exe', 'sdk\python\glossa_module.py', 'examples\modules') {
             if (-not (Test-Path "$dir\$f")) { throw "$f was not installed" }
           }
+          if (Test-Path "$dir\portable.txt") { throw "the installer installed the portable marker" }
           if (Test-Path "$dir\data") { throw "the installer made a portable data folder" }
           & "$dir\glossa-cli.exe" --home "$env:RUNNER_TEMP\glossa-home" services -c translate
           if ($LASTEXITCODE) { exit $LASTEXITCODE }
@@ -236,20 +322,20 @@ jobs:
           if (Test-Path "$dir\glossa.exe") { throw "glossa.exe is still there after uninstalling" }
       - uses: actions/upload-artifact@v4
         with:
-          name: windows
+          name: windows-${{ matrix.arch }}
           path: |
             dist/*.zip
             dist/*-setup.exe
           if-no-files-found: error
 
   macos:
-    name: build (macOS arm64 + universal)
+    name: build (macOS arm64 + x86_64)
     needs: version
-    # Apple silicon; the Intel half of the universal build cross-compiles
-    # with the same Xcode SDK.
+    # Apple silicon; the Intel build cross-compiles with the same Xcode SDK.
     runs-on: macos-latest
     env:
       VERSION: ${{ needs.version.outputs.version }}
+      NUMERIC_VERSION: ${{ needs.version.outputs.numeric }}
       # Apple Vision's text recogniser appeared in 10.15 (Apple silicon
       # starts at 11 anyway). Matches LSMinimumSystemVersion in Info.plist.
       MACOSX_DEPLOYMENT_TARGET: '10.15'
@@ -263,12 +349,7 @@ jobs:
           for target in aarch64-apple-darwin x86_64-apple-darwin; do
             cargo build --release --locked --target "$target" -p glossa-ui-egui -p glossa-cli
           done
-          mkdir -p build/universal
-          for bin in glossa glossa-cli; do
-            lipo -create -output "build/universal/$bin" \
-              "target/aarch64-apple-darwin/release/$bin" "target/x86_64-apple-darwin/release/$bin"
-          done
-          lipo -info build/universal/glossa
+          lipo -info target/aarch64-apple-darwin/release/glossa target/x86_64-apple-darwin/release/glossa
       - name: Icon
         run: |
           # The source is 256 px: sizes above that would only be blurred
@@ -286,12 +367,12 @@ jobs:
       - name: Package
         run: |
           set -euo pipefail
-          package() { # flavour, folder holding glossa and glossa-cli
+          package() { # arch, folder holding glossa and glossa-cli
             local name="glossa-$VERSION-$1-macos"
             local root="dist/$name"
             local app="$root/Glossa.app"
             mkdir -p "$app/Contents/MacOS" "$app/Contents/Resources/sdk" "$root/examples/modules"
-            sed "s/@VERSION@/$VERSION/g" assets/macos/Info.plist > "$app/Contents/Info.plist"
+            sed "s/@VERSION@/$NUMERIC_VERSION/g" assets/macos/Info.plist > "$app/Contents/Info.plist"
             plutil -lint "$app/Contents/Info.plist"
             cp "$2/glossa" "$app/Contents/MacOS/"
             cp build/glossa.icns "$app/Contents/Resources/"
@@ -310,10 +391,19 @@ jobs:
             codesign --force --deep --sign - "$app"
             codesign --force --sign - "$root/glossa-cli"
             codesign --verify --deep --strict "$app"
-            # Smoke test: the engine starts and lists the OCR engines,
-            # Apple Vision among them.
-            "$root/glossa-cli" --home "$RUNNER_TEMP/glossa-$1" services -c ocr | tee "$RUNNER_TEMP/ocr-$1.txt"
-            grep -q macos-vision "$RUNNER_TEMP/ocr-$1.txt"
+            # Smoke test: the engine starts and lists the OCR engines, Apple
+            # Vision among them. The Intel build runs under Rosetta, when the
+            # runner has it.
+            local run=""
+            if [ "$1" = x86_64 ]; then
+              if arch -x86_64 /usr/bin/true 2>/dev/null; then run="arch -x86_64"; else run="skip"; fi
+            fi
+            if [ "$run" = skip ]; then
+              echo "::warning::no Rosetta on this runner; the Intel build was not run"
+            else
+              $run "$root/glossa-cli" --home "$RUNNER_TEMP/glossa-$1" services -c ocr | tee "$RUNNER_TEMP/ocr-$1.txt"
+              grep -q macos-vision "$RUNNER_TEMP/ocr-$1.txt"
+            fi
             ditto -c -k --sequesterRsrc --keepParent "$root" "dist/$name.zip"
             # The disk image: Glossa.app and a link to /Applications to drag
             # it onto. ditto keeps the signature intact.
@@ -335,7 +425,7 @@ jobs:
             hdiutil verify "dist/$name.dmg"
           }
           package arm64 target/aarch64-apple-darwin/release
-          package universal build/universal
+          package x86_64 target/x86_64-apple-darwin/release
       - uses: actions/upload-artifact@v4
         with:
           name: macos
@@ -346,6 +436,8 @@ jobs:
 
   release:
     name: draft release
+    # Only for a tag; a run by hand stops at the artifacts.
+    if: github.ref_type == 'tag'
     needs: [version, linux, windows, macos]
     runs-on: ubuntu-latest
     permissions:
@@ -381,9 +473,19 @@ jobs:
 
           ### Downloads
 
-          - **Windows** (x86-64): `glossa-*-x86_64-windows-setup.exe` installs for your account without admin rights (Start menu, optional autostart, uninstaller). Not signed, so SmartScreen may ask: *More info → Run anyway*. Or the portable `glossa-*-x86_64-windows.zip`.
-          - **macOS** (Apple silicon, or universal with Intel): `glossa-*-macos.dmg`, drag `Glossa.app` to Applications; or the `glossa-*-macos.zip` with `glossa-cli` and the documents. It is a menu-bar app and not notarised: on macOS 15 and later open it once, then *System Settings → Privacy & Security → Open Anyway* (or run `xattr -dr com.apple.quarantine /Applications/Glossa.app`). See the README's macOS section for the permissions it asks for.
-          - **Linux** (x86-64): `glossa_*_amd64.deb` for Debian 12, Ubuntu 22.04 and newer (`sudo apt install ./glossa_*_amd64.deb`); `glossa-*-x86_64.AppImage` for other distributions; or `glossa-*-x86_64-linux.tar.gz`.
+          `x86_64` is an ordinary Intel or AMD PC (and an Intel Mac); `arm64` is ARM: Apple silicon Macs, Snapdragon Windows laptops, ARM Linux boards.
+
+          - **Windows 10, 11**
+            - `glossa-*-x86_64-windows-setup.exe` / `glossa-*-arm64-windows-setup.exe`: installs for your account without admin rights (Start menu, optional autostart, uninstaller).
+            - `glossa-*-x86_64-windows-portable.zip` / `glossa-*-arm64-windows-portable.zip`: unzip anywhere and run `glossa.exe`; settings stay in the `data` folder next to it.
+            - Not signed yet, so SmartScreen may warn: *More info → Run anyway*.
+          - **macOS 10.15+** (11+ on Apple silicon)
+            - `glossa-*-arm64-macos.dmg` (Apple silicon) / `glossa-*-x86_64-macos.dmg` (Intel): drag `Glossa.app` to Applications. The `.zip` holds the same app plus `glossa-cli`.
+            - A menu-bar app, not notarised: open it once, then *System Settings → Privacy & Security → Open Anyway* (or `xattr -dr com.apple.quarantine /Applications/Glossa.app`). The README's macOS section lists the permissions it asks for.
+          - **Linux** (x86_64, arm64): **not tested on real hardware yet**, expect rough edges and please report them.
+            - `glossa_*_amd64.deb` / `glossa_*_arm64.deb` for Debian 12, Ubuntu 22.04 and newer: `sudo apt install ./glossa_*.deb`.
+            - `glossa-*-x86_64.AppImage` / `glossa-*-aarch64.AppImage` for other distributions.
+            - `glossa-*-linux-portable.tar.gz`: unpack and run `./glossa`; settings stay in `data/` next to it.
 
           See [docs/install.md](https://github.com/bropines/glossa/blob/main/docs/install.md) for details. `SHA256SUMS` lists every file's checksum.
           EOF
@@ -391,7 +493,7 @@ jobs:
           else
             notes=(--generate-notes)
           fi
-          # v1.2.3-rc.1 and the like are pre-releases.
+          # v1.2.3-beta.1 and the like are pre-releases.
           case "$GITHUB_REF_NAME" in *-*) pre=(--prerelease) ;; *) pre=() ;; esac
           gh release create "$GITHUB_REF_NAME" dist/* \
             --draft --verify-tag --title "Glossa $VERSION" "${notes[@]}" "${pre[@]}"

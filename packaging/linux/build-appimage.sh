@@ -1,12 +1,15 @@
 #!/bin/sh
-# Build glossa-<version>-x86_64.AppImage from release binaries.
+# Build glossa-<version>-<arch>.AppImage from release binaries.
 #
 #   packaging/linux/build-appimage.sh <folder with glossa and glossa-cli> <version> [out-dir]
 #
 # Environment:
 #   APPIMAGETOOL     appimagetool (default: appimagetool on PATH)
-#   APPIMAGE_RUNTIME the type 2 runtime file to embed; without it appimagetool
-#                    downloads the latest one
+#   APPIMAGE_RUNTIME the type 2 runtime file to embed, for APPIMAGE_ARCH;
+#                    without it appimagetool downloads the latest one
+#   APPIMAGE_ARCH    the binaries' architecture: x86_64 (default) or aarch64.
+#                    appimagetool itself runs on the build machine, so an
+#                    aarch64 image can be made on x86-64
 #
 # Only Glossa's own files go in. GTK 3, ALSA and glibc come from the system,
 # as for the tarball: every desktop has them, and a bundled GTK fights the
@@ -23,6 +26,7 @@ version=$2
 out=${3:-dist}
 here=$(cd "$(dirname "$0")" && pwd)
 tool=${APPIMAGETOOL:-appimagetool}
+arch=${APPIMAGE_ARCH:-x86_64}
 
 mkdir -p "$out"
 out=$(cd "$out" && pwd)
@@ -45,10 +49,10 @@ exec "$here/usr/bin/glossa" "$@"
 EOF
 chmod 0755 "$appdir/AppRun"
 
-image="$out/glossa-$version-x86_64.AppImage"
+image="$out/glossa-$version-$arch.AppImage"
 set -- --no-appstream
 [ -n "${APPIMAGE_RUNTIME:-}" ] && set -- "$@" --runtime-file "$APPIMAGE_RUNTIME"
 # The tool is itself an AppImage; extracting it to run needs no FUSE, which
 # containers lack.
-APPIMAGE_EXTRACT_AND_RUN=1 ARCH=x86_64 "$tool" "$@" "$appdir" "$image"
+APPIMAGE_EXTRACT_AND_RUN=1 ARCH=$arch "$tool" "$@" "$appdir" "$image"
 echo "$image"
