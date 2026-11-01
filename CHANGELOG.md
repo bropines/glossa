@@ -339,6 +339,10 @@ for Windows, macOS and Linux.
 
 ### Fixed
 
+- A menu or list with no room for all of it on either side of its button
+  (the main window's menu, opened from a window low on the screen) became a
+  list scrolling by a few rows. It now slides over the button to fit, as
+  native menus do; only one taller than the screen scrolls.
 - AI endpoints: a model that does not take the reasoning level set for the
   endpoint (Gemini 3.8 Flash refuses "minimal") failed every request; it
   is now asked again without it, and the model is remembered. The Gemini
