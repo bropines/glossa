@@ -705,7 +705,7 @@ fn ai_endpoints(app: &mut GlossaApp, ui: &mut egui::Ui, st: &mut OptionsState) {
         ui.label(RichText::new(app.t("options.ai.hint")).small().color(look.weak_text()));
         let mut remove = None;
         for e in st.draft.services.ai_endpoints.iter_mut() {
-            ui.horizontal(|ui| {
+            ui.horizontal_wrapped(|ui| {
                 crate::widgets::service_badge(ui, &e.id, &e.name, 18.0);
                 ui.add(egui::TextEdit::singleline(&mut e.name).desired_width(200.0));
                 ui.label(RichText::new(preset(&e.preset).name).small().color(look.weak_text()));
@@ -735,7 +735,9 @@ fn ai_endpoints(app: &mut GlossaApp, ui: &mut egui::Ui, st: &mut OptionsState) {
                 Err(e) => st.message = Some((e.to_string(), true)),
             }
         }
-        ui.horizontal(|ui| {
+        // Wrapped: the pane can be narrower than the row, and a row wider
+        // than the pane would widen the whole settings column.
+        ui.horizontal_wrapped(|ui| {
             egui::ComboBox::from_id_salt("ai-preset")
                 .width(190.0)
                 .selected_text(preset(&st.new_ai_preset).name)

@@ -556,6 +556,10 @@ pub static STRINGS: &[(&str, &str, Option<&str>)] = &[
     ("options.hotkeys.hotkey", "Hotkey", None),
     ("options.hotkeys.press_keys", "Press a key combination… (Esc cancels, Backspace clears)", None),
     ("options.hotkeys.conflict", "Also bound to: %s", None),
+    ("options.hotkeys.taken", "%s is already in use by another program", None),
+    ("options.hotkeys.unknown_key", "The key \"%s\" cannot be used in a global hotkey", None),
+    ("options.hotkeys.unsupported", "Global hotkeys are not available: %s", None),
+    ("options.hotkeys.failed", "Cannot register %s: %s", None),
     (
         "options.hotkeys.wayland",
         "Global hotkeys are not available in this session (Wayland). Bind a shortcut in your desktop's \

@@ -277,7 +277,7 @@ fn build_shell(engine: Engine, wake: Arc<Wake>) -> Shell {
             Some(h)
         }
         Err(e) => {
-            hotkey_errors.push(e.to_string());
+            hotkey_errors.push(hotkey_error_text(&engine.locale(), None, &e));
             None
         }
     };
@@ -334,8 +334,29 @@ pub fn register_hotkeys(shell: &mut Shell) {
     for (action, hotkey) in &cfg.hotkeys.bindings {
         if let Err(e) = h.register(*action, hotkey) {
             tracing::warn!("hotkey {hotkey} for {}: {e}", action.id());
-            shell.hotkey_errors.push(format!("{}: {e}", action.label()));
+            let text = hotkey_error_text(&shell.engine.locale(), Some(*action), &e);
+            shell.hotkey_errors.push(text);
         }
+    }
+}
+
+/// A hotkey failure in the interface language, after the action's name when
+/// there is one; the options page lists these.
+pub fn hotkey_error_text(
+    locale: &glossa_core::Locale,
+    action: Option<Action>,
+    e: &glossa_platform::HotkeyError,
+) -> String {
+    use glossa_platform::HotkeyError as E;
+    let text = match e {
+        E::Unsupported { reason } => locale.fmt("options.hotkeys.unsupported", reason),
+        E::UnknownKey(key) => locale.fmt("options.hotkeys.unknown_key", key),
+        E::Taken { hotkey } => locale.fmt("options.hotkeys.taken", hotkey),
+        E::Failed { hotkey, detail } => locale.fmt_args("options.hotkeys.failed", &[hotkey, detail]),
+    };
+    match action {
+        Some(a) => format!("{}: {text}", locale.get(&format!("action.{}", a.id()))),
+        None => text,
     }
 }
 

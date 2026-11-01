@@ -229,8 +229,7 @@ impl GlossaApp {
         for (action, hotkey) in &self.cfg.hotkeys.bindings {
             if let Err(e) = h.register(*action, hotkey) {
                 tracing::warn!("hotkey {hotkey} for {}: {e}", action.id());
-                let label = self.locale.get(&format!("action.{}", action.id())).to_owned();
-                self.hotkey_errors.push(format!("{label}: {e}"));
+                self.hotkey_errors.push(crate::hotkey_error_text(&self.locale, Some(*action), &e));
             }
         }
     }
