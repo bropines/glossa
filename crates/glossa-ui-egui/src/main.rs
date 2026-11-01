@@ -10,6 +10,7 @@ mod actions;
 mod app;
 mod chrome;
 mod dictionary;
+mod dropdown;
 mod fonts;
 mod history;
 mod icons;

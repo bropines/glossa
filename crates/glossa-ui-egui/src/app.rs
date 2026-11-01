@@ -22,6 +22,9 @@ use crate::actions::Task;
 use crate::fonts::Fonts;
 use crate::style::Look;
 
+/// How much one Ctrl+plus or Ctrl+minus changes the text zoom.
+const TEXT_ZOOM_STEP: f32 = 1.1;
+
 /// What the main window holds.
 pub struct MainState {
     pub source: String,
@@ -122,8 +125,8 @@ pub struct GlossaApp {
     /// Quitting to start again (see [`GlossaApp::restart`]).
     restarting: bool,
     frames: u64,
-    /// The interface scale changed (Ctrl+wheel, Ctrl+plus/minus) and is
-    /// waiting to be saved.
+    /// The text zoom changed (Ctrl+wheel, Ctrl+plus/minus) and is waiting
+    /// to be saved.
     zoom_changed: Option<Instant>,
     /// The main window was created with an alpha channel.
     transparent_root: bool,
@@ -157,6 +160,9 @@ impl GlossaApp {
         let transparent_root = crate::style::needs_transparent_root(&cfg);
         let look = Look::new(engine.current_theme(), &cfg);
         look.apply(&ctx, cfg.appearance.ui_scale);
+        // Ctrl+plus/minus/0 zoom the text areas (see `text_zoom_keys`), not
+        // the whole interface as egui would by default.
+        ctx.options_mut(|o| o.zoom_with_keyboard = false);
         let mut fonts = Fonts::default();
         fonts.install_base(&ctx, &cfg.appearance.font_family);
         *shell.wake.ctx.lock() = Some(ctx.clone());
@@ -431,26 +437,52 @@ impl GlossaApp {
         self.child_backdrops.insert(title.to_owned(), (hwnd, kind, self.backdrop_generation));
     }
 
-    /// Ctrl+wheel scales the whole interface, in any of the windows (each
-    /// calls this with its own input). The scale is shared by all windows.
-    pub fn zoom_input(&mut self, ui: &egui::Ui) {
-        let delta = ui.input(|i| i.zoom_delta());
-        let ctx = ui.ctx();
-        let mut scale = self.cfg.appearance.ui_scale;
-        if (delta - 1.0).abs() > 1e-3 {
-            scale = (scale * delta).clamp(0.5, 3.0);
-            ctx.set_zoom_factor(scale);
-        } else {
-            // Ctrl+plus/minus/0 change egui's zoom directly.
-            scale = ctx.zoom_factor();
-        }
-        if (scale - self.cfg.appearance.ui_scale).abs() > 1e-3 {
-            self.cfg.appearance.ui_scale = scale;
-            self.zoom_changed = Some(Instant::now());
+    /// Ctrl+plus, Ctrl+minus and Ctrl+0 in a window whose content is text
+    /// (the main window, the popup, the dictionary) zoom its text areas.
+    /// Each such window calls this once a frame with its own input. The
+    /// interface scale is not touched: that is set in Options only.
+    pub fn text_zoom_keys(&mut self, ui: &egui::Ui) {
+        use egui::gui_zoom::kb_shortcuts as k;
+        let (bigger, smaller, reset) = ui.ctx().input_mut(|i| {
+            (
+                i.consume_shortcut(&k::ZOOM_IN) || i.consume_shortcut(&k::ZOOM_IN_SECONDARY),
+                i.consume_shortcut(&k::ZOOM_OUT),
+                i.consume_shortcut(&k::ZOOM_RESET),
+            )
+        });
+        let scale = self.look.text_scale;
+        if reset {
+            self.set_text_scale(1.0);
+        } else if bigger {
+            self.set_text_scale(scale * TEXT_ZOOM_STEP);
+        } else if smaller {
+            self.set_text_scale(scale / TEXT_ZOOM_STEP);
         }
     }
 
-    /// Save a changed scale once the wheel has been still for a moment,
+    /// Ctrl+wheel with the pointer over `area`, a text area just drawn,
+    /// zooms the text areas (all of them: the zoom is shared).
+    pub fn text_zoom_wheel(&mut self, ui: &egui::Ui, area: egui::Rect) {
+        let (delta, over) = ui.input(|i| (i.zoom_delta(), i.pointer.hover_pos().is_some_and(|p| area.contains(p))));
+        if over && (delta - 1.0).abs() > 1e-3 {
+            // egui's wheel zoom is about 20% a notch; text wants finer steps
+            // (about 10%, as Ctrl+plus).
+            self.set_text_scale(self.look.text_scale * delta.sqrt());
+        }
+    }
+
+    fn set_text_scale(&mut self, scale: f32) {
+        let scale = glossa_core::config::clamp_text_scale(scale);
+        if (scale - self.look.text_scale).abs() < 1e-3 {
+            return;
+        }
+        self.look.text_scale = scale;
+        self.cfg.appearance.text_scale = scale;
+        self.zoom_changed = Some(Instant::now());
+        self.ctx.request_repaint();
+    }
+
+    /// Save a changed text zoom once the wheel has been still for a moment,
     /// rather than on every notch.
     fn save_zoom_later(&mut self) {
         let Some(at) = self.zoom_changed else { return };
@@ -460,8 +492,8 @@ impl GlossaApp {
             return;
         }
         self.zoom_changed = None;
-        let scale = self.cfg.appearance.ui_scale;
-        let _ = self.engine.update_config(move |c| c.appearance.ui_scale = scale);
+        let scale = self.look.text_scale;
+        let _ = self.engine.update_config(move |c| c.appearance.text_scale = scale);
     }
 
     /// Translate what is in the main window's source pane.
@@ -527,12 +559,17 @@ impl GlossaApp {
     /// Reload settings-derived state after the configuration changed.
     fn refresh_from_config(&mut self) {
         let before_hotkeys = self.cfg.hotkeys.clone();
+        // A text zoom not saved yet stays: the file has the old one.
+        let unsaved_zoom = self.zoom_changed.map(|_| self.look.text_scale);
         let windows = std::mem::take(&mut self.cfg.windows);
         self.cfg = self.engine.config();
         if self.cfg.windows.is_empty() {
             self.cfg.windows = windows;
         }
         self.locale = self.engine.locale();
+        if let Some(scale) = unsaved_zoom {
+            self.cfg.appearance.text_scale = scale;
+        }
         self.look = Look::new(self.engine.current_theme(), &self.cfg);
         self.look.apply(&self.ctx, self.cfg.appearance.ui_scale);
         self.backdrop_dirty = true;
@@ -840,7 +877,7 @@ impl eframe::App for GlossaApp {
         }
         self.frames += 1;
         let ctx = ui.ctx().clone();
-        self.zoom_input(ui);
+        self.fonts.serve_requests(&ctx);
         self.save_zoom_later();
         if self.main_visible {
             phase("main window");

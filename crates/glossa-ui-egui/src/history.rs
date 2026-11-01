@@ -47,7 +47,6 @@ pub fn show(app: &mut GlossaApp, ctx: &egui::Context) {
             open = false;
         }
         crate::chrome::frame(ui, &app.look, custom, &crate::chrome::Caption::new(&title));
-        app.zoom_input(ui);
         body(app, ui, &mut st, &mut open);
     });
     app.child_backdrop(&title, false);

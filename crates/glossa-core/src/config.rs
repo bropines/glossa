@@ -499,6 +499,10 @@ pub struct Appearance {
     pub ui_scale: f32,
     /// Size of the text in the source and translation panes, in points.
     pub text_size: f32,
+    /// A zoom on the text areas alone (the panes, the popup's text, the
+    /// dictionary article), changed with Ctrl+wheel over them; 1.0 is
+    /// `text_size` as set. The interface scale is `ui_scale`, set in Options.
+    pub text_scale: f32,
     /// Size of toolbar and popup icons, as a multiple of their base size.
     pub icon_scale: f32,
     /// Size of the on-screen keyboard, apart from the interface scale:
@@ -616,6 +620,16 @@ impl Renderer {
     }
 }
 
+/// Keep a text zoom within what stays readable and fits a pane: 50% to
+/// 400%. A value that is not a number (a hand-edited file) is 100%.
+pub fn clamp_text_scale(scale: f32) -> f32 {
+    if scale.is_finite() {
+        scale.clamp(0.5, 4.0)
+    } else {
+        1.0
+    }
+}
+
 impl Default for Appearance {
     fn default() -> Self {
         Self {
@@ -624,6 +638,7 @@ impl Default for Appearance {
             font_family: String::new(),
             ui_scale: 1.0,
             text_size: 11.0,
+            text_scale: 1.0,
             icon_scale: 1.2,
             keyboard_scale: 1.0,
             window_transparency: 0,
@@ -1169,6 +1184,7 @@ impl Config {
         p.max_height = p.max_height.clamp(80.0, 4000.0);
         self.appearance.ui_scale = self.appearance.ui_scale.clamp(0.5, 3.0);
         self.appearance.text_size = self.appearance.text_size.clamp(6.0, 48.0);
+        self.appearance.text_scale = clamp_text_scale(self.appearance.text_scale);
         self.appearance.icon_scale = self.appearance.icon_scale.clamp(0.75, 3.0);
         self.appearance.keyboard_scale = self.appearance.keyboard_scale.clamp(0.5, 3.0);
         self.appearance.window_transparency = self.appearance.window_transparency.min(90);
@@ -1268,6 +1284,14 @@ mod tests {
         assert_eq!(c.appearance.popup.transparency, 90);
         assert_eq!(c.appearance.ui_scale, 3.0);
         assert_eq!(c.appearance.keyboard_scale, 0.5);
+        let c = Config::from_toml(
+            "[appearance]
+text_scale = 0.01",
+        )
+        .unwrap();
+        assert_eq!(c.appearance.text_scale, 0.5);
+        assert_eq!(Config::from_toml("").unwrap().appearance.text_scale, 1.0, "absent means 100%");
+        assert_eq!(clamp_text_scale(f32::NAN), 1.0);
     }
 
     #[test]

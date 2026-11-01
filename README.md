@@ -72,7 +72,7 @@
 - **Themes** as plain files, classic QTranslate themes included; Fluent
   (WinUI 3) themes following the system accent colour; Mica, Acrylic or blur
   backdrops on Windows 11 (vibrancy on macOS); window and popup
-  transparency; Ctrl+wheel scales the interface; OpenGL, GPU or software
+  transparency; Ctrl+wheel zooms the text areas; OpenGL, GPU or software
   rendering.
 - **History** with favourites and export (text, CSV, HTML, JSON).
 - **Command line and local API**: `glossa-cli` does everything without a
