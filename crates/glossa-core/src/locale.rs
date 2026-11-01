@@ -611,7 +611,7 @@ pub static STRINGS: &[(&str, &str, Option<&str>)] = &[
     ("options.advanced.copy_wait", "Selection copy wait, ms:", None),
     (
         "options.advanced.mouse_mode_note",
-        "Mouse mode (translate on mouse selection, without a hotkey) is saved but not active in this version.",
+        "Select text with the mouse to translate it, no hotkey needed. The text is read through UI Automation, so the clipboard is left alone; a click on the tray icon turns the mode on and off.",
         None,
     ),
     // -- options: updates ------------------------------------------------------------------

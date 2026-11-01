@@ -277,7 +277,7 @@
     "options.advanced.browser_default": "системный",
     "options.advanced.copy_accessibility": "Только через специальные возможности",
     "options.advanced.copy_wait": "Ожидание копирования выделения, мс:",
-    "options.advanced.mouse_mode_note": "Режим мыши (перевод выделенного мышью текста без горячих клавиш) сохраняется, но в этой версии не работает.",
+    "options.advanced.mouse_mode_note": "Выделите текст мышью — и он будет переведён без горячих клавиш. Текст читается через UI Automation, буфер обмена не затрагивается; клик по значку в трее включает и выключает режим.",
     "options.updates": "Обновления",
     "options.updates.auto": "Автоматически проверять обновления",
     "options.updates.check_now": "Проверить сейчас",

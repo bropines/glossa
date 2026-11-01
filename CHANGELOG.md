@@ -93,6 +93,25 @@ for Windows and Linux.
 - **Portable mode**: a `portable` file or a `data` folder beside the
   executable keeps settings, history and the log there; `GLOSSA_HOME`
   overrides the location.
+- **Mouse mode**: select text with the mouse and a button by the pointer (or
+  the translation itself) appears, no hotkey; a low-level mouse hook on
+  Windows, the PRIMARY selection on Linux; the text is read through UI
+  Automation only. A click on the tray icon toggles it, a double click opens
+  the window; the tray icon takes the theme's accent colour and another hue
+  while mouse mode is on.
+- **Popup**: title on the left, actions centred, window buttons (reset size,
+  pin, close) on the right, all lighting up on hover; resizable with the
+  size remembered, draggable by any empty spot; room for the service strip
+  always kept; clear separators, the romanisation and dictionary block
+  below a line in the middle of a fixed-size popup; border optional; a shade
+  when nothing blurs behind it.
+- **Look**: Fluent Dark and Fluent Light (WinUI 3) themes following the
+  system accent colour; Mica, Mica Alt, Acrylic and blur backdrops for the
+  windows and the popup (Windows 11, vibrancy on macOS; OpenGL engine);
+  Ctrl+wheel scales the interface; an icon size setting; changing the
+  graphics engine offers to restart.
+- **Options**: the Services page uses the whole window, the list in a
+  resizable pane beside the settings.
 - Licenses (MIT or Apache-2.0), NOTICE, CI on Linux and Windows, release
   builds, issue templates, contributing and security guides.
 
@@ -112,7 +131,7 @@ for Windows and Linux.
 
 ### Known gaps
 
-- Mouse mode (translate on double-click or selection without a hotkey),
-  speech input and the update check are not implemented yet.
-- On Wayland, global hotkeys and reading the selection depend on the
-  compositor; bind keys to the control API instead.
+- Speech input and the update check are not implemented yet; mouse mode is
+  not available on macOS yet.
+- On Wayland, global hotkeys, mouse mode and reading the selection depend on
+  the compositor; bind keys to the control API instead.
