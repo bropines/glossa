@@ -1,8 +1,9 @@
 # .github/
 
 CI, the release workflow and the issue templates. The root
-[AGENTS.md](../AGENTS.md) applies. Actions are switched off on the
-repository for now, so a change here is not tried by pushing; read it twice.
+[AGENTS.md](../AGENTS.md) applies. Run `actionlint` on a workflow before
+pushing it; the release workflow can be tried without making a release by
+running it by hand (*Actions → release → Run workflow*).
 
 ## ci.yml
 
