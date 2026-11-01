@@ -294,6 +294,7 @@ pub fn screenshot_flow(app: &mut GlossaApp, ctx: &egui::Context, what: &str, _pa
     }
     match what {
         "options" => crate::options::open(app),
+        w if w.starts_with("options:") => crate::options::open_at(app, &w["options:".len()..]),
         "dictionary" => crate::dictionary::open(app, Some("serendipity".into())),
         "history" => crate::history::open(app),
         "about" => app.about_open = true,

@@ -188,7 +188,7 @@ fn body(app: &mut GlossaApp, ui: &mut egui::Ui, st: &mut HistoryState, open: &mu
                 if resp.double_clicked() {
                     action = Some((e.id, "open"));
                 }
-                resp.context_menu(|ui| {
+                crate::dropdown::context_menu(ui, &resp, |ui| {
                     for (key, what) in [
                         ("history.open", "open"),
                         ("history.copy_text", "copy_text"),

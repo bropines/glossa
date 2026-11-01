@@ -93,6 +93,16 @@ enum AiReply {
     Test(Result<(String, std::time::Duration), String>),
 }
 
+/// Open the options on the page whose key ends in `name` (`appearance`,
+/// `ocr`…), for `--screenshot options:NAME`.
+pub fn open_at(app: &mut GlossaApp, name: &str) {
+    open(app);
+    let page = Page::ALL.into_iter().find(|p| p.key().ends_with(name));
+    if let (Some(st), Some(page)) = (app.options.as_mut(), page) {
+        st.page = page;
+    }
+}
+
 pub fn open(app: &mut GlossaApp) {
     if app.options.is_some() {
         crate::chrome::raise(&app.ctx, crate::chrome::viewport(crate::chrome::OPTIONS));
@@ -272,7 +282,7 @@ fn basics(app: &mut GlossaApp, ui: &mut egui::Ui, st: &mut OptionsState) {
                 })
                 .map(|l| format!("{} - {}", l.name, l.native_name))
                 .unwrap_or_else(|| app.t("options.basics.ui_language_system"));
-            egui::ComboBox::from_id_salt("ui-lang").width(240.0).selected_text(current).show_ui(ui, |ui| {
+            crate::dropdown::ComboBox::from_id_salt("ui-lang").width(240.0).selected_text(current).show_ui(ui, |ui| {
                 if ui
                     .selectable_label(d.general.ui_language.is_empty(), app.t("options.basics.ui_language_system"))
                     .clicked()
@@ -397,17 +407,17 @@ fn internet(app: &mut GlossaApp, ui: &mut egui::Ui, st: &mut OptionsState) {
             (ProxyMode::Auto, app.t("options.internet.proxy_auto")),
         ];
         let current = names.iter().find(|(m, _)| *m == p.mode).map(|(_, n)| n.clone()).unwrap_or_default();
-        egui::ComboBox::from_id_salt("proxy-mode").width(ui.available_width()).selected_text(current).show_ui(
-            ui,
-            |ui| {
+        crate::dropdown::ComboBox::from_id_salt("proxy-mode")
+            .width(ui.available_width())
+            .selected_text(current)
+            .show_ui(ui, |ui| {
                 for (m, name) in &names {
                     ui.selectable_value(&mut p.mode, *m, name);
                 }
-            },
-        );
+            });
         ui.add_enabled_ui(p.mode == ProxyMode::Manual, |ui| {
             ui.horizontal(|ui| {
-                egui::ComboBox::from_id_salt("proxy-scheme")
+                crate::dropdown::ComboBox::from_id_salt("proxy-scheme")
                     .width(100.0)
                     .selected_text(p.scheme.as_str().to_uppercase())
                     .show_ui(ui, |ui| {
@@ -668,7 +678,7 @@ fn backdrop_row(
     row(ui, label, |ui| {
         ui.add_enabled_ui(supported, |ui| {
             let cur = names.iter().find(|(b, _)| b == value).map(|(_, n)| n.clone()).unwrap_or_default();
-            egui::ComboBox::from_id_salt(salt).width(200.0).selected_text(cur).show_ui(ui, |ui| {
+            crate::dropdown::ComboBox::from_id_salt(salt).width(200.0).selected_text(cur).show_ui(ui, |ui| {
                 for (b, n) in &names {
                     ui.selectable_value(value, *b, n);
                 }
@@ -737,7 +747,7 @@ fn ai_endpoints(app: &mut GlossaApp, ui: &mut egui::Ui, st: &mut OptionsState) {
         // Wrapped: the pane can be narrower than the row, and a row wider
         // than the pane would widen the whole settings column.
         ui.horizontal_wrapped(|ui| {
-            egui::ComboBox::from_id_salt("ai-preset")
+            crate::dropdown::ComboBox::from_id_salt("ai-preset")
                 .width(190.0)
                 .selected_text(preset(&st.new_ai_preset).name)
                 .show_ui(ui, |ui| {
@@ -831,7 +841,7 @@ fn ai_tools(
         ui.horizontal(|ui| {
             ui.label(app.locale.fmt("options.ai.models", &list.len().to_string()));
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                egui::ComboBox::from_id_salt(("ai-models", id))
+                crate::dropdown::ComboBox::from_id_salt(("ai-models", id))
                     .width(320.0)
                     .height(360.0)
                     .selected_text(if current.is_empty() { app.t("options.ai.pick_model") } else { current.clone() })
@@ -911,14 +921,17 @@ fn option_field(
                     .find(|c| c.value == cur)
                     .map(|c| if c.label.is_empty() { c.value.clone() } else { c.label.clone() })
                     .unwrap_or(cur.clone());
-                egui::ComboBox::from_id_salt(("opt", &spec.key)).width(280.0).selected_text(shown).show_ui(ui, |ui| {
-                    for c in &spec.choices {
-                        let name = if c.label.is_empty() { c.value.clone() } else { c.label.clone() };
-                        if ui.selectable_label(c.value == cur, name).clicked() {
-                            values.insert(spec.key.clone(), c.value.clone().into());
+                crate::dropdown::ComboBox::from_id_salt(("opt", &spec.key)).width(280.0).selected_text(shown).show_ui(
+                    ui,
+                    |ui| {
+                        for c in &spec.choices {
+                            let name = if c.label.is_empty() { c.value.clone() } else { c.label.clone() };
+                            if ui.selectable_label(c.value == cur, name).clicked() {
+                                values.insert(spec.key.clone(), c.value.clone().into());
+                            }
                         }
-                    }
-                });
+                    },
+                );
             }
             OptionKind::Multiline => {
                 let mut s = current.as_str().unwrap_or("").to_owned();
@@ -984,18 +997,21 @@ fn appearance(app: &mut GlossaApp, ui: &mut egui::Ui, st: &mut OptionsState) {
         ui.checkbox(&mut d.appearance.custom_frame, app.t("options.appearance.window_style"));
         row(ui, &app.t("options.appearance.theme"), |ui| {
             let entries = app.engine.theme_entries();
-            egui::ComboBox::from_id_salt("theme").width(260.0).selected_text(&d.appearance.theme).show_ui(ui, |ui| {
-                for t in &entries {
-                    let label = if t.classic {
-                        app.locale.fmt("options.appearance.classic_theme", &t.name)
-                    } else {
-                        t.name.clone()
-                    };
-                    if ui.selectable_label(t.name == d.appearance.theme, label).clicked() {
-                        d.appearance.theme = t.name.clone();
+            crate::dropdown::ComboBox::from_id_salt("theme").width(260.0).selected_text(&d.appearance.theme).show_ui(
+                ui,
+                |ui| {
+                    for t in &entries {
+                        let label = if t.classic {
+                            app.locale.fmt("options.appearance.classic_theme", &t.name)
+                        } else {
+                            t.name.clone()
+                        };
+                        if ui.selectable_label(t.name == d.appearance.theme, label).clicked() {
+                            d.appearance.theme = t.name.clone();
+                        }
                     }
-                }
-            });
+                },
+            );
         });
         ui.horizontal(|ui| {
             if ui.button(app.t("options.appearance.edit_theme")).clicked() {
@@ -1042,7 +1058,7 @@ fn appearance(app: &mut GlossaApp, ui: &mut egui::Ui, st: &mut OptionsState) {
             ];
             let cur =
                 names.iter().find(|(r, _)| *r == d.appearance.renderer).map(|(_, n)| n.clone()).unwrap_or_default();
-            egui::ComboBox::from_id_salt("renderer").width(280.0).selected_text(cur).show_ui(ui, |ui| {
+            crate::dropdown::ComboBox::from_id_salt("renderer").width(280.0).selected_text(cur).show_ui(ui, |ui| {
                 for (r, n) in names {
                     ui.selectable_value(&mut d.appearance.renderer, r, n);
                 }
@@ -1139,11 +1155,14 @@ fn exceptions(app: &mut GlossaApp, ui: &mut egui::Ui, st: &mut OptionsState) {
         (ExceptionMode::DisabledFor, app.t("options.exceptions.disabled_for")),
     ];
     let current = modes.iter().find(|(m, _)| *m == e.mode).map(|(_, s)| s.clone()).unwrap_or_default();
-    egui::ComboBox::from_id_salt("exc-mode").width(ui.available_width()).selected_text(current).show_ui(ui, |ui| {
-        for (m, s) in &modes {
-            ui.selectable_value(&mut e.mode, *m, s);
-        }
-    });
+    crate::dropdown::ComboBox::from_id_salt("exc-mode").width(ui.available_width()).selected_text(current).show_ui(
+        ui,
+        |ui| {
+            for (m, s) in &modes {
+                ui.selectable_value(&mut e.mode, *m, s);
+            }
+        },
+    );
     let mut selected: Option<usize> = ui.data(|dd| dd.get_temp(egui::Id::unique("exc-sel")));
     egui::Grid::new("exc").num_columns(2).striped(true).min_col_width(260.0).show(ui, |ui| {
         ui.label(RichText::new(app.t("options.exceptions.program")).strong());
@@ -1229,24 +1248,24 @@ fn advanced(app: &mut GlossaApp, ui: &mut egui::Ui, st: &mut OptionsState) {
             ];
             let cur =
                 names.iter().find(|(a, _)| *a == d.advanced.copy_action).map(|(_, n)| n.clone()).unwrap_or_default();
-            egui::ComboBox::from_id_salt("copy-action").width(260.0).selected_text(cur).show_ui(ui, |ui| {
+            crate::dropdown::ComboBox::from_id_salt("copy-action").width(260.0).selected_text(cur).show_ui(ui, |ui| {
                 for (a, n) in names {
                     ui.selectable_value(&mut d.advanced.copy_action, a, n);
                 }
             });
         });
         row(ui, &app.t("options.advanced.preferred_domain"), |ui| {
-            egui::ComboBox::from_id_salt("domain").width(260.0).selected_text(&d.advanced.preferred_domain).show_ui(
-                ui,
-                |ui| {
+            crate::dropdown::ComboBox::from_id_salt("domain")
+                .width(260.0)
+                .selected_text(&d.advanced.preferred_domain)
+                .show_ui(ui, |ui| {
                     for dom in [
                         "com", "ru", "com.ua", "by", "kz", "de", "fr", "es", "it", "co.uk", "co.jp", "com.br", "pl",
                         "com.tr", "cn",
                     ] {
                         ui.selectable_value(&mut d.advanced.preferred_domain, dom.to_owned(), dom);
                     }
-                },
-            );
+                });
         });
         row(ui, &app.t("options.advanced.copy_wait"), |ui| {
             ui.add(egui::DragValue::new(&mut d.advanced.copy_wait_ms).range(20..=3000));

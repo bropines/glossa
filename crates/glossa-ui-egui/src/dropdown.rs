@@ -27,6 +27,8 @@ const MARGIN: i8 = 4;
 const EDGE: f32 = MARGIN as f32 + 1.0;
 /// Longest a menu gets before it scrolls.
 const MENU_MAX_HEIGHT: f32 = 640.0;
+/// Longest a [`ComboBox`]'s list gets before it scrolls, unless it says.
+const COMBO_MAX_HEIGHT: f32 = 400.0;
 
 /// An open dropdown, kept in egui's memory under its id.
 #[derive(Clone, Copy, Debug, Default)]
@@ -384,4 +386,62 @@ pub fn combo_button(ui: &mut Ui, text: &str, width: f32, open: bool) -> Response
         ));
     }
     resp
+}
+
+/// A stand-in for [`egui::ComboBox`] whose list opens in a window of its
+/// own (see the module docs), so a small window does not clip it. The same
+/// builder calls; the list closes when one of its items is clicked.
+pub struct ComboBox {
+    id_salt: egui::IdSalt,
+    width: Option<f32>,
+    height: f32,
+    text: String,
+}
+
+impl ComboBox {
+    pub fn from_id_salt(salt: impl egui::AsIdSalt) -> Self {
+        Self { id_salt: egui::IdSalt::new(salt), width: None, height: COMBO_MAX_HEIGHT, text: String::new() }
+    }
+
+    /// The button's width (the list is at least as wide).
+    pub fn width(mut self, width: f32) -> Self {
+        self.width = Some(width);
+        self
+    }
+
+    /// How tall the list gets before it scrolls.
+    pub fn height(mut self, height: f32) -> Self {
+        self.height = height;
+        self
+    }
+
+    pub fn selected_text(mut self, text: impl Into<String>) -> Self {
+        self.text = text.into();
+        self
+    }
+
+    /// Draw the button and, while it is open, the list `add` fills. Returns
+    /// the button's response.
+    pub fn show_ui(self, ui: &mut Ui, add: impl FnOnce(&mut Ui)) -> Response {
+        let id = ui.make_persistent_id(("combo", self.id_salt));
+        let width = self.width.unwrap_or(ui.spacing().combo_width).min(ui.available_width()).max(40.0);
+        let button = combo_button(ui, &self.text, width, is_open(ui.ctx(), id));
+        if button.clicked() {
+            toggle(ui.ctx(), id);
+        }
+        show(ui, id, button.rect, button.rect.width(), self.height, |ui, _| {
+            add(ui);
+            // An item was picked: a click on a widget that only clicks (the
+            // scroll bar also drags, and keeps the list open).
+            let ctx = ui.ctx().clone();
+            let picked = ctx
+                .interaction_snapshot(|s| s.clicked)
+                .and_then(|clicked| ctx.read_response(clicked))
+                .is_some_and(|r| !r.sense.senses_drag());
+            if picked {
+                ui.close();
+            }
+        });
+        button
+    }
 }
