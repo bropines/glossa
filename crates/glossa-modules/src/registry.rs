@@ -53,6 +53,9 @@ impl Entry {
 pub struct RuntimeContext {
     /// The Python interpreter for Python modules; empty to search `PATH`.
     pub python: String,
+    /// The `java` for Java modules (an executable or a Java home); empty to
+    /// look in `JAVA_HOME`, `PATH` and the usual install folders.
+    pub java: String,
     pub allow_native: bool,
     pub allow_legacy_scripts: bool,
     pub call_timeout: Duration,
@@ -71,6 +74,7 @@ impl Default for RuntimeContext {
     fn default() -> Self {
         Self {
             python: String::new(),
+            java: String::new(),
             allow_native: true,
             allow_legacy_scripts: true,
             call_timeout: Duration::from_secs(30),
@@ -249,6 +253,17 @@ impl Registry {
                 {
                     let _ = (dir, manifest);
                     Err(Skip::Reason("this build has no Python runtime".into()))
+                }
+            }
+            Runtime::Process | Runtime::Java => {
+                #[cfg(feature = "process")]
+                {
+                    runtime::process::load(dir, manifest, ctx).map_err(Skip::Failed)
+                }
+                #[cfg(not(feature = "process"))]
+                {
+                    let _ = (dir, manifest);
+                    Err(Skip::Reason("this build has no process runtime".into()))
                 }
             }
             Runtime::Native => {

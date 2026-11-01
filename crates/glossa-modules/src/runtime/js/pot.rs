@@ -102,6 +102,7 @@ impl PotPlugin {
                 max_input_chars: None,
                 idle_timeout_secs: None,
                 ready_to_use: false,
+                ..Default::default()
             },
             capabilities: vec![capability.into()],
             languages,
