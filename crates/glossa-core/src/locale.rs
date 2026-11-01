@@ -357,10 +357,15 @@ pub static STRINGS: &[(&str, &str, Option<&str>)] = &[
     ("main.tried_first", "Tried first: %s", None),
     ("lang.search", "Search…", None),
     // -- on-screen keyboard -------------------------------------------------
-    ("keyboard.space", "Space", None),
     ("keyboard.backspace", "Backspace", None),
     ("keyboard.enter", "Enter", None),
     ("keyboard.shift", "Shift", None),
+    ("keyboard.tab", "Tab", None),
+    ("keyboard.caps", "Caps Lock", None),
+    ("keyboard.ctrl", "Ctrl", None),
+    ("keyboard.alt", "Alt", None),
+    ("keyboard.win", "Win", None),
+    ("keyboard.size_tip", "Ctrl + mouse wheel, or drag the window's edge, to resize the keyboard", None),
     // -- about window -------------------------------------------------------
     ("about.tagline", "A clean-room reincarnation of QTranslate.", None),
     ("about.summary", "Translation, dictionaries and screen OCR — Rust, egui, no web engine.", None),
