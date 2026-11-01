@@ -57,6 +57,12 @@ for Windows, macOS and Linux.
   translation in the same request when asked. A vision model, the answer
   format, the box coordinates and the instructions are in the endpoint's
   settings. Endpoints never serve as a quiet fallback for another engine.
+- **Light and dark themes that follow the system**: *Options → Appearance*
+  has a switch to follow the system's mode, with a light and a dark theme to
+  pick (one theme when it is off, or when the system does not tell); the
+  preview shows the one in effect. In the welcome guide, a theme for the
+  mode the system is in becomes that mode's theme; one for the other mode
+  is taken as the theme to keep, and following stops.
 - **Options, grouped**: the pages are listed under General, Translation,
   Recognition and System, each with an icon on a colour of its own, and
   the open page shows its icon and name over its content.
