@@ -475,6 +475,12 @@ fn fc_match(pattern: &str) -> Option<(PathBuf, u32, String)> {
 #[cfg(not(windows))]
 fn base_font(families: &[&str], _chosen: &str) -> Option<(PathBuf, u32)> {
     let found = families.iter().filter(|f| !f.trim().is_empty()).find_map(|family| {
+        // fontconfig knows the system face only by its hidden name (".SF NS"),
+        // so "SF Pro" would pass over it to the theme's next choice.
+        #[cfg(target_os = "macos")]
+        if let Some(sf) = mac_system_face(family) {
+            return Some(sf);
+        }
         let out = std::process::Command::new("fc-match").args(["-f", "%{family}", family]).output().ok()?;
         let found = squash(&String::from_utf8_lossy(&out.stdout));
         found.split(',').any(|f| f == squash(family)).then(|| fc_match(family)).flatten().map(|(p, i, _)| (p, i))
@@ -487,6 +493,19 @@ fn base_font(families: &[&str], _chosen: &str) -> Option<(PathBuf, u32)> {
     {
         found
     }
+}
+
+/// SF, the macOS interface face, for the names a theme or the user may give
+/// it.
+#[cfg(target_os = "macos")]
+fn mac_system_face(family: &str) -> Option<(PathBuf, u32)> {
+    const NAMES: [&str; 6] =
+        ["SF Pro", "SF Pro Text", "SF Pro Display", "San Francisco", "System Font", ".AppleSystemUIFont"];
+    NAMES
+        .iter()
+        .any(|n| n.eq_ignore_ascii_case(family.trim()))
+        .then(|| first_existing(&["/System/Library/Fonts/SFNS.ttf"]))
+        .flatten()
 }
 
 /// macOS has no fontconfig unless one was installed: the family picked in
@@ -514,6 +533,14 @@ fn script_font(s: Script) -> Option<(PathBuf, u32)> {
     }
     // fontconfig always answers with something; take it only if it really
     // covers the language (else it is the default face, already drawn).
+    // fontconfig answers "symbols" with any face that covers English
+    // (Verdana here), which has no arrows; macOS ships the right one.
+    #[cfg(target_os = "macos")]
+    if s == Script::Symbols {
+        if let Some(found) = first_existing(s.mac_files()) {
+            return Some(found);
+        }
+    }
     let lang = s.fc_lang();
     if let Some((path, index, langs)) = fc_match(&format!(":lang={lang}")) {
         if langs.split('|').any(|l| l == lang) {
