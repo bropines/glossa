@@ -590,7 +590,10 @@ pub static STRINGS: &[(&str, &str, Option<&str>)] = &[
         None,
     ),
     ("action.show_main_window", "Show main window", Some("w:16:1165:0")),
-    ("action.show_popup", "Show popup window", Some("w:16:1165:1")),
+    // The classic "Show popup window" (w:16:1165:1) read as if it only
+    // opened a window; it translates the selection there, so it is not
+    // mapped and the classic files' wording does not win over this one.
+    ("action.show_popup", "Translate selection", None),
     ("action.show_dictionary", "Show dictionary window", Some("w:16:1165:2")),
     ("action.show_history", "Show history window", Some("w:16:1165:3")),
     ("action.show_keyboard", "Show keyboard window", Some("w:16:1165:4")),
@@ -934,7 +937,8 @@ mod tests {
         assert_eq!(ru.get("msg.translate_tip"), "Перевести (Ctrl+Enter)");
         assert_eq!(ru.get("options.hotkeys"), "Горячие клавиши");
         assert_eq!(ru.get("options.hotkeys.enable"), "Использовать горячие клавиши");
-        assert_eq!(ru.get("action.show_popup"), "Показать всплывающее окно");
+        // Deliberately not mapped: Glossa's own wording wins.
+        assert_eq!(ru.get("action.show_popup"), "Translate selection");
         assert_eq!(ru.get("dict.title"), "Словарь");
         // Keys the file lacks fall back to English.
         assert_eq!(ru.get("history.title"), "History");

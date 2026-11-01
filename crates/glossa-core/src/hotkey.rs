@@ -153,7 +153,7 @@ impl Action {
     pub fn label(self) -> &'static str {
         match self {
             Action::ShowMainWindow => "Show main window",
-            Action::ShowPopup => "Show popup window",
+            Action::ShowPopup => "Translate selection",
             Action::ShowDictionary => "Show dictionary window",
             Action::ShowHistory => "Show history window",
             Action::ShowKeyboard => "Show keyboard window",

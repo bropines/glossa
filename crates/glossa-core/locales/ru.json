@@ -251,7 +251,7 @@
     "options.hotkeys.failed": "Не удалось назначить %s: %s",
     "options.hotkeys.wayland": "Глобальные горячие клавиши в этом сеансе недоступны (Wayland). Назначьте сочетание в настройках клавиатуры рабочего стола на команду:",
     "action.show_main_window": "Показать главное окно",
-    "action.show_popup": "Показать всплывающее окно",
+    "action.show_popup": "Перевести выделенное",
     "action.show_dictionary": "Показать словарь",
     "action.show_history": "Показать историю",
     "action.show_keyboard": "Показать клавиатуру",
