@@ -243,9 +243,6 @@ fn java_install_dirs() -> Vec<PathBuf> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::protocol::Transport;
-    use glossa_module_sdk::wire::{ModuleError, Reply};
-    use serde_json::Value;
     use std::time::Duration;
 
     struct TempModule {
@@ -278,10 +275,6 @@ mod tests {
 
     fn ctx() -> RuntimeContext {
         RuntimeContext { call_timeout: Duration::from_secs(20), ..Default::default() }
-    }
-
-    fn no_host(method: &str, _: Value) -> Reply {
-        Reply::err(ModuleError::other(format!("unexpected host call {method}")))
     }
 
     #[test]
@@ -362,6 +355,14 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn a_shell_script_is_a_module() {
+        use crate::protocol::Transport;
+        use glossa_module_sdk::wire::{ModuleError, Reply};
+        use serde_json::Value;
+
+        fn no_host(method: &str, _: Value) -> Reply {
+            Reply::err(ModuleError::other(format!("unexpected host call {method}")))
+        }
+
         let script = r#"
 echo "starting" >&2
 while IFS= read -r line; do
