@@ -286,6 +286,7 @@ fn ocr_menu(app: &mut GlossaApp, ui: &mut egui::Ui) {
 fn main_menu(app: &mut GlossaApp, ui: &mut egui::Ui) {
     let mut g = app.cfg.general.clone();
     let before = g.clone();
+    ui.checkbox(&mut g.spell_checking, app.t("menu.spell_checking"));
     ui.checkbox(&mut g.instant_translation, app.t("menu.instant_translation"));
     ui.checkbox(&mut g.back_translation, app.t("menu.back_translation"));
     ui.checkbox(&mut g.clear_on_drag_drop, app.t("menu.clear_on_drop"));
@@ -390,10 +391,14 @@ fn source_pane(app: &mut GlossaApp, ui: &mut egui::Ui, height: f32) {
                 .desired_rows(4)
                 .hint_text(app.locale.get("main.source_placeholder"))
                 .lock_focus(false);
-            let r = ui.add_sized(vec2(ui.available_width(), inner_h), edit);
+            // As `add_sized`, keeping the output for the spelling's lines.
+            let layout = egui::Layout::centered_and_justified(ui.layout().main_dir());
+            let out = ui.allocate_ui_with_layout(vec2(ui.available_width(), inner_h), layout, |ui| edit.show(ui)).inner;
+            let r = out.response.response.clone();
             if r.changed() {
                 source_edited(app);
             }
+            spelling(app, ui, &out, &r);
             crate::text_menu::keep_selection(ui.ctx(), &r);
             crate::dropdown::context_menu(ui, &r, |ui| source_menu(app, ui, r.id));
         });
@@ -419,6 +424,39 @@ fn source_pane(app: &mut GlossaApp, ui: &mut egui::Ui, height: f32) {
         }
     });
     app.text_zoom_wheel(ui, shown.response.rect);
+}
+
+/// The language to check the source's spelling in: the source language
+/// when one is set, else the one the last translation detected; `None`
+/// when spell checking is off or the language is unknown.
+fn spell_lang(app: &GlossaApp) -> Option<LangId> {
+    if !app.cfg.general.spell_checking {
+        return None;
+    }
+    let from = app.cfg.general.pair.from;
+    if from.is_language() {
+        return Some(from);
+    }
+    app.main.outcome.as_ref().map(|o| o.pair.from).filter(|l| l.is_language())
+}
+
+/// Underline the source's misspelled words, and note the one a right
+/// click lands on for the context menu.
+fn spelling(app: &mut GlossaApp, ui: &egui::Ui, out: &egui::text_edit::TextEditOutput, r: &egui::Response) {
+    let lang = spell_lang(app);
+    let found = app.main.spell.update(ui.ctx(), &app.main.source, lang);
+    // The galley is the text as laid out this frame; draw only over that.
+    let current = out.galley.job.text == app.main.source;
+    let origin = out.galley_pos - vec2(out.galley.rect.left(), 0.0);
+    if current && !found.is_empty() {
+        crate::spell::paint(ui, &out.galley, origin, &app.main.source, &found);
+    }
+    if r.secondary_clicked() {
+        let at = ui.ctx().input(|i| i.pointer.interact_pos());
+        let word =
+            at.filter(|_| current).and_then(|p| crate::spell::hit(&out.galley, origin, &app.main.source, &found, p));
+        app.main.spell.open_menu(ui.ctx(), word, lang);
+    }
 }
 
 /// The source text changed (typed, pasted, cut, undone).
@@ -775,6 +813,39 @@ fn source_menu(app: &mut GlossaApp, ui: &mut egui::Ui, edit: egui::Id) {
     let button =
         |ui: &mut egui::Ui, enabled: bool, key: &str| ui.add_enabled(enabled, egui::Button::new(locale.get(key)));
     let mut changed = false;
+    // A misspelled word under the pointer: its suggestions first.
+    if let Some(m) = app.main.spell.menu_word(&app.main.source) {
+        match &m.suggestions {
+            None => {
+                ui.add_enabled(false, egui::Button::new("…"));
+            }
+            Some(list) if list.is_empty() => {
+                ui.add_enabled(false, egui::Button::new(locale.get("edit.no_suggestions")));
+            }
+            Some(list) => {
+                for s in list {
+                    if ui.button(egui::RichText::new(s).strong()).clicked() {
+                        tm::remember_for_undo(&ctx, edit, &app.main.source);
+                        let range = m.word.range.clone();
+                        let at = app.main.source[..range.start].chars().count() + s.chars().count();
+                        app.main.source.replace_range(range, s);
+                        tm::set_selection(&ctx, edit, tm::cursor_at(at));
+                        changed = true;
+                        ui.close();
+                    }
+                }
+            }
+        }
+        if ui.button(locale.get("edit.ignore_word")).clicked() {
+            app.main.spell.ignore(&m.word.word);
+            ui.close();
+        }
+        if glossa_platform::spell::CAN_ADD && ui.button(locale.get("edit.add_to_dictionary")).clicked() {
+            app.main.spell.add(&ctx, &m.word.word, m.lang);
+            ui.close();
+        }
+        ui.separator();
+    }
     if button(ui, can_undo, "edit.undo").clicked() {
         changed |= tm::undo(&ctx, edit, &mut app.main.source, false);
         ui.close();

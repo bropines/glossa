@@ -27,6 +27,7 @@
 //! | Window backdrops ([`backdrop`]) | Mica / Acrylic / blur (DWM)     | KWin blur-behind        | none                                            | `NSVisualEffectView`           |
 //! | Accent, dark mode ([`appearance`]) | registry                     | `gsettings` (dark only) | `gsettings` (dark only)                         | `NSColor`, `AppleInterfaceStyle` |
 //! | Installed fonts ([`fonts`])     | font folders, `name` tables     | `fc-list`               | `fc-list`                                       | font folders, `name` tables    |
+//! | Spell checking ([`spell`])      | Spell Checking API              | Hunspell dictionaries   | Hunspell dictionaries                           | `NSSpellChecker` (main thread) |
 //!
 //! Threading: [`hotkeys::HotkeyService`] must be created on the thread that
 //! runs the event loop on Windows (the hotkeys are bound to that thread's
@@ -55,6 +56,7 @@ pub mod secrets;
 pub mod selection;
 pub mod session;
 pub mod shell;
+pub mod spell;
 pub mod window;
 
 #[cfg(target_os = "macos")]
