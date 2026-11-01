@@ -44,6 +44,14 @@ enigo = { version = "0.6", default-features = false, features = ["x11rb"] }
 x11rb = { version = "0.13", features = ["randr"] }
 xcap-linux = { package = "xcap", version = "0.9", optional = true }
 
+# The desktop portals (`portal`): global shortcuts and screenshots on
+# Wayland. async-io and futures-lite come with zbus; they give a portal
+# request its timeout.
+[target.'cfg(all(unix, not(target_os = "macos")))'.dependencies]
+zbus = { workspace = true }
+async-io = "2.6"
+futures-lite = "2.6"
+
 [target.'cfg(target_os = "macos")'.dependencies]
 enigo = { version = "0.6", default-features = false }
 # Vibrancy (NSVisualEffectView), the accent colour and the menu bar; already

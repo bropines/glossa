@@ -2263,9 +2263,11 @@ name = "glossa-platform"
 version = "0.1.0"
 dependencies = [
  "arboard",
+ "async-io",
  "dirs",
  "eframe",
  "enigo",
+ "futures-lite",
  "global-hotkey",
  "glossa-core",
  "image",
@@ -2279,6 +2281,7 @@ dependencies = [
  "windows 0.62.2",
  "x11rb",
  "xcap",
+ "zbus",
 ]
 
 [[package]]
