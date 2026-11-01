@@ -49,8 +49,9 @@
   click on the tray icon turns it on and off; the icon changes colour.
 - **Recognise text on screen** (OCR) and translate it: drag over a region,
   copy it, or watch it and re-translate when it changes. Google Lens through
-  [chrome-lens-py](https://github.com/bropines/chrome-lens-py); offline on
-  Windows with Windows OCR or the Snipping Tool's OneOCR engine.
+  [chrome-lens-py](https://github.com/bropines/chrome-lens-py); offline with
+  Windows OCR or the Snipping Tool's OneOCR engine on Windows, Apple Vision
+  on macOS, and Tesseract anywhere; or through a module or any command.
 - **Dictionary**: online (Google, Yandex, Multitran, ABBYY Lingvo Live,
   Oxford Learner's, Wiktionary, Youdao, Academic, Wikipedia, Urban
   Dictionary, and the classic dictionary scripts) and offline (StarDict, DSL,
@@ -100,10 +101,19 @@ Hotkeys*. A `portable` file next to the executable keeps the settings beside
 it.
 
 For OCR, install chrome-lens-py (`pip install "chrome-lens-py[clipboard]"`);
-Glossa finds it, and keeps its daemon warm so a scan takes about 0.4 s. On
-Windows, *Options → Text recognition* also offers two offline engines that
-need nothing installed: Windows OCR and, on Windows 11, OneOCR from the
-Snipping Tool.
+Glossa finds it, and keeps its daemon warm so a scan takes about 0.4 s.
+Without it, recognition falls over to an offline engine. *Options → Text
+recognition* lists the engines this system has:
+
+| engine | id | works | platforms | setup |
+|---|---|---|---|---|
+| Google Lens | `lens` | online | all | `pip install "chrome-lens-py[clipboard]"` |
+| Windows OCR | `windows-ocr` | offline | Windows 10, 11 | the language's OCR pack (Settings → Time & language) |
+| OneOCR | `oneocr` | offline | Windows 11 | the Snipping Tool; chosen only explicitly, never a fallback |
+| Apple Vision | `macos-vision` | offline | macOS 10.15+ (Russian from 13) | nothing |
+| Tesseract | `tesseract` | offline | all | `apt install tesseract-ocr tesseract-ocr-rus`, `brew install tesseract tesseract-lang`, the UB Mannheim installer on Windows |
+| External command | `command-ocr` | either | all | a command line in its options |
+| Module | its id | either | all | a Python or JavaScript module with the OCR capability |
 
 ## Coming from QTranslate
 
@@ -178,7 +188,7 @@ echo "Bonjour" | glossa-cli translate -t en
 glossa-cli translate -s ai-deepseek -t de "streams to the terminal as it is written"
 glossa-cli dict -f en -t ru serendipity
 glossa-cli ocr screenshot.png -t en
-glossa-cli ocr screenshot.png --engine oneocr   # or windows-ocr, lens
+glossa-cli ocr screenshot.png --engine tesseract   # or lens, windows-ocr, oneocr, macos-vision
 glossa-cli services                  # what is available
 glossa-cli action show_popup "text"  # ask the running app to show a popup
 ```
