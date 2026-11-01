@@ -42,6 +42,10 @@ pub struct Look {
     /// settings ask for, where the platform and renderer can show it.
     pub window_backdrop: Backdrop,
     pub popup_backdrop: Backdrop,
+    /// The fill of lists, menus and tooltips: the theme's window colour,
+    /// opaque. They float over other content and get no backdrop of their
+    /// own, so the transparency slider and the backdrops leave them alone.
+    pub overlay_back: Color32,
 }
 
 /// Whether window backdrops can show at all: on Windows with any renderer
@@ -73,6 +77,7 @@ impl Look {
         let supported = backdrops_supported(cfg);
         let window_backdrop = if supported { cfg.appearance.backdrop } else { Backdrop::None };
         let popup_backdrop = if supported { p.backdrop } else { Backdrop::None };
+        let overlay_back = c(theme.window.back.with_alpha(255));
         // With a backdrop the theme's fills turn translucent, so the material
         // shows through everywhere they are used.
         // The backdrop opacity settings thin them further.
@@ -109,6 +114,7 @@ impl Look {
             },
             window_backdrop,
             popup_backdrop,
+            overlay_back,
             theme,
         }
     }
@@ -154,7 +160,7 @@ impl Look {
 
         v.override_text_color = Some(c(t.window.text));
         v.panel_fill = c(t.window.back);
-        v.window_fill = c(t.window.back);
+        v.window_fill = self.overlay_back;
         v.window_stroke = Stroke::new(t.metrics.border_width, c(t.window.border));
         v.window_corner_radius = win_radius;
         v.menu_corner_radius = if t.metrics.overlay_radius > 0.0 {
@@ -213,7 +219,6 @@ impl Look {
         if self.window_alpha < 1.0 {
             let a = self.window_alpha;
             v.panel_fill = v.panel_fill.gamma_multiply(a);
-            v.window_fill = v.window_fill.gamma_multiply(a);
             v.extreme_bg_color = v.extreme_bg_color.gamma_multiply(a.max(0.3));
             v.text_edit_bg_color = v.text_edit_bg_color.map(|c| c.gamma_multiply(a.max(0.3)));
             v.faint_bg_color = v.faint_bg_color.gamma_multiply(a);
@@ -404,6 +409,18 @@ mod tests {
         let translucent = from32(c(Color::rgba(10, 20, 30, 200)));
         assert_eq!(translucent.a, 200);
         assert!((translucent.b as i32 - 30).abs() <= 1);
+    }
+
+    #[test]
+    fn lists_and_menus_stay_opaque_under_transparency_and_backdrops() {
+        let mut cfg = glossa_core::Config::default();
+        cfg.appearance.window_transparency = 60;
+        cfg.appearance.backdrop = Backdrop::Acrylic;
+        let look = Look::new(glossa_core::theme::builtin::fluent_dark(), &cfg);
+        assert_eq!(look.overlay_back.a(), 255);
+        let ctx = egui::Context::default();
+        look.apply(&ctx, 1.0);
+        assert_eq!(ctx.global_style().visuals.window_fill.a(), 255);
     }
 
     #[test]
