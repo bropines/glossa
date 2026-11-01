@@ -184,6 +184,39 @@ pub fn find_own_window(title: &str) -> Option<isize> {
     }
 }
 
+/// Whether the system rounds an undecorated window's corners and draws its
+/// border once [`style_frame`] has been applied: Windows 11. Elsewhere an
+/// app drawing its own frame draws the border too.
+pub fn frame_drawn_by_system() -> bool {
+    windows_build().is_some_and(|b| b >= BUILD_WINDOWS_11)
+}
+
+/// Give a window that draws its own title bar the outline a Windows 11
+/// window has: rounded corners (`DWMWA_WINDOW_CORNER_PREFERENCE`, which an
+/// undecorated window does not get by default) and a one-pixel border in
+/// `border` (`DWMWA_BORDER_COLOR`; `None` keeps the system's colour).
+/// Harmless before Windows 11 and a no-op off Windows.
+pub fn style_frame(hwnd: isize, border: Option<(u8, u8, u8)>) -> Result<(), String> {
+    #[cfg(windows)]
+    {
+        win::style_frame(hwnd, border)
+    }
+    #[cfg(not(windows))]
+    {
+        let _ = (hwnd, border);
+        Ok(())
+    }
+}
+
+/// [`style_frame`] for anything with a raw window handle (`eframe::Frame`).
+pub fn style_frame_of(window: &impl HasWindowHandle, border: Option<(u8, u8, u8)>) -> Result<(), String> {
+    let handle = window.window_handle().map_err(|e| format!("no window handle: {e}"))?;
+    match handle.as_raw() {
+        RawWindowHandle::Win32(h) => style_frame(h.hwnd.get(), border),
+        _ => Ok(()),
+    }
+}
+
 /// How a request is carried out on Windows.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum WinMethod {
@@ -258,7 +291,7 @@ mod win {
     use windows::Win32::Foundation::{HWND, LPARAM};
     use windows::Win32::Graphics::Dwm::{
         DwmSetWindowAttribute, DWMWA_SYSTEMBACKDROP_TYPE, DWMWA_USE_IMMERSIVE_DARK_MODE,
-        DWMWA_WINDOW_CORNER_PREFERENCE, DWMWCP_DEFAULT, DWMWCP_ROUND, DWMWINDOWATTRIBUTE,
+        DWMWA_WINDOW_CORNER_PREFERENCE, DWMWCP_ROUND, DWMWINDOWATTRIBUTE,
     };
     use windows::Win32::System::LibraryLoader::{GetModuleHandleW, GetProcAddress};
     use windows::Win32::System::Threading::GetCurrentProcessId;
@@ -273,6 +306,10 @@ mod win {
     /// The dark-mode attribute's number before Windows 10 20H1.
     const DWMWA_USE_IMMERSIVE_DARK_MODE_OLD: DWMWINDOWATTRIBUTE = DWMWINDOWATTRIBUTE(19);
     const DWMSBT_AUTO: i32 = 0;
+    /// `DWMWA_BORDER_COLOR` (Windows 11) and the value that restores the
+    /// system's border colour.
+    const DWMWA_BORDER_COLOR: DWMWINDOWATTRIBUTE = DWMWINDOWATTRIBUTE(34);
+    const DWMWA_COLOR_DEFAULT: u32 = 0xFFFF_FFFF;
 
     const WCA_ACCENT_POLICY: u32 = 19;
     const ACCENT_DISABLED: u32 = 0;
@@ -392,10 +429,11 @@ mod win {
         }
 
         // Rounded corners, as WinUI windows have; an undecorated window
-        // (Glossa's custom frame, the popup) is square otherwise.
-        if build >= BUILD_WINDOWS_11 {
-            let corners = if kind.is_some() { DWMWCP_ROUND } else { DWMWCP_DEFAULT };
-            let _ = set_attr(hwnd, DWMWA_WINDOW_CORNER_PREFERENCE, &corners);
+        // (Glossa's custom frame, the popup) is square otherwise. Clearing
+        // the backdrop leaves the corners alone: a window drawing its own
+        // frame keeps them round (`style_frame`).
+        if build >= BUILD_WINDOWS_11 && kind.is_some() {
+            let _ = set_attr(hwnd, DWMWA_WINDOW_CORNER_PREFERENCE, &DWMWCP_ROUND);
         }
 
         match method {
@@ -413,6 +451,24 @@ mod win {
             WinMethod::AccentBlur => set_accent(hwnd, ACCENT_ENABLE_BLURBEHIND, 0).map(|_| Applied::AccentBlur),
             WinMethod::Unsupported => Err(format!("window backdrops need Windows 10 or later (this is build {build})")),
         }
+    }
+
+    pub fn style_frame(hwnd: isize, border: Option<(u8, u8, u8)>) -> Result<(), String> {
+        if hwnd == 0 {
+            return Err("no window".into());
+        }
+        if build().unwrap_or(0) < BUILD_WINDOWS_11 {
+            return Ok(());
+        }
+        let hwnd = HWND(hwnd as *mut c_void);
+        set_attr(hwnd, DWMWA_WINDOW_CORNER_PREFERENCE, &DWMWCP_ROUND)
+            .map_err(|e| format!("DWMWA_WINDOW_CORNER_PREFERENCE: {e}"))?;
+        // A COLORREF is 0x00BBGGRR; DWMWA_COLOR_DEFAULT puts the system's back.
+        let colour: u32 = match border {
+            Some((r, g, b)) => (b as u32) << 16 | (g as u32) << 8 | r as u32,
+            None => DWMWA_COLOR_DEFAULT,
+        };
+        set_attr(hwnd, DWMWA_BORDER_COLOR, &colour).map_err(|e| format!("DWMWA_BORDER_COLOR: {e}"))
     }
 
     struct Search {

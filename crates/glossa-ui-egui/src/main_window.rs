@@ -2,7 +2,7 @@
 //! service on top, the source pane, a bar with the language direction, the
 //! translation pane, and the service tabs along the bottom.
 
-use egui::{vec2, Color32, RichText, Sense};
+use egui::{vec2, RichText, Sense};
 use glossa_core::config::{ResultsLayout, StartupAction};
 use glossa_core::{Action, Capabilities, LangId, LangPair};
 
@@ -13,7 +13,7 @@ use crate::style::c;
 pub fn show(app: &mut GlossaApp, ui: &mut egui::Ui) {
     let look = app.look.clone();
     let ctx = ui.ctx().clone();
-    let custom = app.cfg.appearance.custom_frame;
+    let custom = crate::chrome::custom(&app.cfg);
 
     // Keyboard shortcuts of the classic window.
     let (go, swap, clear, back, fwd) = ctx.input(|i| {
@@ -51,19 +51,10 @@ pub fn show(app: &mut GlossaApp, ui: &mut egui::Ui) {
         }
     }
 
-    let frame = egui::Frame::new()
-        .fill(look.window_back())
-        .inner_margin(egui::Margin::same(if custom { 1 } else { 6 }))
-        .stroke(if custom {
-            egui::Stroke::new(look.theme.metrics.border_width, look.border())
-        } else {
-            egui::Stroke::NONE
-        });
+    crate::chrome::frame(ui, &look, custom, &crate::chrome::Caption::new("Glossa"));
+    let frame =
+        egui::Frame::new().fill(look.window_back()).inner_margin(egui::Margin::same(if custom { 1 } else { 6 }));
     egui::CentralPanel::no_frame().frame(frame).show(ui, |ui| {
-        if custom {
-            title_bar(app, ui);
-            resize_edges(ui, "main");
-        }
         let inner = egui::Frame::new().inner_margin(egui::Margin::symmetric(8, 6));
         inner.show(ui, |ui| {
             if app.cfg.general.show_top_pane {
@@ -112,114 +103,6 @@ pub fn show(app: &mut GlossaApp, ui: &mut egui::Ui) {
     toast(app, &ctx);
 }
 
-fn title_bar(app: &mut GlossaApp, ui: &mut egui::Ui) {
-    let look = app.look.clone();
-    let h = 30.0;
-    let (rect, resp) = ui.allocate_exact_size(vec2(ui.available_width(), h), Sense::click_and_drag());
-    let caption =
-        look.theme.window.caption.map(c).unwrap_or(c(look.theme.window.back)).gamma_multiply(look.window_alpha);
-    ui.painter().rect_filled(rect, 0.0, caption);
-    let icon_rect = egui::Rect::from_min_size(rect.min + vec2(10.0, 7.0), vec2(16.0, 16.0));
-    crate::icons::paint(ui.painter(), icon_rect, Icon::Translate, look.accent());
-    ui.painter().text(
-        rect.min + vec2(34.0, h / 2.0),
-        egui::Align2::LEFT_CENTER,
-        "Glossa",
-        egui::FontId::proportional(look.theme.fonts.size * 1.4),
-        look.text(),
-    );
-    if resp.drag_started() {
-        ui.ctx().send_viewport_cmd(egui::ViewportCommand::StartDrag);
-    }
-    if resp.double_clicked() {
-        let max = ui.ctx().input(|i| i.viewport().maximized.unwrap_or(false));
-        ui.ctx().send_viewport_cmd(egui::ViewportCommand::Maximized(!max));
-    }
-    // Caption buttons, right to left.
-    let bw = 40.0;
-    let mut x = rect.right();
-    let maximized = ui.ctx().input(|i| i.viewport().maximized.unwrap_or(false));
-    for (icon, which) in
-        [(Icon::Close, 0), (if maximized { Icon::Restore } else { Icon::Maximize }, 1), (Icon::Minimize, 2)]
-    {
-        x -= bw;
-        let r = egui::Rect::from_min_size(egui::pos2(x, rect.top()), vec2(bw, h));
-        let b = ui.interact(r, ui.scope_id().with(("caption", which)), Sense::click());
-        let state = if b.is_pointer_button_down_on() {
-            glossa_core::theme::WidgetState::Pressed
-        } else if b.hovered() {
-            glossa_core::theme::WidgetState::Hover
-        } else {
-            glossa_core::theme::WidgetState::Normal
-        };
-        let g = look.theme.window_button.get(state);
-        if let Some(back) = g.back {
-            ui.painter().rect_filled(
-                r,
-                0.0,
-                if which == 0 && b.hovered() { Color32::from_rgb(196, 43, 28) } else { c(back) },
-            );
-        } else if which == 0 && b.hovered() {
-            ui.painter().rect_filled(r, 0.0, Color32::from_rgb(196, 43, 28));
-        }
-        crate::icons::paint(ui.painter(), egui::Rect::from_center_size(r.center(), vec2(11.0, 11.0)), icon, c(g.main));
-        if b.clicked() {
-            match which {
-                0 => ui.ctx().send_viewport_cmd(egui::ViewportCommand::Close),
-                1 => ui.ctx().send_viewport_cmd(egui::ViewportCommand::Maximized(!maximized)),
-                _ => ui.ctx().send_viewport_cmd(egui::ViewportCommand::Minimized(true)),
-            }
-        }
-    }
-}
-
-/// Invisible handles along the edges of an undecorated window.
-/// Edges and a corner that resize an undecorated window when dragged.
-pub(crate) fn resize_edges(ui: &mut egui::Ui, salt: &str) -> bool {
-    use egui::viewport::ResizeDirection as R;
-    let screen = ui.ctx().content_rect();
-    let t = 5.0;
-    let zones = [
-        (
-            egui::Rect::from_min_max(screen.left_top(), egui::pos2(screen.right(), screen.top() + t)),
-            R::North,
-            egui::CursorIcon::ResizeVertical,
-        ),
-        (
-            egui::Rect::from_min_max(egui::pos2(screen.left(), screen.bottom() - t), screen.right_bottom()),
-            R::South,
-            egui::CursorIcon::ResizeVertical,
-        ),
-        (
-            egui::Rect::from_min_max(screen.left_top(), egui::pos2(screen.left() + t, screen.bottom())),
-            R::West,
-            egui::CursorIcon::ResizeHorizontal,
-        ),
-        (
-            egui::Rect::from_min_max(egui::pos2(screen.right() - t, screen.top()), screen.right_bottom()),
-            R::East,
-            egui::CursorIcon::ResizeHorizontal,
-        ),
-        (
-            egui::Rect::from_min_size(screen.right_bottom() - vec2(12.0, 12.0), vec2(12.0, 12.0)),
-            R::SouthEast,
-            egui::CursorIcon::ResizeNwSe,
-        ),
-    ];
-    let mut started = false;
-    for (i, (rect, dir, cursor)) in zones.into_iter().enumerate() {
-        let r = ui.interact(rect, egui::Id::unique(("resize-edge", salt, i)), Sense::drag());
-        if r.hovered() {
-            ui.ctx().set_cursor_icon(cursor);
-        }
-        if r.drag_started() {
-            ui.ctx().send_viewport_cmd(egui::ViewportCommand::BeginResize(dir));
-            started = true;
-        }
-    }
-    started
-}
-
 fn top_pane(app: &mut GlossaApp, ui: &mut egui::Ui) {
     let look = app.look.clone();
     ui.horizontal(|ui| {
@@ -255,7 +138,7 @@ fn top_pane(app: &mut GlossaApp, ui: &mut egui::Ui) {
                 app.perform(Action::ShowOptions, None);
             }
             if icons::sized_button(ui, &look, Icon::Keyboard, &app.t("menu.keyboard"), 24.0, true).clicked() {
-                app.keyboard_open = !app.keyboard_open;
+                app.open_keyboard();
             }
             if icons::sized_button(ui, &look, Icon::Camera, &app.t("action.text_recognition"), 24.0, true).clicked() {
                 app.perform(Action::TextRecognition, None);
@@ -309,7 +192,7 @@ fn main_menu(app: &mut GlossaApp, ui: &mut egui::Ui) {
         ui.close();
     }
     if ui.button(app.t("menu.keyboard")).clicked() {
-        app.keyboard_open = true;
+        app.open_keyboard();
         ui.close();
     }
     if ui.button(app.t("menu.options")).clicked() {
@@ -318,7 +201,7 @@ fn main_menu(app: &mut GlossaApp, ui: &mut egui::Ui) {
     }
     ui.separator();
     if ui.button(app.t("menu.about")).clicked() {
-        app.about_open = true;
+        app.open_about();
         ui.close();
     }
     if ui.button(app.t("menu.exit")).clicked() {
@@ -797,16 +680,15 @@ pub fn show_about(app: &mut GlossaApp, ctx: &egui::Context) {
         return;
     }
     let look = app.look.clone();
-    let builder = egui::ViewportBuilder::default()
-        .with_title(app.t("msg.about"))
-        .with_inner_size([440.0, 330.0])
-        .with_resizable(false)
-        .with_icon(crate::app_icon(32));
+    let title = app.t("msg.about");
+    let builder = crate::chrome::builder(app, &title).with_inner_size([440.0, 362.0]).with_resizable(false);
     let mut open = true;
-    ctx.show_viewport_immediate(egui::ViewportId::from_hash_of("glossa-about"), builder, |ui, _| {
+    let custom = crate::chrome::custom(&app.cfg);
+    ctx.show_viewport_immediate(crate::chrome::viewport(crate::chrome::ABOUT), builder, |ui, _| {
         if ui.input(|i| i.viewport().close_requested() || i.key_pressed(egui::Key::Escape)) {
             open = false;
         }
+        crate::chrome::frame(ui, &look, custom, &crate::chrome::Caption::fixed(&title));
         egui::CentralPanel::default().show(ui, |ui| {
             ui.vertical_centered(|ui| {
                 ui.add_space(8.0);
@@ -833,6 +715,7 @@ pub fn show_about(app: &mut GlossaApp, ctx: &egui::Context) {
             });
         });
     });
+    app.child_backdrop(&title, false);
     app.about_open = open;
 }
 
@@ -842,16 +725,16 @@ pub fn show_keyboard(app: &mut GlossaApp, ctx: &egui::Context) {
     if !app.keyboard_open {
         return;
     }
-    let builder = egui::ViewportBuilder::default()
-        .with_title(app.t("msg.keyboard"))
-        .with_inner_size([620.0, 230.0])
-        .with_icon(crate::app_icon(32));
+    let title = app.t("msg.keyboard");
+    let builder = crate::chrome::builder(app, &title).with_inner_size([620.0, 262.0]);
     let mut open = true;
     let id = egui::Id::unique("keyboard-layout");
-    ctx.show_viewport_immediate(egui::ViewportId::from_hash_of("glossa-keyboard"), builder, |ui, _| {
+    let (look, custom) = (app.look.clone(), crate::chrome::custom(&app.cfg));
+    ctx.show_viewport_immediate(crate::chrome::viewport(crate::chrome::KEYBOARD), builder, |ui, _| {
         if ui.input(|i| i.viewport().close_requested()) {
             open = false;
         }
+        crate::chrome::frame(ui, &look, custom, &crate::chrome::Caption::new(&title));
         egui::CentralPanel::default().show(ui, |ui| {
             let mut russian: bool =
                 ui.data(|d| d.get_temp(id)).unwrap_or(app.cfg.general.first_language == LangId::RUSSIAN);
@@ -892,5 +775,6 @@ pub fn show_keyboard(app: &mut GlossaApp, ctx: &egui::Context) {
             });
         });
     });
+    app.child_backdrop(&title, false);
     app.keyboard_open = open;
 }

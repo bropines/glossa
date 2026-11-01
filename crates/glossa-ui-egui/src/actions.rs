@@ -41,7 +41,7 @@ pub fn perform(app: &mut GlossaApp, action: Action, text: Option<String>) {
         Action::ShowOptions => crate::options::open(app),
         Action::ShowDictionary => crate::dictionary::open(app, text),
         Action::ShowHistory => crate::history::open(app),
-        Action::ShowKeyboard => app.keyboard_open = true,
+        Action::ShowKeyboard => app.open_keyboard(),
         Action::Quit => app.quit(),
         Action::SwapLanguages => {
             let pair = app.cfg.general.pair;

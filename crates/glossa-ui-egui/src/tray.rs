@@ -242,6 +242,6 @@ pub fn handle(app: &mut GlossaApp, e: TrayEvent) {
             let on = !app.cfg.hotkeys.enabled;
             let _ = app.engine.update_config(move |c| c.hotkeys.enabled = on);
         }
-        TrayEvent::About => app.about_open = true,
+        TrayEvent::About => app.open_about(),
     }
 }
