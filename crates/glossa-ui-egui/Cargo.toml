@@ -18,7 +18,7 @@ glossa-modules = { workspace = true }
 glossa-platform = { workspace = true }
 glossa-dict = { workspace = true }
 glossa-net = { workspace = true }
-eframe = { workspace = true, features = ["glow", "wgpu", "default_fonts", "x11", "wayland"] }
+eframe = { workspace = true, features = ["glow", "wgpu", "default_fonts", "x11", "wayland", "clipboard"] }
 egui = { workspace = true }
 image = { workspace = true }
 rfd = { workspace = true }

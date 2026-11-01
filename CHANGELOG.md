@@ -322,6 +322,12 @@ for Windows, macOS and Linux.
 
 ### Fixed
 
+- Pasting into text fields (the settings, the main window, search boxes)
+  took nothing from the system clipboard on any system: eframe was built
+  without its clipboard feature, so egui only saw what was copied inside
+  Glossa itself. Glossa already shipped arboard for its own copying, so
+  this adds nothing on Windows and macOS (smithay-clipboard on Linux, for
+  Wayland).
 - The welcome guide opened behind the main window on the first start, a
   tip began with a bare dash where its action had no hotkey, and quitting
   Glossa while the guide was open counted as skipping it.
