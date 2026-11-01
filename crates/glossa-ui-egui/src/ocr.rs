@@ -1,29 +1,57 @@
-//! Screen-region OCR: the overlay, its result panel, and watching a region.
+//! Screen-region OCR: the overlay, its toolbar and result panel, the copy
+//! mode's notice, and watching a region.
 //!
 //! The overlay is a borderless window over the whole desktop showing a
 //! screenshot taken just before it opened, dimmed except for the rectangle
-//! the user drags. Releasing the mouse recognises that rectangle; the result
-//! appears beside it with copy / translate / save actions. The silent variant
-//! puts the text straight on the clipboard; the watch variant keeps
-//! re-reading the same rectangle and pops up a translation whenever its pixels
-//! change — subtitles for a game or a video.
+//! the user drags. What releasing the mouse does depends on the action:
+//!
+//! - **text recognition** follows `ocr.after_select`: show the text (and
+//!   its translation) beside the region, copy it, translate it in place, or
+//!   offer a toolbar to choose (Snipping Tool style, with keys: Enter for
+//!   the default, C copy, T translate, I in place, Esc cancel);
+//! - **recognise to clipboard** closes the overlay at once, recognises in
+//!   the background and puts the text on the clipboard, with a small notice
+//!   by the region that takes no focus;
+//! - **recognise and translate** shows the text with its translation;
+//! - **translate in place** closes the overlay and opens
+//!   [`crate::inplace`] over the region when the translation is ready;
+//! - **watch** keeps re-reading the same rectangle and pops up a
+//!   translation whenever its pixels change — subtitles for a game or a
+//!   video.
 
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use egui::{pos2, vec2, Color32, Rect, RichText, Sense};
+use glossa_core::config::OcrAfterSelect;
 use glossa_core::ocr::Rect as GRect;
-use glossa_core::{Action, Error, LangId, LangPair};
-use glossa_engine::{OcrOutcome, Slot};
+use glossa_core::{Action, Error, LangId};
+use glossa_engine::{OcrOutcome, RecognizeOptions, Slot};
 
 use crate::app::GlossaApp;
 
 pub enum Phase {
     Selecting,
+    /// A region is selected and the toolbar asks what to do with it.
+    Choosing,
     Recognizing,
     Done(Arc<OcrOutcome>),
     Failed(String),
+}
+
+/// What to do with a selected region.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Choice {
+    /// Recognise and show the text (and a translation, when so set).
+    Show,
+    /// Recognise and show the text with its translation.
+    Translate,
+    Copy,
+    InPlace,
+    CopyImage,
+    SaveImage,
+    Cancel,
 }
 
 pub struct OcrState {
@@ -42,7 +70,31 @@ pub struct OcrState {
     edited_text: Option<String>,
 }
 
+/// A recognition running after the overlay closed: copy mode, or in place.
+pub struct Background {
+    job: u64,
+    in_place: bool,
+    region: GRect,
+    /// The captured region, for painting the translation over.
+    crop: Option<image::RgbaImage>,
+}
+
+/// The small notice copy mode shows by the region: it takes no focus and
+/// goes away by itself.
+pub struct Notice {
+    text: String,
+    /// The start of what was copied, a line or two.
+    preview: Option<String>,
+    error: bool,
+    busy: bool,
+    /// The region it belongs to, in desktop pixels.
+    region: GRect,
+    shown: Instant,
+}
+
 const ID: &str = "glossa-ocr";
+const NOTICE_TITLE: &str = "Glossa notice";
+const NOTICE_LIFE: Duration = Duration::from_millis(3500);
 
 pub fn begin(app: &mut GlossaApp, action: Action, image: image::RgbaImage, origin: (i32, i32)) {
     let scale = glossa_platform::window::monitor_at(origin.0, origin.1)
@@ -80,8 +132,18 @@ fn translate_target(app: &GlossaApp) -> Option<LangId> {
     if !app.cfg.ocr.translate_after {
         return None;
     }
+    Some(target_language(app))
+}
+
+/// The language to translate recognised text into: the main window's
+/// target, or the first language when that is "auto".
+fn target_language(app: &GlossaApp) -> LangId {
     let to = app.cfg.general.pair.to;
-    Some(if to.is_language() { to } else { app.cfg.general.first_language })
+    if to.is_language() {
+        to
+    } else {
+        app.cfg.general.first_language
+    }
 }
 
 pub fn on_result(app: &mut GlossaApp, job: u64, result: Result<Arc<OcrOutcome>, Arc<Error>>, message: Option<String>) {
@@ -114,6 +176,12 @@ pub fn on_result(app: &mut GlossaApp, job: u64, result: Result<Arc<OcrOutcome>, 
             return;
         }
     }
+    if app.ocr_background.as_ref().is_some_and(|b| b.job == job) {
+        if let Some(bg) = app.ocr_background.take() {
+            background_done(app, bg, result, message);
+        }
+        return;
+    }
     let Some(st) = app.ocr.as_mut() else { return };
     if job != st.job {
         return;
@@ -125,20 +193,81 @@ pub fn on_result(app: &mut GlossaApp, job: u64, result: Result<Arc<OcrOutcome>, 
                 let t = t.to_owned();
                 app.fonts.ensure(&app.ctx, &t);
             }
-            match st.action {
-                Action::RecognizeToClipboard => {
-                    let text = o.ocr.text.clone();
-                    app.ocr = None;
-                    app.copy_text(&text);
-                }
-                _ => st.phase = Phase::Done(o),
-            }
+            st.phase = Phase::Done(o);
         }
         Err(_) => st.phase = Phase::Failed(message.unwrap_or_default()),
     }
 }
 
+/// A copy-mode or in-place recognition finished.
+fn background_done(
+    app: &mut GlossaApp,
+    bg: Background,
+    result: Result<Arc<OcrOutcome>, Arc<Error>>,
+    message: Option<String>,
+) {
+    let o = match result {
+        Ok(o) => o,
+        Err(_) => {
+            notice(app, bg.region, message.unwrap_or_default(), None, true, false);
+            return;
+        }
+    };
+    if !bg.in_place {
+        let text = glossa_engine::ocr::copy_text(&o.ocr, app.cfg.ocr.copy_joined_lines);
+        copy_with_notice(app, &text, bg.region);
+        return;
+    }
+    app.ocr_notice = None;
+    match bg.crop {
+        Some(crop) if !o.blocks.is_empty() => crate::inplace::open(app, crop, bg.region, o),
+        _ => {
+            // Nothing with a place to paint on (an engine that gives text
+            // only): show the translation in the popup instead.
+            let near = (bg.region.x as i32, (bg.region.y + bg.region.height) as i32);
+            match o.translation.clone() {
+                Some(t) => crate::popup::show_text(app, o.ocr.text.clone(), Some(Arc::new(t)), near),
+                None => {
+                    let m = app.t("ocr.nothing_to_paint");
+                    notice(app, bg.region, m, None, true, false);
+                }
+            }
+        }
+    }
+}
+
+/// Put recognised text on the clipboard and say so by the region.
+fn copy_with_notice(app: &mut GlossaApp, text: &str, region: GRect) {
+    let result = match app.clipboard.as_mut() {
+        Some(c) => c.set_text(text).map_err(|e| e.to_string()),
+        None => {
+            app.ctx.copy_text(text.to_owned());
+            Ok(())
+        }
+    };
+    match result {
+        Ok(()) => {
+            let count = text.chars().count().to_string();
+            let m = app.locale.fmt("ocr.copied_chars", &count);
+            let preview: String = text.split_whitespace().collect::<Vec<_>>().join(" ").chars().take(160).collect();
+            app.fonts.ensure(&app.ctx, &preview);
+            notice(app, region, m, Some(preview), false, false);
+        }
+        Err(e) => notice(app, region, e, None, true, false),
+    }
+}
+
+fn notice(app: &mut GlossaApp, region: GRect, text: String, preview: Option<String>, error: bool, busy: bool) {
+    app.ocr_notice = Some(Notice { text, preview, error, busy, region, shown: Instant::now() });
+    app.ctx.request_repaint();
+}
+
 pub fn tick(app: &mut GlossaApp) {
+    if let Some(n) = &app.ocr_notice {
+        if !n.busy && n.shown.elapsed() > NOTICE_LIFE {
+            app.ocr_notice = None;
+        }
+    }
     let Some(w) = &app.watch else { return };
     if w.stop.load(Ordering::SeqCst) {
         app.watch = None;
@@ -169,6 +298,7 @@ pub fn recognize_region(app: &mut GlossaApp, rect: GRect) {
 }
 
 pub fn show(app: &mut GlossaApp, ctx: &egui::Context) {
+    show_notice(app, ctx);
     let Some(mut st) = app.ocr.take() else { return };
     let (w, h) = (st.image.width() as f32 / st.scale, st.image.height() as f32 / st.scale);
     let builder = egui::ViewportBuilder::default()
@@ -241,10 +371,15 @@ fn overlay(app: &mut GlossaApp, ui: &mut egui::Ui, st: &mut OcrState) -> bool {
             }
         }
 
-        if matches!(st.phase, Phase::Selecting) {
+        // A new drag starts a new selection, also while the toolbar asks.
+        if matches!(st.phase, Phase::Selecting | Phase::Choosing) {
             ctx.set_cursor_icon(egui::CursorIcon::Crosshair);
             if resp.drag_started() {
-                st.drag_start = resp.interact_pointer_pos();
+                // Where the button went down: egui calls it a drag only once
+                // the pointer has moved a little, and the corner must not
+                // move with that.
+                st.drag_start = ui.input(|i| i.pointer.press_origin()).or(resp.interact_pointer_pos());
+                st.phase = Phase::Selecting;
             }
             if let (Some(a), Some(b)) = (st.drag_start, resp.interact_pointer_pos()) {
                 if resp.dragged() {
@@ -254,7 +389,10 @@ fn overlay(app: &mut GlossaApp, ui: &mut egui::Ui, st: &mut OcrState) -> bool {
             if resp.drag_stopped() {
                 st.drag_start = None;
                 if let Some(sel) = st.selection.filter(|s| s.width() > 4.0 && s.height() > 4.0) {
-                    keep = start_recognition(app, st, sel);
+                    match first_choice(app, st.action) {
+                        Some(choice) => keep = run(app, st, sel, choice),
+                        None => st.phase = Phase::Choosing,
+                    }
                 } else {
                     st.selection = None;
                 }
@@ -262,31 +400,72 @@ fn overlay(app: &mut GlossaApp, ui: &mut egui::Ui, st: &mut OcrState) -> bool {
         }
         if resp.secondary_clicked() {
             // Right click: cancel, as a quick way out.
-            if matches!(st.phase, Phase::Selecting) {
+            if matches!(st.phase, Phase::Selecting | Phase::Choosing) {
                 keep = false;
             }
         }
 
         if let Some(sel) = st.selection {
-            if !matches!(st.phase, Phase::Selecting) {
-                keep &= result_panel(app, ui, st, sel, full);
+            match st.phase {
+                Phase::Selecting => {}
+                Phase::Choosing => {
+                    if let Some(choice) = toolbar(app, ui, st, sel, full) {
+                        keep &= run(app, st, sel, choice);
+                    }
+                }
+                _ => keep &= result_panel(app, ui, st, sel, full),
             }
         }
     });
     keep
 }
 
-/// Crop the selection out of the screenshot and send it off. Returns whether
-/// the overlay stays open.
-fn start_recognition(app: &mut GlossaApp, st: &mut OcrState, sel: Rect) -> bool {
+/// What releasing the mouse does for `action`; `None` asks with the toolbar.
+fn first_choice(app: &GlossaApp, action: Action) -> Option<Choice> {
+    match action {
+        Action::RecognizeToClipboard => Some(Choice::Copy),
+        Action::RecognizeAndTranslate => Some(Choice::Translate),
+        Action::TranslateRegionInPlace => Some(Choice::InPlace),
+        // Watching is started by `run` too.
+        Action::WatchRegion => Some(Choice::Show),
+        _ => match app.cfg.ocr.after_select {
+            OcrAfterSelect::Show => Some(Choice::Show),
+            OcrAfterSelect::Copy => Some(Choice::Copy),
+            OcrAfterSelect::InPlace => Some(Choice::InPlace),
+            OcrAfterSelect::Ask => None,
+        },
+    }
+}
+
+/// What Enter does in the toolbar: the configured action, or translating
+/// when the setting is to ask.
+fn default_choice(app: &GlossaApp) -> Choice {
+    match app.cfg.ocr.after_select {
+        OcrAfterSelect::Copy => Choice::Copy,
+        OcrAfterSelect::InPlace => Choice::InPlace,
+        OcrAfterSelect::Show | OcrAfterSelect::Ask => Choice::Translate,
+    }
+}
+
+/// The selection in screenshot pixels, clamped to the screenshot.
+fn pixel_rect(st: &OcrState, sel: Rect) -> (u32, u32, u32, u32) {
     let s = st.scale;
-    let x = (sel.min.x * s).max(0.0) as u32;
-    let y = (sel.min.y * s).max(0.0) as u32;
+    let x = ((sel.min.x * s).max(0.0) as u32).min(st.image.width().saturating_sub(1));
+    let y = ((sel.min.y * s).max(0.0) as u32).min(st.image.height().saturating_sub(1));
     let w = ((sel.width() * s) as u32).min(st.image.width().saturating_sub(x)).max(1);
     let h = ((sel.height() * s) as u32).min(st.image.height().saturating_sub(y)).max(1);
+    (x, y, w, h)
+}
+
+/// Act on the selection. Returns whether the overlay stays open.
+fn run(app: &mut GlossaApp, st: &mut OcrState, sel: Rect, choice: Choice) -> bool {
+    if choice == Choice::Cancel {
+        return false;
+    }
+    let (x, y, w, h) = pixel_rect(st, sel);
     let crop = image::imageops::crop_imm(&st.image, x, y, w, h).to_image();
-    let png = glossa_platform::capture::encode_png(&crop);
-    let region = GRect::new((st.origin.0 as u32 + x) as f32, (st.origin.1 as u32 + y) as f32, w as f32, h as f32);
+    let region =
+        GRect::new((st.origin.0 + x as i32) as f32, (st.origin.1 + y as i32) as f32, w as f32, h as f32);
     app.last_region = Some(region);
     if st.action == Action::WatchRegion {
         app.watch = Some(Watch::start(region, Duration::from_millis(app.cfg.ocr.watch_interval_ms), app.ctx.clone()));
@@ -294,154 +473,255 @@ fn start_recognition(app: &mut GlossaApp, st: &mut OcrState, sel: Rect) -> bool 
         app.notify(m, false);
         return false;
     }
-    let translate_to = match st.action {
-        Action::RecognizeToClipboard => None,
-        Action::RecognizeAndTranslate => Some(translate_target(app).unwrap_or(app.cfg.general.first_language)),
-        _ => translate_target(app),
+    match choice {
+        Choice::CopyImage => {
+            if let Some(cb) = app.clipboard.as_mut() {
+                if let Err(e) = cb.set_image(&crop) {
+                    app.notify(e.to_string(), true);
+                    return true;
+                }
+            }
+            let m = app.t("msg.copied");
+            notice(app, region, m, None, false, false);
+            false
+        }
+        Choice::SaveImage => {
+            save_image(app, &crop);
+            false
+        }
+        Choice::Copy | Choice::InPlace => {
+            let png = glossa_platform::capture::encode_png(&crop);
+            let in_place = choice == Choice::InPlace;
+            let opts = RecognizeOptions {
+                lang: st.lang,
+                translate_to: in_place.then(|| target_language(app)),
+                in_place,
+                layout: app.cfg.ocr.copy_joined_lines,
+                ..Default::default()
+            };
+            let job = app.engine.recognize_async_with(Slot::Ocr, png, opts);
+            app.ocr_background = Some(Background { job, in_place, region, crop: in_place.then_some(crop) });
+            let m = app.t("msg.recognizing");
+            notice(app, region, m, None, false, true);
+            false
+        }
+        Choice::Show | Choice::Translate | Choice::Cancel => {
+            let png = glossa_platform::capture::encode_png(&crop);
+            let translate_to =
+                if choice == Choice::Translate { Some(target_language(app)) } else { translate_target(app) };
+            st.job = app.engine.recognize_async(Slot::Ocr, png, st.lang, translate_to);
+            st.phase = Phase::Recognizing;
+            true
+        }
+    }
+}
+
+fn save_image(app: &mut GlossaApp, img: &image::RgbaImage) {
+    if let Some(path) =
+        rfd::FileDialog::new().add_filter("PNG", &["png"]).set_file_name("glossa-ocr.png").save_file()
+    {
+        if let Err(e) = img.save(&path) {
+            app.notify(e.to_string(), true);
+        }
+    }
+}
+
+/// Where a panel of `width` × `height` goes: under the selection, else
+/// above it, kept on the overlay.
+fn panel_pos(sel: Rect, full: Rect, width: f32, height: f32) -> egui::Pos2 {
+    let x = sel.min.x.min(full.max.x - width - 8.0).max(full.min.x + 8.0);
+    let below = sel.max.y + 8.0;
+    if below + height < full.max.y {
+        pos2(x, below)
+    } else if sel.min.y - height - 8.0 > full.min.y {
+        pos2(x, sel.min.y - height - 8.0)
+    } else {
+        pos2(x, (sel.max.y - height - 8.0).max(full.min.y + 8.0))
+    }
+}
+
+/// The Snipping Tool style bar under a fresh selection.
+fn toolbar(app: &mut GlossaApp, ui: &mut egui::Ui, _st: &OcrState, sel: Rect, full: Rect) -> Option<Choice> {
+    let look = app.look.clone();
+    let default = default_choice(app);
+    let mut chosen = ui.input(|i| {
+        if i.modifiers.any() {
+            return None;
+        }
+        if i.key_pressed(egui::Key::Enter) {
+            Some(default)
+        } else if i.key_pressed(egui::Key::C) {
+            Some(Choice::Copy)
+        } else if i.key_pressed(egui::Key::T) {
+            Some(Choice::Translate)
+        } else if i.key_pressed(egui::Key::I) {
+            Some(Choice::InPlace)
+        } else {
+            None
+        }
+    });
+    let default_label = match default {
+        Choice::Copy => app.t("ocr.copy_text"),
+        Choice::InPlace => app.t("ocr.in_place"),
+        _ => app.t("ocr.translate"),
     };
-    st.job = app.engine.recognize_async(Slot::Ocr, png, st.lang, translate_to);
-    st.phase = Phase::Recognizing;
-    true
+    let pos = panel_pos(sel, full, 520.0, 64.0);
+    egui::Area::new(egui::Id::unique("ocr-toolbar")).fixed_pos(pos).order(egui::Order::Foreground).show(ui.ctx(), |ui| {
+        egui::Frame::popup(ui.style())
+            .fill(look.popup_back)
+            .stroke(egui::Stroke::new(look.popup_frame_width.max(1.0), look.popup_frame))
+            .show(ui, |ui| {
+                ui.horizontal(|ui| {
+                    let mut button = |ui: &mut egui::Ui, key: &str, choice: Choice| {
+                        let b = egui::Button::new(app.t(key)).selected(choice == default);
+                        if ui.add(b).clicked() {
+                            chosen = Some(choice);
+                        }
+                    };
+                    button(ui, "ocr.copy_text", Choice::Copy);
+                    button(ui, "ocr.translate", Choice::Translate);
+                    button(ui, "ocr.in_place", Choice::InPlace);
+                    ui.separator();
+                    button(ui, "ocr.copy_image", Choice::CopyImage);
+                    button(ui, "ocr.save_image", Choice::SaveImage);
+                    ui.separator();
+                    if ui.button(app.t("ocr.cancel")).clicked() {
+                        chosen = Some(Choice::Cancel);
+                    }
+                });
+                ui.label(
+                    RichText::new(app.locale.fmt("ocr.toolbar_keys", &default_label)).small().color(look.weak_text()),
+                );
+            });
+    });
+    chosen
 }
 
 fn result_panel(app: &mut GlossaApp, ui: &mut egui::Ui, st: &mut OcrState, sel: Rect, full: Rect) -> bool {
     let look = app.look.clone();
     let mut keep = true;
     let width = sel.width().clamp(320.0, 560.0);
-    let below = sel.max.y + 8.0;
-    let pos = if below + 160.0 < full.max.y {
-        pos2(sel.min.x.min(full.max.x - width - 8.0), below)
-    } else {
-        pos2(sel.min.x.min(full.max.x - width - 8.0), (sel.min.y - 230.0).max(8.0))
-    };
-    egui::Area::new(egui::Id::unique("ocr-result")).fixed_pos(pos).order(egui::Order::Foreground).show(
-        ui.ctx(),
-        |ui| {
-            egui::Frame::popup(ui.style())
-                .fill(look.popup_back)
-                .stroke(egui::Stroke::new(look.popup_frame_width.max(1.0), look.popup_frame))
-                .show(ui, |ui| {
-                    ui.set_width(width);
-                    match &st.phase {
-                        Phase::Recognizing => {
-                            ui.horizontal(|ui| {
-                                ui.add(egui::Spinner::new());
-                                ui.label(app.t("msg.recognizing"));
-                            });
-                        }
-                        Phase::Failed(e) => {
-                            ui.label(RichText::new(e).color(look.error()));
-                            ui.horizontal(|ui| {
-                                if ui.button(app.t("ocr.clear_selection")).clicked() {
-                                    st.selection = None;
-                                    st.phase = Phase::Selecting;
-                                }
-                                if ui.button(app.t("ocr.close")).clicked() {
-                                    keep = false;
-                                }
-                            });
-                        }
-                        Phase::Done(o) => {
-                            let o = o.clone();
-                            let text = st.edited_text.get_or_insert_with(|| o.ocr.text.clone());
-                            egui::ScrollArea::vertical().id_salt("ocr-text").max_height(140.0).show(ui, |ui| {
-                                ui.add(
-                                    egui::TextEdit::multiline(text).desired_width(f32::INFINITY).font(look.text_font()),
-                                );
-                            });
-                            if let Some(t) = o.translated_text() {
-                                ui.separator();
-                                egui::ScrollArea::vertical().id_salt("ocr-tr").max_height(140.0).show(ui, |ui| {
-                                    ui.add(
-                                        egui::Label::new(
-                                            RichText::new(t).font(look.text_font()).color(look.popup_text),
-                                        )
-                                        .selectable(true)
-                                        .wrap(),
-                                    );
-                                });
-                            }
-                            let text = text.clone();
-                            ui.horizontal_wrapped(|ui| {
-                                if ui.button(app.t("ocr.copy_text")).clicked() {
-                                    app.copy_text(&text);
-                                }
-                                if let Some(t) = o.translated_text() {
-                                    if ui.button(app.t("history.copy_translation")).clicked() {
-                                        let t = t.to_owned();
-                                        app.copy_text(&t);
-                                    }
-                                }
-                                if ui.button(app.t("ocr.translate")).clicked() {
-                                    app.main.source = text.clone();
-                                    app.main.translated_source.clear();
-                                    app.translate_main();
-                                    app.show_main();
-                                    keep = false;
-                                }
-                                if ui.button(app.t("ocr.copy_image")).clicked() {
-                                    if let Some(img) = crop_of(st, sel) {
-                                        if let Some(cb) = app.clipboard.as_mut() {
-                                            let _ = cb.set_image(&img);
-                                        }
-                                    }
-                                }
-                                if ui.button(app.t("ocr.save_image")).clicked() {
-                                    if let (Some(img), Some(path)) = (
-                                        crop_of(st, sel),
-                                        rfd::FileDialog::new()
-                                            .add_filter("PNG", &["png"])
-                                            .set_file_name("glossa-ocr.png")
-                                            .save_file(),
-                                    ) {
-                                        if let Err(e) = img.save(&path) {
-                                            app.notify(e.to_string(), true);
-                                        }
-                                    }
-                                }
-                                if ui.button(app.t("ocr.clear_selection")).clicked() {
-                                    st.selection = None;
-                                    st.edited_text = None;
-                                    st.phase = Phase::Selecting;
-                                }
-                                if ui.button(app.t("ocr.close")).clicked() {
-                                    keep = false;
-                                }
-                            });
-                            ui.horizontal(|ui| {
-                                ui.label(RichText::new(app.t("ocr.language")).small());
-                                let disabled = app.cfg.languages.disabled.clone();
-                                let auto = app.t("main.auto_detect");
-                                if let Some(l) = crate::widgets::lang_combo(
-                                    ui,
-                                    "ocr-lang",
-                                    st.lang,
-                                    true,
-                                    &auto,
-                                    &app.t("lang.search"),
-                                    &disabled,
-                                    160.0,
-                                ) {
-                                    st.lang = l;
-                                    let _ = app.engine.update_config(move |c| c.ocr.language = l);
-                                }
-                                ui.label(
-                                    RichText::new(format!(
-                                        "{} · {}",
-                                        o.ocr.provider_id,
-                                        app.locale.fmt("msg.ms", &o.ocr.elapsed_ms.to_string())
-                                    ))
-                                    .small()
-                                    .color(look.weak_text()),
-                                );
-                            });
-                        }
-                        Phase::Selecting => {}
+    let pos = panel_pos(sel, full, width, 230.0);
+    egui::Area::new(egui::Id::unique("ocr-result")).fixed_pos(pos).order(egui::Order::Foreground).show(ui.ctx(), |ui| {
+        egui::Frame::popup(ui.style())
+            .fill(look.popup_back)
+            .stroke(egui::Stroke::new(look.popup_frame_width.max(1.0), look.popup_frame))
+            .show(ui, |ui| {
+                ui.set_width(width);
+                match &st.phase {
+                    Phase::Recognizing => {
+                        ui.horizontal(|ui| {
+                            ui.add(egui::Spinner::new());
+                            ui.label(app.t("msg.recognizing"));
+                        });
                     }
-                });
-        },
-    );
-    let _ = LangPair::new(LangId::AUTO, LangId::AUTO);
+                    Phase::Failed(e) => {
+                        ui.label(RichText::new(e).color(look.error()));
+                        ui.horizontal(|ui| {
+                            if ui.button(app.t("ocr.clear_selection")).clicked() {
+                                st.selection = None;
+                                st.phase = Phase::Selecting;
+                            }
+                            if ui.button(app.t("ocr.close")).clicked() {
+                                keep = false;
+                            }
+                        });
+                    }
+                    Phase::Done(o) => {
+                        let o = o.clone();
+                        keep = done_panel(app, ui, st, sel, &o);
+                    }
+                    Phase::Selecting | Phase::Choosing => {}
+                }
+            });
+    });
+    keep
+}
+
+fn done_panel(app: &mut GlossaApp, ui: &mut egui::Ui, st: &mut OcrState, sel: Rect, o: &OcrOutcome) -> bool {
+    let look = app.look.clone();
+    let mut keep = true;
+    let text = st.edited_text.get_or_insert_with(|| o.ocr.text.clone());
+    egui::ScrollArea::vertical().id_salt("ocr-text").max_height(140.0).show(ui, |ui| {
+        ui.add(egui::TextEdit::multiline(text).desired_width(f32::INFINITY).font(look.text_font()));
+    });
+    if let Some(t) = o.translated_text() {
+        ui.separator();
+        egui::ScrollArea::vertical().id_salt("ocr-tr").max_height(140.0).show(ui, |ui| {
+            ui.add(
+                egui::Label::new(RichText::new(t).font(look.text_font()).color(look.popup_text)).selectable(true).wrap(),
+            );
+        });
+    }
+    let text = text.clone();
+    ui.horizontal_wrapped(|ui| {
+        if ui.button(app.t("ocr.copy_text")).clicked() {
+            let t = glossa_engine::ocr::text_for_copy(&text, app.cfg.ocr.copy_joined_lines);
+            app.copy_text(&t);
+        }
+        if let Some(t) = o.translated_text() {
+            if ui.button(app.t("history.copy_translation")).clicked() {
+                let t = t.to_owned();
+                app.copy_text(&t);
+            }
+        }
+        if ui.button(app.t("ocr.translate")).clicked() {
+            app.main.source = text.clone();
+            app.main.translated_source.clear();
+            app.translate_main();
+            app.show_main();
+            keep = false;
+        }
+        if ui.button(app.t("ocr.in_place")).clicked() {
+            keep = run(app, st, sel, Choice::InPlace);
+        }
+        if ui.button(app.t("ocr.copy_image")).clicked() {
+            if let Some(img) = crop_of(st, sel) {
+                if let Some(cb) = app.clipboard.as_mut() {
+                    let _ = cb.set_image(&img);
+                }
+            }
+        }
+        if ui.button(app.t("ocr.save_image")).clicked() {
+            if let Some(img) = crop_of(st, sel) {
+                save_image(app, &img);
+            }
+        }
+        if ui.button(app.t("ocr.clear_selection")).clicked() {
+            st.selection = None;
+            st.edited_text = None;
+            st.phase = Phase::Selecting;
+        }
+        if ui.button(app.t("ocr.close")).clicked() {
+            keep = false;
+        }
+    });
+    ui.horizontal(|ui| {
+        ui.label(RichText::new(app.t("ocr.language")).small());
+        let disabled = app.cfg.languages.disabled.clone();
+        let auto = app.t("main.auto_detect");
+        if let Some(l) =
+            crate::widgets::lang_combo(ui, "ocr-lang", st.lang, true, &auto, &app.t("lang.search"), &disabled, 160.0)
+        {
+            st.lang = l;
+            let _ = app.engine.update_config(move |c| c.ocr.language = l);
+        }
+        let by = o
+            .translation
+            .as_ref()
+            .filter(|t| t.translation.provider_id != o.ocr.provider_id)
+            .map(|t| format!(" → {}", t.translation.provider_id))
+            .unwrap_or_default();
+        ui.label(
+            RichText::new(format!(
+                "{}{by} · {}",
+                o.ocr.provider_id,
+                app.locale.fmt("msg.ms", &o.ocr.elapsed_ms.to_string())
+            ))
+            .small()
+            .color(look.weak_text()),
+        );
+    });
     keep
 }
 
@@ -452,6 +732,72 @@ fn crop_of(st: &OcrState, sel: Rect) -> Option<image::RgbaImage> {
     let w = ((sel.width() * s) as u32).min(st.image.width().saturating_sub(x));
     let h = ((sel.height() * s) as u32).min(st.image.height().saturating_sub(y));
     (w > 0 && h > 0).then(|| image::imageops::crop_imm(&st.image, x, y, w, h).to_image())
+}
+
+/// Draw the copy-mode notice by its region. It never takes the focus, so
+/// the program the text came from keeps it; a click dismisses it.
+fn show_notice(app: &mut GlossaApp, ctx: &egui::Context) {
+    let Some(n) = app.ocr_notice.as_ref() else { return };
+    if !n.busy {
+        ctx.request_repaint_after(NOTICE_LIFE.saturating_sub(n.shown.elapsed()));
+    }
+    let (cx, cy) = n.region.centre();
+    let monitor = glossa_platform::window::monitor_at(cx as i32, cy as i32)
+        .or_else(|| glossa_platform::window::monitors().into_iter().find(|m| m.is_primary));
+    let scale = monitor.as_ref().map(|m| m.scale).filter(|s| *s > 0.0).unwrap_or(1.0);
+    let size = vec2(340.0, if n.preview.is_some() { 64.0 } else { 34.0 });
+    let pos = notice_pos(n.region, size * scale, monitor.map(|m| m.work_area)) / scale;
+    let builder = egui::ViewportBuilder::default()
+        .with_title(NOTICE_TITLE)
+        .with_decorations(false)
+        .with_resizable(false)
+        .with_taskbar(false)
+        .with_active(false)
+        .with_window_level(egui::WindowLevel::AlwaysOnTop)
+        .with_position(pos)
+        .with_inner_size(size);
+    let look = app.look.clone();
+    let mut dismissed = false;
+    let (text, preview, error, busy) = (n.text.clone(), n.preview.clone(), n.error, n.busy);
+    ctx.show_viewport_immediate(egui::ViewportId::from_hash_of(NOTICE_TITLE), builder, |ui, _| {
+        let frame = egui::Frame::new()
+            .fill(look.popup_back)
+            .stroke(egui::Stroke::new(1.0, if error { look.error() } else { look.accent() }))
+            .inner_margin(egui::Margin::symmetric(10, 6));
+        egui::CentralPanel::no_frame().frame(frame).show(ui, |ui| {
+            let resp = ui.interact(ui.max_rect(), egui::Id::unique("notice-click"), Sense::click());
+            ui.horizontal(|ui| {
+                if busy {
+                    ui.add(egui::Spinner::new().size(14.0));
+                }
+                let colour = if error { look.error() } else { look.popup_text };
+                ui.add(egui::Label::new(RichText::new(&text).strong().color(colour)).truncate());
+            });
+            if let Some(p) = &preview {
+                ui.add(egui::Label::new(RichText::new(p).small().color(look.weak_text())).truncate());
+            }
+            dismissed = resp.clicked();
+        });
+    });
+    if dismissed {
+        app.ocr_notice = None;
+    }
+}
+
+/// Where the notice goes, in desktop pixels: under the region's left edge,
+/// else above it, kept inside the work area.
+fn notice_pos(region: GRect, size: egui::Vec2, work: Option<GRect>) -> egui::Pos2 {
+    let work = work.unwrap_or(GRect::new(f32::MIN / 4.0, f32::MIN / 4.0, f32::MAX / 2.0, f32::MAX / 2.0));
+    let gap = 8.0;
+    let mut y = region.y + region.height + gap;
+    if y + size.y > work.y + work.height {
+        y = region.y - size.y - gap;
+    }
+    if y < work.y {
+        y = work.y + work.height - size.y - gap;
+    }
+    let x = region.x.min(work.x + work.width - size.x).max(work.x);
+    pos2(x, y)
 }
 
 /// A region being watched for changes.
@@ -502,5 +848,30 @@ impl Watch {
 
     pub fn stop(&self) {
         self.stop.store(true, Ordering::SeqCst);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_notice_sits_under_the_region_or_above_it_near_the_bottom() {
+        let work = Some(GRect::new(0.0, 0.0, 1920.0, 1040.0));
+        let size = vec2(340.0, 64.0);
+        assert_eq!(notice_pos(GRect::new(100.0, 100.0, 300.0, 50.0), size, work), pos2(100.0, 158.0));
+        // Too close to the taskbar: above.
+        assert_eq!(notice_pos(GRect::new(100.0, 950.0, 300.0, 50.0), size, work), pos2(100.0, 878.0));
+        // Too close to the right edge: pulled in.
+        assert_eq!(notice_pos(GRect::new(1800.0, 100.0, 100.0, 50.0), size, work).x, 1580.0);
+    }
+
+    #[test]
+    fn panels_go_under_the_selection_or_above_it() {
+        let full = Rect::from_min_size(pos2(0.0, 0.0), vec2(1000.0, 800.0));
+        let sel = Rect::from_min_size(pos2(100.0, 100.0), vec2(200.0, 50.0));
+        assert_eq!(panel_pos(sel, full, 300.0, 60.0), pos2(100.0, 158.0));
+        let low = Rect::from_min_size(pos2(100.0, 700.0), vec2(200.0, 80.0));
+        assert_eq!(panel_pos(low, full, 300.0, 60.0), pos2(100.0, 632.0));
     }
 }

@@ -141,9 +141,8 @@ fn top_pane(app: &mut GlossaApp, ui: &mut egui::Ui) {
             if icons::sized_button(ui, &look, Icon::Keyboard, &app.t("menu.keyboard"), 24.0, true).clicked() {
                 app.open_keyboard();
             }
-            if icons::sized_button(ui, &look, Icon::Camera, &app.t("action.text_recognition"), 24.0, true).clicked() {
-                app.perform(Action::TextRecognition, None);
-            }
+            let ocr_btn = icons::sized_button(ui, &look, Icon::Camera, &app.t("action.text_recognition"), 24.0, true);
+            crate::dropdown::menu(ui, &ocr_btn, |ui| ocr_menu(app, ui));
             if icons::sized_button(ui, &look, Icon::Dictionary, &app.t("menu.dictionary"), 24.0, true).clicked() {
                 app.perform(
                     Action::ShowDictionary,
@@ -156,6 +155,26 @@ fn top_pane(app: &mut GlossaApp, ui: &mut egui::Ui) {
         });
     });
     ui.add_space(2.0);
+}
+
+/// The camera button's menu: every way to recognise a screen region, with
+/// its hotkey where one is set.
+fn ocr_menu(app: &mut GlossaApp, ui: &mut egui::Ui) {
+    let items = [
+        (Action::TextRecognition, "ocr.menu.recognize"),
+        (Action::RecognizeAndTranslate, "ocr.menu.recognize_translate"),
+        (Action::RecognizeToClipboard, "ocr.menu.copy"),
+        (Action::TranslateRegionInPlace, "ocr.menu.in_place"),
+        (Action::WatchRegion, "ocr.menu.watch"),
+        (Action::RepeatLastRecognition, "ocr.menu.repeat"),
+    ];
+    for (action, key) in items {
+        let shortcut = app.cfg.hotkeys.bindings.get(&action).map(|h| h.to_string()).unwrap_or_default();
+        if ui.add(egui::Button::new(app.t(key)).shortcut_text(shortcut)).clicked() {
+            ui.close();
+            app.perform(action, None);
+        }
+    }
 }
 
 fn main_menu(app: &mut GlossaApp, ui: &mut egui::Ui) {

@@ -231,6 +231,9 @@ impl Default for HotkeysConfig {
         bind(Action::ListenSelection, "Ctrl+E");
         bind(Action::TextRecognition, "Ctrl+Shift+O");
         bind(Action::RecognizeAndTranslate, "Ctrl+Alt+O");
+        // Ctrl+Shift+C would be the obvious chord, but it is Copy in Windows
+        // Terminal and most Linux terminals; a global hotkey would take it.
+        bind(Action::RecognizeToClipboard, "Ctrl+Alt+C");
         bind(Action::ShowMainWindow, "Ctrl+Alt+Q");
         Self { enabled: true, bindings }
     }
@@ -982,6 +985,15 @@ pub struct OcrConfig {
     pub save_image_dir: Option<PathBuf>,
     /// How often a watched region is checked for changes.
     pub watch_interval_ms: u64,
+    /// What plain "text recognition" does once a region is selected. The
+    /// dedicated actions (to the clipboard, translate, in place) ignore it.
+    pub after_select: OcrAfterSelect,
+    /// Who translates recognised text: the OCR engine in the same request
+    /// when it can (Google Lens), or the current translator.
+    pub translate_with: OcrTranslateWith,
+    /// Join the lines of recognised text when copying it (prose), rather
+    /// than keeping the picture's line breaks (code, lists).
+    pub copy_joined_lines: bool,
     pub lens: LensConfig,
     /// The Windows 11 Snipping Tool's engine.
     pub oneocr: OneOcrConfig,
@@ -996,10 +1008,41 @@ impl Default for OcrConfig {
             preserve_line_breaks: true,
             save_image_dir: None,
             watch_interval_ms: 800,
+            after_select: OcrAfterSelect::default(),
+            translate_with: OcrTranslateWith::default(),
+            copy_joined_lines: false,
             lens: LensConfig::default(),
             oneocr: OneOcrConfig::default(),
         }
     }
+}
+
+/// What text recognition does after a region is selected.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum OcrAfterSelect {
+    /// Show the text, and its translation when `translate_after` is on, beside
+    /// the region.
+    #[default]
+    Show,
+    /// Copy the text to the clipboard and close.
+    Copy,
+    /// Paint the translation over the region.
+    InPlace,
+    /// Offer a toolbar to choose.
+    Ask,
+}
+
+/// Who translates the text an OCR engine read.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum OcrTranslateWith {
+    /// The OCR engine, in the same request, when it can (Google Lens); the
+    /// current translator otherwise.
+    #[default]
+    OcrEngine,
+    /// Always the current translator.
+    Translator,
 }
 
 /// Where OneOCR's files are.
@@ -1305,6 +1348,25 @@ text_scale = 0.01",
         let back = Config::from_toml(&c.to_toml()).unwrap();
         assert_eq!(back, c);
         assert_eq!(back.services.option("deepl", "api_key"), Some(&serde_json::json!("secret")));
+    }
+
+    #[test]
+    fn ocr_choices_load_by_name_and_default_when_absent() {
+        let c = Config::from_toml("[ocr]
+provider = \"lens\"").unwrap();
+        assert_eq!(c.ocr.after_select, OcrAfterSelect::Show);
+        assert_eq!(c.ocr.translate_with, OcrTranslateWith::OcrEngine);
+        assert!(!c.ocr.copy_joined_lines);
+        let c = Config::from_toml(
+            "[ocr]
+after_select = \"ask\"
+translate_with = \"translator\"
+copy_joined_lines = true",
+        )
+        .unwrap();
+        assert_eq!(c.ocr.after_select, OcrAfterSelect::Ask);
+        assert_eq!(c.ocr.translate_with, OcrTranslateWith::Translator);
+        assert!(c.ocr.copy_joined_lines);
     }
 
     #[test]

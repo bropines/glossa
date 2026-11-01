@@ -48,7 +48,8 @@
   by the pointer (or the translation itself) appears, no hotkey needed. A
   click on the tray icon turns it on and off; the icon changes colour.
 - **Recognise text on screen** (OCR) and translate it: drag over a region,
-  copy it, or watch it and re-translate when it changes. Google Lens through
+  copy its text, translate it in place over the picture, or watch it and
+  re-translate when it changes. Google Lens through
   [chrome-lens-py](https://github.com/bropines/chrome-lens-py); offline on
   Windows with Windows OCR or the Snipping Tool's OneOCR engine.
 - **Dictionary**: online (Google, Yandex, Multitran, ABBYY Lingvo Live,
@@ -193,6 +194,8 @@ machine-readable output.
   [native](docs/modules/native-modules.md) modules, the
   [protocol](docs/modules/protocol.md), and
   [classic QTranslate and pot-app scripts](docs/modules/classic-scripts.md)
+- [Text recognition (OCR)](docs/ocr.md): engines, copy mode, Lens translation,
+  in-place translation
 - [AI endpoints](docs/ai-endpoints.md)
 - [Themes](docs/theming.md)
 - [Architecture](docs/architecture.md)

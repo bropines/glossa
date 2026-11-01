@@ -90,6 +90,7 @@ pub fn perform(app: &mut GlossaApp, action: Action, text: Option<String>) {
         Action::TextRecognition
         | Action::RecognizeAndTranslate
         | Action::RecognizeToClipboard
+        | Action::TranslateRegionInPlace
         | Action::WatchRegion => {
             if let Some(w) = app.watch.take() {
                 // Pressing the watch hotkey again stops watching.

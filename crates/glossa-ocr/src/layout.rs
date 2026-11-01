@@ -99,13 +99,13 @@ impl RawLine {
                 .iter()
                 .map(|w| {
                     let (bounds, angle) = w.shape.map(|s| s.geometry()).map_or((None, 0.0), |(r, a)| (Some(r), a));
-                    OcrBlock { text: w.text.clone(), bounds, angle, children: Vec::new() }
+                    OcrBlock { text: w.text.clone(), bounds, angle, ..Default::default() }
                 })
                 .collect()
         } else {
             Vec::new()
         };
-        OcrBlock { text: self.text.clone(), bounds, angle, children }
+        OcrBlock { text: self.text.clone(), bounds, angle, children, ..Default::default() }
     }
 }
 

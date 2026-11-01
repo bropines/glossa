@@ -133,6 +133,10 @@ pub struct OcrBlock {
     pub angle: f32,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub children: Vec<OcrBlock>,
+    /// This block's own translation, when the provider translated block by
+    /// block (Google Lens does): what an in-place rendering paints over it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub translation: Option<String>,
 }
 
 /// An axis-aligned rectangle in image pixels.

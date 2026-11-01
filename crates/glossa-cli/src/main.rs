@@ -55,7 +55,9 @@ COMMANDS
     translate  [-f FROM] [-t TO] [-s SERVICE] [--back] [TEXT…]   (stdin if no text)
     detect     [TEXT…]
     dict       [-f FROM] [-t TO] [-s SERVICE] WORD
-    ocr        IMAGE [-l LANG] [-t TO] [-e ENGINE]   ENGINE: lens, windows-ocr, oneocr, command-ocr…
+    ocr        IMAGE [-l LANG] [-t TO] [-e ENGINE] [--in-place] [--join-lines]
+               ENGINE: lens, windows-ocr, oneocr, command-ocr…; --in-place translates block by
+               block (each block with its box under --json); --join-lines joins lines into paragraphs
     speak      [-l LANG] [--slow] -o OUT.mp3 TEXT…
     services   [-c CAPABILITY]        translate | dictionary | listen | ocr | detect_language
     modules                           what loaded, what failed and why
@@ -344,19 +346,33 @@ fn run(args: &Args) -> Result<(), Fail> {
             let e = engine(args)?;
             let to = args.flag(&["-t", "--to"]).map(|c| lang(Some(c), LangId::ENGLISH)).transpose()?;
             let from = lang(args.flag(&["-l", "--lang"]), LangId::AUTO)?;
-            let out = match args.flag(&["-e", "--engine", "-s", "--service"]) {
-                Some(engine) => e.recognize_using(engine, image, from, to)?,
-                None => e.recognize(image, from, to)?,
+            let in_place = args.has(&["--in-place"]);
+            let join = args.has(&["--join-lines"]);
+            let opts = glossa_engine::RecognizeOptions {
+                lang: from,
+                translate_to: if in_place { Some(to.unwrap_or(e.config().general.first_language)) } else { to },
+                provider: args.flag(&["-e", "--engine", "-s", "--service"]).map(str::to_owned),
+                in_place,
+                layout: join,
             };
+            let out = e.recognize_with_options(image, &opts)?;
+            let text = glossa_engine::ocr::copy_text(&out.ocr, join);
+            let translator = out.translation.as_ref().map(|t| t.translation.provider_id.as_str());
             if args.json {
                 out!(
                     "{}",
-                    json!({ "text": out.ocr.text, "translation": out.translated_text(),
+                    json!({ "text": text, "translation": out.translated_text(),
                             "detected": out.ocr.detected_lang.map(|l| l.bcp47()), "service": out.ocr.provider_id,
-                            "elapsed_ms": out.ocr.elapsed_ms })
+                            "translator": translator, "elapsed_ms": out.ocr.elapsed_ms,
+                            "blocks": out.blocks, "image_size": out.ocr.image_size })
                 );
+            } else if !out.blocks.is_empty() {
+                for b in &out.blocks {
+                    out!("{}\t{}", b.source.replace('\n', " "), b.translation.replace('\n', " "));
+                }
+                eprintln!("[{} · {} ms]", out.ocr.provider_id, out.ocr.elapsed_ms);
             } else {
-                out!("{}", out.translated_text().unwrap_or(&out.ocr.text));
+                out!("{}", out.translated_text().unwrap_or(&text));
                 eprintln!("[{} · {} ms]", out.ocr.provider_id, out.ocr.elapsed_ms);
             }
             Ok(())

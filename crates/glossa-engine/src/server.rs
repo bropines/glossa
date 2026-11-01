@@ -14,7 +14,8 @@
 //! GET  /v1/translate?text=…&to=…
 //! POST /v1/detect      {"text"}
 //! POST /v1/dictionary  {"text","from"?,"to"?,"service"?}
-//! POST /v1/ocr         image bytes (image/*), or {"image_base64","lang"?,"translate_to"?}
+//! POST /v1/ocr         image bytes (image/*), or {"image_base64","lang"?,"translate_to"?,"in_place"?}
+//!                      in_place: translate block by block, each with its box, under "blocks"
 //! POST /v1/speak       {"text","lang"?,"slow"?}            -> audio bytes
 //! GET|POST /v1/action/<action>?text=…   ask the UI to act (show_popup, text_recognition…)
 //! ```
@@ -324,6 +325,7 @@ fn route(engine: &Engine, req: &mut Request) -> Reply {
         (Method::Post, "/v1/ocr") => {
             let is_image = header(req, "Content-Type")
                 .is_some_and(|c| c.starts_with("image/") || c.starts_with("application/octet-stream"));
+            let mut in_place = query_param(&url, "in_place").is_some_and(|v| v == "1" || v == "true");
             let (image, lang_code, to) = if is_image {
                 match read_body(req) {
                     Ok(b) => (b, query_param(&url, "lang"), query_param(&url, "translate_to")),
@@ -337,13 +339,21 @@ fn route(engine: &Engine, req: &mut Request) -> Reply {
                 let Some(b64) = body.get("image_base64").and_then(|v| v.as_str()) else {
                     return Reply::error(400, "send image bytes or {\"image_base64\": …}");
                 };
+                in_place |= body.get("in_place").and_then(|v| v.as_bool()).unwrap_or(false);
                 match base64::engine::general_purpose::STANDARD.decode(b64) {
                     Ok(bytes) => (bytes, field(&body, &url, "lang"), field(&body, &url, "translate_to")),
                     Err(e) => return Reply::error(400, format!("image_base64: {e}")),
                 }
             };
             let to = to.as_deref().and_then(LangId::from_code);
-            match engine.recognize(image, lang(lang_code, LangId::AUTO), to) {
+            let from = lang(lang_code, LangId::AUTO);
+            let result = if in_place {
+                let to = to.unwrap_or(engine.config().general.first_language);
+                engine.recognize_in_place(image, from, to, None)
+            } else {
+                engine.recognize(image, from, to)
+            };
+            match result {
                 Ok(out) => Reply::json(
                     200,
                     json!({
@@ -351,6 +361,9 @@ fn route(engine: &Engine, req: &mut Request) -> Reply {
                         "translation": out.translated_text(),
                         "detected": out.ocr.detected_lang.map(|l| l.bcp47()),
                         "service": out.ocr.provider_id,
+                        "translator": out.translation.as_ref().map(|t| t.translation.provider_id.clone()),
+                        "blocks": out.blocks,
+                        "image_size": out.ocr.image_size,
                     }),
                 ),
                 Err(e) => Reply::from_error(&e),

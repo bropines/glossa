@@ -14,6 +14,7 @@ mod dropdown;
 mod fonts;
 mod history;
 mod icons;
+mod inplace;
 mod keyboard;
 mod main_window;
 mod mouse;

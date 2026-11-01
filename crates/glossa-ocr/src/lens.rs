@@ -709,7 +709,13 @@ fn block_of(node: &Value, size: Option<(u32, u32)>, depth: usize) -> OcrBlock {
             .map(|kids| kids.iter().map(|k| block_of(k, size, depth - 1)).collect())
             .unwrap_or_default()
     };
-    OcrBlock { text: node.get("text").and_then(Value::as_str).unwrap_or("").to_owned(), bounds, angle, children }
+    OcrBlock {
+        text: node.get("text").and_then(Value::as_str).unwrap_or("").to_owned(),
+        bounds,
+        angle,
+        children,
+        ..Default::default()
+    }
 }
 
 fn joined_text(blocks: &[OcrBlock], preserve_line_breaks: bool) -> String {
@@ -733,7 +739,7 @@ fn map_daemon_result(v: &Value, req: &OcrRequest) -> Result<OcrResult> {
         return Err(Error::BadResponse { provider: NAME.into(), detail: "the reply is not a JSON object".into() });
     }
     let size = v.get("image_size").and_then(Value::as_array).and_then(|a| size_from(a.first(), a.get(1)));
-    let blocks: Vec<OcrBlock> = if let Some(b) = arr(v, "detailed_blocks") {
+    let mut blocks: Vec<OcrBlock> = if let Some(b) = arr(v, "detailed_blocks") {
         b.iter().map(|n| block_of(n, size, 2)).collect()
     } else if let Some(b) = arr(v, "text_blocks") {
         b.iter().map(|n| block_of(n, size, 1)).collect()
@@ -746,6 +752,11 @@ fn map_daemon_result(v: &Value, req: &OcrRequest) -> Result<OcrResult> {
         Some(t) => t.to_owned(),
         None => joined_text(&blocks, req.preserve_line_breaks),
     };
+    if req.granularity != OcrGranularity::FullText {
+        if let Some(render) = arr(v, "translation_render_data") {
+            attach_translations(&mut blocks, render, size);
+        }
+    }
     Ok(OcrResult {
         text,
         blocks,
@@ -754,6 +765,90 @@ fn map_daemon_result(v: &Value, req: &OcrRequest) -> Result<OcrResult> {
         image_size: size,
         ..Default::default()
     })
+}
+
+/// Lens's per-paragraph translations (`translation_render_data`, one entry
+/// per paragraph it translated) laid onto the paragraphs read. Each entry is
+/// `{translation, lines: [{range, words: [[start, end]…], geometry, …}]}`:
+/// the lines carry the source line's geometry and the character ranges of
+/// the translation that Lens sets on that line, which is how Chromium's
+/// overlay draws a translated line where the original was.
+///
+/// A paragraph is matched by where its first line sits; a translation
+/// whose paragraph is not among `blocks` becomes a block of its own, so
+/// nothing Lens translated is lost.
+fn attach_translations(blocks: &mut Vec<OcrBlock>, render: &[Value], size: Option<(u32, u32)>) {
+    for entry in render {
+        let Some(translation) = non_blank(entry.get("translation")) else { continue };
+        let lines_json = arr(entry, "lines").map(Vec::as_slice).unwrap_or_default();
+        let mut lines: Vec<OcrBlock> = Vec::new();
+        for (i, line) in lines_json.iter().enumerate() {
+            let (bounds, angle) = bounds_of(line, size);
+            let words = word_ranges(line);
+            let next = lines_json.get(i + 1).map(word_ranges);
+            let text = line_text(&translation, &words, next.as_deref()).trim().to_owned();
+            lines.push(OcrBlock { bounds, angle, translation: Some(text), ..Default::default() });
+        }
+        let bounds = crate::layout::union(lines.iter().filter_map(|l| l.bounds));
+        let angle = lines.first().map_or(0.0, |l| l.angle);
+        let centre = lines.iter().find_map(|l| l.bounds).map(|r| r.centre());
+        let home = centre.and_then(|(x, y)| {
+            blocks.iter().position(|b| b.translation.is_none() && b.bounds.is_some_and(|r| r.expanded(2.0).contains(x, y)))
+        });
+        match home {
+            Some(i) => {
+                let block = &mut blocks[i];
+                // Keep the source lines' text where they line up one to one.
+                if block.children.len() == lines.len() {
+                    for (line, source) in lines.iter_mut().zip(&block.children) {
+                        line.text = source.text.clone();
+                    }
+                }
+                block.translation = Some(translation);
+                block.children = lines;
+            }
+            None => blocks.push(OcrBlock { bounds, angle, translation: Some(translation), children: lines, ..Default::default() }),
+        }
+    }
+}
+
+/// A line's `words`: `[[start, end], …]` into the paragraph's translation.
+fn word_ranges(line: &Value) -> Vec<(usize, usize)> {
+    arr(line, "words")
+        .map(|w| {
+            w.iter()
+                .filter_map(|pair| {
+                    let p = pair.as_array()?;
+                    Some((p.first()?.as_u64()? as usize, p.get(1)?.as_u64()? as usize))
+                })
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+/// One line of a paragraph's translation, from its word ranges. The ranges
+/// count UTF-16 code units (Lens's server uses ICU strings); the gap after
+/// each word up to the next, crossing into the following line for the
+/// last, is the separator. Without word ranges the line has no text.
+fn line_text(translation: &str, words: &[(usize, usize)], next: Option<&[(usize, usize)]>) -> String {
+    let units: Vec<u16> = translation.encode_utf16().collect();
+    let slice = |a: usize, b: usize| {
+        let (a, b) = (a.min(units.len()), b.min(units.len()));
+        if a >= b {
+            String::new()
+        } else {
+            String::from_utf16_lossy(&units[a..b])
+        }
+    };
+    let mut out = String::new();
+    for (i, &(start, end)) in words.iter().enumerate() {
+        out.push_str(&slice(start, end));
+        let following = words.get(i + 1).or_else(|| next.and_then(|n| n.first()));
+        if let Some(&(next_start, _)) = following {
+            out.push_str(&slice(end, next_start));
+        }
+    }
+    out
 }
 
 /// `lens_scan --format json` output for one image: `{file, width, height,
@@ -988,6 +1083,70 @@ mod tests {
         q.preserve_line_breaks = false;
         let flat = map_daemon_result(&serde_json::from_str(BLOCKS).unwrap(), &q).unwrap();
         assert_eq!(flat.text, "第一行 第二行 下");
+    }
+
+    /// `output_format: "blocks"` with `translate_to`, trimmed from a real
+    /// chrome-lens-py 3.8 reply: one paragraph of two lines, and a
+    /// translation whose paragraph is not among the text blocks.
+    const BLOCKS_TRANSLATED: &str = r#"{
+        "translated_text": "Привет мир\nНажмите Enter",
+        "word_data": [],
+        "detected_language": "en",
+        "objects": [],
+        "translation_render_data": [
+            {"translation": "Привет мир", "source_language": "en", "target_language": "ru",
+             "lines": [
+                {"range": [0, 6], "words": [[0, 6]], "text_color_argb": 4278190080, "background_color_argb": 4294967295,
+                 "geometry": {"center_x": 0.25, "center_y": 0.1, "width": 0.3, "height": 0.1, "angle_deg": 0.0, "coordinate_type": "NORMALIZED"}},
+                {"range": [7, 10], "words": [[7, 10]], "text_color_argb": 4278190080, "background_color_argb": 4294967295,
+                 "geometry": {"center_x": 0.25, "center_y": 0.3, "width": 0.3, "height": 0.1, "angle_deg": 0.0, "coordinate_type": "NORMALIZED"}}
+             ]},
+            {"translation": "Нажмите Enter", "source_language": "en", "target_language": "ru",
+             "lines": [
+                {"range": [0, 13], "words": [[0, 7], [8, 13]],
+                 "geometry": {"center_x": 0.5, "center_y": 0.8, "width": 0.4, "height": 0.1, "angle_deg": 0.0, "coordinate_type": "NORMALIZED"}}
+             ]}
+        ],
+        "image_size": [1000, 500],
+        "text_blocks": [
+            {"text": "Hello\nworld", "lines": ["Hello", "world"],
+             "geometry": {"center_x": 0.25, "center_y": 0.2, "width": 0.3, "height": 0.3, "angle_deg": 0.0}}
+        ]
+    }"#;
+
+    #[test]
+    fn lens_block_translations_land_on_their_paragraphs() {
+        let mut q = req();
+        q.granularity = OcrGranularity::Blocks;
+        q.translate_to = Some(LangId::RUSSIAN);
+        let r = map_daemon_result(&serde_json::from_str(BLOCKS_TRANSLATED).unwrap(), &q).unwrap();
+        assert_eq!(r.text, "Hello\nworld");
+        assert_eq!(r.translation.as_deref(), Some("Привет мир\nНажмите Enter"));
+        assert_eq!(r.blocks.len(), 2, "the stray translation becomes a block of its own");
+        let b = &r.blocks[0];
+        assert_eq!(b.translation.as_deref(), Some("Привет мир"));
+        let lines: Vec<_> = b.children.iter().map(|l| (l.text.as_str(), l.translation.as_deref().unwrap())).collect();
+        assert_eq!(lines, [("Hello", "Привет"), ("world", "мир")], "source lines kept, translation split by range");
+        assert_eq!(b.children[0].bounds, Some(Rect::new(100.0, 25.0, 300.0, 50.0)));
+        let stray = &r.blocks[1];
+        assert_eq!(stray.text, "");
+        assert_eq!(stray.children[0].translation.as_deref(), Some("Нажмите Enter"));
+        assert_eq!(stray.bounds, Some(Rect::new(300.0, 375.0, 400.0, 50.0)));
+
+        // Full text asks for no structure, so none is made up.
+        q.granularity = OcrGranularity::FullText;
+        let r = map_daemon_result(&serde_json::from_str(BLOCKS_TRANSLATED).unwrap(), &q).unwrap();
+        assert!(r.blocks.iter().all(|b| b.translation.is_none()));
+    }
+
+    #[test]
+    fn translated_lines_are_cut_by_utf16_ranges() {
+        // "😀" is two UTF-16 units; the ranges count those, not chars.
+        let t = "😀 ab cd";
+        assert_eq!(line_text(t, &[(0, 2), (3, 5)], Some(&[(6, 8)])), "😀 ab ");
+        assert_eq!(line_text(t, &[(6, 8)], None), "cd");
+        assert_eq!(line_text(t, &[], None), "");
+        assert_eq!(line_text(t, &[(6, 99)], None), "cd", "a range past the end is clamped");
     }
 
     #[test]

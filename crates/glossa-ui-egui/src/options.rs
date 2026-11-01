@@ -1309,6 +1309,22 @@ fn ocr(app: &mut GlossaApp, ui: &mut egui::Ui, st: &mut OptionsState) {
         });
         ui.checkbox(&mut d.translate_after, app.t("options.ocr.translate_after"));
         ui.checkbox(&mut d.preserve_line_breaks, app.t("options.ocr.keep_line_breaks"));
+        ui.checkbox(&mut d.copy_joined_lines, app.t("options.ocr.copy_joined"));
+        {
+            use glossa_core::config::{OcrAfterSelect as A, OcrTranslateWith as T};
+            ui.label(app.t("options.ocr.after_select"));
+            ui.indent("ocr-after-select", |ui| {
+                ui.radio_value(&mut d.after_select, A::Show, app.t("options.ocr.after_show"));
+                ui.radio_value(&mut d.after_select, A::Copy, app.t("options.ocr.after_copy"));
+                ui.radio_value(&mut d.after_select, A::InPlace, app.t("options.ocr.after_in_place"));
+                ui.radio_value(&mut d.after_select, A::Ask, app.t("options.ocr.after_ask"));
+            });
+            ui.label(app.t("options.ocr.translate_with"));
+            ui.indent("ocr-translate-with", |ui| {
+                ui.radio_value(&mut d.translate_with, T::OcrEngine, app.t("options.ocr.translate_with_engine"));
+                ui.radio_value(&mut d.translate_with, T::Translator, app.t("options.ocr.translate_with_translator"));
+            });
+        }
         row(ui, &app.t("options.ocr.watch_interval"), |ui| {
             ui.add(egui::DragValue::new(&mut d.watch_interval_ms).range(200..=60000));
         });

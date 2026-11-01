@@ -47,6 +47,24 @@ for Windows and Linux.
   changes. Google Lens through
   [chrome-lens-py](https://github.com/bropines/chrome-lens-py) (its warm
   daemon, else its CLI), or any external command.
+- **OCR to the clipboard, discoverable**: *Copy text from the screen*
+  (Ctrl+Alt+C) closes the overlay at once and copies the text, with a notice
+  by the region that takes no focus ("Copied N characters" and a preview).
+  Every recognition action is in the tray menu, the main window's camera
+  button menu and Options → Hotkeys. *After selecting a region* chooses what
+  plain text recognition does: show, copy, translate in place, or ask with a
+  Snipping Tool style toolbar (Enter, C, T, I, Esc). *Join lines when
+  copying* turns hard-wrapped prose into paragraphs.
+- **Translation by Google Lens itself**: Lens's own translation is shown
+  without a second request and saved in the history under Google Lens;
+  *Translate with* can send the text to the current translator instead.
+- **Translate the screen in place**: the translation painted over the region
+  in a window laid exactly over it, block by block, on the sampled
+  background colour, in the text's colour and angle, fitted to each box (Lens
+  line by line, as Chromium's overlay does; other engines' lines grouped
+  into paragraphs and translated in one request). Also `glossa-cli ocr
+  --in-place` and `"in_place": true` on the control API's `/v1/ocr`; see
+  [docs/ocr.md](docs/ocr.md).
 - **Offline OCR on Windows**: Windows OCR (the recogniser built into Windows
   10 and 11, for the languages whose OCR pack is installed) and OneOCR (the
   Windows 11 Snipping Tool's engine, loaded from the user's own installation;
