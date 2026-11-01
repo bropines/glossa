@@ -11,14 +11,16 @@
 //!
 //! | Feature                         | Windows                         | X11                     | Wayland                                         | macOS                          |
 //! |---------------------------------|---------------------------------|-------------------------|-------------------------------------------------|--------------------------------|
-//! | Global hotkeys ([`hotkeys`])    | yes                             | yes                     | **no** — bind a compositor shortcut to the HTTP API | yes                         |
+//! | Global hotkeys ([`hotkeys`])    | yes                             | yes                     | GlobalShortcuts portal (KDE Plasma 6, GNOME 48+, Hyprland); elsewhere **no** — bind a desktop shortcut to the D-Bus or HTTP API | yes |
 //! | Read selection ([`selection`])  | UI Automation, then Ctrl+C      | PRIMARY selection       | PRIMARY via data-control (KDE, wlroots, Hyprland), else clipboard | AX `AXSelectedText`, then Cmd+C |
 //! | Replace selection               | clipboard + Ctrl+V              | clipboard + Ctrl+V      | **no** — text is left on the clipboard          | clipboard + Cmd+V              |
 //! | Synthetic input ([`input`])     | `SendInput`                     | XTest (enigo)           | **no**                                          | CGEvent (enigo), needs Accessibility |
 //! | Foreground window ([`window`])  | process, class, title, pid      | EWMH: process, class, title, pid | none                                   | best effort (xcap)             |
 //! | Caret rectangle                 | `GetGUIThreadInfo`              | none                    | none                                            | none                           |
 //! | Monitors + work area            | yes, work area excludes taskbar | RandR + `_NET_WORKAREA` | with `wayland-capture` only (work area = bounds)| yes (work area = bounds)       |
-//! | Screen capture ([`capture`])    | xcap                            | x11rb `GetImage`        | xcap with `wayland-capture`, else `grim`        | xcap, needs Screen Recording   |
+//! | Screen capture ([`capture`])    | xcap                            | x11rb `GetImage`        | xcap with `wayland-capture`, else the Screenshot portal (may ask once), else `grim`; `grim` first on wlroots | xcap, needs Screen Recording |
+//! | Desktop portals ([`portal`])    | none                            | not used                | GlobalShortcuts, Screenshot                     | none                           |
+//! | D-Bus service (`glossa_engine::dbus`) | none                      | session bus             | session bus                                     | none                           |
 //! | Autostart ([`autostart`])       | `HKCU\…\Run`                    | XDG autostart `.desktop`| XDG autostart `.desktop`                        | LaunchAgent plist              |
 //! | Audio ([`audio`])               | rodio                           | rodio (ALSA)            | rodio (ALSA)                                    | rodio                          |
 //! | Layout conversion ([`layout`])  | pure + switch foreground layout | pure                    | pure                                            | pure                           |
@@ -28,7 +30,7 @@
 //!
 //! Threading: [`hotkeys::HotkeyService`] must be created on the thread that
 //! runs the event loop on Windows (the hotkeys are bound to that thread's
-//! message queue). Everything else may be called from any thread; selection
+//! message queue); on Wayland it runs the portal on threads of its own. Everything else may be called from any thread; selection
 //! capture and screen capture block for tens to hundreds of milliseconds and
 //! belong on a worker thread, not the UI thread.
 

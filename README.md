@@ -251,8 +251,9 @@ All pages, by topic: [docs/README.md](docs/README.md)
 
 - [Command line](docs/cli.md): every `glossa-cli` command, flag, exit code and
   environment variable
-- [Control API](docs/control-api.md): driving a running Glossa over HTTP, and
-  binding hotkeys to it on Wayland, macOS or with AutoHotkey
+- [Control API](docs/control-api.md): driving a running Glossa over HTTP or
+  (on Linux) D-Bus, and binding hotkeys to it on Wayland, macOS or with
+  AutoHotkey
 - [Configuration](docs/configuration.md): every `config.toml` key, and where
   the data folder is
 - [Text recognition (OCR)](docs/ocr.md): engines, copy mode, Lens translation,
@@ -287,9 +288,14 @@ Ubuntu names). Windows binaries also cross-compile from Linux with the
 Working: everything listed under Features, on Windows (tested daily) and
 Linux X11; on macOS (Apple silicon) it is in early testing.
 
-Not yet: speech input, the update check. On Wayland,
-global hotkeys, mouse mode and reading the selection depend on the
-compositor. On macOS, vibrancy needs the OpenGL engine.
+Not yet: speech input, the update check. On Wayland, global hotkeys go
+through the desktop's shortcut portal (KDE Plasma 6, GNOME 48 and later,
+Hyprland) and screen capture through its screenshot portal or `grim`;
+elsewhere, bind a desktop shortcut to Glossa's D-Bus service or HTTP API.
+Mouse mode and reading the selection depend on the compositor, and
+"replace selection" leaves the translation on the clipboard (Wayland allows
+no typing into other programs). `glossa-cli doctor` says what works in your
+session. On macOS, vibrancy needs the OpenGL engine.
 
 Classic QTranslate service scripts and the keyless bundled services depend on
 the websites they talk to; when a site changes, a classic script breaks for

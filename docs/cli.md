@@ -622,8 +622,12 @@ Windows OCR with its language packs, Apple Vision, Tesseract with its
 languages), which modules loaded or failed, the files and folders in use,
 the proxy requests go through and whether certificates are checked against
 the system's store, the control API (switched on, and whether a Glossa,
-another program or nothing answers at its address), and whether the
-desktop program runs for this data folder.
+another program or nothing answers at its address), on Linux and the BSDs
+the [D-Bus service](control-api.md#d-bus) (switched on, and whether its name
+is owned), on Wayland what the desktop portal offers (global shortcuts and
+screenshots, with their versions: this is asked live, so it tells whether
+hotkeys can work in this session), and whether the desktop program runs for
+this data folder.
 
 Nothing is changed: a `config.toml` that does not parse is reported, not
 moved aside as the desktop program does. With `--json`, the same as one
@@ -638,7 +642,7 @@ System
   linux x86_64, display: Wayland (GNOME), desktop ubuntu:GNOME
 
 Desktop features
-  hotkeys          no      bind a compositor shortcut to the control API
+  hotkeys          partly  the desktop portal's GlobalShortcuts (GNOME 48 or later); confirmed in its dialog
   selection        partly  the clipboard only: copy first
   …
 OCR engines
@@ -647,6 +651,13 @@ OCR engines
   …
 Control API
   enabled on 127.0.0.1:60828: Glossa 0.1.0 is running
+
+D-Bus service
+  enabled, io.github.bropines.Glossa: owned (Glossa is running)
+
+Desktop portal
+  global shortcuts yes (version 1)
+  screenshot       yes (version 2)
 ```
 
 ## Environment variables
