@@ -346,12 +346,15 @@ described in [ocr.md](ocr.md).
 
 | key | type | default | what it does |
 |---|---|---|---|
-| `provider` | id | `"lens"` | The OCR engine: `lens` (Google Lens through chrome-lens-py), `windows-ocr`, `oneocr`, `command-ocr`, or a module's id. |
+| `provider` | id | `"lens"` | The OCR engine: `lens` (Google Lens through chrome-lens-py), `windows-ocr`, `oneocr`, `macos-vision`, `tesseract`, `command-ocr`, or a module's id. |
 | `language` | language | `1` (auto) | Language of the text in the picture; auto lets the engine decide. |
 | `translate_after` | bool | `true` | Translate the recognised text, into the main window's target language. |
 | `preserve_line_breaks` | bool | `true` | Keep the picture's line breaks in the text. |
 | `save_image_dir` | path | absent | Save each captured region in this folder. Absent saves nothing. |
 | `watch_interval_ms` | integer | `800` | How often a watched region is checked for changes, 200–60 000 ms. |
+| `after_select` | `"show"`, `"copy"`, `"in_place"`, `"ask"` | `"show"` | What *Text recognition* (and Enter on the selection toolbar) does once a region is selected: show the result window, copy the text to the clipboard, paint the translation over the region, or show a toolbar to choose. The dedicated actions (to the clipboard, translate, in place) ignore it. |
+| `translate_with` | `"ocr_engine"`, `"translator"` | `"ocr_engine"` | Who translates recognised text: the OCR engine itself in the same request when it can (Google Lens, recorded in history as "Google Lens"), or always the current translator. |
+| `copy_joined_lines` | bool | `false` | Join the lines of recognised text into paragraphs when copying it (prose), rather than keeping the picture's line breaks (code, lists). |
 | `lens` | table | | See [`[ocr.lens]`](#ocrlens). |
 | `oneocr` | table | | See [`[ocr.oneocr]`](#ocroneocr). |
 | `tesseract` | table | | See [`[ocr.tesseract]`](#ocrtesseract). |
@@ -455,7 +458,8 @@ in the main window's panes when it closed.
 ### `[windows]`
 
 Kept by the program: window positions and sizes, one sub-table per window
-name (`main`, `popup`, `popup-size`…).
+name (`main`, `popup`, `popup-size`, `ocr-result` for the OCR result
+window…).
 
 ```toml
 [windows.main]

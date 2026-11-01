@@ -15,6 +15,7 @@
 pub mod bundled;
 pub mod catalog;
 pub mod export;
+pub mod ocr;
 pub mod pipeline;
 pub mod server;
 
@@ -25,6 +26,7 @@ use std::sync::mpsc::{self, Receiver, Sender};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
+use glossa_core::config::OcrTranslateWith;
 use glossa_core::history::{HistoryEntry, HistoryResult};
 use glossa_core::ocr::{ImageSource, OcrGranularity, OcrRequest};
 use glossa_core::{
@@ -38,6 +40,7 @@ use parking_lot::{Mutex, RwLock};
 
 pub use catalog::{LocaleCatalog, LocaleEntry, ThemeCatalog, ThemeEntry};
 pub use export::ExportFormat;
+pub use ocr::{TranslatedBlock, TranslatedLine};
 pub use pipeline::{Pipeline, Progress, TranslateOptions, TranslateReport, TranslationOutcome};
 
 /// The presets an AI endpoint can start from, for front ends.
@@ -54,6 +57,9 @@ pub enum Slot {
     Popup,
     Dictionary,
     Ocr,
+    /// Translations made in the OCR result window, apart from recognition so
+    /// that translating there does not cancel a region being recognised.
+    OcrResult,
     Speech,
     /// A one-off request (the control API, the command line).
     Detached,
@@ -110,14 +116,63 @@ pub enum Event {
 #[derive(Debug, Clone)]
 pub struct OcrOutcome {
     pub ocr: OcrResult,
-    /// The translation: the OCR provider's own, or one made afterwards.
+    /// The translation: the OCR provider's own (under the provider's id), or
+    /// one made afterwards.
     pub translation: Option<TranslationOutcome>,
+    /// Block-by-block translations with their places, for an in-place
+    /// rendering; empty unless one was asked for.
+    pub blocks: Vec<TranslatedBlock>,
 }
 
 impl OcrOutcome {
     pub fn translated_text(&self) -> Option<&str> {
         self.translation.as_ref().map(|t| t.translation.text.as_str()).or(self.ocr.translation.as_deref())
     }
+}
+
+/// How to recognise: see [`Engine::recognize_async_with`].
+#[derive(Debug, Clone, Default)]
+pub struct RecognizeOptions {
+    /// The language in the picture; `AUTO` lets the provider decide.
+    pub lang: LangId,
+    /// Translate into this language as well.
+    pub translate_to: Option<LangId>,
+    /// This OCR provider only, no fail-over.
+    pub provider: Option<String>,
+    /// Translate block by block for painting over the picture
+    /// ([`OcrOutcome::blocks`]).
+    pub in_place: bool,
+    /// Ask for the layout too (paragraphs or lines with their places), as
+    /// joining lines by paragraph needs; `in_place` implies it.
+    pub layout: bool,
+    /// Who translates, overriding `ocr.translate_with` for this request (the
+    /// OCR result window's translator choice).
+    pub translate_with: Option<OcrTranslateWith>,
+    /// How much structure to ask for (words for hOCR or ALTO export), when
+    /// more than `in_place` and `layout` imply.
+    pub granularity: Option<OcrGranularity>,
+}
+
+/// The translation an OCR provider made in the same request, as an outcome
+/// like any other: it shows under the provider's name and goes into the
+/// history under it.
+fn provider_translation(ocr: &OcrResult, to: LangId) -> Option<TranslationOutcome> {
+    let text = ocr.translation.clone().filter(|t| !t.trim().is_empty())?;
+    let from = ocr.detected_lang.filter(|l| l.is_language()).unwrap_or(LangId::AUTO);
+    Some(TranslationOutcome {
+        translation: glossa_core::Translation {
+            text,
+            detected_from: ocr.detected_lang,
+            provider_id: ocr.provider_id.clone(),
+            elapsed_ms: ocr.elapsed_ms,
+            ..Default::default()
+        },
+        pair: LangPair::new(from, to),
+        source: ocr.text.clone(),
+        detected: None,
+        back: None,
+        failed: Vec::new(),
+    })
 }
 
 /// A provider, as the settings page lists it.
@@ -734,7 +789,7 @@ impl Engine {
     pub fn translate_async(&self, slot: Slot, text: String, pair: LangPair, mut opts: TranslateOptions) -> u64 {
         let (job, cancel) = self.begin(slot);
         // Windows that show translations get them as they are written.
-        if opts.progress.is_none() && matches!(slot, Slot::Main | Slot::Popup) {
+        if opts.progress.is_none() && matches!(slot, Slot::Main | Slot::Popup | Slot::OcrResult) {
             let (me, cancel) = (self.clone(), cancel.clone());
             opts.progress = Some(Progress::new(move |text| {
                 if !cancel.is_cancelled() && me.current(slot, job) {
@@ -748,7 +803,7 @@ impl Engine {
             if cancel.is_cancelled() || !me.current(slot, job) {
                 return;
             }
-            if let (Ok(out), true) = (&result, matches!(slot, Slot::Main | Slot::Popup)) {
+            if let (Ok(out), true) = (&result, matches!(slot, Slot::Main | Slot::Popup | Slot::OcrResult)) {
                 me.record_history(out);
             }
             me.emit(Event::Translated { slot, job, result: result.map(Arc::new).map_err(Arc::new) });
@@ -839,10 +894,11 @@ impl Engine {
     }
 
     /// Recognise text in an image, translating it when `translate_to` is set
-    /// (by the OCR provider itself if it can, else by the translation
-    /// pipeline). Blocking.
+    /// (by the OCR provider itself if it can and `ocr.translate_with` allows,
+    /// else by the translation pipeline). Blocking.
     pub fn recognize(&self, image: Vec<u8>, lang: LangId, translate_to: Option<LangId>) -> Result<OcrOutcome> {
-        self.recognize_with(image, lang, translate_to, None, &CancelToken::new())
+        let opts = RecognizeOptions { lang, translate_to, ..Default::default() };
+        self.recognize_with(image, &opts, &CancelToken::new())
     }
 
     /// [`Engine::recognize`] with one OCR provider (`windows-ocr`, `oneocr`,
@@ -854,7 +910,29 @@ impl Engine {
         lang: LangId,
         translate_to: Option<LangId>,
     ) -> Result<OcrOutcome> {
-        self.recognize_with(image, lang, translate_to, Some(provider), &CancelToken::new())
+        let opts = RecognizeOptions { lang, translate_to, provider: Some(provider.to_owned()), ..Default::default() };
+        self.recognize_with(image, &opts, &CancelToken::new())
+    }
+
+    /// Recognise and translate block by block, for painting the translation
+    /// over the picture: [`OcrOutcome::blocks`] holds each paragraph's
+    /// translation and place. Blocking.
+    pub fn recognize_in_place(
+        &self,
+        image: Vec<u8>,
+        lang: LangId,
+        to: LangId,
+        provider: Option<&str>,
+    ) -> Result<OcrOutcome> {
+        let opts = RecognizeOptions {
+            lang,
+            translate_to: Some(to),
+            provider: provider.map(str::to_owned),
+            in_place: true,
+            layout: true,
+            ..Default::default()
+        };
+        self.recognize_with(image, &opts, &CancelToken::new())
     }
 
     /// [`Engine::recognize`] asking the provider for `granularity` (words
@@ -868,29 +946,22 @@ impl Engine {
         provider: Option<&str>,
         granularity: OcrGranularity,
     ) -> Result<OcrOutcome> {
-        self.recognize_granular(image, lang, translate_to, provider, granularity, &CancelToken::new())
+        let opts = RecognizeOptions {
+            lang,
+            translate_to,
+            provider: provider.map(str::to_owned),
+            granularity: Some(granularity),
+            ..Default::default()
+        };
+        self.recognize_with(image, &opts, &CancelToken::new())
     }
 
-    fn recognize_with(
-        &self,
-        image: Vec<u8>,
-        lang: LangId,
-        translate_to: Option<LangId>,
-        only: Option<&str>,
-        cancel: &CancelToken,
-    ) -> Result<OcrOutcome> {
-        self.recognize_granular(image, lang, translate_to, only, OcrGranularity::FullText, cancel)
+    /// Recognise with every option ([`RecognizeOptions`]). Blocking.
+    pub fn recognize_with_options(&self, image: Vec<u8>, opts: &RecognizeOptions) -> Result<OcrOutcome> {
+        self.recognize_with(image, opts, &CancelToken::new())
     }
 
-    fn recognize_granular(
-        &self,
-        image: Vec<u8>,
-        lang: LangId,
-        translate_to: Option<LangId>,
-        only: Option<&str>,
-        granularity: OcrGranularity,
-        cancel: &CancelToken,
-    ) -> Result<OcrOutcome> {
+    fn recognize_with(&self, image: Vec<u8>, opts: &RecognizeOptions, cancel: &CancelToken) -> Result<OcrOutcome> {
         let cfg = self.config();
         if let Some(dir) = &cfg.ocr.save_image_dir {
             let name = format!("glossa-{}.png", glossa_core::now_unix());
@@ -900,7 +971,7 @@ impl Engine {
         }
         let registry = self.registry();
         let http = self.inner.http.read().clone();
-        let providers: Vec<Arc<dyn Provider>> = match only {
+        let providers: Vec<Arc<dyn Provider>> = match opts.provider.as_deref() {
             Some(id) => {
                 let p = registry.get(id).ok_or_else(|| Error::NoSuchModule(id.to_owned()))?;
                 if !p.info().capabilities.contains(Capabilities::OCR) {
@@ -923,11 +994,21 @@ impl Engine {
         if providers.is_empty() {
             return Err(Error::NoProvider("text recognition"));
         }
+        let to = opts.translate_to.filter(|l| l.is_language());
         let mut req = OcrRequest::new(ImageSource::Bytes(image));
-        req.lang = lang;
-        req.translate_to = translate_to;
+        req.lang = opts.lang;
+        // The provider translates in the same request only when allowed to;
+        // otherwise the current translator does it afterwards.
+        let translate_with = opts.translate_with.unwrap_or(cfg.ocr.translate_with);
+        req.translate_to = to.filter(|_| translate_with == OcrTranslateWith::OcrEngine);
         req.preserve_line_breaks = cfg.ocr.preserve_line_breaks;
-        req.granularity = granularity;
+        // An explicit granularity wins; in-place translation and joining
+        // lines by paragraph need at least the blocks.
+        req.granularity = opts.granularity.unwrap_or(if opts.in_place || opts.layout {
+            OcrGranularity::Blocks
+        } else {
+            OcrGranularity::FullText
+        });
         // The first engine's error is the one reported: it is the one the
         // user chose, and the fallbacks' complaints (not installed, not
         // configured) would only hide it.
@@ -936,13 +1017,13 @@ impl Engine {
             if cancel.is_cancelled() {
                 return Err(Error::Cancelled);
             }
-            let opts = glossa_modules::provider::resolve_options(
+            let opts_values = glossa_modules::provider::resolve_options(
                 provider.options(),
                 cfg.services.options.get(&provider.info().id),
             );
             let host = Host {
                 http: http.as_ref(),
-                options: &opts,
+                options: &opts_values,
                 ui_language: LangId::ENGLISH,
                 preferred_domain: &cfg.advanced.preferred_domain,
                 cancel,
@@ -955,19 +1036,22 @@ impl Engine {
                     if ocr.is_empty() {
                         return Err(Error::NoTextRecognised);
                     }
-                    // Translate ourselves when asked and the provider did not.
-                    let translation = match translate_to {
-                        Some(to) if ocr.translation.as_deref().is_none_or(|t| t.trim().is_empty()) => {
-                            let from = ocr.detected_lang.filter(|l| l.is_language()).unwrap_or(LangId::AUTO);
-                            self.with_pipeline(cancel, |p| {
-                                p.translate(&ocr.text, LangPair::new(from, to), &TranslateOptions::default())
-                            })
-                            .map_err(|e| tracing::debug!("translating the OCR text failed: {e}"))
-                            .ok()
+                    if req.translate_to.is_none() {
+                        // A provider that translated unasked is not what the
+                        // user chose.
+                        ocr.translation = None;
+                        for b in &mut ocr.blocks {
+                            b.translation = None;
                         }
-                        _ => None,
+                    }
+                    let Some(to) = to else {
+                        return Ok(OcrOutcome { ocr, translation: None, blocks: Vec::new() });
                     };
-                    return Ok(OcrOutcome { ocr, translation });
+                    return Ok(if opts.in_place {
+                        self.translate_in_place(ocr, to, cancel)
+                    } else {
+                        self.translate_recognised(ocr, to, cancel)
+                    });
                 }
                 Err(Error::Cancelled) => return Err(Error::Cancelled),
                 Err(e) => {
@@ -983,13 +1067,118 @@ impl Engine {
         Err(first.unwrap_or(Error::NoProvider("text recognition")))
     }
 
+    /// The translation of recognised text: the provider's own when it made
+    /// one, else the pipeline's. A failed translation leaves the text alone.
+    fn translate_recognised(&self, ocr: OcrResult, to: LangId, cancel: &CancelToken) -> OcrOutcome {
+        if let Some(own) = provider_translation(&ocr, to) {
+            return OcrOutcome { ocr, translation: Some(own), blocks: Vec::new() };
+        }
+        let from = ocr.detected_lang.filter(|l| l.is_language()).unwrap_or(LangId::AUTO);
+        let translation = self
+            .with_pipeline(cancel, |p| p.translate(&ocr.text, LangPair::new(from, to), &TranslateOptions::default()))
+            .map_err(|e| tracing::debug!("translating the OCR text failed: {e}"))
+            .ok();
+        OcrOutcome { ocr, translation, blocks: Vec::new() }
+    }
+
+    /// Block-by-block translations: the provider's own (Lens), else each
+    /// paragraph through the current translator.
+    fn translate_in_place(&self, ocr: OcrResult, to: LangId, cancel: &CancelToken) -> OcrOutcome {
+        let own = ocr::provider_blocks(&ocr);
+        if !own.is_empty() {
+            let translation = provider_translation(&ocr, to);
+            return OcrOutcome { ocr, translation, blocks: own };
+        }
+        let paragraphs = ocr::paragraphs(&ocr);
+        if paragraphs.is_empty() {
+            // No geometry to paint on (an engine that returns text only).
+            return self.translate_recognised(ocr, to, cancel);
+        }
+        let texts: Vec<String> = paragraphs.iter().map(|p| p.text.clone()).collect();
+        let from = ocr.detected_lang.filter(|l| l.is_language()).unwrap_or(LangId::AUTO);
+        match self.translate_texts(&texts, LangPair::new(from, to), cancel) {
+            Ok((translated, outcome)) => {
+                let blocks = paragraphs
+                    .into_iter()
+                    .zip(translated)
+                    .map(|(p, t)| ocr::TranslatedBlock {
+                        source: p.text,
+                        translation: t,
+                        bounds: p.bounds,
+                        angle: p.angle,
+                        lines: Vec::new(),
+                    })
+                    .collect();
+                OcrOutcome { ocr, translation: Some(outcome), blocks }
+            }
+            Err(e) => {
+                tracing::debug!("translating the OCR blocks failed: {e}");
+                OcrOutcome { ocr, translation: None, blocks: Vec::new() }
+            }
+        }
+    }
+
+    /// Translate several texts with the current translator, keeping them
+    /// apart: one request with the texts as separate paragraphs, or, when
+    /// the translator merges them, one request per text. Blocking.
+    pub fn translate_blocks(&self, texts: &[String], pair: LangPair) -> Result<Vec<String>> {
+        self.translate_texts(texts, pair, &CancelToken::new()).map(|(t, _)| t)
+    }
+
+    /// [`Engine::translate_blocks`], also returning the whole translation as
+    /// one outcome (the texts and their translations joined by blank lines),
+    /// for the history and for showing it as text.
+    fn translate_texts(
+        &self,
+        texts: &[String],
+        pair: LangPair,
+        cancel: &CancelToken,
+    ) -> Result<(Vec<String>, TranslationOutcome)> {
+        if texts.is_empty() {
+            return Err(Error::EmptyInput);
+        }
+        let opts = TranslateOptions::default();
+        let joined = ocr::batch(texts);
+        let mut whole = self.with_pipeline(cancel, |p| p.translate(&joined, pair, &opts))?;
+        if let Some(parts) = ocr::unbatch(&whole.translation.text, texts.len()) {
+            return Ok((parts, whole));
+        }
+        tracing::debug!(blocks = texts.len(), "the translator merged the paragraphs; translating them one by one");
+        // One by one, in the direction the batch settled on, so each short
+        // text is not detected again on its own.
+        let pair = LangPair::new(whole.pair.from, whole.pair.to);
+        let mut parts = Vec::with_capacity(texts.len());
+        for t in texts {
+            if cancel.is_cancelled() {
+                return Err(Error::Cancelled);
+            }
+            let out = self.with_pipeline(cancel, |p| p.translate(t, pair, &opts))?;
+            parts.push(out.translation.text);
+        }
+        whole.translation.text = parts.join("\n\n");
+        Ok((parts, whole))
+    }
+
+    /// Recognise on a worker; the result arrives as [`Event::Recognized`].
+    /// Results in [`Slot::Ocr`] that carry a translation go into the
+    /// history.
     pub fn recognize_async(&self, slot: Slot, image: Vec<u8>, lang: LangId, translate_to: Option<LangId>) -> u64 {
+        self.recognize_async_with(slot, image, RecognizeOptions { lang, translate_to, ..Default::default() })
+    }
+
+    /// [`Engine::recognize_async`] with every option.
+    pub fn recognize_async_with(&self, slot: Slot, image: Vec<u8>, opts: RecognizeOptions) -> u64 {
         let (job, cancel) = self.begin(slot);
         let me = self.clone();
         self.spawn("ocr", move || {
-            let result = me.recognize_with(image, lang, translate_to, None, &cancel);
+            let result = me.recognize_with(image, &opts, &cancel);
             if cancel.is_cancelled() || !me.current(slot, job) {
                 return;
+            }
+            if let (Ok(out), Slot::Ocr) = (&result, slot) {
+                if let Some(t) = &out.translation {
+                    me.record_history(t);
+                }
             }
             me.emit(Event::Recognized { slot, job, result: result.map(Arc::new).map_err(Arc::new) });
         });
@@ -1601,6 +1790,62 @@ mod tests {
             .unwrap();
         assert_eq!(out.translation.text, "hello");
         std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn blocks_are_translated_in_one_request_or_one_by_one() {
+        let (e, dir) = engine("blocks");
+        let classic = dir.join("QTranslate");
+        std::fs::create_dir_all(classic.join("Data")).unwrap();
+        std::fs::write(classic.join("Data").join("Options.json"), "{}").unwrap();
+        // One translator keeps the paragraphs apart, the other runs them
+        // together (as some do with short texts).
+        for (name, body) in [("Keeps", "a.toUpperCase()"), ("Merges", "a.replace(/\\s+/g, ' ').toUpperCase()")] {
+            let folder = classic.join("Services").join(name);
+            std::fs::create_dir_all(&folder).unwrap();
+            std::fs::write(
+                folder.join("Service.js"),
+                format!(
+                    r#"function serviceHeader(){{return new ServiceHeader(900,"{name}","",Capability.TRANSLATE)}}
+                       function serviceHost(){{return "https://tr.test"}}
+                       SupportedLanguages=[-1,"auto"]; SupportedLanguages[17]="en"; SupportedLanguages[46]="ru";
+                       function serviceTranslateRequest(a,b,c){{return new RequestData(HttpMethod.UNDEFINED)}}
+                       function serviceTranslateResponse(a,b,c,d){{return new ResponseData({body},c,d)}}"#
+                ),
+            )
+            .unwrap();
+        }
+        e.import_classic(&classic).unwrap();
+        let texts = vec!["open the\nsettings".to_owned(), "press enter".to_owned()];
+        let pair = LangPair::new(LangId::ENGLISH, LangId::RUSSIAN);
+        for id in ["qt-keeps", "qt-merges"] {
+            e.update_config(|c| {
+                c.services.active = id.into();
+                c.services.fail_over = false;
+            })
+            .unwrap();
+            let out = e.translate_blocks(&texts, pair).unwrap();
+            assert_eq!(out, ["OPEN THE SETTINGS", "PRESS ENTER"], "{id}");
+        }
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn a_provider_translation_counts_as_the_providers_own() {
+        let ocr = OcrResult {
+            text: "Hello".into(),
+            translation: Some("Привет".into()),
+            detected_lang: Some(LangId::ENGLISH),
+            provider_id: "lens".into(),
+            ..Default::default()
+        };
+        let t = provider_translation(&ocr, LangId::RUSSIAN).unwrap();
+        assert_eq!(t.translation.provider_id, "lens", "shown and recorded under Lens");
+        assert_eq!(t.translation.text, "Привет");
+        assert_eq!(t.pair, LangPair::new(LangId::ENGLISH, LangId::RUSSIAN));
+        assert_eq!(t.source, "Hello");
+        let blank = OcrResult { translation: Some(" ".into()), ..ocr };
+        assert!(provider_translation(&blank, LangId::RUSSIAN).is_none());
     }
 
     #[test]

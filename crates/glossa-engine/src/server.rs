@@ -15,8 +15,9 @@
 //! POST /v1/detect      {"text"}
 //! POST /v1/dictionary  {"text","from"?,"to"?,"service"?}
 //! POST /v1/ocr         image bytes (image/*), or {"image_base64","lang"?,"translate_to"?,
-//!                      "engine"?,"format"?}; format text|json|hocr|alto returns
-//!                      that document (json: the full layout) instead of the summary
+//!                      "engine"?,"format"?,"in_place"?}; format text|json|hocr|alto returns
+//!                      that document (json: the full layout) instead of the summary;
+//!                      in_place translates block by block, each with its box, under "blocks"
 //! POST /v1/speak       {"text","lang"?,"slow"?}            -> audio bytes
 //! GET|POST /v1/action/<action>?text=…   ask the UI to act (show_popup, text_recognition…)
 //! ```
@@ -512,9 +513,14 @@ fn route(engine: &Engine, req: &mut Request) -> Reply {
                     Err(e) => Reply::from_ocr_error(&e),
                 };
             }
-            let result = match service.as_deref() {
-                Some(id) => engine.recognize_using(id, image, lang, to),
-                None => engine.recognize(image, lang, to),
+            let in_place = tri!(bool_param(&body, &url, "in_place")).unwrap_or(false);
+            let result = match (in_place, service.as_deref()) {
+                (true, service) => {
+                    let to = to.unwrap_or(engine.config().general.first_language);
+                    engine.recognize_in_place(image, lang, to, service)
+                }
+                (false, Some(id)) => engine.recognize_using(id, image, lang, to),
+                (false, None) => engine.recognize(image, lang, to),
             };
             match result {
                 Ok(out) => Reply::json(200, ocr_summary(&out)),
@@ -565,6 +571,11 @@ pub fn ocr_summary(out: &crate::OcrOutcome) -> Value {
         "detected": out.ocr.detected_lang.map(|l| l.bcp47()),
         "service": out.ocr.provider_id,
         "elapsed_ms": out.ocr.elapsed_ms,
+        // Who translated: `lens` when Google Lens translated the picture itself.
+        "translator": out.translation.as_ref().map(|t| t.translation.provider_id.clone()),
+        "image_size": out.ocr.image_size,
+        // Filled for an in-place translation: each block with its place.
+        "blocks": out.blocks,
     })
 }
 

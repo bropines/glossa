@@ -36,6 +36,20 @@ pub enum Icon {
     Open,
     Translate,
     Globe,
+    /// A floppy disk: save to a file.
+    Save,
+    /// A framed landscape: a picture.
+    Image,
+    /// A picture with lines of text laid over it: translate in place.
+    Overlay,
+    /// Crop marks: select a region again.
+    Crop,
+    /// Boxes inside a frame: show where text was found.
+    Boxes,
+    /// Arrows to opposite corners: make larger.
+    Expand,
+    /// Arrows to the centre: make smaller.
+    Shrink,
 }
 
 /// Draw `icon` into `rect`.
@@ -206,7 +220,101 @@ pub fn paint(painter: &egui::Painter, rect: Rect, icon: Icon, color: Color32) {
                 .collect();
             poly(mer, false);
         }
+        Icon::Save => {
+            poly(vec![p(2.5, 2.5), p(11.5, 2.5), p(13.5, 4.5), p(13.5, 13.5), p(2.5, 13.5)], true);
+            poly(vec![p(5.0, 2.5), p(5.0, 6.0), p(10.5, 6.0), p(10.5, 2.5)], false);
+            painter.rect_stroke(Rect::from_min_max(p(5.0, 9.0), p(11.0, 13.5)), 0.5 * u, st, egui::StrokeKind::Middle);
+        }
+        Icon::Image => {
+            painter.rect_stroke(Rect::from_min_max(p(1.5, 2.5), p(14.5, 13.5)), 1.0 * u, st, egui::StrokeKind::Middle);
+            poly(vec![p(2.0, 12.5), p(6.0, 7.5), p(9.0, 10.5), p(10.5, 9.0), p(14.0, 12.5)], false);
+            painter.circle_stroke(p(10.8, 5.6), 1.3 * u, st);
+        }
+        Icon::Overlay => {
+            painter.rect_stroke(Rect::from_min_max(p(1.5, 2.5), p(14.5, 13.5)), 1.0 * u, st, egui::StrokeKind::Middle);
+            painter.rect_filled(Rect::from_min_max(p(4.0, 5.0), p(12.0, 7.0)), 0.5 * u, color);
+            painter.rect_filled(Rect::from_min_max(p(4.0, 9.0), p(9.5, 11.0)), 0.5 * u, color);
+        }
+        Icon::Crop => {
+            poly(vec![p(4.5, 1.5), p(4.5, 11.5), p(14.5, 11.5)], false);
+            poly(vec![p(1.5, 4.5), p(11.5, 4.5), p(11.5, 14.5)], false);
+        }
+        Icon::Boxes => {
+            painter.rect_stroke(Rect::from_min_max(p(1.5, 1.5), p(14.5, 14.5)), 1.0 * u, st, egui::StrokeKind::Middle);
+            painter.rect_stroke(Rect::from_min_max(p(4.0, 4.0), p(12.0, 7.0)), 0.0, st, egui::StrokeKind::Middle);
+            painter.rect_stroke(Rect::from_min_max(p(4.0, 9.0), p(9.5, 12.0)), 0.0, st, egui::StrokeKind::Middle);
+        }
+        Icon::Expand => {
+            line(p(9.5, 6.5), p(13.5, 2.5));
+            poly(vec![p(9.5, 2.5), p(13.5, 2.5), p(13.5, 6.5)], false);
+            line(p(6.5, 9.5), p(2.5, 13.5));
+            poly(vec![p(2.5, 9.5), p(2.5, 13.5), p(6.5, 13.5)], false);
+        }
+        Icon::Shrink => {
+            line(p(9.5, 6.5), p(13.5, 2.5));
+            poly(vec![p(9.5, 2.5), p(9.5, 6.5), p(13.5, 6.5)], false);
+            line(p(6.5, 9.5), p(2.5, 13.5));
+            poly(vec![p(2.5, 9.5), p(6.5, 9.5), p(6.5, 13.5)], false);
+        }
     }
+}
+
+/// The plate under a flat icon button the pointer is on: the theme's caption
+/// button plate when it has one, else a faint fill of the border colour.
+fn hover_plate(look: &Look, pressed: bool) -> Color32 {
+    let plate =
+        look.theme.window_button.get(WidgetState::Hover).back.map(crate::style::c).unwrap_or_else(|| look.border());
+    plate.gamma_multiply(if pressed { 0.85 } else { 0.6 })
+}
+
+/// A flat command button: an icon and a label beside it, a plate under the
+/// pointer, as in a WinUI command bar. An empty `label` makes it an icon
+/// button of the same height. `tooltip` (with the shortcut, say) shows on
+/// hover.
+pub fn command_button(ui: &mut Ui, look: &Look, icon: Icon, label: &str, tooltip: &str, enabled: bool) -> Response {
+    let icon_size = (16.0 * look.icon_scale).round();
+    let pad = 8.0;
+    let height = ui.spacing().interact_size.y.max(icon_size + 8.0).round();
+    let font = egui::TextStyle::Button.resolve(ui.style());
+    let galley = (!label.is_empty()).then(|| ui.painter().layout_no_wrap(label.to_owned(), font, Color32::PLACEHOLDER));
+    let width = match &galley {
+        Some(g) => (pad + icon_size + 6.0 + g.size().x + pad).round(),
+        None => height,
+    };
+    let (rect, mut resp) =
+        ui.allocate_exact_size(vec2(width, height), if enabled { Sense::click() } else { Sense::hover() });
+    if ui.is_rect_visible(rect) {
+        let state = if !enabled {
+            WidgetState::Disabled
+        } else if resp.is_pointer_button_down_on() {
+            WidgetState::Pressed
+        } else if resp.hovered() {
+            WidgetState::Hover
+        } else {
+            WidgetState::Normal
+        };
+        if matches!(state, WidgetState::Hover | WidgetState::Pressed) {
+            let radius = look.theme.metrics.button_radius.max(3.0);
+            ui.painter().rect_filled(rect, radius, hover_plate(look, state == WidgetState::Pressed));
+        }
+        let icon_rect = match &galley {
+            Some(_) => Rect::from_center_size(
+                pos2(rect.left() + pad + icon_size / 2.0, rect.center().y),
+                vec2(icon_size, icon_size),
+            ),
+            None => Rect::from_center_size(rect.center(), vec2(icon_size, icon_size)),
+        };
+        paint(ui.painter(), icon_rect, icon, look.icon(state));
+        if let Some(g) = galley {
+            let colour = if enabled { look.text() } else { look.weak_text() };
+            let at = pos2(icon_rect.right() + 6.0, rect.center().y - g.size().y / 2.0);
+            ui.painter().galley(at, g, colour);
+        }
+    }
+    if !tooltip.is_empty() {
+        resp = resp.on_hover_text(tooltip);
+    }
+    resp
 }
 
 pub fn sized_button(ui: &mut Ui, look: &Look, icon: Icon, tooltip: &str, size: f32, enabled: bool) -> Response {
@@ -224,14 +332,7 @@ pub fn sized_button(ui: &mut Ui, look: &Look, icon: Icon, tooltip: &str, size: f
             WidgetState::Normal
         };
         if enabled && resp.hovered() {
-            let plate = look
-                .theme
-                .window_button
-                .get(WidgetState::Hover)
-                .back
-                .map(crate::style::c)
-                .unwrap_or_else(|| look.border());
-            ui.painter().rect_filled(rect, 3.0, plate.gamma_multiply(0.6));
+            ui.painter().rect_filled(rect, 3.0, hover_plate(look, resp.is_pointer_button_down_on()));
         }
         paint(ui.painter(), rect.shrink(size * 0.17), icon, look.icon(state));
     }
@@ -278,6 +379,13 @@ mod tests {
                 Icon::Open,
                 Icon::Translate,
                 Icon::Globe,
+                Icon::Save,
+                Icon::Image,
+                Icon::Overlay,
+                Icon::Crop,
+                Icon::Boxes,
+                Icon::Expand,
+                Icon::Shrink,
             ] {
                 for s in [8.0, 16.0, 48.0] {
                     paint(painter, Rect::from_min_size(pos2(0.0, 0.0), vec2(s, s)), icon, Color32::WHITE);

@@ -3,12 +3,13 @@
 //! A click toggles mouse mode, as the classic program did (or shows the main
 //! window, if so configured); a double click shows the main window; right
 //! click opens the classic menu (text recognition, dictionary, history,
-//! mouse mode and global hotkeys on/off, options, about, exit). The icon is
-//! drawn in the theme's accent colour, another hue while mouse mode is on,
-//! and on Windows the menu is dark or light with the theme
-//! (`glossa_platform::appearance::set_menu_theme`). Events reach the app
-//! through channels and wake its loop, so they work while every window is
-//! hidden.
+//! mouse mode and global hotkeys on/off, options, about, exit), with copy
+//! mode, in-place translation and the other recognition actions beside text
+//! recognition. The icon is drawn in the theme's accent colour, another hue
+//! while mouse mode is on, and on Windows the menu is dark or light with the
+//! theme (`glossa_platform::appearance::set_menu_theme`). Events reach the
+//! app through channels and wake its loop, so they work while every window
+//! is hidden.
 //!
 //! On Linux the indicator needs GTK running on the thread that owns it, so
 //! the icon lives on a thread of its own there.
@@ -16,7 +17,7 @@
 use std::sync::mpsc::{self, Receiver};
 
 use glossa_core::{Action, Locale};
-use tray_icon::menu::{CheckMenuItem, Menu, MenuEvent, MenuItem, PredefinedMenuItem};
+use tray_icon::menu::{CheckMenuItem, Menu, MenuEvent, MenuItem, PredefinedMenuItem, Submenu};
 use tray_icon::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
 
 use crate::app::GlossaApp;
@@ -90,10 +91,31 @@ fn build_menu(locale: &Locale) -> (Menu, CheckMenuItem, CheckMenuItem) {
     let item = |id: &str, key: &str| MenuItem::with_id(id, locale.get(key), true, None);
     let hotkeys = CheckMenuItem::with_id("hotkeys", locale.get("tray.hotkeys"), true, true, None);
     let mouse = CheckMenuItem::with_id("mouse", locale.get("tray.mouse_mode"), true, false, None);
+    // Recognition actions go by their action id; the classic item stays
+    // first, with copy mode and in-place translation next to it where they
+    // are seen, and the rest a level down.
+    let action = |a: Action, key: &str| MenuItem::with_id(format!("action:{}", a.id()), locale.get(key), true, None);
+    let more = Submenu::with_items(
+        locale.get("ocr.menu.more"),
+        true,
+        &[
+            &action(Action::RecognizeAndTranslate, "ocr.menu.recognize_translate"),
+            &action(Action::WatchRegion, "ocr.menu.watch"),
+            &action(Action::RepeatLastRecognition, "ocr.menu.repeat"),
+        ],
+    );
+    let more = more.ok();
+    let mut ocr_items: Vec<Box<dyn tray_icon::menu::IsMenuItem>> = vec![
+        Box::new(item("ocr", "tray.text_recognition")),
+        Box::new(action(Action::RecognizeToClipboard, "ocr.menu.copy")),
+        Box::new(action(Action::TranslateRegionInPlace, "ocr.menu.in_place")),
+    ];
+    if let Some(m) = more {
+        ocr_items.push(Box::new(m));
+    }
+    let _ = menu.append_items(&[&item("show", "tray.show"), &PredefinedMenuItem::separator()]);
+    let _ = menu.append_items(&ocr_items.iter().map(|b| b.as_ref()).collect::<Vec<_>>());
     let _ = menu.append_items(&[
-        &item("show", "tray.show"),
-        &PredefinedMenuItem::separator(),
-        &item("ocr", "tray.text_recognition"),
         &item("dictionary", "tray.dictionary"),
         &item("history", "tray.history"),
         &item("keyboard", "tray.keyboard"),
@@ -123,7 +145,7 @@ fn install_handlers(wake: WakeFn) -> Receiver<TrayEvent> {
             "options" => Some(TrayEvent::Action(Action::ShowOptions)),
             "about" => Some(TrayEvent::About),
             "exit" => Some(TrayEvent::Action(Action::Quit)),
-            _ => None,
+            other => other.strip_prefix("action:").and_then(Action::from_id).map(TrayEvent::Action),
         };
         if let Some(ev) = ev {
             let _ = tx.send(ev);

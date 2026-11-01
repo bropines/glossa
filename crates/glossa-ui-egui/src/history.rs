@@ -122,6 +122,10 @@ fn body(app: &mut GlossaApp, ui: &mut egui::Ui, st: &mut HistoryState, open: &mu
         // lines under the source start where the source does.
         let icon = 24.0;
         let indent = (icon * look.icon_scale).round() + ui.spacing().item_spacing.x;
+        // Entries name their translator by id; show its name ("Google Lens"
+        // for a translation Lens made of a picture).
+        let registry = app.engine.registry();
+        let name_of = |id: &str| registry.get(id).map(|p| p.info().name.clone()).unwrap_or_else(|| id.to_owned());
         egui::ScrollArea::vertical().id_salt("hist-list").show(ui, |ui| {
             ui.set_width(ui.available_width());
             for e in &st.entries {
@@ -170,7 +174,7 @@ fn body(app: &mut GlossaApp, ui: &mut egui::Ui, st: &mut HistoryState, open: &mu
                                     ui.label(
                                         RichText::new(format!(
                                             "{} · {} → {}",
-                                            r.provider_id,
+                                            name_of(&r.provider_id),
                                             r.from.english_name(),
                                             r.to.english_name()
                                         ))

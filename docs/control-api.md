@@ -258,6 +258,7 @@ Two ways to send the image:
 | `translate_to` | none | Translate the recognised text into this language. |
 | `engine` | `[ocr] provider`, with fail-over | Use only this OCR engine (`lens`, `windows-ocr`, `oneocr`, `macos-vision`, `tesseract`, `command-ocr`, a module's id), as `glossa-cli ocr -e` does. `service` is accepted as another name. An id that is not an OCR engine is a 400. |
 | `format` | none | `text`, `json` (the full layout: blocks, lines, words with boxes), `hocr` or `alto`: answer with that document instead of the summary below. |
+| `in_place` | `false` | Translate block by block, each block with its box, under `blocks` (into `translate_to`, else the first language). |
 
 ```console
 $ curl -s -H "Authorization: Bearer $T" -H "Content-Type: image/png" \
@@ -268,8 +269,12 @@ $ curl -s -H "Authorization: Bearer $T" -H "Content-Type: image/png" \
 The summary is the same object `glossa-cli --json ocr` prints.
 `translation` is null without `translate_to`; `detected` is the language the
 engine reported, or null; `service` is the engine that read the image and
-`elapsed_ms` how long it took. An engine that is not installed or not set
-up answers 503 (see [Errors](#errors)). Engines and their setup:
+`elapsed_ms` how long it took. `translator` is who translated (`lens` when
+Google Lens translated the picture itself, as `[ocr] translate_with`
+allows), `image_size` the picture's size, and `blocks` is filled with
+`in_place` (the shape is described under [`glossa-cli ocr`](cli.md#ocr)). An
+engine that is not installed or not set up answers 503 (see
+[Errors](#errors)). Engines and their setup:
 [ocr.md](ocr.md).
 
 ### POST /v1/speak
@@ -329,7 +334,8 @@ The action ids are listed in [cli.md](cli.md#action): `show_main_window`,
 `translate_clipboard_in_popup`, `dictionary_from_clipboard`,
 `convert_layout`, `listen_translation`, `text_recognition`, `speech_input`,
 `recognize_and_translate`, `repeat_last_recognition`,
-`recognize_to_clipboard`, `watch_region`, `swap_languages`, `next_service`,
+`recognize_to_clipboard`, `watch_region`, `translate_region_in_place`,
+`swap_languages`, `next_service`,
 `show_options`, `quit`.
 
 [`glossa-cli action`](cli.md#action) sends these requests for you, reading

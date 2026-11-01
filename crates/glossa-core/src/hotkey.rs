@@ -52,6 +52,10 @@ pub enum Action {
     /// Pin a region and re-recognise it whenever its pixels change — live
     /// subtitles for a game or a video.
     WatchRegion,
+    /// Region OCR translated over the picture itself, block by block, in a
+    /// window laid exactly over the region (the way Chrome's Lens overlay
+    /// does it).
+    TranslateRegionInPlace,
     /// Swap the source and target language of the main window.
     SwapLanguages,
     /// Cycle to the next enabled translation service.
@@ -83,7 +87,7 @@ impl Action {
         Action::SpeechInput,
     ];
 
-    pub const ALL: [Action; 25] = [
+    pub const ALL: [Action; 26] = [
         Action::ShowMainWindow,
         Action::ShowPopup,
         Action::ShowDictionary,
@@ -105,6 +109,7 @@ impl Action {
         Action::RepeatLastRecognition,
         Action::RecognizeToClipboard,
         Action::WatchRegion,
+        Action::TranslateRegionInPlace,
         Action::SwapLanguages,
         Action::NextService,
         Action::ShowOptions,
@@ -173,6 +178,7 @@ impl Action {
             Action::RepeatLastRecognition => "Repeat the last recognised region",
             Action::RecognizeToClipboard => "Recognise a screen region to the clipboard",
             Action::WatchRegion => "Watch a screen region and translate changes",
+            Action::TranslateRegionInPlace => "Translate a screen region in place",
             Action::SwapLanguages => "Swap translation direction",
             Action::NextService => "Switch to the next service",
             Action::ShowOptions => "Show options",
@@ -204,6 +210,7 @@ impl Action {
             Action::RepeatLastRecognition => "repeat_last_recognition",
             Action::RecognizeToClipboard => "recognize_to_clipboard",
             Action::WatchRegion => "watch_region",
+            Action::TranslateRegionInPlace => "translate_region_in_place",
             Action::SwapLanguages => "swap_languages",
             Action::NextService => "next_service",
             Action::ShowOptions => "show_options",

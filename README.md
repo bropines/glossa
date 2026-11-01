@@ -48,7 +48,8 @@
   by the pointer (or the translation itself) appears, no hotkey needed. A
   click on the tray icon turns it on and off; the icon changes colour.
 - **Recognise text on screen** (OCR) and translate it: drag over a region,
-  copy it, or watch it and re-translate when it changes. Google Lens through
+  copy its text, translate it in place over the picture, or watch it and
+  re-translate when it changes. Google Lens through
   [chrome-lens-py](https://github.com/bropines/chrome-lens-py); offline with
   Windows OCR or the Snipping Tool's OneOCR engine on Windows, Apple Vision
   on macOS, and Tesseract anywhere; or through a module or any command.
@@ -210,7 +211,8 @@ All pages, by topic: [docs/README.md](docs/README.md)
   binding hotkeys to it on Wayland, macOS or with AutoHotkey
 - [Configuration](docs/configuration.md): every `config.toml` key, and where
   the data folder is
-- [Text recognition](docs/ocr.md)
+- [Text recognition (OCR)](docs/ocr.md): engines, copy mode, Lens translation,
+  in-place translation
 - [Modules](docs/modules/README.md): guides for
   [JavaScript](docs/modules/js-modules.md), [Python](sdk/python/README.md),
   [Java and any other language over stdio](docs/modules/process-modules.md)

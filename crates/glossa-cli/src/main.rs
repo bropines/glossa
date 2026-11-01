@@ -58,8 +58,13 @@ COMMANDS
     detect     [TEXT…]
     dict       [-f FROM] [-t TO] [-s SERVICE] WORD
     ocr        IMAGE [-l LANG] [-t TO] [-e ENGINE] [-F text|json|hocr|alto]
+               [--in-place] [--join-lines] [--translate-with ocr|translator]
                                       ENGINE: lens, windows-ocr, oneocr, macos-vision, tesseract, command-ocr…;
-                                      -F json/hocr/alto print the layout (blocks, lines, words with boxes)
+                                      -F json/hocr/alto print the layout (blocks, lines, words with boxes);
+                                      --in-place translates block by block (each block with its box under
+                                      --json); --join-lines joins lines into paragraphs; --translate-with ocr
+                                      lets the OCR engine translate when it can (Google Lens), translator
+                                      always uses the current translator
     speak      [-l LANG] [--slow] -o OUT.mp3 TEXT…
     services   [-c CAPABILITY]        translate | dictionary | listen | ocr | detect_language
     modules                           what loaded, what failed and why
@@ -114,11 +119,24 @@ const VALUED: &[&str] = &[
     "--home",
     "-F",
     "--format",
+    "--translate-with",
 ];
 
 /// Flags that take no value.
-const SWITCHES: &[&str] =
-    &["--json", "-v", "--verbose", "-h", "--help", "--back", "--slow", "--favorites", "--save-history", "--full"];
+const SWITCHES: &[&str] = &[
+    "--json",
+    "-v",
+    "--verbose",
+    "-h",
+    "--help",
+    "--back",
+    "--slow",
+    "--favorites",
+    "--save-history",
+    "--full",
+    "--in-place",
+    "--join-lines",
+];
 
 /// Flags every command takes.
 const GLOBAL: &[&str] = &["--json", "-v", "--verbose", "-h", "--help", "--home"];
@@ -129,7 +147,21 @@ fn command_flags(command: &str) -> Option<&'static [&'static str]> {
     Some(match command {
         "translate" | "tr" => &["-f", "--from", "-t", "--to", "-s", "--service", "--back", "--save-history", "--full"],
         "dict" | "dictionary" => &["-f", "--from", "-t", "--to", "-s", "--service"],
-        "ocr" => &["-l", "--lang", "-t", "--to", "-e", "--engine", "-s", "--service", "-F", "--format"],
+        "ocr" => &[
+            "-l",
+            "--lang",
+            "-t",
+            "--to",
+            "-e",
+            "--engine",
+            "-s",
+            "--service",
+            "-F",
+            "--format",
+            "--in-place",
+            "--join-lines",
+            "--translate-with",
+        ],
         "speak" => &["-o", "--out", "-l", "--lang", "--slow"],
         "services" => &["-c", "--capability"],
         "history" => &["--search", "--favorites", "--export"],
@@ -447,14 +479,39 @@ fn run(args: &Args) -> Result<(), Fail> {
                 eprintln!("[{} · {} ms]", ocr.provider_id, ocr.elapsed_ms);
                 return Ok(());
             }
-            let out = match engine_id {
-                Some(engine) => e.recognize_using(engine, image, from, to)?,
-                None => e.recognize(image, from, to)?,
+            let in_place = args.has(&["--in-place"]);
+            let join = args.has(&["--join-lines"]);
+            let translate_with = match args.flag(&["--translate-with"]) {
+                None => None,
+                Some("ocr" | "engine" | "ocr_engine") => Some(glossa_core::config::OcrTranslateWith::OcrEngine),
+                Some("translator") => Some(glossa_core::config::OcrTranslateWith::Translator),
+                Some(other) => {
+                    return Err(Fail::Usage(format!("--translate-with takes ocr or translator, not {other}")));
+                }
             };
+            let opts = glossa_engine::RecognizeOptions {
+                lang: from,
+                translate_to: if in_place { Some(to.unwrap_or(e.config().general.first_language)) } else { to },
+                provider: engine_id.map(str::to_owned),
+                in_place,
+                layout: join,
+                translate_with,
+                ..Default::default()
+            };
+            let out = e.recognize_with_options(image, &opts)?;
+            let text = glossa_engine::ocr::copy_text(&out.ocr, join);
             if args.json {
-                out!("{}", glossa_engine::server::ocr_summary(&out));
+                let mut summary = glossa_engine::server::ocr_summary(&out);
+                summary["text"] = text.into();
+                out!("{summary}");
+            } else if !out.blocks.is_empty() {
+                // One line per block: what was read there, a tab, its translation.
+                for b in &out.blocks {
+                    out!("{}\t{}", b.source.replace('\n', " "), b.translation.replace('\n', " "));
+                }
+                eprintln!("[{} · {} ms]", out.ocr.provider_id, out.ocr.elapsed_ms);
             } else {
-                out!("{}", out.translated_text().unwrap_or(&out.ocr.text));
+                out!("{}", out.translated_text().unwrap_or(&text));
                 eprintln!("[{} · {} ms]", out.ocr.provider_id, out.ocr.elapsed_ms);
             }
             Ok(())

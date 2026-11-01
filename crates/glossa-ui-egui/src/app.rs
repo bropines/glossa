@@ -109,6 +109,13 @@ pub struct GlossaApp {
     pub popup: Option<crate::popup::PopupState>,
     pub ocr: Option<crate::ocr::OcrState>,
     pub watch: Option<crate::ocr::Watch>,
+    /// A copy-mode or in-place recognition running after its overlay closed.
+    pub ocr_background: Option<crate::ocr::Background>,
+    /// The small notice by an OCR region ("Copied 120 characters").
+    pub ocr_notice: Option<crate::ocr::Notice>,
+    pub in_place: Option<crate::inplace::InPlace>,
+    /// The window showing a recognised region's text and translation.
+    pub ocr_result: Option<crate::ocr_result::ResultWindow>,
     pub options: Option<crate::options::OptionsState>,
     pub dictionary: Option<crate::dictionary::DictState>,
     pub history: Option<crate::history::HistoryState>,
@@ -204,6 +211,10 @@ impl GlossaApp {
             popup: None,
             ocr: None,
             watch: None,
+            ocr_background: None,
+            ocr_notice: None,
+            in_place: None,
+            ocr_result: None,
             options: None,
             dictionary: None,
             history: None,
@@ -620,6 +631,10 @@ impl GlossaApp {
                     }
                 }
             }
+            Event::Progress { slot: Slot::OcrResult, job, text } => crate::ocr_result::on_progress(self, job, text),
+            Event::Translated { slot: Slot::OcrResult, job, result } => {
+                crate::ocr_result::on_translated(self, job, result)
+            }
             Event::Translated { slot: Slot::Detached, job, result } => {
                 if let Some(id) = self.main.stacked_jobs.remove(&job) {
                     let r = result.map_err(|e| self.describe(&e));
@@ -720,7 +735,7 @@ impl GlossaApp {
             return;
         }
         let delay = self.cfg.appearance.unload_graphics_after_secs;
-        let busy = self.main.busy || self.watch.is_some() || self.toast.is_some();
+        let busy = self.main.busy || self.watch.is_some() || self.toast.is_some() || self.ocr_background.is_some();
         if !glossa_platform::idle::IdlePump::supported()
             || self.launch.screenshot.is_some()
             || delay == 0
@@ -844,6 +859,9 @@ impl eframe::App for GlossaApp {
         let needs_ui = self.popup.is_some()
             || self.mouse_icon.is_some()
             || self.ocr.is_some()
+            || self.ocr_notice.is_some()
+            || self.in_place.is_some()
+            || self.ocr_result.is_some()
             || self.options.is_some()
             || self.dictionary.is_some()
             || self.history.is_some()
@@ -907,6 +925,8 @@ impl eframe::App for GlossaApp {
         crate::mouse::show_icon(self, &ctx);
         phase("ocr");
         crate::ocr::show(self, &ctx);
+        crate::inplace::show(self, &ctx);
+        crate::ocr_result::show(self, &ctx);
         phase("options");
         crate::options::show(self, &ctx);
         phase("dictionary");
