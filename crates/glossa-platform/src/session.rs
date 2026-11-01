@@ -173,65 +173,158 @@ impl Session {
         matches!(self.display, DisplayServer::Windows | DisplayServer::MacOs | DisplayServer::X11)
     }
 
-    /// What will not work in this session, in words for the user.
-    pub fn limitations(&self) -> Vec<String> {
+    /// What will not work in this session, as locale keys (English text in
+    /// [`glossa_core::locale`], translations in the locale packs) so a front
+    /// end can show them in the interface language.
+    pub fn limitations(&self) -> Vec<Limitation> {
         let mut out = Vec::new();
         match &self.display {
-            DisplayServer::Windows => {
-                out.push(
-                    "Programs running as administrator cannot be read from or typed into \
-                     unless Glossa also runs as administrator."
-                        .into(),
-                );
-            }
+            DisplayServer::Windows => out.push(Limitation::new("limitation.windows.elevated")),
             DisplayServer::MacOs => {
-                out.push(
-                    "Reading the selection and pasting translations need the Accessibility \
-                     permission (System Settings → Privacy & Security → Accessibility)."
-                        .into(),
-                );
-                out.push("Screen text recognition needs the Screen Recording permission.".into());
+                out.push(Limitation::new("limitation.macos.accessibility"));
+                out.push(Limitation::new("limitation.macos.screen_recording"));
             }
-            DisplayServer::X11 => {
-                out.push(
-                    "The selection is read from the PRIMARY selection: the text highlighted \
-                     most recently, in any window."
-                        .into(),
-                );
-            }
+            DisplayServer::X11 => out.push(Limitation::new("limitation.x11.primary")),
             DisplayServer::Wayland { compositor } => {
-                out.push(
-                    "Wayland does not allow global hotkeys. Bind a shortcut in your \
-                     compositor's settings that calls Glossa's local HTTP API with curl."
-                        .into(),
-                );
-                out.push(
-                    "Wayland does not allow typing into other programs: \"replace selection\" \
-                     leaves the translation on the clipboard for you to paste."
-                        .into(),
-                );
+                out.push(Limitation::new("limitation.wayland.hotkeys"));
+                out.push(Limitation::new("limitation.wayland.typing"));
                 if !compositor.has_data_control() {
-                    out.push(format!(
-                        "{compositor} does not let Glossa read the highlighted text; copy it \
-                         with Ctrl+C first and Glossa will use the clipboard."
-                    ));
+                    out.push(match compositor {
+                        Compositor::Unknown => Limitation::new("limitation.wayland.no_primary_unknown"),
+                        named => Limitation::with_arg("limitation.wayland.no_primary", named.to_string()),
+                    });
                 }
-                out.push(
-                    "The popup cannot be placed at the text cursor; it opens near the mouse \
-                     or in the centre of the screen."
-                        .into(),
-                );
+                out.push(Limitation::new("limitation.wayland.popup_position"));
             }
-            DisplayServer::Unknown => {
-                out.push(
-                    "No graphical session was found (neither WAYLAND_DISPLAY nor DISPLAY is \
-                     set): clipboard, hotkeys and screen capture are unavailable."
-                        .into(),
-                );
-            }
+            DisplayServer::Unknown => out.push(Limitation::new("limitation.no_display")),
         }
         out
     }
+
+    /// What Glossa's desktop features can do in this session, for
+    /// `glossa-cli doctor` and bug reports. Static knowledge: nothing is
+    /// tried, so a permission that is missing on macOS shows separately
+    /// ([`crate::permissions`]).
+    pub fn features(&self) -> Vec<Feature> {
+        use Support::{No, Partly, Yes};
+        let f = |key, support, note| Feature { key, support, note };
+        match &self.display {
+            DisplayServer::Windows => vec![
+                f("hotkeys", Yes, "RegisterHotKey"),
+                f("selection", Yes, "UI Automation, then a synthetic Ctrl+C (never in terminals)"),
+                f("synthetic_input", Yes, "SendInput; not into programs running as administrator"),
+                f("capture", Yes, "the whole virtual desktop"),
+                f("mouse_mode", Yes, "a low-level mouse hook"),
+                f("tray", Yes, "notification area icon"),
+            ],
+            DisplayServer::MacOs => vec![
+                f("hotkeys", Yes, "Carbon hotkeys; no permission needed"),
+                f("selection", Partly, "AXSelectedText, then Cmd+C; needs Accessibility"),
+                f("synthetic_input", Partly, "needs Accessibility"),
+                f("capture", Partly, "needs Screen Recording"),
+                f("mouse_mode", No, "not implemented on macOS yet"),
+                f("tray", Yes, "menu bar icon"),
+            ],
+            DisplayServer::X11 => vec![
+                f("hotkeys", Yes, "XGrabKey"),
+                f("selection", Yes, "the PRIMARY selection; no keystroke"),
+                f("synthetic_input", Yes, "XTest"),
+                f("capture", Yes, "X11 screen capture"),
+                f("mouse_mode", Yes, "watches the PRIMARY selection"),
+                f("tray", Partly, "needs a system tray (StatusNotifierItem or XEmbed)"),
+            ],
+            DisplayServer::Wayland { compositor } => {
+                let primary = compositor.has_data_control();
+                vec![
+                    f("hotkeys", No, "bind a compositor shortcut to the control API"),
+                    if primary {
+                        f("selection", Yes, "PRIMARY through data-control")
+                    } else {
+                        f("selection", Partly, "the clipboard only: copy first")
+                    },
+                    f("synthetic_input", No, "Wayland forbids it; replacing leaves text on the clipboard"),
+                    f("capture", Partly, "the desktop portal, wlr-screencopy or grim"),
+                    if primary {
+                        f("mouse_mode", Yes, "watches the PRIMARY selection")
+                    } else {
+                        f("mouse_mode", No, "needs PRIMARY, which this compositor does not offer")
+                    },
+                    f("tray", Partly, "needs a StatusNotifierItem host (GNOME: an extension)"),
+                ]
+            }
+            DisplayServer::Unknown => ["hotkeys", "selection", "synthetic_input", "capture", "mouse_mode", "tray"]
+                .into_iter()
+                .map(|key| f(key, No, "no graphical session"))
+                .collect(),
+        }
+    }
+}
+
+/// Something that does not work in a session ([`Session::limitations`]): a
+/// locale key and the value for its `%s`, if it has one.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Limitation {
+    pub key: &'static str,
+    pub arg: Option<String>,
+}
+
+impl Limitation {
+    fn new(key: &'static str) -> Self {
+        Limitation { key, arg: None }
+    }
+
+    fn with_arg(key: &'static str, arg: String) -> Self {
+        Limitation { key, arg: Some(arg) }
+    }
+
+    /// The text in `locale`'s language.
+    pub fn text(&self, locale: &glossa_core::Locale) -> String {
+        match &self.arg {
+            Some(a) => locale.fmt(self.key, a),
+            None => locale.get(self.key).to_owned(),
+        }
+    }
+
+    /// The English text.
+    pub fn english(&self) -> String {
+        self.text(&glossa_core::Locale::english())
+    }
+}
+
+impl fmt::Display for Limitation {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(&self.english())
+    }
+}
+
+/// How far a feature works in a session.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Support {
+    Yes,
+    /// With a condition: a permission, a compositor feature, a tray host.
+    Partly,
+    No,
+}
+
+impl Support {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Support::Yes => "yes",
+            Support::Partly => "partly",
+            Support::No => "no",
+        }
+    }
+}
+
+/// One desktop feature and whether it works here ([`Session::features`]).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Feature {
+    /// `hotkeys`, `selection`, `synthetic_input`, `capture`, `mouse_mode`,
+    /// `tray`.
+    pub key: &'static str,
+    pub support: Support,
+    /// How, or why not, in English.
+    pub note: &'static str,
 }
 
 fn detect_compositor(get: &impl Fn(&str) -> Option<String>, desktop: &str) -> Compositor {
@@ -289,7 +382,7 @@ mod tests {
         assert!(!w.supports_primary_selection());
         let m = Session::detect_from(Os::MacOs, |_| None);
         assert_eq!(m.display, DisplayServer::MacOs);
-        assert!(m.limitations().iter().any(|l| l.contains("Accessibility")));
+        assert!(m.limitations().iter().any(|l| l.english().contains("Accessibility")));
     }
 
     #[test]
@@ -311,7 +404,7 @@ mod tests {
         assert!(!s.supports_global_hotkeys());
         assert!(!s.supports_synthetic_input());
         assert!(!s.supports_primary_selection(), "GNOME has no data-control");
-        let lim = s.limitations().join("\n");
+        let lim = s.limitations().iter().map(Limitation::english).collect::<Vec<_>>().join("\n");
         assert!(lim.contains("global hotkeys"));
         assert!(lim.contains("GNOME does not let Glossa read"));
     }
@@ -336,7 +429,7 @@ mod tests {
         let s = linux(&[("WAYLAND_DISPLAY", "wayland-1"), ("SWAYSOCK", "/run/sway.sock")]);
         assert_eq!(s.display, DisplayServer::Wayland { compositor: Compositor::Sway });
         assert!(s.supports_primary_selection());
-        assert!(!s.limitations().iter().any(|l| l.contains("Ctrl+C first")));
+        assert!(!s.limitations().iter().any(|l| l.english().contains("Ctrl+C first")));
     }
 
     #[test]
@@ -349,7 +442,7 @@ mod tests {
         assert!(!s.supports_primary_selection());
         let s = linux(&[("WAYLAND_DISPLAY", "w")]);
         assert_eq!(s.display, DisplayServer::Wayland { compositor: Compositor::Unknown });
-        assert!(s.limitations().iter().any(|l| l.starts_with("This compositor")));
+        assert!(s.limitations().iter().any(|l| l.english().starts_with("This compositor")));
     }
 
     #[test]
@@ -358,7 +451,33 @@ mod tests {
         assert_eq!(s.display, DisplayServer::Unknown);
         assert!(!s.supports_global_hotkeys());
         assert!(!s.supports_synthetic_input());
-        assert!(s.limitations()[0].contains("No graphical session"));
+        assert!(s.limitations()[0].english().contains("No graphical session"));
+        assert!(s.features().iter().all(|f| f.support == Support::No));
+    }
+
+    #[test]
+    fn every_limitation_has_text_in_english_and_russian() {
+        let ru = glossa_core::Locale::builtin("ru").unwrap();
+        let sessions = [
+            Session::detect_from(Os::Windows, |_| None),
+            Session::detect_from(Os::MacOs, |_| None),
+            linux(&[("DISPLAY", ":0")]),
+            linux(&[("WAYLAND_DISPLAY", "w"), ("XDG_CURRENT_DESKTOP", "GNOME")]),
+            linux(&[("WAYLAND_DISPLAY", "w")]),
+            linux(&[]),
+        ];
+        for s in &sessions {
+            for l in s.limitations() {
+                let en = l.english();
+                assert!(en != l.key && !en.contains("%s"), "{}: {en}", l.key);
+                assert!(ru.has(l.key), "{} has no Russian text", l.key);
+                assert!(!l.text(&ru).contains("%s"), "{}", l.key);
+            }
+            let keys: Vec<&str> = s.features().iter().map(|f| f.key).collect();
+            assert_eq!(keys, ["hotkeys", "selection", "synthetic_input", "capture", "mouse_mode", "tray"]);
+        }
+        let gnome = &sessions[3];
+        assert!(gnome.limitations().iter().any(|l| l.text(&ru).contains("GNOME")));
     }
 
     #[test]

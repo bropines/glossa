@@ -594,6 +594,20 @@ fn proxy_spec(settings: &Network) -> Option<ProxySpec> {
     }
 }
 
+/// The proxy requests go through right now, without credentials (`none`,
+/// `http://proxy.example:3128`), for diagnostics such as `glossa-cli
+/// doctor`. With the system mode this is what the system says at this
+/// moment.
+pub fn proxy_in_use(settings: &Network) -> String {
+    describe_proxy(proxy_spec(settings).as_ref())
+}
+
+/// Whether certificates are checked against the system's store (else the
+/// bundled Mozilla roots), for diagnostics.
+pub fn uses_system_certificates() -> bool {
+    system_store_has_roots()
+}
+
 /// A proxy's address without any credentials in it, for the log.
 fn describe_proxy(spec: Option<&ProxySpec>) -> String {
     match spec {

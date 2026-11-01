@@ -169,13 +169,22 @@ pub fn acquire(paths: &Paths) -> Instance {
                 let (inbox, stop) = (inbox.clone(), stop.clone());
                 std::thread::Builder::new()
                     .name("glossa-instance".into())
-                    .spawn(move || imp::serve(server, &stop, &mut |m| inbox.lock().unwrap_or_else(|e| e.into_inner()).deliver(m)))
+                    .spawn(move || {
+                        imp::serve(server, &stop, &mut |m| inbox.lock().unwrap_or_else(|e| e.into_inner()).deliver(m))
+                    })
                     .map_err(|e| tracing::warn!("single-instance listener not started: {e}"))
                     .ok()
             });
             Instance::Primary(InstanceGuard { inbox, stop, listener, imp: lock })
         }
     }
+}
+
+/// Whether a copy holds the lock for this data folder, without taking it
+/// (for `glossa-cli doctor`). On Unix the lock is tested by taking it for
+/// an instant.
+pub fn is_running(paths: &Paths) -> bool {
+    imp::is_locked(&Names::for_paths(paths))
 }
 
 /// Hand `message` to the primary copy for this data folder. Retries until
@@ -294,7 +303,7 @@ mod imp {
         PIPE_TYPE_BYTE, PIPE_UNLIMITED_INSTANCES, PIPE_WAIT,
     };
     use windows::Win32::System::RemoteDesktop::ProcessIdToSessionId;
-    use windows::Win32::System::Threading::CreateMutexW;
+    use windows::Win32::System::Threading::{CreateMutexW, OpenMutexW, SYNCHRONIZATION_SYNCHRONIZE};
 
     use super::{handle_connection, Message, Names};
 
@@ -382,9 +391,15 @@ mod imp {
         }
 
         pub fn wake_listener(&self) {
-            if let Ok(mut f) = std::fs::OpenOptions::new().read(true).write(true).open(&self.pipe) {
-                use std::io::Write;
-                let _ = f.write_all(&0u32.to_le_bytes());
+            // Between two clients the listener briefly has no pipe instance
+            // to connect to; try again for a moment.
+            for _ in 0..10 {
+                if let Ok(mut f) = std::fs::OpenOptions::new().read(true).write(true).open(&self.pipe) {
+                    use std::io::Write;
+                    let _ = f.write_all(&0u32.to_le_bytes());
+                    return;
+                }
+                std::thread::sleep(Duration::from_millis(20));
             }
         }
 
@@ -423,6 +438,21 @@ mod imp {
 
     pub fn connect(names: &Names) -> std::io::Result<File> {
         std::fs::OpenOptions::new().read(true).write(true).open(pipe_name(names))
+    }
+
+    pub fn is_locked(names: &Names) -> bool {
+        let name = HSTRING::from(format!(r"Local\Glossa-{}", names.key));
+        // SAFETY: the name outlives the call; the handle is closed at once.
+        match unsafe { OpenMutexW(SYNCHRONIZATION_SYNCHRONIZE, false, PCWSTR(name.as_ptr())) } {
+            Ok(h) => {
+                // SAFETY: our own handle, closed once.
+                unsafe {
+                    let _ = CloseHandle(h);
+                }
+                true
+            }
+            Err(_) => false,
+        }
     }
 }
 
@@ -526,6 +556,11 @@ mod imp {
         s.set_write_timeout(Some(Duration::from_secs(3)))?;
         Ok(s)
     }
+
+    pub fn is_locked(names: &Names) -> bool {
+        let Ok(file) = std::fs::OpenOptions::new().write(true).open(paths(names).0) else { return false };
+        matches!(file.try_lock(), Err(std::fs::TryLockError::WouldBlock))
+    }
 }
 
 #[cfg(not(any(windows, unix)))]
@@ -546,6 +581,10 @@ mod imp {
     }
 
     pub fn serve(_: Server, _: &AtomicBool, _: &mut dyn FnMut(Message)) {}
+
+    pub fn is_locked(_: &Names) -> bool {
+        false
+    }
 
     pub fn connect(_: &Names) -> std::io::Result<std::io::Cursor<Vec<u8>>> {
         Err(std::io::Error::new(std::io::ErrorKind::Unsupported, "no single-instance channel on this platform"))
@@ -607,6 +646,7 @@ mod tests {
         assert_eq!(rx.recv_timeout(Duration::from_secs(5)).unwrap().text.as_deref(), Some("early"));
 
         assert!(matches!(acquire(&paths), Instance::Secondary), "the same home is taken");
+        assert!(is_running(&paths));
         send(&paths, &Message::show(), Duration::from_secs(5)).unwrap();
         assert_eq!(rx.recv_timeout(Duration::from_secs(5)).unwrap(), Message::show());
 
@@ -618,6 +658,7 @@ mod tests {
         // on the old channel.
         drop(guard);
         assert!(send(&paths, &Message::show(), Duration::from_millis(200)).is_err());
+        assert!(!is_running(&paths));
         let Instance::Primary(again) = acquire(&paths) else { panic!("the lock was released") };
         assert!(again.listening());
         drop(again);

@@ -2117,6 +2117,8 @@ dependencies = [
  "glossa-engine",
  "glossa-modules",
  "glossa-net",
+ "glossa-ocr",
+ "glossa-platform",
  "serde_json",
  "tracing",
  "tracing-subscriber",
