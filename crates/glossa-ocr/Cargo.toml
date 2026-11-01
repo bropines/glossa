@@ -1,6 +1,6 @@
 [package]
 name = "glossa-ocr"
-description = "Text recognition providers: chrome-lens (daemon, CLI), Windows OCR, OneOCR, external commands."
+description = "Text recognition providers: chrome-lens (daemon, CLI), Windows OCR, OneOCR, Apple Vision, Tesseract, external commands."
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -31,3 +31,33 @@ windows = { workspace = true, features = [
     "Win32_System_Com",
     "Win32_System_LibraryLoader",
 ] }
+
+# Apple Vision (`VNRecognizeTextRequest`). The objc2 generation winit,
+# tray-icon and arboard already use, so nothing is compiled twice; default
+# features off, since Vision's would pull in AVFoundation and Core ML.
+[target.'cfg(target_os = "macos")'.dependencies]
+objc2 = "0.6"
+objc2-foundation = { version = "0.3", default-features = false, features = [
+    "std",
+    "NSArray",
+    "NSData",
+    "NSDictionary",
+    "NSError",
+    "NSRange",
+    "NSString",
+] }
+objc2-vision = { version = "0.3", default-features = false, features = [
+    "std",
+    "objc2-core-foundation",
+    "VNObservation",
+    "VNRecognizeTextRequest",
+    "VNRequest",
+    "VNRequestHandler",
+    "VNTypes",
+] }
+
+[dev-dependencies]
+# Drawing text for the live recogniser tests.
+ab_glyph = "0.2"
+epaint_default_fonts = "0.37"
+image = { workspace = true }
