@@ -27,10 +27,10 @@ fourth without touching the rest.
 
 | crate | role |
 |---|---|
-| `glossa-core` | The domain model: the language table, capabilities, requests and results, `config.toml`, themes, locales, history, hotkey and action definitions, the classic-format importers. Pure data and logic: no network, no threads, no UI. |
+| `glossa-core` | The domain model: the language table, capabilities, requests and results (including the OCR layout and its hOCR/ALTO/JSON exporters and readers), `config.toml`, themes, locales, history, hotkey and action definitions, the classic-format importers. Pure data and logic: no network, no threads, no UI. |
 | `glossa-net` | HTTP on `ureq`: proxies (including the Windows system proxy), timeouts, retries, legacy code pages, an HTTP mock for tests. |
 | `glossa-module-sdk` | What a module author depends on: the protocol's wire types, the C ABI (`include/glossa_module.h`), and `export_module!` for Rust modules. Depends on nothing else in the workspace. |
-| `glossa-modules` | The `Provider` trait every translator, dictionary, voice and OCR engine implements; the host API given to modules (scoped HTTP, cache, log); the registry that scans module folders; the runtimes: JavaScript (Glossa, classic QTranslate and pot-app dialects, on boa), Python (stdio child processes), native (shared libraries). |
+| `glossa-modules` | The `Provider` trait every translator, dictionary, voice and OCR engine implements; the host API given to modules (scoped HTTP, cache, log, and the image API in `image_ops`); the registry that scans module folders; the runtimes: JavaScript (Glossa, classic QTranslate and pot-app dialects, on boa), Python (stdio child processes), native (shared libraries). |
 | `glossa-services` | Built-in providers in Rust: Google, Google Dictionary, Bing (keyless web session or keyed API), DeepL, DeepLX, LibreTranslate, MyMemory, Lingva, OpenAI-compatible, Yandex. |
 | `glossa-ocr` | OCR providers: Google Lens through `chrome-lens-py` (warm daemon, else its CLI), Windows OCR (`Windows.Media.Ocr`) and OneOCR (the Snipping Tool's `oneocr.dll`, loaded from the user's installation) on Windows, and any external command. The Windows engines' OS calls live here behind `cfg(windows)` rather than in `glossa-platform`, which the engine and CLI do not depend on. |
 | `glossa-dict` | Offline dictionaries (StarDict with dictzip, DSL, XDXF, tab-separated) and the HTML simplifier for dictionary articles. |

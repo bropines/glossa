@@ -311,10 +311,8 @@ impl ImageStore {
                 if overlap >= tw.min(th) {
                     return Err(bad("overlap must be smaller than a tile"));
                 }
-                let rects = tile_rects(img.width, img.height, tw, th, overlap);
-                if rects.len() > MAX_IMAGES {
-                    return Err(bad(format!("{} tiles is too many", rects.len())));
-                }
+                let rects = tile_rects(img.width, img.height, tw, th, overlap)
+                    .ok_or_else(|| bad(format!("more than {MAX_IMAGES} tiles; make them larger")))?;
                 let crops: Vec<(Img, Transform)> = rects
                     .into_iter()
                     .map(|(x, y, w, h)| (crop(img, x, y, w, h), Transform([1.0, 0.0, x as f64, 0.0, 1.0, y as f64])))
@@ -1211,8 +1209,9 @@ pub fn estimate_skew(img: &Img, max: f64) -> f64 {
 }
 
 /// Tiles of at most `tw`×`th` covering a `w`×`h` image, overlapping by
-/// `overlap`, in rows from the top left.
-fn tile_rects(w: u32, h: u32, tw: u32, th: u32, overlap: u32) -> Vec<(u32, u32, u32, u32)> {
+/// `overlap`, in rows from the top left; `None` when that would be more
+/// than [`MAX_IMAGES`] tiles.
+fn tile_rects(w: u32, h: u32, tw: u32, th: u32, overlap: u32) -> Option<Vec<(u32, u32, u32, u32)>> {
     let starts = |len: u32, tile: u32| -> Vec<u32> {
         if len <= tile {
             return vec![0];
@@ -1223,13 +1222,17 @@ fn tile_rects(w: u32, h: u32, tw: u32, th: u32, overlap: u32) -> Vec<(u32, u32, 
         v.dedup();
         v
     };
+    let (xs, ys) = (starts(w, tw), starts(h, th));
+    if xs.len().saturating_mul(ys.len()) > MAX_IMAGES {
+        return None;
+    }
     let mut out = Vec::new();
-    for y in starts(h, th) {
-        for x in starts(w, tw) {
+    for &y in &ys {
+        for &x in &xs {
             out.push((x, y, tw.min(w - x), th.min(h - y)));
         }
     }
-    out
+    Some(out)
 }
 
 #[cfg(test)]
@@ -1403,8 +1406,9 @@ mod tests {
 
     #[test]
     fn tiles_cover_the_image_and_paste_composites() {
-        assert_eq!(tile_rects(10, 10, 4, 10, 0), vec![(0, 0, 4, 10), (4, 0, 4, 10), (6, 0, 4, 10)]);
-        assert_eq!(tile_rects(10, 10, 20, 20, 0), vec![(0, 0, 10, 10)]);
+        assert_eq!(tile_rects(10, 10, 4, 10, 0), Some(vec![(0, 0, 4, 10), (4, 0, 4, 10), (6, 0, 4, 10)]));
+        assert_eq!(tile_rects(10, 10, 20, 20, 0), Some(vec![(0, 0, 10, 10)]));
+        assert_eq!(tile_rects(50_000, 2_000, 1, 1, 0), None, "counted before they are made");
         let mut s = ImageStore::new();
         let h = s.insert(gradient(100, 30), Transform::IDENTITY, None).unwrap();
         let t = call(&mut s, "split_tiles", json!({ "handle": h, "max_width": 40, "overlap": 5 })).unwrap();

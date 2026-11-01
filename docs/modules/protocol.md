@@ -6,7 +6,7 @@ differ in how the messages travel:
 
 | runtime | a request arrives as | a host call is |
 |---|---|---|
-| JavaScript | `translate(req, host)` etc. | `host.fetch(…)`, `host.http(…)`, `host.cache.get(…)` (synchronous) |
+| JavaScript | `translate(req, host)` etc. | `host.fetch(…)`, `host.http(…)`, `host.cache.get(…)`, `host.image.crop(…)` (synchronous) |
 | Python | a JSON line on stdin | a JSON line on stdout, answered on stdin (the SDK hides both) |
 | Native | `call(method, params_json)` through the C ABI | `host->call(ctx, method, params_json)` |
 
@@ -107,17 +107,31 @@ Glossa simplifies it to its own styling.
 ### `recognize`
 
 ```json
-{ "image_base64": "iVBORw0KGgo…", "lang": "auto", "translate_to": "ru",
-  "preserve_line_breaks": true, "options": {} }
+{ "image_base64": "iVBORw0KGgo…", "image_handle": 1, "lang": "auto", "translate_to": "ru",
+  "granularity": "words", "preserve_line_breaks": true, "options": {} }
 ```
 
-The image is PNG, JPEG or WebP. `translate_to` is set when the user asked to
-recognise *and* translate; a module whose service can do both in one go fills
-`translation`, otherwise Glossa translates the text itself.
+The image is PNG, JPEG or WebP. `image_handle` is the same image registered
+with the [image API](#image) for this call. `translate_to` is set when the
+user asked to recognise *and* translate; a module whose service can do both
+in one go fills `translation`, otherwise Glossa translates the text itself.
+`granularity` (`full_text`, `blocks`, `lines`, `words`) says how much
+structure the caller wants; more is always fine.
 
 ```json
-{ "text": "Recognised text\nsecond line", "translation": "…", "detected_lang": "en" }
+{ "text": "Recognised text\nsecond line", "translation": "…", "detected_lang": "en",
+  "blocks": [{ "level": "line", "text": "Recognised text", "bbox": [10, 8, 210, 36], "confidence": 0.97 }],
+  "image_size": [640, 200], "hocr": null, "alto": null, "transform": null }
 ```
+
+Only `text` is required, and it may be empty when the structure carries the
+result. `blocks` is the layout (blocks, paragraphs, lines, words with boxes,
+rotation, outline, confidence, baseline, language, direction and per-region
+translation); `hocr` or `alto` may carry it instead as a standard document;
+`transform` says the coordinates belong to a prepared copy of the input
+(Glossa maps them back). Coordinates are pixels of the input image. The
+fields, the formats and the coordinate rules are in
+[ocr-modules.md](ocr-modules.md).
 
 ## Errors
 
@@ -202,6 +216,23 @@ process. Use it for session tokens and other things worth not fetching on
 every call: a JavaScript module gets a fresh context each call and a Python
 process is stopped when idle, so module-level variables do not last. `ttl_secs`
 of 0 keeps the value until Glossa exits.
+
+### `image`
+
+`image.<operation>` — crop, resize, rotate, deskew, threshold, encode and
+the rest of the image API, for preparing pictures (OCR above all) without an
+imaging library:
+
+```json
+"image.scale_to_min_height"  { "handle": 1, "min_height": 32 }
+→ { "handle": 2, "width": 640, "height": 64, "channels": 4,
+    "transform": [0.5, 0, 0, 0, 0.5, 0] }
+```
+
+Images are handles that live until the current request returns; each
+operation takes `handle` (or `data_base64`) and returns a new image whose
+`transform` maps its pixels back to the original. The operations, their
+parameters and the limits are in [ocr-modules.md](ocr-modules.md#the-image-api).
 
 ## Versioning
 
