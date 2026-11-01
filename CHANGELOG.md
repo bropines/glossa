@@ -341,6 +341,10 @@ for Windows, macOS and Linux.
 
 ### Fixed
 
+- A menu or list with no room for all of it on either side of its button
+  (the main window's menu, opened from a window low on the screen) became a
+  list scrolling by a few rows. It now slides over the button to fit, as
+  native menus do; only one taller than the screen scrolls.
 - A hotkey with Shift and a digit or symbol (Ctrl+Shift+1) could not be
   set: the field took the character Shift makes ("!"), which names no
   key. It now takes the key itself, whatever Shift or the layout makes it
