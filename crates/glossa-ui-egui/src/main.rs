@@ -211,8 +211,17 @@ fn main() -> eframe::Result<()> {
                 viewport = viewport.with_maximized(true);
             }
         }
-        let mut options =
-            eframe::NativeOptions { viewport, run_and_return: can_unload, persist_window: false, ..Default::default() };
+        // Fonts for other scripts and emoji are Glossa's own business
+        // (`fonts::Fonts` loads them when such text first shows, used from
+        // the next frame). eframe's system-font lookup is not built in; its
+        // stand-in only logs "No font has …" for that first frame.
+        let mut options = eframe::NativeOptions {
+            viewport,
+            run_and_return: can_unload,
+            persist_window: false,
+            system_font_fallback: false,
+            ..Default::default()
+        };
         choose_renderer(&mut options, cfg.appearance.renderer, style::needs_transparent_root(&cfg));
         let mut this_launch = launch.clone();
         this_launch.hidden = !start_visible;
