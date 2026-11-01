@@ -219,7 +219,7 @@ Linux X11; macOS builds but is untested.
 
 Not yet: speech input, the update check; mouse mode on macOS. On Wayland,
 global hotkeys, mouse mode and reading the selection depend on the
-compositor. Backdrops need the OpenGL engine.
+compositor. On macOS, vibrancy needs the OpenGL engine.
 
 Classic QTranslate service scripts and the keyless bundled services depend on
 the websites they talk to; when a site changes, a classic script breaks for
