@@ -15,7 +15,7 @@ fourth without touching the rest.
                      (built-in APIs)   (Lens…)     (StarDict…)    │
                              └───────────┬─────┴───────┘          │
                                    glossa-modules ────────────────┘
-                          (provider API; JS / Python / native runtimes)
+                (provider API; JS / stdio: Python, Java, any program / native)
                                    │            │
                               glossa-net   glossa-module-sdk
                                    │        (wire types, C ABI)
@@ -30,7 +30,7 @@ fourth without touching the rest.
 | `glossa-core` | The domain model: the language table, capabilities, requests and results, `config.toml`, themes, locales, history, hotkey and action definitions, the classic-format importers. Pure data and logic: no network, no threads, no UI. |
 | `glossa-net` | HTTP on `ureq`: proxies (including the Windows system proxy), timeouts, retries, legacy code pages, an HTTP mock for tests. |
 | `glossa-module-sdk` | What a module author depends on: the protocol's wire types, the C ABI (`include/glossa_module.h`), and `export_module!` for Rust modules. Depends on nothing else in the workspace. |
-| `glossa-modules` | The `Provider` trait every translator, dictionary, voice and OCR engine implements; the host API given to modules (scoped HTTP, cache, log); the registry that scans module folders; the runtimes: JavaScript (Glossa, classic QTranslate and pot-app dialects, on boa), Python (stdio child processes), native (shared libraries). |
+| `glossa-modules` | The `Provider` trait every translator, dictionary, voice and OCR engine implements; the host API given to modules (scoped HTTP, cache, log); the registry that scans module folders; the runtimes: JavaScript (Glossa, classic QTranslate and pot-app dialects, on boa), Python, Java and any other program (`runtime = "process"`) as child processes over one stdio transport, native (shared libraries). |
 | `glossa-services` | Built-in providers in Rust: Google, Google Dictionary, Bing (keyless web session or keyed API), DeepL, DeepLX, LibreTranslate, MyMemory, Lingva, OpenAI-compatible, Yandex. |
 | `glossa-ocr` | OCR providers: Google Lens through `chrome-lens-py` (warm daemon, else its CLI), Windows OCR (`Windows.Media.Ocr`) and OneOCR (the Snipping Tool's `oneocr.dll`, loaded from the user's installation) on Windows, and any external command. The Windows engines' OS calls live here behind `cfg(windows)` rather than in `glossa-platform`, which the engine and CLI do not depend on. |
 | `glossa-dict` | Offline dictionaries (StarDict with dictzip, DSL, XDXF, tab-separated) and the HTML simplifier for dictionary articles. |
@@ -78,9 +78,9 @@ milliseconds. Things that must happen before any window exists (reading the
 selection, whose focus a new window would steal) are done in that loop.
 
 Other choices made for size: fonts for CJK, Arabic, Indic and other scripts
-are loaded only when text in that script first appears; a Python module's
-process starts on first use and stops when idle; the renderer is selectable
-(OpenGL is the lightest).
+are loaded only when text in that script first appears; a Python, Java or
+process module's process starts on first use and stops when idle; the
+renderer is selectable (OpenGL is the lightest).
 
 ## Threads
 
@@ -89,7 +89,7 @@ process starts on first use and stops when idle; the renderer is selectable
   (`actions::Task`, engine events).
 - Engine jobs run on short-lived threads with a cancellation token per slot
   (main window, popup, dictionary…); a newer job in a slot cancels the older.
-- Each Python module has one process; calls to it are serialised.
+- Each Python, Java or process module has one process; calls to it are serialised.
 - The control API runs on its own thread.
 
 ## Configuration and data

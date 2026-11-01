@@ -64,6 +64,17 @@ for Windows and Linux.
   `Common.js` helper API and WSH-style HTTP objects) and pot-app plugins run
   unchanged. Examples: `free-dictionary` (JS), `example-reverse` and
   `lens-ocr` (Python), `example-rot13` (Rust) and `example-c` (C).
+- **Java and any-language modules**: `runtime = "process"` runs any program
+  that speaks the module protocol over stdio (`command`, per-platform
+  `command.windows` / `.macos` / `.linux`, `args`, `env`, `cwd`), and
+  `runtime = "java"` runs a jar or a main class with Java found through the
+  new *Java* setting, `JAVA_HOME`, `PATH` or the usual install folders (a
+  missing Java fails the load with install instructions). Python, Java and
+  process modules share one stdio transport: same timeouts, idle stop,
+  restart and logging, and every host call. A dependency-free Java 17 SDK
+  (`sdk/java`, usable from Kotlin) and examples `example-upper` (Java) and
+  `example-node` (Node.js, no SDK). `glossa-cli modules` shows each module's
+  runtime.
 - **Classic QTranslate**: point Glossa at an installation to use its
   services, themes and languages in place, or import its `Options.json` and
   history with `glossa-cli import-classic`. The import maps classic services
