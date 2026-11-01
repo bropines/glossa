@@ -38,6 +38,13 @@ for Windows, macOS and Linux.
   (`general.secret_storage = "system"`): Windows Credential Manager, the
   macOS Keychain or the Secret Service on Linux keep the services' keys, the
   proxy password and the Lens token; the settings file holds a placeholder.
+- **Text recognition with AI endpoints**: any AI endpoint (OpenAI,
+  OpenRouter, a local vLLM, Ollama or LM Studio) reads text from pictures
+  with a vision model when chosen as the OCR engine: plain text, or lines
+  with their boxes for translating in place and the whole screen, and the
+  translation in the same request when asked. A vision model, the answer
+  format, the box coordinates and the instructions are in the endpoint's
+  settings. Endpoints never serve as a quiet fallback for another engine.
 - **Options, grouped**: the pages are listed under General, Translation,
   Recognition and System, each with an icon on a colour of its own, and
   the open page shows its icon and name over its content.

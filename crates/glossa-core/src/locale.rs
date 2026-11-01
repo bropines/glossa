@@ -505,6 +505,9 @@ pub static STRINGS: &[(&str, &str, Option<&str>)] = &[
     ("options.appearance.preview", "Preview", None),
     ("options.appearance.preview_source", "Hello, everyone! How are you today?", None),
     ("options.appearance.preview_translation", "Bonjour à tous ! Comment allez-vous ?", None),
+    ("options.ocr.ai_group", "AI endpoints (vision models)", None),
+    ("options.ocr.ai_hint", "%s reads the picture with a vision model, and only when chosen here. Its model, answer format and box coordinates are in its settings.", None),
+    ("options.ocr.ai_settings", "Settings…", None),
     ("options.group.general", "General", None),
     ("options.group.translation", "Translation", None),
     ("options.group.recognition", "Recognition", None),
@@ -848,7 +851,7 @@ pub static STRINGS: &[(&str, &str, Option<&str>)] = &[
     ("options.ocr.after_in_place", "Translate it in place", None),
     ("options.ocr.after_ask", "Ask, with a toolbar", None),
     ("options.ocr.translate_with", "Translate with:", None),
-    ("options.ocr.translate_with_engine", "The OCR engine itself when it can (Google Lens)", None),
+    ("options.ocr.translate_with_engine", "The OCR engine itself when it can (Google Lens, AI endpoints)", None),
     ("options.ocr.translate_with_translator", "The current translator", None),
     (
         "options.ocr.copy_joined",

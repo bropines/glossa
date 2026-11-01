@@ -54,6 +54,10 @@ models* shows what is really there.
 | Timeout, seconds | For the whole answer, streamed or not (default 120). |
 | Extra headers | One `Name: value` per line. The OpenRouter preset fills in its app attribution headers. |
 | Extra request fields | A JSON object merged into the request: `{"top_p": 0.9}`, OpenRouter's `{"provider": {"sort": "price"}}`, a vendor's own switches. Fields given here override Glossa's; `null` removes one (`{"temperature": null}`). |
+| Vision model (text recognition) | The model that reads pictures when this endpoint is the text recognition engine. Empty: the model above. See [ocr.md](ocr.md#ai-endpoints-vision-models). |
+| Recognition answer | `auto` (lines with boxes when needed, plain text otherwise), `text`, or `lines`. |
+| Box coordinates | `auto`, `pixels`, `1000`, `1000yx` (Gemini) or `fraction`: how the model gives a box. |
+| Recognition instructions | A prompt of your own for reading pictures; empty uses Glossa's. |
 
 Settings are stored in `config.toml` like any service's:
 
@@ -69,7 +73,8 @@ model = "deepseek-chat"
 reasoning_effort = ""
 ```
 
-The key is stored in plain text, as every service key is; keep the data folder
+The key is stored in plain text, as every service key is, unless the keys
+are kept in the system keychain (*Options → Basics*); keep the data folder
 private.
 
 ## Style and glossary
