@@ -56,9 +56,13 @@ pub fn show_about(app: &mut GlossaApp, ctx: &egui::Context) {
         return;
     }
     let title = app.t("msg.about");
-    let builder =
-        crate::chrome::builder(app, &title).with_inner_size([520.0, 472.0]).with_min_inner_size([420.0, 452.0]);
     let (look, custom) = (app.look.clone(), crate::chrome::custom(&app.cfg));
+    // The contents need 472 pt; Glossa's own title bar (Windows, custom
+    // frame) is drawn inside the window, a system one outside it.
+    let caption = if custom { crate::chrome::TITLE_HEIGHT } else { 0.0 };
+    let builder = crate::chrome::builder(app, &title)
+        .with_inner_size([520.0, 472.0 + caption])
+        .with_min_inner_size([420.0, 452.0 + caption]);
     let mut open = true;
     ctx.show_viewport_immediate(crate::chrome::viewport(crate::chrome::ABOUT), builder, |ui, _| {
         if ui.input(|i| i.viewport().close_requested()) {
