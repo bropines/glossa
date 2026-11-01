@@ -1413,8 +1413,11 @@ text_scale = 0.01",
 
     #[test]
     fn ocr_choices_load_by_name_and_default_when_absent() {
-        let c = Config::from_toml("[ocr]
-provider = \"lens\"").unwrap();
+        let c = Config::from_toml(
+            "[ocr]
+provider = \"lens\"",
+        )
+        .unwrap();
         assert_eq!(c.ocr.after_select, OcrAfterSelect::Show);
         assert_eq!(c.ocr.translate_with, OcrTranslateWith::OcrEngine);
         assert!(!c.ocr.copy_joined_lines);

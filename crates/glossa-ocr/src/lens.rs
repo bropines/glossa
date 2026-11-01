@@ -793,7 +793,9 @@ fn attach_translations(blocks: &mut Vec<OcrBlock>, render: &[Value], size: Optio
         let angle = lines.first().map_or(0.0, |l| l.angle);
         let centre = lines.iter().find_map(|l| l.bounds).map(|r| r.centre());
         let home = centre.and_then(|(x, y)| {
-            blocks.iter().position(|b| b.translation.is_none() && b.bounds.is_some_and(|r| r.expanded(2.0).contains(x, y)))
+            blocks
+                .iter()
+                .position(|b| b.translation.is_none() && b.bounds.is_some_and(|r| r.expanded(2.0).contains(x, y)))
         });
         match home {
             Some(i) => {
@@ -807,7 +809,13 @@ fn attach_translations(blocks: &mut Vec<OcrBlock>, render: &[Value], size: Optio
                 block.translation = Some(translation);
                 block.children = lines;
             }
-            None => blocks.push(OcrBlock { bounds, angle, translation: Some(translation), children: lines, ..Default::default() }),
+            None => blocks.push(OcrBlock {
+                bounds,
+                angle,
+                translation: Some(translation),
+                children: lines,
+                ..Default::default()
+            }),
         }
     }
 }

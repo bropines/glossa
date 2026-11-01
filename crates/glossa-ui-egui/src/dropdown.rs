@@ -54,6 +54,19 @@ pub fn is_open(ctx: &Context, id: Id) -> bool {
     state(ctx, id).is_some()
 }
 
+/// Where the pass number of the last pass that showed any dropdown is kept.
+fn any_open_id() -> Id {
+    Id::unique("glossa-dropdown-any-open")
+}
+
+/// Whether a dropdown was showing in this pass or the one before: a window
+/// that closes on Escape asks this first, since the Escape that closes a
+/// list reaches the window it belongs to as well.
+pub fn recently_open(ctx: &Context) -> bool {
+    let last: Option<u64> = ctx.data(|d| d.get_temp(any_open_id()));
+    last.is_some_and(|p| p + 1 >= ctx.cumulative_pass_nr())
+}
+
 /// Open the dropdown `id` (again, from scratch, if it is open). The window
 /// it belongs to gives up its keyboard focus: what is typed now goes to the
 /// list.
@@ -121,6 +134,8 @@ pub fn show<R>(
     let ctx = ui.ctx().clone();
     let mut st = state(&ctx, id)?;
     st.age = st.age.saturating_add(1);
+    let pass = ctx.cumulative_pass_nr();
+    ctx.data_mut(|d| d.insert_temp(any_open_id(), pass));
 
     // A click anywhere else in the window it belongs to, or the program
     // losing the focus, closes it.

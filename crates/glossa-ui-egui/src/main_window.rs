@@ -309,10 +309,10 @@ fn source_pane(app: &mut GlossaApp, ui: &mut egui::Ui, height: f32) {
 
 /// The inner margin of the source and translation panes, the same for both
 /// so their texts line up.
-const PANE_MARGIN: i8 = 4;
+pub(crate) const PANE_MARGIN: i8 = 4;
 
 /// The frame of the source and translation panes.
-fn pane_frame(look: &crate::style::Look) -> egui::Frame {
+pub(crate) fn pane_frame(look: &crate::style::Look) -> egui::Frame {
     egui::Frame::new()
         .fill(look.edit_back())
         .stroke(egui::Stroke::new(1.0, c(look.theme.edit.normal.border)))

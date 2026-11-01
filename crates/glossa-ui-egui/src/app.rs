@@ -114,6 +114,8 @@ pub struct GlossaApp {
     /// The small notice by an OCR region ("Copied 120 characters").
     pub ocr_notice: Option<crate::ocr::Notice>,
     pub in_place: Option<crate::inplace::InPlace>,
+    /// The window showing a recognised region's text and translation.
+    pub ocr_result: Option<crate::ocr_result::ResultWindow>,
     pub options: Option<crate::options::OptionsState>,
     pub dictionary: Option<crate::dictionary::DictState>,
     pub history: Option<crate::history::HistoryState>,
@@ -210,6 +212,7 @@ impl GlossaApp {
             ocr_background: None,
             ocr_notice: None,
             in_place: None,
+            ocr_result: None,
             options: None,
             dictionary: None,
             history: None,
@@ -625,6 +628,10 @@ impl GlossaApp {
                     }
                 }
             }
+            Event::Progress { slot: Slot::OcrResult, job, text } => crate::ocr_result::on_progress(self, job, text),
+            Event::Translated { slot: Slot::OcrResult, job, result } => {
+                crate::ocr_result::on_translated(self, job, result)
+            }
             Event::Translated { slot: Slot::Detached, job, result } => {
                 if let Some(id) = self.main.stacked_jobs.remove(&job) {
                     let r = result.map_err(|e| self.describe(&e));
@@ -851,6 +858,7 @@ impl eframe::App for GlossaApp {
             || self.ocr.is_some()
             || self.ocr_notice.is_some()
             || self.in_place.is_some()
+            || self.ocr_result.is_some()
             || self.options.is_some()
             || self.dictionary.is_some()
             || self.history.is_some()
@@ -903,6 +911,7 @@ impl eframe::App for GlossaApp {
         phase("ocr");
         crate::ocr::show(self, &ctx);
         crate::inplace::show(self, &ctx);
+        crate::ocr_result::show(self, &ctx);
         phase("options");
         crate::options::show(self, &ctx);
         phase("dictionary");

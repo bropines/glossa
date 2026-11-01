@@ -20,6 +20,7 @@ mod keyboard;
 mod main_window;
 mod mouse;
 mod ocr;
+mod ocr_result;
 mod options;
 mod popup;
 mod rich;

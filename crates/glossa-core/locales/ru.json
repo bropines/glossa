@@ -481,7 +481,7 @@
     "ocr.select_all": "Выделить всё",
     "ocr.clear_selection": "Сбросить выделение",
     "ocr.close": "Закрыть",
-    "ocr.hint": "Выделите область мышью. Esc — отмена, правая кнопка — меню.",
+    "ocr.hint": "Выделите область мышью. Esc или правая кнопка — отмена.",
     "ocr.menu.recognize": "Распознать текст",
     "ocr.menu.recognize_translate": "Распознать и перевести",
     "ocr.menu.copy": "Скопировать текст с экрана",
@@ -496,6 +496,22 @@
     "ocr.original": "Оригинал",
     "ocr.translation": "Перевод",
     "ocr.in_place_keys": "Пробел: оригинал   C: копировать перевод   Esc: закрыть",
-    "ocr.nothing_to_paint": "Нет текста с расположением для перевода на месте"
+    "ocr.nothing_to_paint": "Нет текста с расположением для перевода на месте",
+    "ocr.result.title": "Распознанный текст",
+    "ocr.result.larger": "Крупнее",
+    "ocr.result.smaller": "Мельче",
+    "ocr.result.boxes": "Показать найденные области",
+    "ocr.result.counts": "Символов: %s · строк: %s",
+    "ocr.result.failed": "Ничего не распознано",
+    "ocr.result.select_again": "Выделить заново",
+    "ocr.result.translator": "Переводчик",
+    "ocr.result.lens_note": "Google Lens переводит саму картинку, без второго запроса",
+    "ocr.result.no_lens_translation": "Google Lens не перевёл эту картинку",
+    "ocr.result.translating": "Перевод…",
+    "ocr.result.translate_hint": "Ещё не переведено. Перевести: %s",
+    "ocr.result.stale": "Текст изменён после перевода",
+    "ocr.result.to_main": "В главное окно",
+    "ocr.result.read_aloud": "Прочитать вслух",
+    "ocr.result.no_clipboard": "Буфер обмена недоступен"
   }
 }
