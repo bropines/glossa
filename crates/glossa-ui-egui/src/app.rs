@@ -860,7 +860,14 @@ impl eframe::App for GlossaApp {
             || self.history.is_some()
             || self.about_open
             || self.keyboard_open;
-        if !self.main_visible && needs_ui {
+        // Only until one of those windows exists: eframe runs the ui anyway
+        // while a child window is shown (an immediate viewport not drawn in
+        // a pass is dropped, so one that exists is on screen), and the
+        // command asks for a repaint each time it is sent; sending it every
+        // frame kept the program drawing ~10 frames a second for as long as
+        // a popup stayed open.
+        let child_shown = ctx.input(|i| i.raw.viewports.keys().any(|id| *id != egui::ViewportId::ROOT));
+        if !self.main_visible && needs_ui && !child_shown {
             ctx.send_viewport_cmd_to(egui::ViewportId::ROOT, egui::ViewportCommand::RequestPaintWhileHidden);
         }
         self.maybe_unload(needs_ui);
@@ -894,7 +901,7 @@ impl eframe::App for GlossaApp {
         }
         self.frames += 1;
         let ctx = ui.ctx().clone();
-        tracing::trace!(frame = self.frames, causes = ?ctx.repaint_causes(), "DBGFRAME");
+        tracing::trace!(frame = self.frames, causes = ?ctx.repaint_causes(), "frame");
         self.fonts.serve_requests(&ctx);
         self.save_zoom_later();
         if self.main_visible {
