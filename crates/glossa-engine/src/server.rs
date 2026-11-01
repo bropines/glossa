@@ -37,8 +37,10 @@
 //! which pot-app's bindings call without a token: with
 //! `[server] pot_compat_without_token` on, they are let through from a
 //! loopback peer only. They can only open windows, never return data. Any
-//! request carrying an `Origin` header (`null` included) is refused, so a web
-//! page cannot reach the API from the user's browser.
+//! request carrying a header only browsers send (`Origin`, `Sec-Fetch-*`,
+//! `Referer`) is refused, so a web page cannot reach the API from the user's
+//! browser, not even with an `<img>`; and the `Host` must be an address or
+//! `localhost`, which defeats DNS rebinding.
 
 use std::io::Read;
 use std::net::SocketAddr;
@@ -167,6 +169,7 @@ impl Reply {
             Error::MissingCredential { .. } => 412,
             Error::RateLimited { .. } => 429,
             Error::Timeout(_) => 504,
+            Error::Internal(_) => 500,
             _ => 502,
         };
         Reply::error(status, e)
@@ -185,7 +188,16 @@ impl Reply {
 }
 
 fn handle(engine: &Engine, mut req: Request) {
-    let reply = route(engine, &mut req);
+    // A bug behind one request answers 500 instead of ending the program
+    // (release builds unwind; the panic hook has logged the panic).
+    let reply = match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| route(engine, &mut req))) {
+        Ok(reply) => reply,
+        Err(payload) => {
+            let msg = glossa_core::error::panic_message(payload.as_ref());
+            tracing::error!("control API request panicked: {msg}");
+            Reply::error(500, format!("internal error: {msg}"))
+        }
+    };
     let mut resp = Response::from_data(reply.body).with_status_code(reply.status);
     if let Ok(h) = Header::from_bytes("Content-Type", reply.content_type) {
         resp = resp.with_header(h);
@@ -364,11 +376,58 @@ macro_rules! tri {
     };
 }
 
+/// Headers only a browser sends. `Origin` comes with scripts' requests and
+/// form posts (`null` from sandboxed frames and `file:` pages, which is no
+/// less a browser); the `Sec-Fetch-*` metadata comes with every request a
+/// current browser makes, an `<img>` or a link included, which is what an
+/// `Origin` check alone misses; `Referer` covers older browsers that send
+/// neither. Command-line tools and scripts send none of them.
+const BROWSER_HEADERS: &[&str] =
+    &["Origin", "Sec-Fetch-Site", "Sec-Fetch-Mode", "Sec-Fetch-Dest", "Sec-Fetch-User", "Referer"];
+
+fn from_a_browser(req: &Request) -> bool {
+    BROWSER_HEADERS.iter().any(|h| header(req, h).is_some())
+}
+
+/// Whether the `Host` header names this machine by address or as
+/// `localhost` (with any port). A page that rebinds its own domain name to
+/// 127.0.0.1 (DNS rebinding) still sends that domain as the host, so it is
+/// refused here even if it slipped past the browser checks. A server
+/// listening beyond loopback (`bind = "0.0.0.0:…"`, token required) is
+/// reached by its network address, so any IP address is accepted there,
+/// but still never a domain name. No `Host` at all is accepted: browsers
+/// always send one.
+fn host_allowed(host: Option<&str>, listening_beyond_loopback: bool) -> bool {
+    let Some(host) = host.map(str::trim) else { return true };
+    // Strip the port: `[::1]:60828`, `127.0.0.1:60828`, `localhost:60828`.
+    let name = if let Some(rest) = host.strip_prefix('[') {
+        match rest.split_once(']') {
+            Some((inside, after)) if after.is_empty() || after.starts_with(':') => inside,
+            _ => return false,
+        }
+    } else {
+        match host.rsplit_once(':') {
+            Some((name, port)) if !name.contains(':') && port.chars().all(|c| c.is_ascii_digit()) => name,
+            Some(_) => return false,
+            None => host,
+        }
+    };
+    if name.eq_ignore_ascii_case("localhost") {
+        return true;
+    }
+    match name.parse::<std::net::IpAddr>() {
+        Ok(ip) => ip.is_loopback() || listening_beyond_loopback,
+        Err(_) => false,
+    }
+}
+
 fn route(engine: &Engine, req: &mut Request) -> Reply {
-    // Browsers send `Origin: null` from sandboxed frames and `file:` pages,
-    // so `null` is no less a browser than any other origin.
-    if header(req, "Origin").is_some() {
+    if from_a_browser(req) {
         return Reply::error(403, "browser requests are not accepted");
+    }
+    let beyond_loopback = engine.config().server.bind.parse::<SocketAddr>().is_ok_and(|a| !a.ip().is_loopback());
+    if !host_allowed(header(req, "Host"), beyond_loopback) {
+        return Reply::error(403, "the Host header must be 127.0.0.1, localhost or [::1]");
     }
     let url = req.url().to_owned();
     let path = url.split('?').next().unwrap_or("/").trim_end_matches('/').to_owned();
@@ -621,19 +680,19 @@ mod tests {
     fn health_is_open_and_everything_else_needs_the_token() {
         let (e, dir) = engine();
         let server = start(e.clone()).unwrap();
-        let (status, body) = request(server.addr, "GET /health HTTP/1.1\r\nHost: x\r\nConnection: close\r\n\r\n");
+        let (status, body) = request(server.addr, "GET /health HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: close\r\n\r\n");
         assert_eq!(status, 200);
         assert!(body.contains("\"glossa\""));
 
-        let (status, _) = request(server.addr, "GET /v1/services HTTP/1.1\r\nHost: x\r\nConnection: close\r\n\r\n");
+        let (status, _) = request(server.addr, "GET /v1/services HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: close\r\n\r\n");
         assert_eq!(status, 401);
         let (status, body) =
-            request(server.addr, "GET /v1/services?token=secret HTTP/1.1\r\nHost: x\r\nConnection: close\r\n\r\n");
+            request(server.addr, "GET /v1/services?token=secret HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: close\r\n\r\n");
         assert_eq!(status, 200);
         assert!(body.contains("\"google\""));
         let (status, _) = request(
             server.addr,
-            "GET /v1/services HTTP/1.1\r\nHost: x\r\nAuthorization: Bearer secret\r\nConnection: close\r\n\r\n",
+            "GET /v1/services HTTP/1.1\r\nHost: 127.0.0.1\r\nAuthorization: Bearer secret\r\nConnection: close\r\n\r\n",
         );
         assert_eq!(status, 200);
         server.stop();
@@ -646,7 +705,7 @@ mod tests {
         let server = start(e).unwrap();
         let (status, _) = request(
             server.addr,
-            "GET /v1/services?token=secret HTTP/1.1\r\nHost: x\r\nOrigin: https://evil.example\r\nConnection: close\r\n\r\n",
+            "GET /v1/services?token=secret HTTP/1.1\r\nHost: 127.0.0.1\r\nOrigin: https://evil.example\r\nConnection: close\r\n\r\n",
         );
         assert_eq!(status, 403);
         std::fs::remove_dir_all(&dir).ok();
@@ -659,7 +718,7 @@ mod tests {
         let server = start(e).unwrap();
         let (status, _) = request(
             server.addr,
-            "GET /v1/action/show_popup?token=secret&text=hello%20world HTTP/1.1\r\nHost: x\r\nConnection: close\r\n\r\n",
+            "GET /v1/action/show_popup?token=secret&text=hello%20world HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: close\r\n\r\n",
         );
         assert_eq!(status, 202);
         let got = (0..50).find_map(|_| match rx.recv_timeout(Duration::from_millis(100)) {
@@ -669,13 +728,13 @@ mod tests {
         assert_eq!(got, Some((Action::ShowPopup, Some("hello world".into()))));
         let (status, _) = request(
             server.addr,
-            "GET /v1/action/self_destruct?token=secret HTTP/1.1\r\nHost: x\r\nConnection: close\r\n\r\n",
+            "GET /v1/action/self_destruct?token=secret HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: close\r\n\r\n",
         );
         assert_eq!(status, 404);
         // pot-app's endpoint maps onto the same action.
         let (status, _) = request(
             server.addr,
-            "GET /selection_translate?token=secret HTTP/1.1\r\nHost: x\r\nConnection: close\r\n\r\n",
+            "GET /selection_translate?token=secret HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: close\r\n\r\n",
         );
         assert_eq!(status, 202);
         std::fs::remove_dir_all(&dir).ok();
@@ -688,19 +747,19 @@ mod tests {
         let body = "{not json";
         let (status, resp) = request(
             server.addr,
-            &format!("POST /v1/translate?token=secret HTTP/1.1\r\nHost: x\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}", body.len()),
+            &format!("POST /v1/translate?token=secret HTTP/1.1\r\nHost: 127.0.0.1\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}", body.len()),
         );
         assert_eq!(status, 400);
         assert!(resp.contains("invalid JSON"));
         let (status, _) = request(
             server.addr,
-            "POST /v1/translate?token=secret HTTP/1.1\r\nHost: x\r\nContent-Length: 2\r\nConnection: close\r\n\r\n{}",
+            "POST /v1/translate?token=secret HTTP/1.1\r\nHost: 127.0.0.1\r\nContent-Length: 2\r\nConnection: close\r\n\r\n{}",
         );
         assert_eq!(status, 400, "text is required");
         let body = r#"{"image_base64":"iVBORw0KGgo=","format":"pdf"}"#;
         let (status, resp) = request(
             server.addr,
-            &format!("POST /v1/ocr?token=secret HTTP/1.1\r\nHost: x\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}", body.len()),
+            &format!("POST /v1/ocr?token=secret HTTP/1.1\r\nHost: 127.0.0.1\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}", body.len()),
         );
         assert_eq!(status, 400);
         assert!(resp.contains("unknown format"), "{resp}");
@@ -722,7 +781,7 @@ mod tests {
         request(
             addr,
             &format!(
-                "{method} {path} HTTP/1.1\r\nHost: x\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                "{method} {path} HTTP/1.1\r\nHost: 127.0.0.1\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
                 body.len()
             ),
         )
@@ -750,16 +809,91 @@ mod tests {
         let server = start(e).unwrap();
         let (status, _) = request(
             server.addr,
-            "GET /v1/services?token=secret HTTP/1.1\r\nHost: x\r\nOrigin: null\r\nConnection: close\r\n\r\n",
+            "GET /v1/services?token=secret HTTP/1.1\r\nHost: 127.0.0.1\r\nOrigin: null\r\nConnection: close\r\n\r\n",
         );
         assert_eq!(status, 403);
         // Not even pot-app's open routes take a browser request.
         let (status, _) = request(
             server.addr,
-            "GET /selection_translate HTTP/1.1\r\nHost: x\r\nOrigin: null\r\nConnection: close\r\n\r\n",
+            "GET /selection_translate HTTP/1.1\r\nHost: 127.0.0.1\r\nOrigin: null\r\nConnection: close\r\n\r\n",
         );
         assert_eq!(status, 403);
         std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn anything_a_browser_sends_is_refused_even_without_an_origin() {
+        let (e, dir) = engine();
+        let server = start(e).unwrap();
+        // What an `<img src=http://127.0.0.1:60828/selection_translate>` on
+        // a page sends: no Origin, but fetch metadata.
+        for extra in [
+            "Sec-Fetch-Site: cross-site\r\n",
+            "Sec-Fetch-Mode: no-cors\r\n",
+            "Sec-Fetch-Dest: image\r\n",
+            "Sec-Fetch-User: ?1\r\n",
+            "Referer: https://evil.example/page\r\n",
+        ] {
+            let (status, _) = request(
+                server.addr,
+                &format!("GET /selection_translate HTTP/1.1\r\nHost: 127.0.0.1\r\n{extra}Connection: close\r\n\r\n"),
+            );
+            assert_eq!(status, 403, "{extra}");
+            // The token does not make a browser request acceptable either.
+            let (status, _) = request(
+                server.addr,
+                &format!("GET /v1/services?token=secret HTTP/1.1\r\nHost: 127.0.0.1\r\n{extra}Connection: close\r\n\r\n"),
+            );
+            assert_eq!(status, 403, "{extra}");
+        }
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn the_host_must_name_this_machine() {
+        let (e, dir) = engine();
+        let server = start(e).unwrap();
+        let port = server.addr.port();
+        for host in ["127.0.0.1".to_owned(), format!("127.0.0.1:{port}"), format!("localhost:{port}"), "LOCALHOST".into(), format!("[::1]:{port}")] {
+            let (status, _) = request(
+                server.addr,
+                &format!("GET /v1/services?token=secret HTTP/1.1\r\nHost: {host}\r\nConnection: close\r\n\r\n"),
+            );
+            assert_eq!(status, 200, "{host}");
+        }
+        // A rebinding page sends its own name; health included.
+        for path in ["/health", "/selection_translate", "/v1/services?token=secret"] {
+            let (status, _) = request(
+                server.addr,
+                &format!("GET {path} HTTP/1.1\r\nHost: evil.example:{port}\r\nConnection: close\r\n\r\n"),
+            );
+            assert_eq!(status, 403, "{path}");
+        }
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn host_names_are_parsed_strictly() {
+        for ok in ["127.0.0.1", "127.0.0.1:60828", "localhost", "localhost:1", "[::1]", "[::1]:60828", "127.5.6.7"] {
+            assert!(host_allowed(Some(ok), false), "{ok}");
+        }
+        for bad in [
+            "evil.example",
+            "localhost.evil.example",
+            "127.0.0.1.nip.io",
+            "192.168.1.5:60828",
+            "[::1]x",
+            "127.0.0.1:port",
+            "::1",
+            "",
+        ] {
+            assert!(!host_allowed(Some(bad), false), "{bad}");
+        }
+        assert!(host_allowed(None, false), "no Host: not a browser");
+        // Listening on the network: its address is fine, a name still is not.
+        assert!(host_allowed(Some("192.168.1.5:60828"), true));
+        assert!(host_allowed(Some("[fe80::1]:60828"), true));
+        assert!(!host_allowed(Some("glossa.lan:60828"), true));
     }
 
     #[test]
@@ -785,12 +919,12 @@ mod tests {
         let (e, dir) = engine();
         let server = start(e).unwrap();
         let out =
-            raw(server.addr, "DELETE /v1/translate?token=secret HTTP/1.1\r\nHost: x\r\nConnection: close\r\n\r\n");
+            raw(server.addr, "DELETE /v1/translate?token=secret HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: close\r\n\r\n");
         assert!(out.starts_with("HTTP/1.1 405"), "{out}");
         assert!(out.lines().any(|l| l.eq_ignore_ascii_case("allow: GET, POST")), "{out}");
-        let out = raw(server.addr, "GET /v1/speak?token=secret HTTP/1.1\r\nHost: x\r\nConnection: close\r\n\r\n");
+        let out = raw(server.addr, "GET /v1/speak?token=secret HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: close\r\n\r\n");
         assert!(out.starts_with("HTTP/1.1 405") && out.contains("Allow: POST"), "{out}");
-        let out = raw(server.addr, "GET /translate?token=secret HTTP/1.1\r\nHost: x\r\nConnection: close\r\n\r\n");
+        let out = raw(server.addr, "GET /translate?token=secret HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: close\r\n\r\n");
         assert!(out.starts_with("HTTP/1.1 405"), "{out}");
         assert_eq!(call(server.addr, "GET", "/v1/nothing?token=secret", "").0, 404);
         std::fs::remove_dir_all(&dir).ok();

@@ -117,13 +117,14 @@ Errors have a status code and a body of the form:
 |---|---|
 | 400 | Invalid JSON, a missing `text`, empty text, an unknown language, capability, service or OCR engine id, a boolean that is not one, an unknown OCR `format`, the same source and target language, a configuration problem with a translation service. |
 | 401 | The token is missing or wrong. |
-| 403 | The request carries an `Origin` header (any value, `null` included). |
+| 403 | The request came from a browser: it carries an `Origin`, `Sec-Fetch-Site`, `Sec-Fetch-Mode`, `Sec-Fetch-Dest`, `Sec-Fetch-User` or `Referer` header (any value). Or its `Host` header is a name other than `localhost` (see [Security](#security)). |
 | 404 | No such route or action; no service can do what was asked (no speech service). |
 | 405 | The path exists but not for this method; the `Allow` header lists the methods it answers. |
 | 412 | The service needs a key that is not set. |
 | 413 | The body is larger than 32 MiB. |
 | 422 | No text was found in the image, or the language could not be detected. |
 | 429 | The service is rate-limiting. |
+| 500 | A bug in Glossa: the code handling the request panicked. The program keeps running; the log has the details. |
 | 502 | The service failed otherwise (network error, unexpected answer). |
 | 503 | `/v1/ocr` only: the OCR engine is not installed or not set up (Lens without chrome-lens-py, Tesseract missing, no engine at all). The request was fine; the machine needs setting up. |
 | 504 | The service timed out. |
@@ -362,7 +363,9 @@ without one when all of these hold:
 
 - `[server] pot_compat_without_token` is on (the default);
 - the request comes from a loopback address (this machine);
-- it has no `Origin` header (no request with one gets anywhere, as below).
+- it carries none of the headers browsers send (no request with one gets
+  anywhere, as below), and its `Host` is `127.0.0.1`, `localhost` or
+  `[::1]`.
 
 A token, when sent, is still accepted. Every other route needs the token
 regardless.
@@ -372,14 +375,20 @@ show the popup or the main window, start a screen recognition, or put text
 of its choosing into the popup. It cannot read anything back (the answer is
 only `{"accepted": …}`), cannot reach the translation, OCR or speech
 endpoints that use your service keys, and cannot type into other programs
-(`replace_selection` and `convert_layout` are not among these routes). A
-web page's scripts cannot use it, since `fetch` and form posts carry an
-`Origin`; but an image or a link on a page is a plain `GET` without one, so
-a page you visit could open the popup on your selection, the main window
-or a screen recognition. That is a nuisance, not a leak: the results show
-on your screen, never in the page. If even that is too much, set
-`pot_compat_without_token = false` and add `?token=…` to the bindings'
-URLs.
+(`replace_selection` and `convert_layout` are not among these routes).
+
+Web pages cannot use them. A page's scripts and forms send an `Origin`
+header. An image or a link on a page (`<img
+src="http://127.0.0.1:60828/selection_translate">`) sends no `Origin`, but
+every current browser sends fetch metadata with it (`Sec-Fetch-Site`,
+`Sec-Fetch-Mode`, `Sec-Fetch-Dest`; Chrome and Edge since 2020, Firefox
+since version 90, Safari since 16.4), and Glossa refuses any request with
+one, or with a `Referer`. That is why the tokenless default is safe to keep:
+what remains open is programs already running on this machine, which could
+equally press the hotkey. The one gap is a browser too old to send fetch
+metadata, on an `https` page (whose links to `http` carry no `Referer`).
+If that matters, set `pot_compat_without_token = false` and add `?token=…`
+to the bindings' URLs.
 
 ## Binding hotkeys to it
 
@@ -506,12 +515,19 @@ In Windows PowerShell 5.1, `curl` is an alias of `Invoke-WebRequest`; call
   plain text, as are service keys.
 - **Prefer the header.** A token in the query string ends up in shell
   history and in the process list while `curl` runs.
-- **Browsers are refused.** A request with an `Origin` header, whatever its
-  value (`null` included: sandboxed frames and `file:` pages send that),
-  gets 403, so a web page's scripts cannot use the API, even with the
-  token. Requests a page can make without an `Origin` header (a link, an
-  image) still need the token, which a page has no way to learn, except on
-  the pot-app routes described above. The `Host` header is not checked.
+- **Browsers are refused.** A request with any of the headers only
+  browsers send gets 403, whatever the value and even with the token:
+  `Origin` (scripts and form posts; `null` from sandboxed frames and
+  `file:` pages), `Sec-Fetch-Site`, `Sec-Fetch-Mode`, `Sec-Fetch-Dest`,
+  `Sec-Fetch-User` (every request of a current browser, images and links
+  included) and `Referer`. `curl`, PowerShell, AutoHotkey and the like send
+  none of these.
+- **The `Host` is checked.** It must be `127.0.0.1`, another loopback
+  address, `[::1]` or `localhost`, with any port (or absent, which browsers
+  never do). A page that points its own domain at 127.0.0.1 (DNS
+  rebinding) still sends its domain as the host and gets 403. A server
+  listening beyond loopback also accepts its network address as the host,
+  but never a domain name.
 - **What the token allows.** Translating text through your configured
   services (with your keys), typing into the foreground program
   (`replace_selection`, `convert_layout`), showing the clipboard
