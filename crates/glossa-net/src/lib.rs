@@ -361,7 +361,15 @@ impl HttpClient {
         };
 
         call.map_err(|e| match e {
-            ureq::Error::Timeout(_) => Error::Timeout(request.timeout.unwrap_or(self.timeout).as_millis() as u64),
+            ureq::Error::Timeout(phase) => {
+                let budget = request.timeout.unwrap_or(self.timeout);
+                let ms = match phase {
+                    ureq::Timeout::Resolve | ureq::Timeout::Connect => budget.min(CONNECT_BUDGET),
+                    _ => budget,
+                };
+                tracing::debug!(url = %redact(&request.url), phase = %phase, "timed out");
+                Error::Timeout(ms.as_millis() as u64)
+            }
             other => Error::Network(format!("{provider}: {other}")),
         })
     }
@@ -383,11 +391,20 @@ impl HttpClient {
     }
 }
 
+/// The most that looking up a host, or connecting to it (TCP, any proxy
+/// negotiation and the TLS handshake), may take, within the overall timeout.
+/// These take a fraction of a second when they work; a server that answers
+/// slowly is given the rest of the budget, a host that cannot be reached is
+/// given up on early so the next service gets its turn.
+const CONNECT_BUDGET: Duration = Duration::from_secs(5);
+
 fn build_agent(settings: &Network, proxy: Option<ProxySpec>) -> Result<ureq::Agent, Error> {
     let timeout = Duration::from_secs(settings.timeout_secs.max(1));
     let cfg = ureq::Agent::config_builder()
         .http_status_as_error(false)
         .timeout_global(Some(timeout))
+        .timeout_resolve(Some(timeout.min(CONNECT_BUDGET)))
+        .timeout_connect(Some(timeout.min(CONNECT_BUDGET)))
         .max_redirects(8)
         .user_agent(if settings.user_agent.is_empty() {
             DEFAULT_USER_AGENT.to_owned()
@@ -451,6 +468,11 @@ impl Http for HttpClient {
         loop {
             let result = self.send_once(&request);
             let retry = match &result {
+                // A timeout has used the whole budget already; waiting for it
+                // again doubles the time before the engine moves on to the
+                // next service. A host the network black-holes (TLS to some
+                // CDNs is dropped by DPI on some networks) cost 20 s that way.
+                Err(Error::Timeout(_)) => false,
                 Err(e) if e.is_transient() => true,
                 Ok(r) => matches!(r.status, 429 | 500 | 502 | 503 | 504),
                 Err(_) => false,
@@ -884,11 +906,29 @@ mod tests {
         assert!(matches!(err, Error::Timeout(_)), "{err:?}");
         assert!(started.elapsed() < Duration::from_millis(2500), "took {:?}", started.elapsed());
 
-        // One retry: the timeout twice plus the back-off, and no more.
+        // Retries are allowed, but a timeout is not repeated: the engine
+        // moves on to the next service instead.
         let started = Instant::now();
-        assert!(client(1, 1).send(HttpRequest::get(&url)).is_err());
+        assert!(client(1, 2).send(HttpRequest::get(&url)).is_err());
+        assert!(started.elapsed() < Duration::from_millis(2500), "took {:?}", started.elapsed());
+    }
+
+    #[test]
+    fn a_handshake_that_never_finishes_is_given_up_within_the_connect_budget() {
+        // Accepts TCP but never answers the TLS ClientHello: what a
+        // black-holed CDN looks like through DPI.
+        let url = stalling_server(|mut s| {
+            use std::io::Read as _;
+            let mut buf = [0u8; 2048];
+            let _ = s.read(&mut buf);
+            std::thread::sleep(Duration::from_secs(30));
+        });
+        let https = url.replacen("http://", "https://", 1);
+        let started = Instant::now();
+        let err = client(30, 2).send(HttpRequest::get(&https)).unwrap_err();
         let took = started.elapsed();
-        assert!(took >= Duration::from_millis(1900) && took < Duration::from_millis(4500), "took {took:?}");
+        assert!(matches!(err, Error::Timeout(ms) if ms == CONNECT_BUDGET.as_millis() as u64), "{err:?}");
+        assert!(took >= CONNECT_BUDGET && took < CONNECT_BUDGET + Duration::from_secs(2), "took {took:?}");
     }
 
     #[test]
