@@ -9,7 +9,12 @@
 //!   was selected is for the caller to find out (UI Automation).
 //! * **Linux**: the PRIMARY selection is the X11 meaning of "selected with
 //!   the mouse", so it is watched directly and reported with its text.
-//! * **macOS**: not available yet.
+//! * **macOS**: a listen-only Quartz event tap on a thread of its own (with
+//!   its own run loop) reports the same gestures as on Windows; the system's
+//!   click count tells double clicks, with the user's double-click speed.
+//!   Clicks on Glossa's own windows are ignored. The selection is then read
+//!   through Accessibility (`AXSelectedText`). The tap needs Accessibility
+//!   or Input Monitoring; without either, macOS refuses to create it.
 //!
 //! The callback runs on the watcher's thread and must return quickly: hand
 //! the gesture to a channel.
@@ -18,7 +23,9 @@
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Gesture {
     /// A drag or a double click that may have selected something, at this
-    /// screen position (physical pixels). `ctrl`: Ctrl was held.
+    /// screen position (physical pixels; on macOS points, as
+    /// [`crate::window::cursor_position`] gives them there). `ctrl`: Ctrl
+    /// was held (on macOS, Ctrl or Cmd).
     Selected { at: (i32, i32), ctrl: bool },
     /// A new PRIMARY selection with its text (Linux).
     Text { text: String, at: Option<(i32, i32)> },
@@ -33,6 +40,19 @@ impl MouseWatcher {
     pub fn start(on_gesture: impl Fn(Gesture) + Send + 'static) -> crate::Result<MouseWatcher> {
         Ok(MouseWatcher { imp: imp::Watcher::start(Box::new(on_gesture))? })
     }
+
+    /// Whether mouse mode can work in this session: Windows, macOS and X11.
+    /// Wayland gives no program the mouse or the PRIMARY selection of
+    /// another.
+    pub fn supported() -> bool {
+        if cfg!(any(windows, target_os = "macos")) {
+            true
+        } else if cfg!(target_os = "linux") {
+            !crate::Session::detect().is_wayland()
+        } else {
+            false
+        }
+    }
 }
 
 impl Drop for MouseWatcher {
@@ -42,7 +62,7 @@ impl Drop for MouseWatcher {
 }
 
 /// Whether a press and a release this far apart are a drag, not a click.
-#[cfg_attr(not(windows), allow(dead_code))]
+#[cfg_attr(not(any(windows, target_os = "macos")), allow(dead_code))]
 fn is_drag(down: (i32, i32), up: (i32, i32)) -> bool {
     let (dx, dy) = ((up.0 - down.0).abs(), (up.1 - down.1).abs());
     dx.max(dy) >= 5
@@ -271,7 +291,278 @@ mod imp {
     }
 }
 
-#[cfg(not(any(windows, target_os = "linux")))]
+#[cfg(target_os = "macos")]
+mod imp {
+    use std::cell::Cell;
+    use std::ffi::c_void;
+    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::sync::{mpsc, Arc};
+    use std::thread::JoinHandle;
+
+    use super::{is_drag, Gesture, Sink};
+
+    // Declared by hand, like `macos_ax`: a dozen functions do not justify a
+    // binding crate.
+    type CFTypeRef = *const c_void;
+    type CFMachPortRef = *mut c_void;
+    type CFRunLoopRef = *mut c_void;
+    type CFRunLoopSourceRef = *mut c_void;
+    type CFStringRef = *const c_void;
+    type CFArrayRef = *const c_void;
+    type CGEventRef = *mut c_void;
+    type CGEventTapProxy = *mut c_void;
+    type TapCallback = extern "C" fn(CGEventTapProxy, u32, CGEventRef, *mut c_void) -> CGEventRef;
+
+    #[repr(C)]
+    #[derive(Clone, Copy)]
+    struct CGPoint {
+        x: f64,
+        y: f64,
+    }
+
+    const SESSION_EVENT_TAP: u32 = 1; // kCGSessionEventTap
+    const HEAD_INSERT_EVENT_TAP: u32 = 0; // kCGHeadInsertEventTap
+    const TAP_LISTEN_ONLY: u32 = 1; // kCGEventTapOptionListenOnly
+    const LEFT_MOUSE_DOWN: u32 = 1; // kCGEventLeftMouseDown
+    const LEFT_MOUSE_UP: u32 = 2; // kCGEventLeftMouseUp
+    const TAP_DISABLED_BY_TIMEOUT: u32 = 0xFFFF_FFFE;
+    const TAP_DISABLED_BY_USER_INPUT: u32 = 0xFFFF_FFFF;
+    const FIELD_CLICK_STATE: u32 = 1; // kCGMouseEventClickState
+    const FIELD_WINDOW_UNDER_POINTER: u32 = 91; // kCGMouseEventWindowUnderMousePointer
+    const FLAG_CONTROL: u64 = 0x0004_0000; // kCGEventFlagMaskControl
+    const FLAG_COMMAND: u64 = 0x0010_0000; // kCGEventFlagMaskCommand
+    const WINDOW_LIST_INCLUDING_WINDOW: u32 = 1 << 3; // kCGWindowListOptionIncludingWindow
+    const CF_NUMBER_SINT64: isize = 4; // kCFNumberSInt64Type
+    const RUN_LOOP_FINISHED: i32 = 1; // kCFRunLoopRunFinished
+
+    #[link(name = "CoreGraphics", kind = "framework")]
+    extern "C" {
+        fn CGEventTapCreate(
+            tap: u32,
+            place: u32,
+            options: u32,
+            events_of_interest: u64,
+            callback: TapCallback,
+            user_info: *mut c_void,
+        ) -> CFMachPortRef;
+        fn CGEventTapEnable(tap: CFMachPortRef, enable: bool);
+        fn CGEventGetLocation(event: CGEventRef) -> CGPoint;
+        fn CGEventGetIntegerValueField(event: CGEventRef, field: u32) -> i64;
+        fn CGEventGetFlags(event: CGEventRef) -> u64;
+        fn CGWindowListCopyWindowInfo(option: u32, relative_to: u32) -> CFArrayRef;
+        static kCGWindowOwnerPID: CFStringRef;
+    }
+
+    #[link(name = "CoreFoundation", kind = "framework")]
+    extern "C" {
+        static kCFRunLoopDefaultMode: CFStringRef;
+        fn CFMachPortCreateRunLoopSource(alloc: *const c_void, port: CFMachPortRef, order: isize)
+            -> CFRunLoopSourceRef;
+        fn CFMachPortInvalidate(port: CFMachPortRef);
+        fn CFRunLoopGetCurrent() -> CFRunLoopRef;
+        fn CFRunLoopAddSource(run_loop: CFRunLoopRef, source: CFRunLoopSourceRef, mode: CFStringRef);
+        fn CFRunLoopRunInMode(mode: CFStringRef, seconds: f64, return_after_source_handled: u8) -> i32;
+        fn CFRunLoopStop(run_loop: CFRunLoopRef);
+        fn CFRetain(cf: CFTypeRef) -> CFTypeRef;
+        fn CFRelease(cf: CFTypeRef);
+        fn CFArrayGetCount(array: CFArrayRef) -> isize;
+        fn CFArrayGetValueAtIndex(array: CFArrayRef, index: isize) -> *const c_void;
+        fn CFDictionaryGetValue(dict: *const c_void, key: *const c_void) -> *const c_void;
+        fn CFNumberGetValue(number: CFTypeRef, kind: isize, out: *mut c_void) -> u8;
+    }
+
+    /// What the tap callback works with. Lives on the watcher thread's
+    /// stack for as long as the tap exists, and is only touched there.
+    struct TapState {
+        tap: Cell<CFMachPortRef>,
+        down: Cell<Option<(i32, i32)>>,
+        sink: Sink,
+    }
+
+    /// The process that owns window number `window`, if any. Window owners
+    /// are readable without the Screen Recording permission (titles are
+    /// not, and are not needed).
+    fn owner_pid(window: u32) -> Option<i64> {
+        if window == 0 {
+            return None;
+        }
+        // SAFETY: the copied array is ours and released below; the values
+        // read from it are borrowed from it while it lives.
+        unsafe {
+            let list = CGWindowListCopyWindowInfo(WINDOW_LIST_INCLUDING_WINDOW, window);
+            if list.is_null() {
+                return None;
+            }
+            let mut pid = None;
+            if CFArrayGetCount(list) > 0 {
+                let info = CFArrayGetValueAtIndex(list, 0);
+                let number = CFDictionaryGetValue(info, kCGWindowOwnerPID);
+                let mut value: i64 = 0;
+                if !number.is_null() && CFNumberGetValue(number, CF_NUMBER_SINT64, (&mut value as *mut i64).cast()) != 0
+                {
+                    pid = Some(value);
+                }
+            }
+            CFRelease(list);
+            pid
+        }
+    }
+
+    fn point(event: CGEventRef) -> (i32, i32) {
+        // SAFETY: `event` is the live event the tap was called with.
+        let p = unsafe { CGEventGetLocation(event) };
+        (p.x.round() as i32, p.y.round() as i32)
+    }
+
+    fn handle(st: &TapState, kind: u32, event: CGEventRef) {
+        match kind {
+            TAP_DISABLED_BY_TIMEOUT | TAP_DISABLED_BY_USER_INPUT => {
+                // macOS switches off a tap it finds slow; switch it back on.
+                let tap = st.tap.get();
+                if !tap.is_null() {
+                    // SAFETY: our own live tap.
+                    unsafe { CGEventTapEnable(tap, true) };
+                }
+            }
+            LEFT_MOUSE_DOWN => st.down.set(Some(point(event))),
+            LEFT_MOUSE_UP => {
+                let Some(down) = st.down.take() else { return };
+                let at = point(event);
+                // SAFETY: plain field reads from the live event.
+                let (clicks, flags, window) = unsafe {
+                    (
+                        CGEventGetIntegerValueField(event, FIELD_CLICK_STATE),
+                        CGEventGetFlags(event),
+                        CGEventGetIntegerValueField(event, FIELD_WINDOW_UNDER_POINTER),
+                    )
+                };
+                // The system counts clicks with the user's double-click speed.
+                if !is_drag(down, at) && clicks < 2 {
+                    return;
+                }
+                if owner_pid(window as u32) == Some(i64::from(std::process::id())) {
+                    return;
+                }
+                (st.sink)(Gesture::Selected { at, ctrl: flags & (FLAG_CONTROL | FLAG_COMMAND) != 0 });
+            }
+            _ => {}
+        }
+    }
+
+    extern "C" fn on_event(
+        _proxy: CGEventTapProxy,
+        kind: u32,
+        event: CGEventRef,
+        user_info: *mut c_void,
+    ) -> CGEventRef {
+        // A panic must not unwind into CoreGraphics.
+        let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            // SAFETY: `user_info` is the `TapState` the watcher thread keeps
+            // alive while its run loop, which calls this, runs.
+            let st = unsafe { &*(user_info as *const TapState) };
+            handle(st, kind, event);
+        }));
+        // A listen-only tap's return value is ignored.
+        event
+    }
+
+    pub struct Watcher {
+        stop: Arc<AtomicBool>,
+        /// The watcher thread's run loop, retained (a `CFRunLoopRef`).
+        run_loop: usize,
+        thread: Option<JoinHandle<()>>,
+    }
+
+    impl Watcher {
+        pub fn start(sink: Sink) -> crate::Result<Watcher> {
+            let stop = Arc::new(AtomicBool::new(false));
+            let flag = stop.clone();
+            let (ready_tx, ready_rx) = mpsc::channel::<Option<usize>>();
+            let thread = std::thread::Builder::new()
+                .name("glossa-mouse".into())
+                .spawn(move || {
+                    let state = TapState { tap: Cell::new(std::ptr::null_mut()), down: Cell::new(None), sink };
+                    let mask = (1u64 << LEFT_MOUSE_DOWN) | (1u64 << LEFT_MOUSE_UP);
+                    // SAFETY: `state` outlives the tap, which is disabled,
+                    // invalidated and released below before `state` drops;
+                    // every CF object created here is released here.
+                    unsafe {
+                        let tap = CGEventTapCreate(
+                            SESSION_EVENT_TAP,
+                            HEAD_INSERT_EVENT_TAP,
+                            TAP_LISTEN_ONLY,
+                            mask,
+                            on_event,
+                            &state as *const TapState as *mut c_void,
+                        );
+                        if tap.is_null() {
+                            let _ = ready_tx.send(None);
+                            return;
+                        }
+                        state.tap.set(tap);
+                        let source = CFMachPortCreateRunLoopSource(std::ptr::null(), tap, 0);
+                        if source.is_null() {
+                            CFMachPortInvalidate(tap);
+                            CFRelease(tap);
+                            let _ = ready_tx.send(None);
+                            return;
+                        }
+                        let run_loop = CFRunLoopGetCurrent();
+                        CFRunLoopAddSource(run_loop, source, kCFRunLoopDefaultMode);
+                        CGEventTapEnable(tap, true);
+                        CFRetain(run_loop);
+                        let _ = ready_tx.send(Some(run_loop as usize));
+                        // In slices, so a stop that lands between two runs
+                        // (where `CFRunLoopStop` would be missed) still ends
+                        // the loop within a second.
+                        while !flag.load(Ordering::Relaxed) {
+                            if CFRunLoopRunInMode(kCFRunLoopDefaultMode, 1.0, 0) == RUN_LOOP_FINISHED {
+                                break;
+                            }
+                        }
+                        CGEventTapEnable(tap, false);
+                        CFMachPortInvalidate(tap);
+                        CFRelease(source);
+                        CFRelease(tap);
+                    }
+                })
+                .map_err(|e| crate::platform_err(format!("mouse watcher: {e}")))?;
+            match ready_rx.recv() {
+                Ok(Some(run_loop)) => Ok(Watcher { stop, run_loop, thread: Some(thread) }),
+                _ => {
+                    let _ = thread.join();
+                    // Show the system's Input Monitoring prompt (once); either
+                    // permission lets the tap be made.
+                    use crate::permissions::{request, Permission};
+                    request(Permission::InputMonitoring);
+                    Err(crate::platform_err(
+                        "macOS does not let Glossa watch the mouse: allow it under System Settings > Privacy & \
+                         Security > Accessibility (or Input Monitoring), then turn mouse mode off and on again",
+                    ))
+                }
+            }
+        }
+
+        pub fn stop(&mut self) {
+            self.stop.store(true, Ordering::Relaxed);
+            if self.run_loop != 0 {
+                // SAFETY: a run loop we retained; stopping one from another
+                // thread is allowed.
+                unsafe { CFRunLoopStop(self.run_loop as CFRunLoopRef) };
+            }
+            if let Some(t) = self.thread.take() {
+                let _ = t.join();
+            }
+            if self.run_loop != 0 {
+                // SAFETY: the reference retained in `start`.
+                unsafe { CFRelease(self.run_loop as CFTypeRef) };
+                self.run_loop = 0;
+            }
+        }
+    }
+}
+
+#[cfg(not(any(windows, target_os = "linux", target_os = "macos")))]
 mod imp {
     use super::Sink;
 
@@ -299,5 +590,27 @@ mod tests {
         assert!(!is_double(((10, 10), 1000), ((11, 12), 1600), 500), "too slow");
         assert!(!is_double(((10, 10), 1000), ((30, 10), 1100), 500), "too far");
         assert!(is_double(((10, 10), u32::MAX - 100), ((10, 10), 200), 500), "the tick counter wraps");
+    }
+
+    #[test]
+    fn supported_where_there_is_a_watcher() {
+        if cfg!(any(windows, target_os = "macos")) {
+            assert!(MouseWatcher::supported());
+        }
+    }
+
+    /// Installs the real hook or event tap and removes it again; nothing is
+    /// clicked. On macOS the process (or the terminal running it) needs
+    /// Accessibility or Input Monitoring:
+    /// `cargo test -p glossa-platform mouse -- --ignored`.
+    #[cfg(any(windows, target_os = "macos"))]
+    #[test]
+    #[ignore = "needs a desktop session"]
+    fn the_watcher_starts_and_stops_live() {
+        let started = std::time::Instant::now();
+        let w = MouseWatcher::start(|g| println!("{g:?}")).expect("watcher");
+        std::thread::sleep(std::time::Duration::from_millis(300));
+        drop(w);
+        assert!(started.elapsed() < std::time::Duration::from_secs(3), "stopping took {:?}", started.elapsed());
     }
 }

@@ -1854,6 +1854,7 @@ fn permissions(app: &mut GlossaApp, ui: &mut egui::Ui) {
         let (name, why) = match p {
             Permission::Accessibility => ("options.permissions.accessibility", "options.permissions.accessibility_why"),
             Permission::ScreenRecording => ("options.permissions.screen", "options.permissions.screen_why"),
+            Permission::InputMonitoring => ("options.permissions.input", "options.permissions.input_why"),
         };
         group(ui, &look, &app.t(name), |ui| {
             ui.label(RichText::new(app.t(why)).color(look.weak_text()));
