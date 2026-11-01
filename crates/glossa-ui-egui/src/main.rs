@@ -151,6 +151,16 @@ fn main() -> eframe::Result<()> {
         }
     };
 
+    // macOS: reading and replacing the selection need Accessibility; show
+    // the system's prompt once at start rather than failing silently later.
+    {
+        use glossa_platform::permissions::{request, status, Permission, Status};
+        if status(Permission::Accessibility) == Status::Missing {
+            tracing::info!("asking for the Accessibility permission");
+            request(Permission::Accessibility);
+        }
+    }
+
     let pump = glossa_platform::idle::IdlePump::for_current_thread();
     let wake = Arc::new(Wake { ctx: parking_lot::Mutex::new(None), idle: pump.waker() });
     let shell = build_shell(engine.clone(), wake.clone());

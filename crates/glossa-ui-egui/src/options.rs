@@ -30,11 +30,12 @@ pub enum Page {
     Ocr,
     Modules,
     Api,
+    Permissions,
     Updates,
 }
 
 impl Page {
-    const ALL: [Page; 12] = [
+    const ALL: [Page; 13] = [
         Page::Basics,
         Page::Hotkeys,
         Page::Internet,
@@ -46,6 +47,7 @@ impl Page {
         Page::Ocr,
         Page::Modules,
         Page::Api,
+        Page::Permissions,
         Page::Updates,
     ];
 
@@ -62,6 +64,7 @@ impl Page {
             Page::Ocr => "options.ocr",
             Page::Modules => "options.modules",
             Page::Api => "options.server",
+            Page::Permissions => "options.permissions",
             Page::Updates => "options.updates",
         }
     }
@@ -213,6 +216,10 @@ fn body(app: &mut GlossaApp, ui: &mut egui::Ui, st: &mut OptionsState) -> bool {
         ui.add_space(6.0);
         ui.with_layout(egui::Layout::top_down_justified(egui::Align::Min), |ui| {
             for p in Page::ALL {
+                // Only macOS asks the user for permissions.
+                if p == Page::Permissions && glossa_platform::permissions::Permission::all().is_empty() {
+                    continue;
+                }
                 let sel = st.page == p;
                 if ui.selectable_label(sel, app.t(p.key())).clicked() {
                     st.page = p;
@@ -240,6 +247,7 @@ fn body(app: &mut GlossaApp, ui: &mut egui::Ui, st: &mut OptionsState) -> bool {
                 Page::Ocr => ocr(app, ui, st),
                 Page::Modules => modules(app, ui, st),
                 Page::Api => api(app, ui, st),
+                Page::Permissions => permissions(app, ui),
                 Page::Updates => updates(app, ui, st),
             }
         });
@@ -262,7 +270,14 @@ fn basics(app: &mut GlossaApp, ui: &mut egui::Ui, st: &mut OptionsState) {
     let look = app.look.clone();
     let d = &mut st.draft;
     group(ui, &look, &app.t("options.basics.general_group"), |ui| {
-        ui.checkbox(&mut st.autostart, app.t("options.basics.start_with_system"));
+        let autostart_label = if cfg!(target_os = "macos") {
+            "options.basics.start_with_system_macos"
+        } else if cfg!(windows) {
+            "options.basics.start_with_system"
+        } else {
+            "options.basics.start_with_system_linux"
+        };
+        ui.checkbox(&mut st.autostart, app.t(autostart_label));
         row(ui, &app.t("options.basics.ui_language"), |ui| {
             let locales = app.engine.locales();
             let current = locales
@@ -1654,6 +1669,44 @@ fn api(app: &mut GlossaApp, ui: &mut egui::Ui, st: &mut OptionsState) {
         });
         ui.code(if st.show_secrets { cmd } else { cmd.replace(&s.token, "<token>") });
     }
+}
+
+/// What the system lets Glossa do, with a way to ask for what is missing.
+fn permissions(app: &mut GlossaApp, ui: &mut egui::Ui) {
+    use glossa_platform::permissions::{self as perm, Permission, Status};
+    let look = app.look.clone();
+    // Grants happen in System Settings, outside this window: look again now
+    // and then.
+    ui.ctx().request_repaint_after(std::time::Duration::from_secs(1));
+    ui.label(RichText::new(app.t("options.permissions.intro")).color(look.weak_text()));
+    for &p in Permission::all() {
+        let (name, why) = match p {
+            Permission::Accessibility => ("options.permissions.accessibility", "options.permissions.accessibility_why"),
+            Permission::ScreenRecording => ("options.permissions.screen", "options.permissions.screen_why"),
+        };
+        group(ui, &look, &app.t(name), |ui| {
+            ui.label(RichText::new(app.t(why)).color(look.weak_text()));
+            ui.horizontal(|ui| {
+                let granted = perm::status(p) == Status::Granted;
+                let (text, colour) = if granted {
+                    (app.t("options.permissions.granted"), egui::Color32::from_rgb(0x3f, 0xb9, 0x50))
+                } else {
+                    (app.t("options.permissions.missing"), look.error())
+                };
+                ui.label(RichText::new(text).color(colour).strong());
+                if !granted && ui.button(app.t("options.permissions.request")).clicked() {
+                    perm::request(p);
+                }
+                if ui.button(app.t("options.permissions.open_settings")).clicked() {
+                    if let Err(e) = perm::open_settings(p) {
+                        app.notify(e.to_string(), true);
+                    }
+                }
+            });
+        });
+    }
+    ui.add_space(6.0);
+    ui.label(RichText::new(app.t("options.permissions.rebuild_note")).small().color(look.weak_text()));
 }
 
 fn updates(app: &mut GlossaApp, ui: &mut egui::Ui, st: &mut OptionsState) {

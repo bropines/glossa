@@ -41,6 +41,17 @@ pub const DEFAULT_DIFF_THRESHOLD: f32 = 0.04;
 
 /// Capture every monitor.
 pub fn capture_all() -> Result<Vec<MonitorShot>> {
+    use crate::permissions::{self, Permission, Status};
+    // Without the permission macOS returns only the desktop wallpaper, which
+    // would be recognised as nothing at all; better to say why.
+    if permissions::status(Permission::ScreenRecording) == Status::Missing
+        && permissions::request(Permission::ScreenRecording) != Status::Granted
+    {
+        return Err(platform_err(
+            "Glossa needs the Screen Recording permission to read text on the screen: allow it in \
+             System Settings → Privacy & Security → Screen Recording, then restart Glossa",
+        ));
+    }
     let shots = screen::capture(None)?;
     if shots.is_empty() {
         return Err(platform_err("no monitors found to capture"));
