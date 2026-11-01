@@ -222,7 +222,7 @@ impl Session {
                 f("selection", Partly, "AXSelectedText, then Cmd+C; needs Accessibility"),
                 f("synthetic_input", Partly, "needs Accessibility"),
                 f("capture", Partly, "needs Screen Recording"),
-                f("mouse_mode", No, "not implemented on macOS yet"),
+                f("mouse_mode", Partly, "an event tap; needs Accessibility and Input Monitoring"),
                 f("tray", Yes, "menu bar icon"),
             ],
             DisplayServer::X11 => vec![
