@@ -1,0 +1,155 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 960 612" width="960" height="612" role="img" aria-labelledby="title desc">
+  <title id="title">How Glossa is built</title>
+  <desc id="desc">Top: a translation in five steps, from the hotkey through reading the selection, the engine and a service to the popup. Bottom: the workspace crates in layers, each using only the crates below it.</desc>
+  <style>
+    text { font-family: system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif; fill: #1f2328; }
+    .mono { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace; }
+    .h { font-size: 17px; font-weight: 600; }
+    .b { font-size: 14px; font-weight: 600; }
+    .s { font-size: 12px; }
+    .c { font-size: 12.5px; font-weight: 600; }
+    .m { fill: #59636e; }
+    .band { fill: #818b98; fill-opacity: 0.08; }
+    .blue { fill: #ddf4ff; stroke: #54aeff; }
+    .purple { fill: #fbefff; stroke: #c297ff; }
+    .green { fill: #dafbe1; stroke: #4ac26b; }
+    .orange { fill: #fff1e5; stroke: #fb8f44; }
+    .gray { fill: #f6f8fa; stroke: #afb8c1; }
+    .arrow { stroke: #59636e; stroke-width: 1.6; fill: none; }
+    .head { fill: #59636e; }
+    @media (prefers-color-scheme: dark) {
+      text { fill: #e6edf3; }
+      .m { fill: #9198a1; }
+      .band { fill: #9198a1; fill-opacity: 0.10; }
+      .blue { fill: #0c2d6b; stroke: #4493f8; }
+      .purple { fill: #2b1d4a; stroke: #ab7df8; }
+      .green { fill: #0f2d18; stroke: #3fb950; }
+      .orange { fill: #3b2210; stroke: #f0883e; }
+      .gray { fill: #1b2129; stroke: #656c76; }
+      .arrow { stroke: #9198a1; }
+      .head { fill: #9198a1; }
+    }
+  </style>
+  <defs>
+    <marker id="ah" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path class="head" d="M0,0 L10,5 L0,10 z"/>
+    </marker>
+  </defs>
+
+  <!-- A translation, step by step -->
+  <text class="h" x="20" y="32">A translation, step by step</text>
+
+  <g stroke-width="1.2">
+    <rect class="blue" x="20" y="52" width="168" height="134" rx="8"/>
+    <rect class="blue" x="210" y="52" width="168" height="134" rx="8"/>
+    <rect class="purple" x="400" y="52" width="168" height="134" rx="8"/>
+    <rect class="green" x="590" y="52" width="168" height="134" rx="8"/>
+    <rect class="blue" x="780" y="52" width="168" height="134" rx="8"/>
+  </g>
+
+  <text class="b" x="34" y="78">1  Hotkey</text>
+  <text class="c mono m" x="34" y="98">glossa-platform</text>
+  <text class="s" x="34" y="124">A global hotkey, or a</text>
+  <text class="s" x="34" y="141">selection in mouse</text>
+  <text class="s" x="34" y="158">mode.</text>
+
+  <text class="b" x="224" y="78">2  Read the selection</text>
+  <text class="c mono m" x="224" y="98">glossa-platform</text>
+  <text class="s" x="224" y="124">UI Automation or</text>
+  <text class="s" x="224" y="141">Accessibility; else a</text>
+  <text class="s" x="224" y="158">copy keystroke, with</text>
+  <text class="s" x="224" y="175">the clipboard restored.</text>
+
+  <text class="b" x="414" y="78">3  Engine</text>
+  <text class="c mono m" x="414" y="98">glossa-engine</text>
+  <text class="s" x="414" y="124">Picks the direction,</text>
+  <text class="s" x="414" y="141">detects the language,</text>
+  <text class="s" x="414" y="158">falls over to the next</text>
+  <text class="s" x="414" y="175">service on failure.</text>
+
+  <text class="b" x="604" y="78">4  Service</text>
+  <text class="c mono m" x="604" y="98">glossa-services</text>
+  <text class="s" x="604" y="124">A built-in service or</text>
+  <text class="s" x="604" y="141">a module, over HTTP</text>
+  <text class="s" x="604" y="158">through glossa-net</text>
+  <text class="s" x="604" y="175">(proxy, retries).</text>
+
+  <text class="b" x="794" y="78">5  Popup</text>
+  <text class="c mono m" x="794" y="98">glossa-ui-egui</text>
+  <text class="s" x="794" y="124">Shows the result by</text>
+  <text class="s" x="794" y="141">the pointer and saves</text>
+  <text class="s" x="794" y="158">it to the history.</text>
+
+  <g>
+    <line class="arrow" x1="190" y1="119" x2="207" y2="119" marker-end="url(#ah)"/>
+    <line class="arrow" x1="380" y1="119" x2="397" y2="119" marker-end="url(#ah)"/>
+    <line class="arrow" x1="570" y1="119" x2="587" y2="119" marker-end="url(#ah)"/>
+    <line class="arrow" x1="760" y1="119" x2="777" y2="119" marker-end="url(#ah)"/>
+  </g>
+
+  <text class="s m" x="20" y="214">glossa-cli and the control API (HTTP on localhost, D-Bus on Linux) call the same engine, from step 3 on.</text>
+
+  <!-- Crates -->
+  <text class="h" x="20" y="262">Crates</text>
+  <text class="s m" x="940" y="262" text-anchor="end">A crate uses only crates in the rows below it; in the bottom row, glossa-net uses glossa-core.</text>
+
+  <rect class="band" x="20" y="280" width="920" height="56" rx="8"/>
+  <rect class="band" x="20" y="344" width="920" height="56" rx="8"/>
+  <rect class="band" x="20" y="408" width="920" height="56" rx="8"/>
+  <rect class="band" x="20" y="472" width="920" height="56" rx="8"/>
+  <rect class="band" x="20" y="536" width="920" height="56" rx="8"/>
+
+  <text class="b m" x="34" y="313">Front ends</text>
+  <text class="b m" x="34" y="377">Engine</text>
+  <text class="b m" x="34" y="441">Providers</text>
+  <text class="b m" x="34" y="505">Modules</text>
+  <text class="b m" x="34" y="569">Foundation</text>
+
+  <g stroke-width="1.2">
+    <rect class="blue" x="150" y="286" width="380" height="44" rx="6"/>
+    <rect class="blue" x="540" y="286" width="390" height="44" rx="6"/>
+
+    <rect class="purple" x="150" y="350" width="380" height="44" rx="6"/>
+    <rect class="blue" x="540" y="350" width="390" height="44" rx="6"/>
+
+    <rect class="green" x="150" y="414" width="254" height="44" rx="6"/>
+    <rect class="green" x="413" y="414" width="254" height="44" rx="6"/>
+    <rect class="green" x="676" y="414" width="254" height="44" rx="6"/>
+
+    <rect class="orange" x="150" y="478" width="780" height="44" rx="6"/>
+
+    <rect class="gray" x="150" y="542" width="190" height="44" rx="6"/>
+    <rect class="gray" x="347" y="542" width="190" height="44" rx="6"/>
+    <rect class="gray" x="544" y="542" width="190" height="44" rx="6"/>
+    <rect class="gray" x="741" y="542" width="189" height="44" rx="6"/>
+  </g>
+
+  <text class="c mono" x="162" y="304">glossa-ui-egui</text>
+  <text class="s m" x="162" y="321">the desktop app, binary glossa</text>
+  <text class="c mono" x="552" y="304">glossa-cli</text>
+  <text class="s m" x="552" y="321">the command line, binary glossa-cli</text>
+
+  <text class="c mono" x="162" y="368">glossa-engine</text>
+  <text class="s m" x="162" y="385">pipeline, history, control API, bundled modules</text>
+  <text class="c mono" x="552" y="368">glossa-platform</text>
+  <text class="s m" x="552" y="385">OS integration for the front ends; only uses glossa-core</text>
+
+  <text class="c mono" x="162" y="432">glossa-services</text>
+  <text class="s m" x="162" y="449">built-in services, system voice</text>
+  <text class="c mono" x="425" y="432">glossa-ocr</text>
+  <text class="s m" x="425" y="449">Lens, system OCR, Tesseract</text>
+  <text class="c mono" x="688" y="432">glossa-dict</text>
+  <text class="s m" x="688" y="449">offline dictionaries</text>
+
+  <text class="c mono" x="162" y="496">glossa-modules</text>
+  <text class="s m" x="162" y="513">the Provider trait, the host API, and the JavaScript, stdio (Python, Java, any program) and native runtimes</text>
+
+  <text class="c mono" x="162" y="560">glossa-core</text>
+  <text class="s m" x="162" y="577">data model, no I/O</text>
+  <text class="c mono" x="359" y="560">glossa-net</text>
+  <text class="s m" x="359" y="577">HTTP, proxies, retries</text>
+  <text class="c mono" x="556" y="560">glossa-module-sdk</text>
+  <text class="s m" x="556" y="577">wire types, C ABI</text>
+  <text class="c mono" x="753" y="560">glossa-lens</text>
+  <text class="s m" x="753" y="577">Google Lens requests</text>
+</svg>

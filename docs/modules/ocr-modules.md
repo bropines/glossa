@@ -27,6 +27,22 @@ Examples, each tested against a canned reply:
 | [`modules/python/ocr-space`](../../modules/python/ocr-space) | Python | fitting an upload under a size limit, `map_box_back` |
 | [`modules/native/example-lines`](../../modules/native/example-lines) | Rust | deskew, threshold, reading pixels back, a layout of its own |
 
+To start from working code, copy one of these examples and read
+[Writing one](#writing-one). The sections before it are the reference.
+
+## Contents
+
+- [The request](#the-request)
+- [The result](#the-result): [nodes](#nodes),
+  [returning hOCR or ALTO](#returning-hocr-or-alto)
+- [Coordinates](#coordinates)
+- [The image API](#the-image-api)
+- [Writing one](#writing-one) in [JavaScript](#javascript),
+  [Python](#python), [Rust](#rust), [C](#c) or
+  [another language](#other-languages)
+- [What Glossa does with the result](#what-glossa-does-with-the-result)
+- [Testing](#testing)
+
 ## The request
 
 ```json

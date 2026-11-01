@@ -10,6 +10,17 @@ The interface is a tiny C ABI that carries JSON. You can write a module in
 Rust with the SDK in a dozen lines, or in C, C++, Zig, Go or anything else
 with a C FFI.
 
+## Contents
+
+- [Quick start (Rust)](#quick-start-rust)
+- [The manifest](#the-manifest)
+- [The C ABI](#the-c-abi)
+- [Ownership and threading](#ownership-and-threading)
+- [Building for each platform](#building-for-each-platform)
+- [Safety](#safety)
+- [Why JSON over a C ABI, not the Rust ABI](#why-json-over-a-c-abi-not-the-rust-abi)
+- [Troubleshooting](#troubleshooting)
+
 ## Quick start (Rust)
 
 ```toml
@@ -198,7 +209,9 @@ Threading:
 
 The library must match Glossa's operating system **and architecture**: a
 32-bit DLL cannot be loaded into 64-bit Glossa, nor an x86-64 library into an
-ARM64 build. Release builds of Glossa are x86-64 unless stated otherwise.
+ARM64 build. Build for the Glossa you run: the download's name says its
+architecture (`x86_64` or `arm64`). On macOS a universal library loads into
+either.
 
 **Windows (MSVC toolchain).** Link the C runtime statically so the DLL does
 not depend on a particular Visual C++ redistributable being installed:
@@ -264,9 +277,9 @@ A native module runs **inside** Glossa with all of Glossa's privileges:
   native code (an overrun is only logged), so a module that hangs hangs the
   request. Use `timeout_ms` on host HTTP calls.
 
-This is why native modules can be switched off entirely (the
-`allow_native` setting), and why you should only install native modules from
-people you trust. When a module does not need native code, write it in
+This is why native modules can be switched off entirely (*Load native
+modules* in *Options → Modules*, `[modules] allow_native` in `config.toml`),
+and why you should only install native modules from people you trust. When a module does not need native code, write it in
 JavaScript or Python instead: those runtimes run it at arm's length.
 
 ## Why JSON over a C ABI, not the Rust ABI

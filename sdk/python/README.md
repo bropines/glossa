@@ -2,13 +2,31 @@
 
 A Python module is a directory with a `module.toml` and a script. Glossa starts
 the script as a child process the first time the module is used, talks to it
-over stdin/stdout, and stops it after a while without use.
+over stdin/stdout, and stops it after a while without use. The user needs
+Python 3.8 or newer; the SDK is one file and needs nothing else.
 
 ```
 my-translator/
 ├── module.toml
 └── main.py
 ```
+
+New to modules? The [modules overview](../../docs/modules/README.md) says
+where modules live and which runtime to pick. Complete Python examples:
+[`modules/python/example-reverse`](../../modules/python/example-reverse),
+[`lens-ocr`](../../modules/python/lens-ocr) and
+[`ocr-space`](../../modules/python/ocr-space).
+
+## Contents
+
+- [module.toml](#moduletoml)
+- [main.py](#mainpy)
+- [Handlers](#handlers)
+- [The host](#the-host)
+- [Errors](#errors)
+- [Trying it](#trying-it)
+- [Things to know](#things-to-know)
+- [The wire format](#the-wire-format)
 
 ## module.toml
 
@@ -109,7 +127,21 @@ Raise `ModuleError(kind, message)` with one of: `missing_credential` (message:
 the option key), `rate_limited` (`retry_after_secs=`), `not_found`,
 `source_language`, `target_language`, `bad_response`, `http`, `network`,
 `unsupported`, `bad_request`, `other`. Any other exception becomes an error
-carrying its traceback; the module keeps running.
+carrying its traceback; the module keeps running. What Glossa does with
+each kind is in [protocol.md](../../docs/modules/protocol.md#errors).
+
+## Trying it
+
+```bash
+glossa-cli modules                                   # did it load? why not?
+glossa-cli -v translate -s my-translator -t ru "Hello"   # with the module's log and stderr
+```
+
+`GLOSSA_HOME=<dir>` gives a clean data folder with only your module in
+`<dir>/modules`. After editing `main.py`, *Options → Modules → Reload
+modules* (or the next CLI run) starts a fresh process. More debugging tips,
+shared with the other stdio runtimes, are in
+[process-modules.md](../../docs/modules/process-modules.md#debugging).
 
 ## Things to know
 
@@ -134,5 +166,6 @@ One JSON object per line, UTF-8. Glossa sends
 `{"id": 1, "result": …}` or `{"id": 1, "error": {"kind": …, "message": …}}`.
 While working, the module may send `{"id": "h1", "method": "http", "params":
 {…}}` (also `log`, `cache_get`, `cache_set`, `image.<op>`) and reads back `{"id": "h1",
-"result" | "error": …}`. The SDK does all of this; the format is documented
-for debugging, and so a module can do without the SDK.
+"result" | "error": …}`. The SDK does all of this. The full rules are in
+[process-modules.md](../../docs/modules/process-modules.md#framing), for
+debugging and for a module that does without the SDK.

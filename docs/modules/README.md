@@ -2,27 +2,99 @@
 
 Everything Glossa translates, looks up, speaks or recognises comes from a
 **provider**. Some are built in (Google, Bing, DeepL, Yandex, Lens OCR…); the
-rest are **modules**: directories Glossa finds at start-up and loads without
+rest are **modules**: folders Glossa finds at start-up and loads without
 being rebuilt.
+
+![A module: Glossa sends a JSON request, the module may call back to the host (HTTP, log, cache, image), then answers with a JSON result](../images/module.svg)
+
+Every kind of module speaks the same [module protocol](protocol.md): the
+same JSON requests, the same results, the same host calls. To the engine
+they are interchangeable, and a module can move from one runtime to another
+without reshaping its data.
+
+## Contents
+
+- [Your first module](#your-first-module)
+- [Which runtime?](#which-runtime)
+- [Where modules live](#where-modules-live)
+- [module.toml](#moduletoml)
+- [Trying a module](#trying-a-module)
+- [Bundled modules](#bundled-modules)
+- [Scripts from other programs](#scripts-from-other-programs)
+- [Guides](#guides)
+
+## Your first module
+
+A JavaScript module needs nothing installed. Make a folder `hello` in your
+modules folder ([where](#where-modules-live)) with two files.
+
+`module.toml`:
+
+```toml
+capabilities = ["translate"]
+
+[module]
+id = "hello"
+name = "Hello"
+runtime = "js"
+```
+
+`main.js`:
+
+```js
+function translate(req, host) {
+  return req.text.toUpperCase();
+}
+```
+
+Then check that it loaded and call it:
+
+```bash
+glossa-cli modules                         # "hello" is listed as loaded
+glossa-cli translate -s hello -t ru "it works"
+```
+
+In the desktop program, *Options → Modules → Reload modules* picks the new
+folder up, and *Options → Services* lists "Hello" to switch on. A real
+module calls a web service through `host.fetch`; the
+[JavaScript guide](js-modules.md) shows how.
+
+## Which runtime?
 
 | kind | you write | runs as | good for | guide |
 |---|---|---|---|---|
 | JavaScript | `main.js` | inside Glossa (boa engine), a fresh context per call | web APIs: a few requests and some JSON | [js-modules.md](js-modules.md) |
-| Python | `main.py` | a child process, started on first use, stopped when idle | anything needing Python libraries (ML models, `chrome-lens-py`, scraping) | [../../sdk/python/README.md](../../sdk/python/README.md) |
-| Java | a `.jar` (Java, Kotlin, any JVM language) | a child process like Python, with Java found for you | JVM libraries and engines (Tess4J, ONNX Runtime for Java, Lucene), Kotlin code | [process-modules.md](process-modules.md#java-modules), [../../sdk/java/README.md](../../sdk/java/README.md) |
+| Python | `main.py` | a child process, started on first use, stopped when idle | anything needing Python libraries (ML models, `chrome-lens-py`, scraping) | [sdk/python](../../sdk/python/README.md) |
+| Java | a `.jar` (Java, Kotlin, any JVM language) | a child process like Python, with Java found for you | JVM libraries and engines (Tess4J, ONNX Runtime for Java, Lucene), Kotlin code | [process-modules.md](process-modules.md#java-modules), [sdk/java](../../sdk/java/README.md) |
 | Process | any program: `node main.mjs`, a Go or C# binary, a script | a child process like Python | any language with stdin and stdout; no SDK needed | [process-modules.md](process-modules.md) |
 | Native | a `.dll` / `.so` / `.dylib` | loaded into Glossa | speed, offline engines, other languages with a C ABI (Rust, C, C++, Go, Zig) | [native-modules.md](native-modules.md) |
 
-Glossa also loads, without changes, scripts written for other programs:
-classic **QTranslate** `Service.js` services and **pot-app** plugins
-(`info.json` + `main.js`, or a `.potext` archive). See
-[classic-scripts.md](classic-scripts.md).
+In short:
 
-All the Glossa kinds speak the same [module protocol](protocol.md): the same
-JSON requests, the same results, the same host calls. To the engine they are
-interchangeable, and a module can move from one runtime to another without
-reshaping its data. Python, Java and process modules share one transport (JSON
-lines over stdio), so they behave identically.
+- A web API with JSON in and out: **JavaScript**. No process, no toolchain,
+  nothing to install for the user.
+- You need a Python library, or the code already exists in Python:
+  **Python**. The process costs memory only while in use.
+- The code is Java or Kotlin, or needs a JVM library: **Java**. Same process
+  model as Python. The user needs a Java 17+ runtime, and Glossa says how to
+  get one if it is missing.
+- Any other language (Node, Go, C#, Ruby, a compiled binary): **process**.
+  Read JSON lines on stdin, write them on stdout. No SDK, nothing linked
+  into Glossa, and a crash only costs that one call.
+- A local engine that must be as fast as possible, called from Rust, C, C++
+  or Zig: **native**. No process boundary, but a crash in it takes Glossa
+  down, so it is for code you trust.
+
+| | JavaScript | Python | Java | process | native |
+|---|---|---|---|---|---|
+| user installs | nothing | Python 3.8+ | Java 17+ | the program's runtime | nothing |
+| memory while idle | none | none (stopped) | none (stopped) | none (stopped) | the library |
+| start-up | instant | tens of ms | a fraction of a second | the program's | instant |
+| a crash takes down | the call | the call | the call | the call | Glossa |
+| SDK | built in | `sdk/python` | `sdk/java` | none needed | `glossa-module-sdk`, `glossa_module.h` |
+
+Python, Java and process modules share one transport (JSON lines over
+stdio), so they behave identically.
 
 Writing a text recognition module (a network OCR service, a local engine)?
 [ocr-modules.md](ocr-modules.md) covers the result format (JSON layout, hOCR
@@ -31,7 +103,7 @@ preprocessing.
 
 ## Where modules live
 
-Glossa scans these directories, in order (later ones win on a duplicate id):
+Glossa scans these folders, in order. A later one wins on a duplicate id.
 
 1. `<folder of glossa.exe>/modules`
 2. `<prefix>/share/glossa/modules` (a Unix install)
@@ -39,10 +111,13 @@ Glossa scans these directories, in order (later ones win on a duplicate id):
    `~/.config/glossa/modules` on Linux, `~/Library/Application Support/Glossa/modules`
    on macOS, or `data/modules` next to the executable in portable mode.
 
-One module is one directory with a `module.toml`. *Options → Modules →
-Install module…* copies a directory or a `.potext` file into the last of
-these; *Reload modules* on the same page picks up changes without a restart.
-More folders can be added there too (`[modules] dirs` in `config.toml`).
+One module is one folder with a `module.toml`.
+
+- *Options → Modules → Install module…* copies a folder or a `.potext` file
+  into the last of these.
+- *Reload modules* on the same page picks up changes without a restart.
+- More folders can be added on the same page (`[modules] dirs` in
+  `config.toml`).
 
 ```
 modules/
@@ -63,43 +138,9 @@ modules/
     └── shout.dll
 ```
 
-## Bundled modules
-
-Some services ship inside Glossa as ordinary JavaScript modules: their
-sources live in [`modules/bundled/<id>/`](../../modules/bundled) in the
-repository and are compiled into the executable (`include_str!` in
-`crates/glossa-engine/src/bundled/`), so they need no files on disk. Each
-`main.js` opens with a description of the service's protocol. All of them work
-without a key or account and are switched on when they first appear.
-
-| id | name | does | service |
-|---|---|---|---|
-| `yandex-web` | Yandex | translate, detect, dictionary | translate.yandex.net, the endpoint Yandex's browser clients use |
-| `deepl-web` | DeepL | translate | the free endpoint of DeepL's iOS app (rate-limited after a burst) |
-| `lara` | Lara | translate | laratranslate.com's web API |
-| `modernmt` | ModernMT | translate | the form behind modernmt.com/translate |
-| `multitran` | Multitran | dictionary | multitran.com result pages |
-| `lingvo-live` | ABBYY Lingvo Live | dictionary | Lingvo Live's word-card JSON |
-| `oxford-learners` | Oxford Learner's Dictionary | dictionary (English) | oxfordlearnersdictionaries.com entry pages |
-| `wiktionary` | Wiktionary | dictionary | English Wiktionary's REST definitions |
-| `youdao` | Youdao | dictionary (English, French, Chinese) | dict.youdao.com's JSON |
-| `dic-academic` | Academic | dictionary | dic.academic.ru search |
-| `translate-academic` | Academic Translations | dictionary | translate.academic.ru entries, as HTML |
-| `wikipedia` | Wikipedia | dictionary | the Wikimedia REST page summary |
-| `urban-dictionary` | Urban Dictionary | dictionary (English) | api.urbandictionary.com |
-
-The keyed APIs stay Rust built-ins with names that say so: "Yandex Cloud (API
-key)" (`yandex`) and "DeepL API (key)" (`deepl`).
-
-**Changing one.** Bundled modules are registered before any module folder is
-scanned, and a module with the same id replaces an earlier one. To change a
-bundled service, copy its folder from `modules/bundled/` into your modules
-folder, keep the `id`, edit, and *Reload modules*; `glossa-cli services` then
-shows it as `[JavaScript]` instead of `[Bundled]`. Delete the copy to go back.
-To hide one without replacing it, switch it off in *Options → Modules*
-(`[modules] disabled` in `config.toml`).
-
 ## module.toml
+
+Only `id`, `name` and `runtime` are required. The full set:
 
 ```toml
 capabilities = ["translate", "detect_language"]   # see below
@@ -150,7 +191,9 @@ default = "default"
 choices = [{ value = "default", label = "Default" }, { value = "more", label = "Formal" }]
 ```
 
-**Capabilities** say which methods the module implements:
+### Capabilities
+
+They say which methods the module implements:
 
 | capability | method | the module is offered as |
 |---|---|---|
@@ -160,30 +203,52 @@ choices = [{ value = "default", label = "Default" }, { value = "more", label = "
 | `listen` | `speak` | text to speech |
 | `ocr` | `recognize` | text recognition for screen regions ([guide](ocr-modules.md)) |
 
-**Languages** are BCP 47 codes: `en`, `ru`, `zh-Hans`, `zh-Hant`, `pt-BR`…
-`glossa-cli services` and the languages list in the main window show the full
-set. A source of `auto` means "detect it". If the service spells a language
-differently, map it in `[language_map]` instead of in code.
+### Languages
 
-**Permissions** limit the requests a module makes *through Glossa*
-(`host.fetch` / `host.http`): a request to a host not on the list never
-leaves, and the module gets an error naming the permission. Those requests use
-the user's proxy settings and Glossa's timeouts and retries. A Python, Java,
-process or native module can open its own connections; permissions do not cover those
-(they are ordinary programs), which is one reason to prefer the host calls.
+Languages are BCP 47 codes: `en`, `ru`, `zh-Hans`, `zh-Hant`, `pt-BR`…
+`glossa-cli services` and the languages list in the main window show the
+full set. A source of `auto` means "detect it". If the service spells a
+language differently, map it in `[language_map]` instead of in code.
 
-**Switching on.** Glossa keeps no fixed list of services. When a provider
-appears for the first time (a built-in on the first run, your module the
-first time it loads), it is switched on in the service strip if it declares
-`ready_to_use = true` and has no required options; otherwise it is only
-listed, for the user to switch on in *Options → Services*. Either way the
-choice is remembered, so a service the user switched off stays off.
+### Permissions
 
-**Options** are stored in the user's `config.toml` under
+Permissions limit the requests a module makes *through Glossa*
+(`host.fetch` / `host.http`):
+
+- A request to a host not on the list never leaves, and the module gets an
+  error naming the permission.
+- Those requests use the user's proxy settings and Glossa's timeouts and
+  retries.
+- A Python, Java, process or native module can open its own connections.
+  Permissions do not cover those (they are ordinary programs), which is one
+  reason to prefer the host calls.
+
+### Switching on
+
+Glossa keeps no fixed list of services. When a provider appears for the
+first time (a built-in on the first run, your module the first time it
+loads):
+
+- it is switched on in the service strip if it declares
+  `ready_to_use = true` and has no required options;
+- otherwise it is only listed, for the user to switch on in
+  *Options → Services*.
+
+Either way the choice is remembered, so a service the user switched off
+stays off.
+
+### Options
+
+Options are stored in the user's `config.toml` under
 `[services.options.<module id>]`, and every request carries them as
-`options`. A `required` option is marked with `*` on the settings page; when
-it is empty, fail with `missing_credential` and the option's key as the
-message, and Glossa tells the user which setting to fill in.
+`options`.
+
+- When the user keeps secrets in the system keychain (`[general]
+  secret_storage`), options of type `secret` are kept there instead. A
+  module still receives the real value.
+- A `required` option is marked with `*` on the settings page. When it is
+  empty, fail with `missing_credential` and the option's key as the
+  message, and Glossa tells the user which setting to fill in.
 
 ## Trying a module
 
@@ -196,28 +261,73 @@ glossa-cli -v translate -s my-translator -t de "Hi"   # with the module's log li
 ```
 
 `GLOSSA_HOME=<dir>` points Glossa at a separate data folder, handy for a
-clean test with only your module in `<dir>/modules`.
+clean test with only your module in `<dir>/modules`. Each guide ends with
+the debugging tips for its runtime.
 
-## Which runtime?
+*Options → Modules* shows the same list in the program, with what failed
+and why:
 
-- A web API with JSON in and out: **JavaScript**. No process, no toolchain,
-  nothing to install for the user.
-- You need a Python library, or the code already exists in Python: **Python**.
-  The process costs memory only while in use.
-- The code is Java or Kotlin, or needs a JVM library: **Java**. Same process
-  model as Python; the user needs a Java 17+ runtime, and Glossa says how to
-  get one if it is missing.
-- Any other language (Node, Go, C#, Ruby, a compiled binary): **process**.
-  Read JSON lines on stdin, write them on stdout; no SDK, nothing linked into
-  Glossa, and a crash only costs that one call.
-- A local engine that must be as fast as possible, called from Rust, C, C++
-  or Zig: **native**. No process boundary, but a crash in it takes Glossa
-  down, so it is for code you trust.
+<picture>
+  <source media="(prefers-color-scheme: light)" srcset="../screenshots/options-modules-light.png">
+  <img src="../screenshots/options-modules-dark.png" alt="Options, Modules: three modules loaded, none failed" width="700">
+</picture>
 
-| | JavaScript | Python | Java | process | native |
-|---|---|---|---|---|---|
-| user installs | nothing | Python 3.8+ | Java 17+ | the program's runtime | nothing |
-| memory while idle | none | none (stopped) | none (stopped) | none (stopped) | the library |
-| start-up | instant | tens of ms | a fraction of a second | the program's | instant |
-| a crash takes down | the call | the call | the call | the call | Glossa |
-| SDK | built in | `sdk/python` | `sdk/java` | none needed | `glossa-module-sdk`, `glossa_module.h` |
+## Bundled modules
+
+Some services ship inside Glossa as ordinary JavaScript modules. Their
+sources live in [`modules/bundled/<id>/`](../../modules/bundled) in the
+repository and are compiled into the executable (`include_str!` in
+`crates/glossa-engine/src/bundled/`), so they need no files on disk. Each
+`main.js` opens with a description of the service's protocol. All of them
+work without a key or account and are switched on when they first appear.
+
+| id | name | does | service |
+|---|---|---|---|
+| `yandex-web` | Yandex | translate, detect, dictionary | translate.yandex.net, the endpoint Yandex's browser clients use |
+| `deepl-web` | DeepL | translate | the free endpoint of DeepL's iOS app (rate-limited after a burst) |
+| `lara` | Lara | translate | laratranslate.com's web API |
+| `modernmt` | ModernMT | translate | the form behind modernmt.com/translate |
+| `multitran` | Multitran | dictionary | multitran.com result pages |
+| `lingvo-live` | ABBYY Lingvo Live | dictionary | Lingvo Live's word-card JSON |
+| `oxford-learners` | Oxford Learner's Dictionary | dictionary (English) | oxfordlearnersdictionaries.com entry pages |
+| `wiktionary` | Wiktionary | dictionary | English Wiktionary's REST definitions |
+| `youdao` | Youdao | dictionary (English, French, Chinese) | dict.youdao.com's JSON |
+| `dic-academic` | Academic | dictionary | dic.academic.ru search |
+| `translate-academic` | Academic Translations | dictionary | translate.academic.ru entries, as HTML |
+| `wikipedia` | Wikipedia | dictionary | the Wikimedia REST page summary |
+| `urban-dictionary` | Urban Dictionary | dictionary (English) | api.urbandictionary.com |
+
+The keyed APIs stay Rust built-ins with names that say so: "Yandex Cloud (API
+key)" (`yandex`) and "DeepL API (key)" (`deepl`).
+
+**Changing one.** Bundled modules are registered before any module folder is
+scanned, and a module with the same id replaces an earlier one.
+
+1. Copy its folder from `modules/bundled/` into your modules folder.
+2. Keep the `id`, edit, and *Reload modules*. `glossa-cli services` then
+   shows it as `[JavaScript]` instead of `[Bundled]`.
+3. Delete the copy to go back.
+
+To hide one without replacing it, switch it off in *Options → Modules*
+(`[modules] disabled` in `config.toml`).
+
+## Scripts from other programs
+
+Glossa also loads, without changes, scripts written for other programs:
+classic **QTranslate** `Service.js` services and **pot-app** plugins
+(`info.json` + `main.js`, or a `.potext` archive). See
+[classic-scripts.md](classic-scripts.md).
+
+## Guides
+
+| guide | for |
+|---|---|
+| [js-modules.md](js-modules.md) | JavaScript modules |
+| [sdk/python](../../sdk/python/README.md) | Python modules |
+| [process-modules.md](process-modules.md) | Java, Kotlin, Node, Go, C# and any program over stdio |
+| [sdk/java](../../sdk/java/README.md) | the Java SDK |
+| [native-modules.md](native-modules.md) | shared libraries in Rust, C, C++, Zig |
+| [ocr-modules.md](ocr-modules.md) | text recognition modules and the image API |
+| [protocol.md](protocol.md) | the requests, results, errors and host calls every module uses |
+| [classic-scripts.md](classic-scripts.md) | classic QTranslate services and pot-app plugins |
+| [agents-template.md](agents-template.md) | an `AGENTS.md` to copy into your module's repository for an AI coding assistant |

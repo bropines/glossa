@@ -16,6 +16,15 @@ All three share one transport inside Glossa, so they behave identically:
 same timeouts, same restart after a crash, same logging, and every host call
 Glossa offers (including ones added later) reaches them without changes.
 
+## Contents
+
+- [A process module](#a-process-module): [manifest fields](#manifest-fields)
+- [Framing](#framing)
+- [Lifetime](#lifetime)
+- [Java modules](#java-modules): [writing one](#writing-one),
+  [Kotlin](#kotlin)
+- [Debugging](#debugging)
+
 ## A process module
 
 ```

@@ -14,6 +14,16 @@ Everything is JSON, UTF-8. Unknown fields are ignored in both directions, so
 adding a field is not a breaking change; removing or retyping one is, and
 bumps `api`.
 
+## Contents
+
+- [Conventions](#conventions)
+- [Methods](#methods): [`translate`](#translate), [`detect`](#detect),
+  [`dictionary`](#dictionary), [`speak`](#speak), [`recognize`](#recognize)
+- [Errors](#errors)
+- [Host calls](#host-calls): [`http`](#http), [`log`](#log),
+  [`cache_get` / `cache_set`](#cache_get--cache_set), [`image`](#image)
+- [Versioning](#versioning)
+
 ## Conventions
 
 - **Languages** are BCP 47 codes: `en`, `ru`, `zh-Hans`, `zh-Hant`, `pt-BR`,

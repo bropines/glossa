@@ -5,6 +5,21 @@ do exists below the UI**. The desktop app, the command line and the control
 API are three front ends over one engine, and another toolkit could be a
 fourth without touching the rest.
 
+<p align="center">
+  <img src="images/architecture.svg" alt="Glossa's crates, and how a selection goes through the engine to the services and back to the popup" width="860">
+</p>
+
+- [Crates](#crates)
+- [Where the systems differ](#where-the-systems-differ)
+- [How a translation flows](#how-a-translation-flows)
+- [The desktop app and memory](#the-desktop-app-and-memory)
+- [Text rendering](#text-rendering)
+- [Threads](#threads)
+- [Configuration and data](#configuration-and-data)
+- [Testing](#testing)
+
+The same dependency graph in text:
+
 ```
                        glossa-ui-egui (glossa)      glossa-cli
                              │      │                    │
@@ -12,7 +27,8 @@ fourth without touching the rest.
                  (OS integration)          │   │   │   │
                              ┌─────────────┘   │   │   └──────────┐
                      glossa-services   glossa-ocr  glossa-dict    │
-                     (built-in APIs)   (Lens…)     (StarDict…)    │
+                     (built-in APIs)   (OCR; Lens  (StarDict…)    │
+                             │          via glossa-lens)          │
                              └───────────┬─────┴───────┘          │
                                    glossa-modules ────────────────┘
                 (provider API; JS / stdio: Python, Java, any program / native)
@@ -27,15 +43,16 @@ fourth without touching the rest.
 
 | crate | role |
 |---|---|
-| `glossa-core` | The domain model: the language table, capabilities, requests and results (including the OCR layout and its hOCR/ALTO/JSON exporters and readers), `config.toml`, themes, locales, history, hotkey and action definitions, the classic-format importers. Pure data and logic: no network, no threads, no UI. |
+| `glossa-core` | The domain model: the language table, capabilities, requests and results (including the OCR layout and its hOCR/ALTO/JSON exporters and readers), `config.toml`, which settings are secrets and where they go (`secrets.rs`), themes, locales, history, hotkey and action definitions, the classic-format importers. Pure data and logic: no network, no threads, no UI. |
 | `glossa-net` | HTTP on `ureq`: proxies (including the Windows system proxy), timeouts, retries, legacy code pages, an HTTP mock for tests. |
 | `glossa-module-sdk` | What a module author depends on: the protocol's wire types, the C ABI (`include/glossa_module.h`), and `export_module!` for Rust modules. Depends on nothing else in the workspace. |
 | `glossa-modules` | The `Provider` trait every translator, dictionary, voice and OCR engine implements; the host API given to modules (scoped HTTP, cache, log, and the image API in `image_ops`); the registry that scans module folders; the runtimes: JavaScript (Glossa, classic QTranslate and pot-app dialects, on boa), Python, Java and any other program (`runtime = "process"`) as child processes over one stdio transport, native (shared libraries); `child`, which runs a helper program with a deadline and cancellation for providers built on one. |
-| `glossa-services` | Built-in providers in Rust: Google, Google Dictionary, Bing (keyless web session or keyed API), DeepL, DeepLX, LibreTranslate, MyMemory, Lingva, OpenAI-compatible, Yandex; and the offline system voice (`system-tts`): WinRT `Windows.Media.SpeechSynthesis` on Windows, `say` on macOS, `espeak-ng` on Linux and the BSDs, in `system_tts/` with one file per system. Like the OS OCR engines, it calls the OS here rather than in `glossa-platform`, which the engine does not depend on. |
-| `glossa-ocr` | OCR providers: Google Lens through `chrome-lens-py` (online; warm daemon, else its CLI); offline Windows OCR (`Windows.Media.Ocr`) and OneOCR (the Snipping Tool's `oneocr.dll`, loaded from the user's installation, opt-in only) on Windows, Apple Vision (`VNRecognizeTextRequest` via objc2) on macOS, and Tesseract (its CLI with TSV output) anywhere it is installed; and any external command. Modules add more. The OS engines' calls live here behind `cfg(windows)` / `cfg(target_os = "macos")` rather than in `glossa-platform`, which the engine does not depend on (the CLI uses it only for `doctor`). Registration order is the fail-over order (Lens, the system engine, Tesseract, the command); the engine falls over past engines that are not installed. |
+| `glossa-services` | Built-in providers in Rust: Google, Google Dictionary, Bing (keyless web session or keyed API), DeepL, DeepLX, LibreTranslate, MyMemory, Lingva, OpenAI-compatible (translation, and text recognition with a vision model in `openai_ocr.rs`), Yandex; and the offline system voice (`system-tts`): WinRT `Windows.Media.SpeechSynthesis` on Windows, `say` on macOS, `espeak-ng` on Linux and the BSDs, in `system_tts/` with one file per system. Like the OS OCR engines, it calls the OS here rather than in `glossa-platform`, which the engine does not depend on. |
+| `glossa-lens` | Google Lens requests and replies, on [chrome-lens-rs](https://github.com/bropines/chrome-lens-rs): builds the request Chromium's Lens overlay sends and reads the reply into paragraphs, lines, words and translations. It sends nothing itself; `glossa-ocr` sends the request through Glossa's own HTTP client. |
+| `glossa-ocr` | OCR providers: Google Lens (online; the built-in client on `glossa-lens`, with retries and at most two requests at once, or a running chrome-lens-py daemon, or its CLI, by `[ocr.lens] mode`); offline Windows OCR (`Windows.Media.Ocr`) and OneOCR (the Snipping Tool's `oneocr.dll`, loaded from the user's installation, opt-in only) on Windows, Apple Vision (`VNRecognizeTextRequest` via objc2) on macOS, and Tesseract (its CLI with TSV output) anywhere it is installed; and any external command. Modules add more. The OS engines' calls live here behind `cfg(windows)` / `cfg(target_os = "macos")` rather than in `glossa-platform`, which the engine does not depend on (the CLI uses it only for `doctor`). Registration order is the fail-over order (Lens, the system engine, Tesseract, the command); the engine falls over past engines that are not installed. |
 | `glossa-dict` | Offline dictionaries (StarDict with dictzip, DSL, XDXF, tab-separated) and the HTML simplifier for dictionary articles. |
 | `glossa-engine` | The front ends' shared core: the keyless JavaScript service modules compiled in from `modules/bundled/`, the translation pipeline (direction detection, fail-over, back translation, input limits), async jobs with cancellation, history, the theme and locale catalogues, exports, the classic import, the control API (HTTP on localhost with a token), and on Linux and the BSDs the same actions as a D-Bus service on the session bus (`dbus`, no token). |
-| `glossa-platform` | Everything OS-specific: the single-instance lock and hand-over channel, clipboard, reading the selection (UI Automation, then a synthetic copy), synthetic input, screen capture, global hotkeys, the XDG desktop portals that stand in for both on Wayland (GlobalShortcuts, Screenshot, RemoteDesktop), the mouse watcher for mouse mode, autostart, audio playback, window placement, window backdrops (Mica, Acrylic, vibrancy), the system accent colour and dark-mode preference, dark or light system menus, spell checking (the Windows Spell Checking API, `NSSpellChecker`, Hunspell dictionaries), the idle message pump. |
+| `glossa-platform` | Everything OS-specific: the single-instance lock and hand-over channel, clipboard, reading the selection (UI Automation, then a synthetic copy), synthetic input, screen capture, global hotkeys, the XDG desktop portals that stand in for them on Wayland (GlobalShortcuts, Screenshot, and RemoteDesktop for copy and paste), the mouse watcher for mouse mode, autostart, audio playback, window placement, Snap Layouts for Glossa's own title bar (Windows 11), rounded corners for borderless windows (macOS), window backdrops (Mica, Acrylic, vibrancy), the system accent colour and dark-mode preference, dark or light system menus, spell checking (the Windows Spell Checking API, `NSSpellChecker`, Hunspell dictionaries), the system keychain (Windows Credential Manager, the macOS Keychain, the Secret Service), the idle message pump. |
 | `glossa-ui-egui` | The desktop app (binary `glossa`): main window, selection popup, OCR overlay, dictionary, history, options, tray. |
 | `glossa-cli` | The command line (binary `glossa-cli`). |
 
@@ -45,7 +62,10 @@ fourth without touching the rest.
 ## Where the systems differ
 
 The interface is one program for every system; what sets Windows, macOS
-and Linux apart is kept out of it:
+and Linux apart is kept out of it. (Windows is used daily, macOS is in
+early testing, and the Linux code passes the automated tests but has not
+been tried on a real Linux desktop yet.)
+
 
 - **`glossa_platform::shell::SHELL`** says how this system's windows behave,
   once per system in `shell/win.rs`, `shell/mac.rs` and `shell/linux.rs`:
@@ -56,11 +76,16 @@ and Linux apart is kept out of it:
   backdrops, how the shortcut modifier is named. The UI asks these
   questions (`SHELL.resize_keeps_bottom_left`) and never tests for an
   operating system to decide how windows behave.
-- **The implementations** sit with their subject, one file per system:
-  `window/win.rs` and `window/mac.rs` (finding Glossa's own windows,
-  monitors, the foreground window), `backdrop/win.rs`, `backdrop/mac.rs`
-  and `backdrop/x11.rs` (Mica and Acrylic, vibrancy, KWin's blur). A fix for
-  one system goes in that system's file.
+- **The implementations** sit with their subject, one file per system. A
+  fix for one system goes in that system's file.
+
+  | subject | files |
+  |---|---|
+  | windows: Glossa's own, monitors, the foreground window | `window/win.rs`, `window/mac.rs` (also rounded corners), `window/snap.rs` (Snap Layouts) |
+  | backdrops: Mica and Acrylic, vibrancy, KWin's blur | `backdrop/win.rs`, `backdrop/mac.rs`, `backdrop/x11.rs` |
+  | spell checking | `spell/win.rs`, `spell/mac.rs`, `spell/linux.rs` |
+  | the keychain | `secrets/win.rs`, `secrets/mac.rs`, `secrets/linux.rs` |
+  | the system voice (in `glossa-services`) | `system_tts/win.rs`, `system_tts/mac.rs`, `system_tts/linux.rs` |
 
 What remains behind `cfg` in `glossa-ui-egui` is either platform API with
 no common shape (the tray icon's look, font files) or a feature only one
@@ -72,7 +97,10 @@ page).
 1. A hotkey fires (`glossa-platform::hotkeys`) or the user types.
 2. For selection actions the app reads the selection: UI Automation first
    (instant, leaves the clipboard alone), else a synthetic Ctrl+C with the
-   clipboard saved and restored.
+   clipboard saved and restored. On Wayland the keystroke goes through the
+   RemoteDesktop portal (`portal.rs`), which the desktop asks the user to
+   allow once; the permission is kept in `remote-desktop-token` in the data
+   folder.
 3. `Engine::translate_async` runs the pipeline on a worker thread: normalise
    the text, pick the direction (detecting the language when the source is
    *auto*, swapping for "smart" pairs), then try the active service and fall
@@ -163,7 +191,10 @@ with the character index.
 
 `config.toml` in the data folder holds every setting, readable and editable
 by hand; the app rewrites it when settings are applied. History is
-`history.json`, the log is `glossa.log` in the cache folder. Portable mode
+`history.json`, the log is `glossa.log` in the cache folder. With
+`[general] secret_storage = "system"`, API keys, the proxy password and the
+Lens token go to the system keychain and the file keeps a placeholder.
+Portable mode
 (a `portable` file or a `data` folder next to the executable) keeps all of it
 beside the program; `GLOSSA_HOME` overrides the location. Every key, the
 folders and the other files are described in

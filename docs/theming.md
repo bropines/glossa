@@ -4,14 +4,51 @@ Every colour and size the UI draws with comes from a theme, and a theme is a
 file. Pick one in *Options → Appearance*; after editing a theme file, press
 *Reload themes* there to see the change without restarting.
 
-Five themes are built in: **Glossa Dark**, **Glossa Light**, **Glossa
-Midnight**, and **Fluent Dark** and **Fluent Light**, which look like
-Windows 11 (WinUI 3) apps: Segoe UI Variable on the Windows type ramp,
-32 px controls, 4 px control and 8 px window and menu corners, hairline
-strokes, thin scroll bars, the Fluent neutral palette and the system accent
-colour ([research/fluent.md](research/fluent.md) lists every number and
-where it comes from). Themes from a classic QTranslate installation appear
-alongside them (see [modules/classic-scripts.md](modules/classic-scripts.md)).
+- [Built-in themes](#built-in-themes)
+- [Light and dark with the system](#light-and-dark-with-the-system)
+- [Where theme files go](#where-theme-files-go)
+- [Writing one](#writing-one): [colours](#colours),
+  [sections](#sections), [fonts](#fonts), [the system accent](#the-system-accent)
+- [Backdrops](#backdrops)
+- [Transparency](#transparency)
+- [Readability](#readability)
+- [Classic themes](#classic-themes)
+
+## Built-in themes
+
+| theme | looks like |
+|---|---|
+| **Glossa Dark**, **Glossa Light**, **Glossa Midnight** | Glossa's own. |
+| **Fluent Dark**, **Fluent Light** | Windows 11 (WinUI 3) apps: Segoe UI Variable on the Windows type ramp, 32 px controls, 4 px control and 8 px window and menu corners, hairline strokes, thin scroll bars, the Fluent neutral palette and the system accent colour ([research/fluent.md](research/fluent.md) lists every number and where it comes from). |
+| **macOS Dark**, **macOS Light** | macOS apps, after AppKit's colours and metrics, with 8 pt corners on menus and the popup. |
+
+Themes from a classic QTranslate installation appear alongside them (see
+[modules/classic-scripts.md](modules/classic-scripts.md)).
+
+## Light and dark with the system
+
+By default a new configuration follows the system's light or dark mode.
+With *Options → Appearance → Follow the system's light and dark mode* on,
+you pick one theme for light mode and one for dark, and Glossa switches
+between them when the system does (it checks every few seconds, and at
+once where the system reports the change). The defaults are the pair that looks native: Fluent Light and
+Fluent Dark on Windows, macOS Light and macOS Dark on macOS, Glossa Light
+and Glossa Dark elsewhere. With following off, or where the mode cannot be
+told, the one theme chosen there is used.
+
+<p align="center">
+  <img src="screenshots/options-appearance-follow.png" alt="Options, Appearance, with the switch to follow the system's mode and a theme for light and one for dark" width="700">
+</p>
+
+| system | where the mode is read |
+|---|---|
+| Windows | *Settings → Personalisation → Colours*, the app mode |
+| macOS | *System Settings → Appearance* |
+| Linux | `GTK_THEME` when set (a name with `dark` in it), else `gsettings` `color-scheme`, else the GTK theme's name |
+
+The keys are `follow_system_theme`, `theme_light`, `theme_dark` and `theme`
+in [`[appearance]`](configuration.md#appearance). A configuration written
+before this setting existed keeps its one theme.
 
 ## Where theme files go
 
