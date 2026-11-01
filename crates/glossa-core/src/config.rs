@@ -1396,11 +1396,21 @@ pub struct Server {
     /// without the token, but only from a loopback address and without an
     /// `Origin` header, so key bindings made for pot-app work unchanged.
     pub pot_compat_without_token: bool,
+    /// Offer the same actions on the session bus (`io.github.bropines.Glossa`)
+    /// on Linux and the BSDs. Needs no token: the session bus is the user's
+    /// own. Ignored on Windows and macOS.
+    pub dbus: bool,
 }
 
 impl Default for Server {
     fn default() -> Self {
-        Self { enabled: true, bind: "127.0.0.1:60828".into(), token: String::new(), pot_compat_without_token: true }
+        Self {
+            enabled: true,
+            bind: "127.0.0.1:60828".into(),
+            token: String::new(),
+            pot_compat_without_token: true,
+            dbus: true,
+        }
     }
 }
 
@@ -1957,6 +1967,12 @@ copy_joined_lines = true",
         assert!(Config::default().to_toml().contains("renderer = \"open_gl\""));
         assert_eq!(Renderer::from_name("GLOW"), Some(Renderer::OpenGl));
         assert_eq!(Renderer::from_name("vulkan"), None);
+    }
+
+    #[test]
+    fn dbus_defaults_on() {
+        assert!(Config::from_toml("").unwrap().server.dbus);
+        assert!(!Config::from_toml("[server]\ndbus = false").unwrap().server.dbus);
     }
 
     #[test]

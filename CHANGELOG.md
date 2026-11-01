@@ -268,7 +268,23 @@ for Windows, macOS and Linux.
   them in Russian with the Russian interface (a `languages` table in the
   native locale format, complete for the built-in Russian pack), with each
   language's own name beside it; a search finds any of the names.
-- A list of problems found at start-up, shown once, for the engine to fill.
+- Problems found at start-up (a `config.toml` that could not be read) are shown once.
+- **D-Bus service** on Linux and the BSDs: `io.github.bropines.Glossa` on
+  the session bus (`/io/github/bropines/Glossa`, interface
+  `io.github.bropines.Glossa1`) with `Action`, `Translate`, `ShowPopup`,
+  `ShowMain`, `Recognize` and a `Version` property, no token needed; for
+  `gdbus`/`busctl`/`qdbus` and desktop shortcut settings. Also offered by
+  `glossa-cli serve`; `[server] dbus = false` switches it off.
+- **Global hotkeys on Wayland** through the desktop portal's GlobalShortcuts
+  (KDE Plasma 6, GNOME 48 and later, Hyprland): the configured chords are
+  suggested to the desktop, which may ask once to confirm them. Elsewhere
+  the "bind a desktop shortcut" advice stays, now with the D-Bus command.
+- **Screen capture on Wayland** through the Screenshot portal (GNOME, KDE;
+  no PipeWire needed) before `grim`, which still goes first on wlroots
+  compositors. GNOME asks once for permission.
+- `glossa-cli doctor` shows the D-Bus service and, on Wayland, what the
+  desktop portal offers; the Wayland limitations say which of the above
+  applies.
 
 ### Fixed
 
@@ -427,8 +443,12 @@ for Windows, macOS and Linux.
 ### Known gaps
 
 - Speech input and the update check are not implemented yet.
-- On Wayland, global hotkeys, mouse mode and reading the selection depend on
-  the compositor; bind keys to the control API instead.
+- On Wayland, mouse mode and reading the selection depend on the
+  compositor, and global hotkeys need the GlobalShortcuts portal; without
+  it (Sway and other wlroots compositors, GNOME before 48) bind keys to the
+  D-Bus service or the control API instead. The portal paths were tested
+  against a fake portal and, for screenshots, the real
+  `xdg-desktop-portal` frontend, not yet on a real KDE or GNOME desktop.
 - In a right-to-left row, the caret and a mouse selection that starts or
   ends inside the row are approximate (egui's cursor code expects positions
   to grow with the character index); selecting whole rows and *Copy all*

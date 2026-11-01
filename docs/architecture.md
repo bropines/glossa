@@ -34,8 +34,8 @@ fourth without touching the rest.
 | `glossa-services` | Built-in providers in Rust: Google, Google Dictionary, Bing (keyless web session or keyed API), DeepL, DeepLX, LibreTranslate, MyMemory, Lingva, OpenAI-compatible, Yandex. |
 | `glossa-ocr` | OCR providers: Google Lens through `chrome-lens-py` (online; warm daemon, else its CLI); offline Windows OCR (`Windows.Media.Ocr`) and OneOCR (the Snipping Tool's `oneocr.dll`, loaded from the user's installation, opt-in only) on Windows, Apple Vision (`VNRecognizeTextRequest` via objc2) on macOS, and Tesseract (its CLI with TSV output) anywhere it is installed; and any external command. Modules add more. The OS engines' calls live here behind `cfg(windows)` / `cfg(target_os = "macos")` rather than in `glossa-platform`, which the engine does not depend on (the CLI uses it only for `doctor`). Registration order is the fail-over order (Lens, the system engine, Tesseract, the command); the engine falls over past engines that are not installed. |
 | `glossa-dict` | Offline dictionaries (StarDict with dictzip, DSL, XDXF, tab-separated) and the HTML simplifier for dictionary articles. |
-| `glossa-engine` | The front ends' shared core: the keyless JavaScript service modules compiled in from `modules/bundled/`, the translation pipeline (direction detection, fail-over, back translation, input limits), async jobs with cancellation, history, the theme and locale catalogues, exports, the classic import, and the control API (HTTP on localhost with a token). |
-| `glossa-platform` | Everything OS-specific: the single-instance lock and hand-over channel, clipboard, reading the selection (UI Automation, then a synthetic copy), synthetic input, screen capture, global hotkeys, the mouse watcher for mouse mode, autostart, audio playback, window placement, window backdrops (Mica, Acrylic, vibrancy), the system accent colour and dark-mode preference, dark or light system menus, the idle message pump. |
+| `glossa-engine` | The front ends' shared core: the keyless JavaScript service modules compiled in from `modules/bundled/`, the translation pipeline (direction detection, fail-over, back translation, input limits), async jobs with cancellation, history, the theme and locale catalogues, exports, the classic import, the control API (HTTP on localhost with a token), and on Linux and the BSDs the same actions as a D-Bus service on the session bus (`dbus`, no token). |
+| `glossa-platform` | Everything OS-specific: the single-instance lock and hand-over channel, clipboard, reading the selection (UI Automation, then a synthetic copy), synthetic input, screen capture, global hotkeys, the XDG desktop portals that stand in for both on Wayland (GlobalShortcuts, Screenshot), the mouse watcher for mouse mode, autostart, audio playback, window placement, window backdrops (Mica, Acrylic, vibrancy), the system accent colour and dark-mode preference, dark or light system menus, the idle message pump. |
 | `glossa-ui-egui` | The desktop app (binary `glossa`): main window, selection popup, OCR overlay, dictionary, history, options, tray. |
 | `glossa-cli` | The command line (binary `glossa-cli`). |
 
@@ -66,16 +66,16 @@ The goal is a resident cost close to the classic program's. The app is split
 in two:
 
 - **The shell**, which lives as long as the process: the engine, hotkeys, the
-  tray icon, the control API, clipboard and audio. In the tray it costs a few
-  MB.
+  tray icon, the control API (and the D-Bus service), clipboard and audio. In
+  the tray it costs a few MB.
 - **The GUI**, eframe with its OpenGL (or wgpu) context, fonts and windows,
   which is the expensive part (≈75 MB with OpenGL).
 
 When no window has been visible for `appearance.unload_graphics_after_secs`
 (default 45), the GUI shuts down completely and the process waits in a plain
 message loop (`glossa-platform::idle`), with its working set trimmed. A
-hotkey, a tray click or a control-API call brings it back in a few hundred
-milliseconds. Things that must happen before any window exists (reading the
+hotkey, a tray click or a control-API or D-Bus call brings it back in a few
+hundred milliseconds. Things that must happen before any window exists (reading the
 selection, whose focus a new window would steal) are done in that loop.
 
 Other choices made for size: fonts for CJK, Arabic, Indic and other scripts
@@ -128,6 +128,11 @@ with the character index.
   serialised.
 - The control API runs on its own thread, and each request on a thread of
   its own.
+- On Linux and the BSDs the D-Bus service has one zbus connection, whose
+  executor is a thread of its own; a translation asked over D-Bus runs on a
+  pool thread. On Wayland the portal hotkeys add a binding thread and a
+  thread forwarding the desktop's activations, on a second connection that
+  screen capture shares.
 
 ## Configuration and data
 

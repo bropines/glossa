@@ -3,12 +3,17 @@
 A running Glossa answers HTTP requests on localhost. Anything on the machine
 can use it: a script, a launcher, a Stream Deck, AutoHotkey, or a key binding
 in the desktop environment. That last one is why it exists: on Wayland an
-application cannot register global hotkeys, but the compositor can run a
-command, and `curl` to the control API makes the popup work there too.
+application cannot register global hotkeys itself (only through the
+desktop's shortcut portal, which not every desktop has), but the compositor
+can run a command, and `curl` to the control API makes the popup work there
+too.
 
 The API can translate, detect, look up, recognise and speak, returning JSON,
 and it can ask the desktop program to perform any of its actions (show the
 popup, recognise a screen region…), exactly as a hotkey would.
+
+On Linux and the BSDs the actions and translation are also on the session
+bus, with no token: see [D-Bus](#d-bus).
 
 ## Enabling it
 
@@ -395,10 +400,91 @@ metadata, on an `https` page (whose links to `http` carry no `Referer`).
 If that matters, set `pot_compat_without_token = false` and add `?token=…`
 to the bindings' URLs.
 
+## D-Bus
+
+On Linux and the BSDs the desktop program (and [`glossa-cli
+serve`](cli.md#serve)) also offers its actions and translation on the
+session bus, the way desktop software there expects to be driven:
+
+| | |
+|---|---|
+| name | `io.github.bropines.Glossa` |
+| object | `/io/github/bropines/Glossa` |
+| interface | `io.github.bropines.Glossa1` |
+
+| member | signature | does |
+|---|---|---|
+| `Action(s action, s text)` | method | Performs any [action](#v1actionaction) by its id, as its hotkey would; `text`, when not empty, is used instead of the selection. An unknown id is an `org.freedesktop.DBus.Error.InvalidArgs` error listing the ids. |
+| `Translate(s text, s from, s to, s service) → (s translation, s detected, s service)` | method | Translates and returns the translation, the source language used (after detection) and the service that answered. Empty `from`, `to` and `service` mean auto, the settings' direction and the active service, with fail-over. A bad language or service id, or the same language on both sides, is `InvalidArgs`; a failed translation is `org.freedesktop.DBus.Error.Failed` with Glossa's message. Not recorded in the history. |
+| `ShowPopup(s text)` | method | `show_popup`: the popup for `text`, or for the selection when empty. |
+| `ShowMain()` | method | `show_main_window`. |
+| `Recognize()` | method | `text_recognition`: select a screen region and recognise it. |
+| `Version` | property, `s` | Glossa's version. |
+
+No token is needed: the session bus belongs to the logged-in user, and the
+bus daemon lets no other user connect to it. Like `/v1/action/…`, an action
+returns at once and wakes the window system if it was unloaded. One process
+owns the name; a second Glossa (another data folder) runs without it, as
+`glossa-cli doctor` shows. `[server] dbus = false` switches the service off
+([configuration.md](configuration.md#server)); it is independent of the HTTP
+API's `enabled`.
+
+```bash
+# The popup for the current selection
+gdbus call --session --dest io.github.bropines.Glossa \
+  --object-path /io/github/bropines/Glossa \
+  --method io.github.bropines.Glossa1.Action show_popup ''
+
+# The popup for given text
+gdbus call --session --dest io.github.bropines.Glossa \
+  --object-path /io/github/bropines/Glossa \
+  --method io.github.bropines.Glossa1.ShowPopup 'Hello world'
+
+# Translate (prints ('Привет', 'en', 'google'))
+gdbus call --session --dest io.github.bropines.Glossa \
+  --object-path /io/github/bropines/Glossa \
+  --method io.github.bropines.Glossa1.Translate Hello '' ru ''
+
+# The same with busctl (systemd) and qdbus (KDE)
+busctl --user call io.github.bropines.Glossa /io/github/bropines/Glossa \
+  io.github.bropines.Glossa1 Action ss text_recognition ''
+busctl --user get-property io.github.bropines.Glossa /io/github/bropines/Glossa \
+  io.github.bropines.Glossa1 Version
+qdbus io.github.bropines.Glossa /io/github/bropines/Glossa \
+  io.github.bropines.Glossa1.Action recognize_to_clipboard ''
+```
+
+`gdbus introspect --session --dest io.github.bropines.Glossa --object-path
+/io/github/bropines/Glossa` lists the interface; D-Feet and Bustle show it
+too.
+
 ## Binding hotkeys to it
 
-Each recipe runs a command that sends an action. Replace `TOKEN` with your
-token. The examples use `show_popup`; any action id works.
+On KDE Plasma 6, GNOME 48 and later and Hyprland, Glossa registers its
+hotkeys through the desktop's shortcut portal, so nothing here is needed
+there: the desktop asks once to confirm them, and they are changed in its
+own settings. Elsewhere on Wayland (Sway and other wlroots compositors,
+older GNOME), and for actions without a hotkey, bind a desktop shortcut to
+a command.
+
+On Linux the D-Bus call needs no token, which makes it the simplest
+command:
+
+```bash
+gdbus call --session --dest io.github.bropines.Glossa --object-path /io/github/bropines/Glossa --method io.github.bropines.Glossa1.Action show_popup ''
+```
+
+- **KDE Plasma**: *System Settings → Keyboard → Shortcuts → Add New →
+  Command or Script*, with the command above.
+- **GNOME**: *Settings → Keyboard → View and Customise Shortcuts → Custom
+  Shortcuts → +*, with the command above. To pass the highlighted text where
+  Glossa cannot read it (GNOME has no PRIMARY access for programs), use
+  `sh -c 'gdbus call --session --dest io.github.bropines.Glossa --object-path /io/github/bropines/Glossa --method io.github.bropines.Glossa1.ShowPopup "$(wl-paste --primary --no-newline)"'`.
+- **Sway**: `bindsym Ctrl+Shift+q exec gdbus call --session --dest io.github.bropines.Glossa --object-path /io/github/bropines/Glossa --method io.github.bropines.Glossa1.Action show_popup ''`.
+
+The recipes below use the HTTP API, which works everywhere (macOS and
+Windows included). Replace `TOKEN` with your token. The examples use
+`show_popup`; any action id works.
 
 When the binding fires, the foreground program still has the focus, so
 Glossa reads its selection as it would for its own hotkey. Where reading the

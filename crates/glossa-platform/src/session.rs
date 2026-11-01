@@ -1,11 +1,12 @@
 //! Which operating system and display server we are running under, and what
 //! that means for the features the user expects.
 //!
-//! The answer decides more than it looks: on Wayland there are no global
-//! hotkeys and no synthetic keystrokes, so the whole "select text, press a
-//! hotkey" workflow has to be rewired through a compositor shortcut and the
-//! local HTTP API. Detecting that up front lets the UI say so once, clearly,
-//! instead of failing silently every time a hotkey is pressed.
+//! The answer decides more than it looks: on Wayland a program cannot grab
+//! global hotkeys or send keystrokes, so the "select text, press a hotkey"
+//! workflow goes through the desktop's shortcut portal where it has one,
+//! and otherwise through a desktop shortcut that calls Glossa's D-Bus
+//! service or HTTP API. Detecting that up front lets the UI say so once,
+//! clearly, instead of failing silently every time a hotkey is pressed.
 
 use std::fmt;
 
@@ -66,6 +67,14 @@ impl Compositor {
                 | Compositor::Cosmic
                 | Compositor::Wlroots(_)
         )
+    }
+
+    /// Whether the compositor's portal backend is known to offer global
+    /// shortcuts (`org.freedesktop.portal.GlobalShortcuts`): KDE Plasma 6,
+    /// GNOME 48 and later, Hyprland. A guess from the name; the hotkey
+    /// service asks the portal itself.
+    pub fn has_global_shortcuts_portal(&self) -> bool {
+        matches!(self, Compositor::Kde | Compositor::Gnome | Compositor::Hyprland)
     }
 }
 
@@ -150,8 +159,9 @@ impl Session {
         matches!(self.display, DisplayServer::Wayland { .. })
     }
 
-    /// Whether system-wide hotkeys can be registered. The `global-hotkey`
-    /// crate covers Windows, macOS and X11; Wayland has no such protocol.
+    /// Whether system-wide hotkeys can be registered directly. The
+    /// `global-hotkey` crate covers Windows, macOS and X11; Wayland has no
+    /// such protocol, only the desktop portal ([`crate::hotkeys`] asks it).
     pub fn supports_global_hotkeys(&self) -> bool {
         matches!(self.display, DisplayServer::Windows | DisplayServer::MacOs | DisplayServer::X11)
     }
@@ -186,7 +196,11 @@ impl Session {
             }
             DisplayServer::X11 => out.push(Limitation::new("limitation.x11.primary")),
             DisplayServer::Wayland { compositor } => {
-                out.push(Limitation::new("limitation.wayland.hotkeys"));
+                out.push(Limitation::new(if compositor.has_global_shortcuts_portal() {
+                    "limitation.wayland.hotkeys_portal"
+                } else {
+                    "limitation.wayland.hotkeys"
+                }));
                 out.push(Limitation::new("limitation.wayland.typing"));
                 if !compositor.has_data_control() {
                     out.push(match compositor {
@@ -195,6 +209,7 @@ impl Session {
                     });
                 }
                 out.push(Limitation::new("limitation.wayland.popup_position"));
+                out.push(Limitation::new("limitation.wayland.capture"));
             }
             DisplayServer::Unknown => out.push(Limitation::new("limitation.no_display")),
         }
@@ -236,14 +251,22 @@ impl Session {
             DisplayServer::Wayland { compositor } => {
                 let primary = compositor.has_data_control();
                 vec![
-                    f("hotkeys", No, "bind a compositor shortcut to the control API"),
+                    if compositor.has_global_shortcuts_portal() {
+                        f(
+                            "hotkeys",
+                            Partly,
+                            "the desktop portal's GlobalShortcuts (GNOME 48 or later); confirmed in its dialog",
+                        )
+                    } else {
+                        f("hotkeys", No, "no shortcut portal: bind a desktop shortcut to the D-Bus or HTTP API")
+                    },
                     if primary {
                         f("selection", Yes, "PRIMARY through data-control")
                     } else {
                         f("selection", Partly, "the clipboard only: copy first")
                     },
                     f("synthetic_input", No, "Wayland forbids it; replacing leaves text on the clipboard"),
-                    f("capture", Partly, "the desktop portal, wlr-screencopy or grim"),
+                    f("capture", Partly, "the Screenshot portal, or grim on wlroots; may ask for permission once"),
                     if primary {
                         f("mouse_mode", Yes, "watches the PRIMARY selection")
                     } else {
@@ -405,7 +428,9 @@ mod tests {
         assert!(!s.supports_synthetic_input());
         assert!(!s.supports_primary_selection(), "GNOME has no data-control");
         let lim = s.limitations().iter().map(Limitation::english).collect::<Vec<_>>().join("\n");
-        assert!(lim.contains("global hotkeys"));
+        assert!(s.limitations().iter().any(|l| l.key == "limitation.wayland.hotkeys_portal"), "GNOME has the portal");
+        assert!(lim.contains("shortcut portal"));
+        assert!(lim.contains("may ask whether Glossa may take screenshots"));
         assert!(lim.contains("GNOME does not let Glossa read"));
     }
 
@@ -429,6 +454,8 @@ mod tests {
         let s = linux(&[("WAYLAND_DISPLAY", "wayland-1"), ("SWAYSOCK", "/run/sway.sock")]);
         assert_eq!(s.display, DisplayServer::Wayland { compositor: Compositor::Sway });
         assert!(s.supports_primary_selection());
+        assert!(s.limitations().iter().any(|l| l.key == "limitation.wayland.hotkeys"), "Sway has no shortcut portal");
+        assert_eq!(s.features()[0].support, Support::No);
         assert!(!s.limitations().iter().any(|l| l.english().contains("Ctrl+C first")));
     }
 
@@ -464,6 +491,7 @@ mod tests {
             linux(&[("DISPLAY", ":0")]),
             linux(&[("WAYLAND_DISPLAY", "w"), ("XDG_CURRENT_DESKTOP", "GNOME")]),
             linux(&[("WAYLAND_DISPLAY", "w")]),
+            linux(&[("WAYLAND_DISPLAY", "w"), ("XDG_CURRENT_DESKTOP", "sway")]),
             linux(&[]),
         ];
         for s in &sessions {

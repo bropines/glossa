@@ -461,6 +461,7 @@ The local [control API](control-api.md). Set in *Options → Control API*.
 | `bind` | string | `"127.0.0.1:60828"` | Address and port to listen on. An address beyond loopback requires a token. Takes effect at the next start. With `0.0.0.0` or `[::]`, `glossa-cli action` connects to `127.0.0.1` or `[::1]` on that port. |
 | `token` | string | generated | Required on every request (but see the next key). Never empty: an empty or missing token is replaced with a new random one, and saved, at the next start or as soon as the settings are applied with the field cleared. Applies at once. |
 | `pot_compat_without_token` | bool | `true` | Let [pot-app's routes](control-api.md#pot-app-compatibility) through without the token, so pot-app key bindings work unchanged. Only for requests from this machine (a loopback address) that carry none of the headers browsers send (`Origin`, `Sec-Fetch-*`, `Referer`), so a web page cannot trigger them; those routes can open windows but never return data. Set to `false` to require the token there too. |
+| `dbus` | bool | `true` | Linux and the BSDs: offer the actions and translation on the session bus as `io.github.bropines.Glossa` ([D-Bus](control-api.md#d-bus)), with no token (the session bus is the user's own). Independent of `enabled`. File only; takes effect at the next start. Ignored on Windows and macOS. |
 
 ### `[modules]`
 

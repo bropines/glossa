@@ -6,8 +6,12 @@
 //!   pixels, EWMH properties for the active window. It needs no system
 //!   libraries beyond libxcb, unlike xcap, which links PipeWire.
 //! - **Linux, Wayland**: `xcap` when built with the `wayland-capture`
-//!   feature; otherwise the `grim` command (wlroots compositors, Hyprland),
-//!   and an explanatory error where that is missing too.
+//!   feature. Otherwise the desktop portal's Screenshot interface (GNOME,
+//!   KDE, and wlroots with `xdg-desktop-portal-wlr`; no PipeWire needed),
+//!   then the `grim` command (wlroots compositors, Hyprland, niri), and an
+//!   explanatory error where both are missing. On the wlroots family `grim`
+//!   goes first when installed: it grabs just the region, without the file
+//!   the portal writes for every shot.
 
 use glossa_core::ocr::Rect;
 #[cfg(target_os = "linux")]
@@ -64,7 +68,7 @@ pub(crate) fn capture(within: Option<Rect>) -> Result<Vec<MonitorShot>> {
         #[cfg(not(feature = "wayland-capture"))]
         {
             let _ = within;
-            let image = grim::capture(None)?;
+            let image = wayland::capture(None)?;
             let (w, h) = image.dimensions();
             let monitor = Monitor {
                 x: 0,
@@ -98,7 +102,7 @@ pub(crate) fn capture_rect_direct(rect: Rect) -> Option<Result<RgbaImage>> {
     }
     #[cfg(not(feature = "wayland-capture"))]
     {
-        Some(grim::capture(Some(rect)))
+        Some(wayland::capture(Some(rect)))
     }
     #[cfg(feature = "wayland-capture")]
     {
@@ -369,6 +373,127 @@ pub(crate) mod x11 {
             let wa = Rect::new(0.0, 32.0, 3840.0, 1048.0);
             assert_eq!(intersection(m, wa), Some(Rect::new(1920.0, 32.0, 1920.0, 1048.0)));
             assert_eq!(intersection(m, Rect::new(0.0, 0.0, 100.0, 100.0)), None);
+        }
+    }
+}
+
+/// Wayland without xcap: the Screenshot portal and `grim`, in the order
+/// that suits the compositor.
+#[cfg(all(target_os = "linux", not(feature = "wayland-capture")))]
+mod wayland {
+    use std::sync::atomic::{AtomicBool, Ordering};
+
+    use glossa_core::ocr::Rect;
+    use image::RgbaImage;
+
+    use crate::portal::PortalError;
+    use crate::session::{Compositor, DisplayServer};
+    use crate::{platform_err, Result};
+
+    /// Set once the portal turned out to have no Screenshot interface, so
+    /// later captures go straight to `grim`.
+    static NO_PORTAL: AtomicBool = AtomicBool::new(false);
+
+    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    pub(crate) enum Backend {
+        Portal,
+        Grim,
+    }
+
+    /// Which backend to try first. The wlroots family implements the
+    /// screencopy protocol `grim` uses, and `grim` takes just the region
+    /// without saving a file; GNOME and KDE do not, and have the portal.
+    pub(crate) fn order(compositor: &Compositor, grim_installed: bool) -> [Backend; 2] {
+        let wlroots =
+            matches!(compositor, Compositor::Sway | Compositor::Hyprland | Compositor::Niri | Compositor::Wlroots(_));
+        if wlroots && grim_installed {
+            [Backend::Grim, Backend::Portal]
+        } else {
+            [Backend::Portal, Backend::Grim]
+        }
+    }
+
+    fn grim_installed() -> bool {
+        std::env::var_os("PATH")
+            .is_some_and(|paths| std::env::split_paths(&paths).any(|dir| dir.join("grim").is_file()))
+    }
+
+    pub fn capture(rect: Option<Rect>) -> Result<RgbaImage> {
+        let compositor = match crate::Session::detect().display {
+            DisplayServer::Wayland { compositor } => compositor,
+            _ => Compositor::Unknown,
+        };
+        let mut errors = Vec::new();
+        for backend in order(&compositor, grim_installed()) {
+            let result = match backend {
+                Backend::Portal if NO_PORTAL.load(Ordering::Relaxed) => continue,
+                Backend::Portal => match crate::portal::screenshot_image() {
+                    Ok(image) => return Ok(crop(image, rect)),
+                    Err(e) => {
+                        if matches!(e, PortalError::Unavailable(_)) {
+                            NO_PORTAL.store(true, Ordering::Relaxed);
+                        }
+                        Err(platform_err(e.to_string()))
+                    }
+                },
+                Backend::Grim => super::grim::capture(rect),
+            };
+            match result {
+                Ok(image) => return Ok(image),
+                Err(e) => {
+                    tracing::debug!("screen capture via {backend:?}: {e}");
+                    errors.push(e.to_string());
+                }
+            }
+        }
+        Err(platform_err(format!(
+            "screen capture on Wayland needs the desktop portal (xdg-desktop-portal with a backend for this \
+             desktop) or the `grim` tool: {}",
+            errors.join("; ")
+        )))
+    }
+
+    /// The part of a full-screen shot inside `rect` (clamped to the image);
+    /// the whole shot for `None`.
+    pub(crate) fn crop(image: RgbaImage, rect: Option<Rect>) -> RgbaImage {
+        let Some(r) = rect else { return image };
+        let (w, h) = image.dimensions();
+        let x0 = (r.x.round().max(0.0) as u32).min(w);
+        let y0 = (r.y.round().max(0.0) as u32).min(h);
+        let x1 = ((r.x + r.width).round().max(0.0) as u32).min(w);
+        let y1 = ((r.y + r.height).round().max(0.0) as u32).min(h);
+        if x1 <= x0 || y1 <= y0 {
+            return RgbaImage::new(1, 1);
+        }
+        image::imageops::crop_imm(&image, x0, y0, x1 - x0, y1 - y0).to_image()
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use super::*;
+
+        #[test]
+        fn grim_first_only_on_wlroots_with_grim() {
+            assert_eq!(order(&Compositor::Sway, true), [Backend::Grim, Backend::Portal]);
+            assert_eq!(order(&Compositor::Hyprland, true), [Backend::Grim, Backend::Portal]);
+            assert_eq!(order(&Compositor::Wlroots("river".into()), true)[0], Backend::Grim);
+            assert_eq!(order(&Compositor::Sway, false), [Backend::Portal, Backend::Grim]);
+            assert_eq!(order(&Compositor::Gnome, true), [Backend::Portal, Backend::Grim]);
+            assert_eq!(order(&Compositor::Kde, true), [Backend::Portal, Backend::Grim]);
+            assert_eq!(order(&Compositor::Unknown, false), [Backend::Portal, Backend::Grim]);
+        }
+
+        #[test]
+        fn crops_clamp_to_the_shot() {
+            let mut img = RgbaImage::new(100, 50);
+            img.put_pixel(10, 20, image::Rgba([1, 2, 3, 255]));
+            let c = crop(img.clone(), Some(Rect::new(10.0, 20.0, 30.0, 10.0)));
+            assert_eq!(c.dimensions(), (30, 10));
+            assert_eq!(c.get_pixel(0, 0).0, [1, 2, 3, 255]);
+            assert_eq!(crop(img.clone(), Some(Rect::new(90.0, 40.0, 30.0, 30.0))).dimensions(), (10, 10));
+            assert_eq!(crop(img.clone(), Some(Rect::new(-5.0, -5.0, 10.0, 10.0))).dimensions(), (5, 5));
+            assert_eq!(crop(img.clone(), Some(Rect::new(200.0, 0.0, 10.0, 10.0))).dimensions(), (1, 1));
+            assert_eq!(crop(img, None).dimensions(), (100, 50));
         }
     }
 }

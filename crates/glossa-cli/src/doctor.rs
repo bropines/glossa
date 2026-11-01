@@ -98,7 +98,39 @@ pub fn report(paths: &Paths) -> Value {
             "certificates": if glossa_net::uses_system_certificates() { "system store" } else { "bundled Mozilla roots" },
         },
         "control_api": control_api(&cfg),
+        "dbus": dbus(&cfg),
+        "portal": portal(&session),
         "running": glossa_platform::instance::is_running(paths),
+    })
+}
+
+/// The D-Bus service (Linux and the BSDs): switched on, and whether some
+/// program owns its name now. `null` elsewhere.
+fn dbus(cfg: &Config) -> Value {
+    if !glossa_engine::dbus::SUPPORTED {
+        return Value::Null;
+    }
+    let name = glossa_engine::dbus::BUS_NAME;
+    let owner = match glossa_platform::portal::session_name_has_owner(name) {
+        None => "no session bus",
+        Some(true) => "owned (Glossa is running)",
+        Some(false) => "nobody owns it",
+    };
+    json!({ "enabled": cfg.server.dbus, "name": name, "owner": owner })
+}
+
+/// What the desktop portal offers, asked only on Wayland, where Glossa
+/// relies on it for global shortcuts and screen capture. `null` elsewhere.
+fn portal(session: &Session) -> Value {
+    if !session.is_wayland() {
+        return Value::Null;
+    }
+    let p = glossa_platform::portal::probe();
+    json!({
+        "reachable": p.reachable,
+        "global_shortcuts": p.global_shortcuts,
+        "screenshot": p.screenshot,
+        "error": p.error,
     })
 }
 
@@ -215,6 +247,23 @@ pub fn print(r: &Value) -> String {
         s(&c["bind"]),
         s(&c["answer"])
     );
+    let d = &r["dbus"];
+    if !d.is_null() {
+        let _ = writeln!(o, "\nD-Bus service");
+        let state = if d["enabled"] == true { "enabled" } else { "disabled" };
+        let _ = writeln!(o, "  {state}, {}: {}", s(&d["name"]), s(&d["owner"]));
+    }
+    let p = &r["portal"];
+    if !p.is_null() {
+        let _ = writeln!(o, "\nDesktop portal");
+        let version = |v: &Value| v.as_u64().map(|v| format!("yes (version {v})")).unwrap_or_else(|| "no".into());
+        if p["reachable"] == true {
+            let _ = writeln!(o, "  global shortcuts {}", version(&p["global_shortcuts"]));
+            let _ = writeln!(o, "  screenshot       {}", version(&p["screenshot"]));
+        } else {
+            let _ = writeln!(o, "  not reachable: {}", s(&p["error"]));
+        }
+    }
     let _ = writeln!(
         o,
         "\nDesktop program for this data folder: {}",
@@ -248,6 +297,12 @@ mod tests {
         let text = print(&r);
         for heading in ["System", "Desktop features", "OCR engines", "Modules", "Files", "Network", "Control API"] {
             assert!(text.contains(heading), "{heading} missing from\n{text}");
+        }
+        if glossa_engine::dbus::SUPPORTED {
+            assert_eq!(r["dbus"]["name"], "io.github.bropines.Glossa");
+            assert!(text.contains("D-Bus service"), "{text}");
+        } else {
+            assert!(r["dbus"].is_null());
         }
 
         // A broken config is reported, and left where it is.

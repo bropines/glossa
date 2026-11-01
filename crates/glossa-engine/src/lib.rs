@@ -14,6 +14,7 @@
 #[cfg(feature = "js")]
 pub mod bundled;
 pub mod catalog;
+pub mod dbus;
 pub mod export;
 pub mod ocr;
 pub mod pipeline;

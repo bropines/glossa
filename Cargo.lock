@@ -2156,6 +2156,7 @@ name = "glossa-engine"
 version = "0.1.0"
 dependencies = [
  "base64 0.22.1",
+ "blocking",
  "glossa-core",
  "glossa-dict",
  "glossa-modules",
@@ -2168,6 +2169,7 @@ dependencies = [
  "tiny_http",
  "tracing",
  "winreg 0.55.0",
+ "zbus",
 ]
 
 [[package]]
@@ -2261,9 +2263,11 @@ name = "glossa-platform"
 version = "0.1.0"
 dependencies = [
  "arboard",
+ "async-io",
  "dirs",
  "eframe",
  "enigo",
+ "futures-lite",
  "global-hotkey",
  "glossa-core",
  "image",
@@ -2277,6 +2281,7 @@ dependencies = [
  "windows 0.62.2",
  "x11rb",
  "xcap",
+ "zbus",
 ]
 
 [[package]]

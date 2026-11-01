@@ -31,3 +31,9 @@ tiny_http = "0.12"
 
 [target.'cfg(windows)'.dependencies]
 winreg = "0.55"
+
+# The D-Bus service (`dbus`). `blocking` runs a translation off zbus's
+# executor thread; zbus already depends on it.
+[target.'cfg(all(unix, not(target_os = "macos")))'.dependencies]
+zbus = { workspace = true }
+blocking = "1.7"

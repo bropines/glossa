@@ -438,7 +438,10 @@ fn basics(app: &mut GlossaApp, ui: &mut egui::Ui, st: &mut OptionsState) {
 fn hotkeys(app: &mut GlossaApp, ui: &mut egui::Ui, st: &mut OptionsState) {
     let d = &mut st.draft;
     ui.checkbox(&mut d.hotkeys.enabled, app.t("options.hotkeys.enable"));
-    if app.session.is_wayland() || app.hotkeys.is_none() {
+    // On Wayland the desktop portal may bind the hotkeys; without it, point
+    // at a desktop shortcut instead.
+    let portal = app.hotkeys.as_ref().is_some_and(|h| h.uses_portal());
+    if app.hotkeys.is_none() || (app.session.is_wayland() && !portal) {
         let token = &d.server.token;
         let cmd = format!("curl -s 'http://{}/v1/action/show_popup?token={token}'", d.server.bind);
         ui.label(RichText::new(app.t("options.hotkeys.wayland")).color(app.look.weak_text()));
