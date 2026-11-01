@@ -13,6 +13,12 @@
 //!   picture of the whole screen, saved to a file. Used by screen capture
 //!   when the session is Wayland. GNOME asks the user once whether Glossa may
 //!   take screenshots.
+//! - **RemoteDesktop** (GNOME, KDE): a virtual keyboard whose keys the
+//!   desktop delivers to the focused program, which Wayland does not let a
+//!   program do itself. Used by [`crate::input`] for the copy and paste
+//!   keystrokes and for typing. The desktop asks once; the permission is
+//!   kept (a restore token in the data folder, see [`set_state_dir`]) until
+//!   the user revokes it.
 //!
 //! The calls follow the portal's request pattern: a method returns at once
 //! with the path of a `Request` object, and the answer arrives later as that
@@ -37,6 +43,8 @@ pub struct PortalSupport {
     pub global_shortcuts: Option<u32>,
     /// The Screenshot interface's version, if offered.
     pub screenshot: Option<u32>,
+    /// The RemoteDesktop interface's version, if offered.
+    pub remote_desktop: Option<u32>,
     /// Why the portal could not be asked, when it could not.
     pub error: Option<String>,
 }
@@ -52,6 +60,20 @@ pub fn probe() -> PortalSupport {
     #[cfg(not(all(unix, not(target_os = "macos"))))]
     {
         PortalSupport { error: Some("desktop portals are a Linux and BSD feature".into()), ..Default::default() }
+    }
+}
+
+/// Where to keep what the portal hands over to be remembered between runs
+/// (the RemoteDesktop restore token): the data folder. Without it the
+/// desktop asks again after every start. Does nothing off Linux and the BSDs.
+pub fn set_state_dir(dir: &std::path::Path) {
+    #[cfg(all(unix, not(target_os = "macos")))]
+    {
+        *imp::STATE_DIR.lock().unwrap_or_else(|p| p.into_inner()) = Some(dir.to_owned());
+    }
+    #[cfg(not(all(unix, not(target_os = "macos"))))]
+    {
+        let _ = dir;
     }
 }
 
@@ -132,6 +154,7 @@ mod imp {
     pub const PATH: &str = "/org/freedesktop/portal/desktop";
     pub const GLOBAL_SHORTCUTS: &str = "org.freedesktop.portal.GlobalShortcuts";
     pub const SCREENSHOT: &str = "org.freedesktop.portal.Screenshot";
+    pub const REMOTE_DESKTOP: &str = "org.freedesktop.portal.RemoteDesktop";
     const REQUEST: &str = "org.freedesktop.portal.Request";
     const SESSION: &str = "org.freedesktop.portal.Session";
     const REGISTRY: &str = "org.freedesktop.host.portal.Registry";
@@ -366,9 +389,14 @@ mod imp {
 
         /// Start a GlobalShortcuts session; its handle.
         pub async fn create_shortcuts_session(&self) -> Result<OwnedObjectPath, PortalError> {
+            self.create_session(GLOBAL_SHORTCUTS).await
+        }
+
+        /// `CreateSession` on `interface`; the session's handle.
+        async fn create_session(&self, interface: &str) -> Result<OwnedObjectPath, PortalError> {
             let (token, session_token) = (new_token(), new_token());
             let body = create_session_body(&token, &session_token);
-            let mut results = self.request(GLOBAL_SHORTCUTS, "CreateSession", &body, &token, CALL_TIMEOUT).await?;
+            let mut results = self.request(interface, "CreateSession", &body, &token, CALL_TIMEOUT).await?;
             // The spec types it as a string; accept an object path too.
             let handle = results.remove("session_handle").ok_or_else(|| failed("no session_handle"))?;
             let handle = match String::try_from(handle.try_clone().map_err(failed)?) {
@@ -391,6 +419,63 @@ mod imp {
             let body = bind_body(session, shortcuts, &token);
             let mut results = self.request(GLOBAL_SHORTCUTS, "BindShortcuts", &body, &token, timeout).await?;
             Ok(results.remove("shortcuts").map(bound_triggers).unwrap_or_default())
+        }
+
+        /// Start a RemoteDesktop session with a keyboard: create it, ask for
+        /// the keyboard (kept until revoked, where the portal can, and
+        /// without a dialog when `restore_token` is still good), and start
+        /// it, which is where the desktop asks the user. Answers the session
+        /// and the token to remember for next time.
+        pub async fn start_keyboard_session(
+            &self,
+            restore_token: Option<&str>,
+            timeout: Duration,
+        ) -> Result<(OwnedObjectPath, Option<String>), PortalError> {
+            // Version 2 brought persistence; version 1 asks every time.
+            let version = self.version(REMOTE_DESKTOP).await?;
+            let session = self.create_session(REMOTE_DESKTOP).await?;
+            let started = async {
+                let token = new_token();
+                let body = select_devices_body(&session, &token, version, restore_token);
+                self.request(REMOTE_DESKTOP, "SelectDevices", &body, &token, CALL_TIMEOUT).await?;
+                let token = new_token();
+                let body = start_body(&session, &token);
+                let mut results = self.request(REMOTE_DESKTOP, "Start", &body, &token, timeout).await?;
+                let devices = results.remove("devices").and_then(|v| u32::try_from(v).ok()).unwrap_or(0);
+                if devices & KEYBOARD == 0 {
+                    return Err(failed("the desktop did not grant a keyboard"));
+                }
+                Ok(results.remove("restore_token").and_then(|v| String::try_from(v).ok()))
+            }
+            .await;
+            match started {
+                Ok(token) => Ok((session, token)),
+                Err(e) => {
+                    self.close_session(&session).await;
+                    Err(e)
+                }
+            }
+        }
+
+        /// Press or release a key on a RemoteDesktop session's keyboard.
+        pub async fn notify_key(&self, session: &ObjectPath<'_>, key: KeyEvent) -> Result<(), PortalError> {
+            let options: HashMap<&str, Value<'_>> = HashMap::new();
+            let state = u32::from(key.down);
+            let (method, code) = match key.key {
+                PortalKey::Code(c) => ("NotifyKeyboardKeycode", c),
+                PortalKey::Sym(s) => ("NotifyKeyboardKeysym", s),
+            };
+            self.conn
+                .call_method(
+                    Some(self.destination.as_str()),
+                    PATH,
+                    Some(REMOTE_DESKTOP),
+                    method,
+                    &(session, options, code, state),
+                )
+                .await
+                .map(|_| ())
+                .map_err(unavailable_or_failed)
         }
 
         /// End a portal session; its shortcuts stop firing.
@@ -424,6 +509,125 @@ mod imp {
         pub preferred_trigger: Option<String>,
     }
 
+    /// A key on the RemoteDesktop keyboard: a Linux evdev key code (the
+    /// physical key, whatever the layout makes of it), or an X keysym (a
+    /// character, which the desktop finds a key for).
+    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    pub enum PortalKey {
+        Code(i32),
+        Sym(i32),
+    }
+
+    /// A key going down or up.
+    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    pub struct KeyEvent {
+        pub key: PortalKey,
+        pub down: bool,
+    }
+
+    /// RemoteDesktop device types: the keyboard.
+    const KEYBOARD: u32 = 1;
+    /// RemoteDesktop `persist_mode`: until the user revokes it.
+    const PERSIST_UNTIL_REVOKED: u32 = 2;
+    /// How long the desktop's "allow remote control" dialog may wait for
+    /// the user.
+    const PERMISSION_TIMEOUT: Duration = Duration::from_secs(120);
+
+    pub(crate) static STATE_DIR: Mutex<Option<std::path::PathBuf>> = Mutex::new(None);
+
+    /// The keyboard session in use, kept for the life of the process so the
+    /// desktop asks once.
+    static KEYBOARD_SESSION: Mutex<Option<OwnedObjectPath>> = Mutex::new(None);
+
+    const TOKEN_FILE: &str = "remote-desktop-token";
+
+    fn saved_token() -> Option<String> {
+        let dir = STATE_DIR.lock().unwrap_or_else(|p| p.into_inner()).clone()?;
+        let token = std::fs::read_to_string(dir.join(TOKEN_FILE)).ok()?;
+        Some(token.trim().to_owned()).filter(|t| !t.is_empty())
+    }
+
+    fn save_token(token: Option<&str>) {
+        let Some(dir) = STATE_DIR.lock().unwrap_or_else(|p| p.into_inner()).clone() else { return };
+        let path = dir.join(TOKEN_FILE);
+        let result = match token {
+            Some(t) => std::fs::write(&path, t),
+            None => std::fs::remove_file(&path).or_else(|e| match e.kind() {
+                std::io::ErrorKind::NotFound => Ok(()),
+                _ => Err(e),
+            }),
+        };
+        if let Err(e) = result {
+            tracing::debug!("could not keep the remote desktop token in {}: {e}", path.display());
+        }
+    }
+
+    /// Send `keys` in order through the RemoteDesktop portal, starting the
+    /// keyboard session first if there is none (the desktop may ask the
+    /// user then, once). A session the user ended is started again, once.
+    /// Keys left down by a failure are released.
+    pub fn send_keys(keys: &[KeyEvent]) -> Result<(), PortalError> {
+        send_keys_with(&shared()?, keys)
+    }
+
+    pub(crate) fn send_keys_with(portal: &Portal, keys: &[KeyEvent]) -> Result<(), PortalError> {
+        // One sender at a time: two interleaved chords would mix.
+        let mut slot = KEYBOARD_SESSION.lock().unwrap_or_else(|p| p.into_inner());
+        async_io::block_on(async {
+            for attempt in 0..2 {
+                let session = match slot.clone() {
+                    Some(s) => s,
+                    None => {
+                        let saved = saved_token();
+                        let started = portal.start_keyboard_session(saved.as_deref(), PERMISSION_TIMEOUT).await;
+                        let (session, token) = match started {
+                            Err(PortalError::Failed(_)) if saved.is_some() => {
+                                // A stale token: forget it and ask afresh.
+                                save_token(None);
+                                portal.start_keyboard_session(None, PERMISSION_TIMEOUT).await?
+                            }
+                            other => other?,
+                        };
+                        // Each start hands over a new token; the old one is spent.
+                        save_token(token.as_deref());
+                        *slot = Some(session.clone());
+                        session
+                    }
+                };
+                let mut down: Vec<PortalKey> = Vec::new();
+                let mut sent = Ok(());
+                for (i, k) in keys.iter().enumerate() {
+                    if let Err(e) = portal.notify_key(&session.as_ref(), *k).await {
+                        sent = Err((i, e));
+                        break;
+                    }
+                    if k.down {
+                        down.push(k.key);
+                    } else {
+                        down.retain(|d| *d != k.key);
+                    }
+                }
+                match sent {
+                    Ok(()) => return Ok(()),
+                    Err((0, e)) if attempt == 0 => {
+                        // Nothing went through: the session is likely gone
+                        // (revoked, or the portal restarted). Start anew.
+                        tracing::debug!("remote desktop session {} unusable ({e}); starting another", session.as_str());
+                        portal.close_session(&session.as_ref()).await;
+                        *slot = None;
+                    }
+                    Err((_, e)) => {
+                        for key in down.into_iter().rev() {
+                            let _ = portal.notify_key(&session.as_ref(), KeyEvent { key, down: false }).await;
+                        }
+                        return Err(e);
+                    }
+                }
+            }
+            Err(failed("the remote desktop session could not be started"))
+        })
+    }
+
     pub(crate) fn request_path_for(unique_name: &str, token: &str) -> String {
         let sender = unique_name.trim_start_matches(':').replace('.', "_");
         format!("{PATH}/request/{sender}/{token}")
@@ -452,6 +656,38 @@ mod imp {
         options.insert("handle_token", Value::from(token));
         options.insert("session_handle_token", Value::from(session_token));
         (options,)
+    }
+
+    /// `SelectDevices(o session_handle, a{sv} options)`: the keyboard, kept
+    /// until revoked where the portal's `version` allows, restored from
+    /// `restore_token` if there is one.
+    pub(crate) fn select_devices_body<'a>(
+        session: &'a ObjectPath<'a>,
+        token: &'a str,
+        version: u32,
+        restore_token: Option<&'a str>,
+    ) -> (&'a ObjectPath<'a>, Options<'a>) {
+        let mut options = Options::new();
+        options.insert("handle_token", Value::from(token));
+        options.insert("types", Value::from(KEYBOARD));
+        if version >= 2 {
+            options.insert("persist_mode", Value::from(PERSIST_UNTIL_REVOKED));
+            if let Some(t) = restore_token {
+                options.insert("restore_token", Value::from(t));
+            }
+        }
+        (session, options)
+    }
+
+    /// `Start(o session_handle, s parent_window, a{sv} options)`.
+    #[allow(clippy::type_complexity)]
+    pub(crate) fn start_body<'a>(
+        session: &'a ObjectPath<'a>,
+        token: &'a str,
+    ) -> (&'a ObjectPath<'a>, &'static str, Options<'a>) {
+        let mut options = Options::new();
+        options.insert("handle_token", Value::from(token));
+        (session, "", options)
     }
 
     /// `BindShortcuts(o session_handle, a(sa{sv}) shortcuts, s parent_window, a{sv} options)`.
@@ -506,7 +742,8 @@ mod imp {
         async_io::block_on(async {
             let gs = portal.version(GLOBAL_SHORTCUTS).await;
             let shot = portal.version(SCREENSHOT).await;
-            let unreachable = [&gs, &shot].iter().find_map(|r| match r {
+            let remote = portal.version(REMOTE_DESKTOP).await;
+            let unreachable = [&gs, &shot, &remote].iter().find_map(|r| match r {
                 Err(PortalError::Unavailable(why)) if !why.starts_with("no org.freedesktop.portal") => {
                     Some(why.clone())
                 }
@@ -517,6 +754,7 @@ mod imp {
                 reachable: unreachable.is_none(),
                 global_shortcuts: gs.ok(),
                 screenshot: shot.ok(),
+                remote_desktop: remote.ok(),
                 error: unreachable,
             }
         })
@@ -581,6 +819,13 @@ mod imp {
             pub sessions: Vec<String>,
             /// Where the next screenshot is "saved".
             pub screenshot_file: Option<std::path::PathBuf>,
+            /// Each RemoteDesktop SelectDevices: the device types and the
+            /// restore token it brought, if any.
+            pub selected: Vec<(u32, Option<String>)>,
+            /// Each RemoteDesktop Start.
+            pub starts: usize,
+            /// Each key sent: "code" or "sym", the value, pressed.
+            pub keys: Vec<(&'static str, i32, bool)>,
         }
 
         pub struct FakePortal {
@@ -600,6 +845,8 @@ mod imp {
                     .serve_at(PATH, Shortcuts { state: state.clone() })
                     .ok()?
                     .serve_at(PATH, Screenshot { state: state.clone() })
+                    .ok()?
+                    .serve_at(PATH, Remote { state: state.clone() })
                     .ok()?
                     .name(name.as_str())
                     .ok()?
@@ -703,6 +950,116 @@ mod imp {
             }
         }
 
+        /// A session object at the path a CreateSession call asks for.
+        async fn new_session(
+            state: &Arc<Mutex<State>>,
+            header: &Header<'_>,
+            options: &HashMap<String, OwnedValue>,
+            server: &zbus::ObjectServer,
+        ) -> fdo::Result<String> {
+            let sender = header.sender().map(|s| s.as_str().to_owned()).unwrap_or_default();
+            let session = format!(
+                "{PATH}/session/{}/{}",
+                sender.trim_start_matches(':').replace('.', "_"),
+                token(options, "session_handle_token")
+            );
+            server
+                .at(session.as_str(), Session { state: state.clone(), path: session.clone() })
+                .await
+                .map_err(|e| fdo::Error::Failed(e.to_string()))?;
+            state.lock().unwrap().sessions.push(session.clone());
+            Ok(session)
+        }
+
+        struct Remote {
+            state: Arc<Mutex<State>>,
+        }
+
+        impl Remote {
+            fn key(&self, kind: &'static str, session: &OwnedObjectPath, value: i32, state: u32) -> fdo::Result<()> {
+                let mut st = self.state.lock().unwrap();
+                if st.closed.iter().any(|c| c == session.as_str()) || !st.sessions.iter().any(|s| s == session.as_str())
+                {
+                    return Err(fdo::Error::Failed("no such session".into()));
+                }
+                st.keys.push((kind, value, state == 1));
+                Ok(())
+            }
+        }
+
+        #[zbus::interface(name = "org.freedesktop.portal.RemoteDesktop")]
+        impl Remote {
+            async fn create_session(
+                &self,
+                options: HashMap<String, OwnedValue>,
+                #[zbus(header)] header: Header<'_>,
+                #[zbus(connection)] conn: &Connection,
+                #[zbus(object_server)] server: &zbus::ObjectServer,
+            ) -> fdo::Result<OwnedObjectPath> {
+                let session = new_session(&self.state, &header, &options, server).await?;
+                let mut results = HashMap::new();
+                results.insert("session_handle", Value::from(session));
+                respond(conn, &header, &options, results).await
+            }
+
+            async fn select_devices(
+                &self,
+                _session: OwnedObjectPath,
+                options: HashMap<String, OwnedValue>,
+                #[zbus(header)] header: Header<'_>,
+                #[zbus(connection)] conn: &Connection,
+            ) -> fdo::Result<OwnedObjectPath> {
+                let types = options.get("types").and_then(|v| u32::try_from(v).ok()).unwrap_or(0);
+                let restore = options.get("restore_token").map(|_| token(&options, "restore_token"));
+                self.state.lock().unwrap().selected.push((types, restore));
+                respond(conn, &header, &options, HashMap::new()).await
+            }
+
+            async fn start(
+                &self,
+                _session: OwnedObjectPath,
+                _parent_window: String,
+                options: HashMap<String, OwnedValue>,
+                #[zbus(header)] header: Header<'_>,
+                #[zbus(connection)] conn: &Connection,
+            ) -> fdo::Result<OwnedObjectPath> {
+                let n = {
+                    let mut st = self.state.lock().unwrap();
+                    st.starts += 1;
+                    st.starts
+                };
+                let mut results = HashMap::new();
+                results.insert("devices", Value::from(1u32));
+                results.insert("restore_token", Value::from(format!("token-{n}")));
+                respond(conn, &header, &options, results).await
+            }
+
+            fn notify_keyboard_keycode(
+                &self,
+                session: OwnedObjectPath,
+                _options: HashMap<String, OwnedValue>,
+                keycode: i32,
+                state: u32,
+            ) -> fdo::Result<()> {
+                self.key("code", &session, keycode, state)
+            }
+
+            fn notify_keyboard_keysym(
+                &self,
+                session: OwnedObjectPath,
+                _options: HashMap<String, OwnedValue>,
+                keysym: i32,
+                state: u32,
+            ) -> fdo::Result<()> {
+                self.key("sym", &session, keysym, state)
+            }
+
+            #[zbus(property, name = "version")]
+            fn version(&self) -> u32 {
+                2
+            }
+        }
+
         struct Session {
             state: Arc<Mutex<State>>,
             path: String,
@@ -790,10 +1147,68 @@ mod imp {
             // A name nobody owns: no portal at all.
             let none = Portal::with(conn.clone(), "io.github.bropines.GlossaTest.Nobody");
             assert!(matches!(async_io::block_on(none.version(SCREENSHOT)), Err(PortalError::Unavailable(_))));
-            // The fake has no RemoteDesktop.
+            // The fake has no Camera.
             let fake = Portal::with(conn, &f.name);
-            let v = async_io::block_on(fake.version("org.freedesktop.portal.RemoteDesktop"));
+            let v = async_io::block_on(fake.version("org.freedesktop.portal.Camera"));
             assert!(matches!(v, Err(PortalError::Unavailable(_))), "{v:?}");
+        }
+
+        #[test]
+        fn keys_go_through_one_remembered_remote_desktop_session() {
+            let Some((f, portal)) = fake("remote") else { return };
+            let dir = std::env::temp_dir().join(format!("glossa-remote-{}", std::process::id()));
+            std::fs::create_dir_all(&dir).unwrap();
+            super::super::set_state_dir(&dir);
+            let tap = |key| [KeyEvent { key, down: true }, KeyEvent { key, down: false }];
+
+            // The first keys start the session, asking for a keyboard to keep.
+            send_keys_with(&portal, &tap(PortalKey::Code(47))).unwrap();
+            send_keys_with(&portal, &tap(PortalKey::Sym(0x61))).unwrap();
+            {
+                let st = f.state.lock().unwrap();
+                assert_eq!(st.selected, [(1, None)]);
+                assert_eq!(st.starts, 1, "one session for both");
+                assert_eq!(
+                    st.keys,
+                    [("code", 47, true), ("code", 47, false), ("sym", 0x61, true), ("sym", 0x61, false)]
+                );
+            }
+            assert_eq!(std::fs::read_to_string(dir.join(TOKEN_FILE)).unwrap(), "token-1");
+
+            // The user ended the session: the next keys start another, with
+            // the token, and keep the new one.
+            let session = f.state.lock().unwrap().sessions.last().cloned().unwrap();
+            f.state.lock().unwrap().closed.push(session);
+            send_keys_with(&portal, &tap(PortalKey::Code(46))).unwrap();
+            {
+                let st = f.state.lock().unwrap();
+                assert_eq!(st.selected.last(), Some(&(1, Some("token-1".to_owned()))));
+                assert_eq!(st.starts, 2);
+                assert_eq!(&st.keys[4..], [("code", 46, true), ("code", 46, false)]);
+            }
+            assert_eq!(std::fs::read_to_string(dir.join(TOKEN_FILE)).unwrap(), "token-2");
+            *STATE_DIR.lock().unwrap() = None;
+            *KEYBOARD_SESSION.lock().unwrap() = None;
+            std::fs::remove_dir_all(&dir).ok();
+        }
+
+        /// Against the session's real portal: the desktop asks to allow
+        /// remote control, then "glossa" is typed into whatever has the focus
+        /// 3 s later. `cargo test -p glossa-platform live_portal_typing -- --ignored --nocapture`
+        #[test]
+        #[ignore = "needs a Wayland desktop with the RemoteDesktop portal and a person at the keyboard"]
+        fn live_portal_typing() {
+            eprintln!("portal: {:?}", probe());
+            eprintln!("focus a text field; typing in 3 s (confirm the desktop's dialog first)");
+            std::thread::sleep(Duration::from_secs(3));
+            let keys: Vec<KeyEvent> = "glossa ж"
+                .chars()
+                .map(|c| if c == 'ж' { 0x0100_0436 } else { c as i32 })
+                .flat_map(|s| {
+                    [KeyEvent { key: PortalKey::Sym(s), down: true }, KeyEvent { key: PortalKey::Sym(s), down: false }]
+                })
+                .collect();
+            send_keys(&keys).expect("keys through the RemoteDesktop portal");
         }
 
         /// Against the session's real portal: on GNOME the first run asks
@@ -860,6 +1275,10 @@ mod imp {
             assert_eq!(signature("Screenshot", &screenshot_body("t")), "sa{sv}");
             assert_eq!(signature("CreateSession", &create_session_body("t", "s")), "a{sv}");
             let session = ObjectPath::try_from("/org/freedesktop/portal/desktop/session/1_42/s").unwrap();
+            assert_eq!(signature("SelectDevices", &select_devices_body(&session, "t", 2, Some("r"))), "oa{sv}");
+            assert_eq!(signature("Start", &start_body(&session, "t")), "osa{sv}");
+            let options: HashMap<&str, Value<'_>> = HashMap::new();
+            assert_eq!(signature("NotifyKeyboardKeycode", &(&session, options, 47i32, 1u32)), "oa{sv}iu");
             let shortcuts = vec![
                 Shortcut {
                     id: "show_popup".into(),

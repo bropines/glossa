@@ -131,6 +131,7 @@ fn portal(session: &Session) -> Value {
         "reachable": p.reachable,
         "global_shortcuts": p.global_shortcuts,
         "screenshot": p.screenshot,
+        "remote_desktop": p.remote_desktop,
         "error": p.error,
     })
 }

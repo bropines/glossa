@@ -300,9 +300,10 @@ Not yet: speech input, the update check. On Wayland, global hotkeys go
 through the desktop's shortcut portal (KDE Plasma 6, GNOME 48 and later,
 Hyprland) and screen capture through its screenshot portal or `grim`;
 elsewhere, bind a desktop shortcut to Glossa's D-Bus service or HTTP API.
-Mouse mode and reading the selection depend on the compositor, and
-"replace selection" leaves the translation on the clipboard (Wayland allows
-no typing into other programs). `glossa-cli doctor` says what works in your
+Mouse mode and reading the selection depend on the compositor;
+copying from and pasting into other programs goes through the desktop's
+remote desktop portal (GNOME, KDE Plasma), which asks once, and elsewhere
+"replace selection" leaves the translation on the clipboard. `glossa-cli doctor` says what works in your
 session. On macOS, vibrancy needs the OpenGL engine.
 
 Classic QTranslate service scripts and the keyless bundled services depend on

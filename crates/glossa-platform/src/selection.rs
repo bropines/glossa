@@ -136,9 +136,16 @@ fn unix_capture(opts: &CaptureOptions) -> Result<Option<String>> {
             if let Some(text) = cb.get_primary() {
                 return Ok(Some(text));
             }
-            // No readable PRIMARY: the clipboard is the best we have. It
-            // holds the selection only if the user copied it, which the
-            // session limitations explain.
+            // No readable PRIMARY: copy through the RemoteDesktop portal.
+            if opts.copy_action != CopyAction::AccessibilityOnly {
+                match wayland_copy(&mut cb, opts) {
+                    Ok(text) => return Ok(text),
+                    Err(e) => tracing::debug!("no copy through the desktop portal: {e}"),
+                }
+            }
+            // The clipboard is the best we have then. It holds the selection
+            // only if the user copied it, which the session limitations
+            // explain.
             static WARNED: std::sync::Once = std::sync::Once::new();
             WARNED.call_once(|| {
                 tracing::warn!(
@@ -146,11 +153,35 @@ fn unix_capture(opts: &CaptureOptions) -> Result<Option<String>> {
                      (copy text with Ctrl+C before translating)"
                 );
             });
-            let _ = opts;
             Ok(cb.get_text())
         }
         _ => Err(crate::platform_err("reading the selection needs a graphical session")),
     }
+}
+
+/// Copy the selection with Ctrl+C sent through the RemoteDesktop portal and
+/// read it from the clipboard, putting back what was there. An error means
+/// the portal could not send the keys (nothing was changed then).
+#[cfg(not(any(windows, target_os = "macos")))]
+fn wayland_copy(cb: &mut crate::clipboard::Clipboard, opts: &CaptureOptions) -> Result<Option<String>> {
+    let snapshot = cb.snapshot();
+    let before = cb.get_text();
+    crate::input::send_copy(opts.copy_action)?;
+    // The clipboard has no change counter here: wait for its text to change.
+    // A selection equal to what was already copied reads as that text.
+    let deadline = Instant::now() + Duration::from_millis(opts.wait_ms);
+    let mut text = None;
+    wait_until(deadline, || {
+        text = cb.get_text().filter(|t| Some(t) != before.as_ref());
+        text.is_some()
+    });
+    let text = text.or(before);
+    if opts.restore_clipboard {
+        if let Err(e) = cb.restore(&snapshot) {
+            tracing::warn!("could not restore the clipboard after copying: {e}");
+        }
+    }
+    Ok(text)
 }
 
 /// The synthetic-copy strategy shared by Windows and macOS.
@@ -207,7 +238,6 @@ fn copy_via_clipboard(opts: &CaptureOptions) -> Result<Option<String>> {
 
 /// Poll `done` every few milliseconds until it is true or `deadline`
 /// passes; returns whether it became true.
-#[cfg_attr(not(any(windows, target_os = "macos")), allow(dead_code))]
 fn wait_until(deadline: Instant, mut done: impl FnMut() -> bool) -> bool {
     loop {
         if done() {
@@ -265,7 +295,19 @@ fn unix_replace(text: &str) -> Result<()> {
 
     let session = Session::detect();
     let mut cb = Clipboard::new()?;
-    if !session.supports_synthetic_input() {
+    let snapshot = cb.snapshot();
+    let pasted = if session.supports_synthetic_input() {
+        None
+    } else if session.is_wayland() {
+        // Through the desktop's RemoteDesktop portal.
+        cb.set_text(text)?;
+        std::thread::sleep(Duration::from_millis(20));
+        Some(input::send_paste())
+    } else {
+        Some(Err(crate::platform_err("synthetic input needs a graphical session")))
+    };
+    if let Some(Err(e)) = &pasted {
+        tracing::debug!("no paste into the other program: {e}");
         cb.set_text(text)?;
         // Keep the clipboard object (and so, on X11/XWayland, the data)
         // alive long enough for a clipboard manager to take it over.
@@ -278,11 +320,12 @@ fn unix_replace(text: &str) -> Result<()> {
              the clipboard — paste it with Ctrl+V",
         ));
     }
-    let snapshot = cb.snapshot();
-    cb.set_text(text)?;
-    std::thread::sleep(Duration::from_millis(20));
-    input::release_modifiers()?;
-    input::send_paste()?;
+    if pasted.is_none() {
+        cb.set_text(text)?;
+        std::thread::sleep(Duration::from_millis(20));
+        input::release_modifiers()?;
+        input::send_paste()?;
+    }
     let pasted = text.to_owned();
     std::thread::spawn(move || {
         // On X11 the clipboard is served from this process: `cb` must live

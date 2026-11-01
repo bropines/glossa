@@ -125,6 +125,8 @@ fn main() -> eframe::Result<()> {
     };
     init_logging(&paths);
     glossa_platform::crash::install(&paths.log_file());
+    // The desktop portal's permissions to remember (Wayland) live with the data.
+    glossa_platform::portal::set_state_dir(&paths.data_dir);
     // Log every panic with its frames. Panics unwind afterwards (release
     // builds too) to the `catch_unwind` around providers, engine jobs and
     // API requests, which fail that one request instead of the program.

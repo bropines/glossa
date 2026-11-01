@@ -20,6 +20,14 @@ for Windows, macOS and Linux.
   dictionary and history windows; every classic options page plus OCR,
   Modules and Control API; a tray icon with the classic menu. Hotkeys wake a
   hidden app, and a second launch hands over to the running one.
+- **Copy and paste on Wayland** through the desktop's RemoteDesktop portal
+  (GNOME, KDE Plasma): "replace selection" pastes the translation itself,
+  and where the compositor does not share the highlighted text (GNOME)
+  Glossa copies it with Ctrl+C. The desktop asks once to allow it; the
+  permission is kept in the data folder (`remote-desktop-token`) until
+  revoked in the desktop's settings. `glossa-cli doctor` shows the portal's
+  RemoteDesktop version. Tested against a fake portal, not yet on a real
+  desktop.
 - **Snap Layouts** on Windows 11: resting the pointer on the maximise
   button of Glossa's own title bar offers the system's window layouts.
 - **Themes that follow the system's light or dark mode**
@@ -544,7 +552,10 @@ for Windows, macOS and Linux.
 - On Wayland, mouse mode and reading the selection depend on the
   compositor, and global hotkeys need the GlobalShortcuts portal; without
   it (Sway and other wlroots compositors, GNOME before 48) bind keys to the
-  D-Bus service or the control API instead. The portal paths were tested
+  D-Bus service or the control API instead. Copying and pasting into other
+  programs needs the RemoteDesktop portal (GNOME, KDE); modifier keys still
+  held from the hotkey cannot be let go of from the desktop's virtual
+  keyboard, so release them promptly. The portal paths were tested
   against a fake portal and, for screenshots, the real
   `xdg-desktop-portal` frontend, not yet on a real KDE or GNOME desktop.
 - In a right-to-left row, the caret and a mouse selection that starts or

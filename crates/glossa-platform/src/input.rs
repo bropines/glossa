@@ -3,8 +3,9 @@
 //!
 //! Windows uses `SendInput`; Linux (X11) and macOS go through `enigo`
 //! (XTest and CGEvent). Wayland forbids one client from typing into another,
-//! so every function here returns an error there, as it does without a
-//! graphical session.
+//! so there the keys go through the desktop's RemoteDesktop portal (GNOME,
+//! KDE; see [`crate::portal`]), which asks the user once. Without the portal,
+//! or without a graphical session, every function here returns an error.
 //!
 //! Every Windows event we inject carries [`INJECTED_TAG`] in `dwExtraInfo`,
 //! so the program's own low-level hooks (mouse mode, layout indicator) can
@@ -56,13 +57,95 @@ pub fn type_text(text: &str) -> Result<()> {
 /// Refuse up front where synthetic input cannot work, with the reason.
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 fn ensure_supported() -> Result<()> {
-    let session = crate::Session::detect();
-    if session.supports_synthetic_input() {
+    if crate::Session::detect().supports_synthetic_input() {
         Ok(())
-    } else if session.is_wayland() {
-        Err(crate::platform_err("Wayland does not allow sending keystrokes to other programs"))
     } else {
         Err(crate::platform_err("synthetic input needs a graphical session"))
+    }
+}
+
+/// Whether keys go through the RemoteDesktop portal: a Wayland session.
+#[cfg(target_os = "linux")]
+fn through_portal() -> bool {
+    crate::Session::detect().is_wayland()
+}
+
+/// Keys through the RemoteDesktop portal, for Wayland.
+#[cfg(target_os = "linux")]
+mod wayland {
+    use glossa_core::config::CopyAction;
+
+    use crate::portal::{send_keys, KeyEvent, PortalError, PortalKey};
+    use crate::{platform_err, Result};
+
+    // Linux evdev key codes (linux/input-event-codes.h).
+    const KEY_LEFTCTRL: i32 = 29;
+    const KEY_C: i32 = 46;
+    const KEY_V: i32 = 47;
+    const KEY_INSERT: i32 = 110;
+
+    // X keysyms for the characters that are keys rather than text.
+    const XK_RETURN: i32 = 0xff0d;
+    const XK_TAB: i32 = 0xff09;
+
+    fn send(keys: &[KeyEvent]) -> Result<()> {
+        send_keys(keys).map_err(|e| match e {
+            PortalError::Unavailable(_) => {
+                platform_err(format!("Wayland allows keystrokes to other programs only through the desktop: {e}"))
+            }
+            other => other.into(),
+        })
+    }
+
+    fn tap(key: PortalKey) -> [KeyEvent; 2] {
+        [KeyEvent { key, down: true }, KeyEvent { key, down: false }]
+    }
+
+    /// Ctrl held around a physical key: the shortcut works on any layout,
+    /// as toolkits match Ctrl shortcuts by key as well as by character.
+    pub(super) fn ctrl_chord(code: i32) -> [KeyEvent; 4] {
+        let ctrl = PortalKey::Code(KEY_LEFTCTRL);
+        let key = PortalKey::Code(code);
+        [
+            KeyEvent { key: ctrl, down: true },
+            KeyEvent { key, down: true },
+            KeyEvent { key, down: false },
+            KeyEvent { key: ctrl, down: false },
+        ]
+    }
+
+    /// The X keysym that types `c`: Latin-1 characters are their own
+    /// keysym, every other one is `0x01000000` plus its code point. Newline
+    /// and tab are the Return and Tab keys; a carriage return types nothing
+    /// (`\r\n` is one Enter).
+    pub(super) fn keysym(c: char) -> Option<i32> {
+        match c {
+            '\n' => Some(XK_RETURN),
+            '\t' => Some(XK_TAB),
+            '\r' => None,
+            c if c.is_control() => None,
+            c if (' '..='~').contains(&c) || ('\u{a0}'..='\u{ff}').contains(&c) => Some(c as i32),
+            c => Some(0x0100_0000 + c as i32),
+        }
+    }
+
+    /// The desktop's view of the modifiers is its own: keys still held on
+    /// the real keyboard cannot be let go of from a virtual one.
+    pub fn release_modifiers() -> Result<()> {
+        Ok(())
+    }
+
+    pub fn send_copy(action: CopyAction) -> Result<()> {
+        send(&ctrl_chord(if action == CopyAction::CtrlInsert { KEY_INSERT } else { KEY_C }))
+    }
+
+    pub fn send_paste() -> Result<()> {
+        send(&ctrl_chord(KEY_V))
+    }
+
+    pub fn type_text(text: &str) -> Result<()> {
+        let keys: Vec<KeyEvent> = text.chars().filter_map(keysym).flat_map(|s| tap(PortalKey::Sym(s))).collect();
+        send(&keys)
     }
 }
 
@@ -239,6 +322,10 @@ mod imp {
     }
 
     pub fn release_modifiers() -> Result<()> {
+        #[cfg(target_os = "linux")]
+        if super::through_portal() {
+            return super::wayland::release_modifiers();
+        }
         let mut en = enigo()?;
         for k in [Key::Control, Key::Shift, Key::Alt, Key::Meta] {
             en.key(k, Direction::Release).map_err(input_err)?;
@@ -262,6 +349,10 @@ mod imp {
     const KEY_V: Key = Key::Unicode('v');
 
     pub fn send_copy(action: CopyAction) -> Result<()> {
+        #[cfg(target_os = "linux")]
+        if super::through_portal() {
+            return super::wayland::send_copy(action);
+        }
         #[cfg(not(target_os = "macos"))]
         if action == CopyAction::CtrlInsert {
             return chord(PRIMARY, Key::Insert);
@@ -272,10 +363,18 @@ mod imp {
     }
 
     pub fn send_paste() -> Result<()> {
+        #[cfg(target_os = "linux")]
+        if super::through_portal() {
+            return super::wayland::send_paste();
+        }
         chord(PRIMARY, KEY_V)
     }
 
     pub fn type_text(text: &str) -> Result<()> {
+        #[cfg(target_os = "linux")]
+        if super::through_portal() {
+            return super::wayland::type_text(text);
+        }
         enigo()?.text(text).map_err(input_err)
     }
 }
@@ -316,6 +415,29 @@ mod tests {
         // Must succeed even without a display: nothing is sent.
         assert!(send_copy(CopyAction::AccessibilityOnly).is_ok());
         assert!(type_text("").is_ok());
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn characters_become_keysyms() {
+        use super::wayland::keysym;
+        assert_eq!(keysym('a'), Some(0x61));
+        assert_eq!(keysym('A'), Some(0x41));
+        assert_eq!(keysym('é'), Some(0xe9));
+        assert_eq!(keysym('ж'), Some(0x0100_0436));
+        assert_eq!(keysym('€'), Some(0x0100_20ac));
+        assert_eq!(keysym('\n'), Some(0xff0d));
+        assert_eq!(keysym('\r'), None);
+        assert_eq!(keysym('\u{7}'), None);
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn ctrl_wraps_the_key() {
+        use crate::portal::PortalKey::Code;
+        let keys = super::wayland::ctrl_chord(47);
+        let seq: Vec<_> = keys.iter().map(|k| (k.key, k.down)).collect();
+        assert_eq!(seq, [(Code(29), true), (Code(47), true), (Code(47), false), (Code(29), false)]);
     }
 
     #[test]

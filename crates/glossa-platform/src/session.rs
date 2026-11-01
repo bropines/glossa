@@ -76,6 +76,13 @@ impl Compositor {
     pub fn has_global_shortcuts_portal(&self) -> bool {
         matches!(self, Compositor::Kde | Compositor::Gnome | Compositor::Hyprland)
     }
+
+    /// Whether the desktop's portal is known to offer RemoteDesktop, the
+    /// virtual keyboard behind copying and pasting into other programs.
+    /// `xdg-desktop-portal-wlr` and Hyprland's portal do not.
+    pub fn has_remote_desktop_portal(&self) -> bool {
+        matches!(self, Compositor::Kde | Compositor::Gnome)
+    }
 }
 
 impl fmt::Display for Compositor {
@@ -177,10 +184,19 @@ impl Session {
     }
 
     /// Whether we can send keystrokes to other programs (the synthetic copy
-    /// and paste). On macOS this additionally needs the Accessibility
-    /// permission, which we cannot check from here without prompting.
+    /// and paste) by ourselves. On macOS this additionally needs the
+    /// Accessibility permission, which we cannot check from here without
+    /// prompting. On Wayland it goes through the desktop instead, see
+    /// [`Session::supports_portal_input`].
     pub fn supports_synthetic_input(&self) -> bool {
         matches!(self.display, DisplayServer::Windows | DisplayServer::MacOs | DisplayServer::X11)
+    }
+
+    /// Whether keystrokes to other programs can go through the desktop's
+    /// RemoteDesktop portal: a Wayland session whose desktop is known to
+    /// offer it. Others are tried too; this decides what Glossa promises.
+    pub fn supports_portal_input(&self) -> bool {
+        matches!(&self.display, DisplayServer::Wayland { compositor } if compositor.has_remote_desktop_portal())
     }
 
     /// What will not work in this session, as locale keys (English text in
@@ -201,10 +217,18 @@ impl Session {
                 } else {
                     "limitation.wayland.hotkeys"
                 }));
-                out.push(Limitation::new("limitation.wayland.typing"));
+                let portal_input = compositor.has_remote_desktop_portal();
+                out.push(Limitation::new(if portal_input {
+                    "limitation.wayland.typing_portal"
+                } else {
+                    "limitation.wayland.typing"
+                }));
                 if !compositor.has_data_control() {
                     out.push(match compositor {
                         Compositor::Unknown => Limitation::new("limitation.wayland.no_primary_unknown"),
+                        named if portal_input => {
+                            Limitation::with_arg("limitation.wayland.no_primary_portal", named.to_string())
+                        }
                         named => Limitation::with_arg("limitation.wayland.no_primary", named.to_string()),
                     });
                 }
@@ -262,10 +286,16 @@ impl Session {
                     },
                     if primary {
                         f("selection", Yes, "PRIMARY through data-control")
+                    } else if compositor.has_remote_desktop_portal() {
+                        f("selection", Partly, "Ctrl+C through the RemoteDesktop portal, then the clipboard")
                     } else {
                         f("selection", Partly, "the clipboard only: copy first")
                     },
-                    f("synthetic_input", No, "Wayland forbids it; replacing leaves text on the clipboard"),
+                    if compositor.has_remote_desktop_portal() {
+                        f("synthetic_input", Partly, "the RemoteDesktop portal; the desktop asks once")
+                    } else {
+                        f("synthetic_input", No, "no RemoteDesktop portal; replacing leaves text on the clipboard")
+                    },
                     f("capture", Partly, "the Screenshot portal, or grim on wlroots; may ask for permission once"),
                     if primary {
                         f("mouse_mode", Yes, "watches the PRIMARY selection")
