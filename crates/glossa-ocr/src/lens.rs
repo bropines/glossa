@@ -557,6 +557,8 @@ mod native {
     use glossa_modules::Host;
     use glossa_net::HttpRequest;
 
+    use std::time::Duration;
+
     use super::{translate_code, NAME, OCR_TIMEOUT};
 
     pub fn recognize(bytes: &[u8], req: &OcrRequest, host: &Host) -> Result<OcrResult> {
@@ -575,15 +577,96 @@ mod native {
         for (name, value) in glossa_lens::headers(glossa_lens::PUBLIC_API_KEY) {
             request = request.header(name, value);
         }
-        host.check_cancelled()?;
-        let response = host.http.send(request)?;
-        if !(200..300).contains(&response.status) {
-            let body = String::from_utf8_lossy(&response.body).chars().take(300).collect();
-            return Err(Error::HttpStatus { provider: NAME.into(), status: response.status, body });
-        }
+        let response = send_with_retries(host, request)?;
         let page = glossa_lens::parse_response(&response.body, &upload)
             .map_err(|detail| Error::BadResponse { provider: NAME.into(), detail })?;
         Ok(result(&page, size, req))
+    }
+
+    /// Retries after a failure that may pass: two, as chrome-lens-py makes.
+    const MAX_RETRIES: u32 = 2;
+    /// Statuses worth trying again (chrome-lens-py's `RETRYABLE_STATUS_CODES`).
+    const RETRYABLE: [u16; 5] = [429, 500, 502, 503, 504];
+    /// Requests to Lens at once, from the whole program: a screen being
+    /// translated or watched must not hammer the service.
+    const MAX_IN_FLIGHT: usize = 2;
+
+    static IN_FLIGHT: std::sync::Mutex<usize> = std::sync::Mutex::new(0);
+    static SLOT_FREED: std::sync::Condvar = std::sync::Condvar::new();
+
+    /// A place among the requests in flight, given back when dropped.
+    struct Slot;
+
+    impl Slot {
+        fn take(host: &Host) -> Result<Slot> {
+            let mut n = IN_FLIGHT.lock().unwrap_or_else(|e| e.into_inner());
+            while *n >= MAX_IN_FLIGHT {
+                host.check_cancelled()?;
+                n = SLOT_FREED.wait_timeout(n, Duration::from_millis(100)).unwrap_or_else(|e| e.into_inner()).0;
+            }
+            *n += 1;
+            Ok(Slot)
+        }
+    }
+
+    impl Drop for Slot {
+        fn drop(&mut self) {
+            let mut n = IN_FLIGHT.lock().unwrap_or_else(|e| e.into_inner());
+            *n = n.saturating_sub(1);
+            SLOT_FREED.notify_one();
+        }
+    }
+
+    /// Send, trying again after a network failure or a status in
+    /// [`RETRYABLE`]: exponential backoff with jitter, capped at 30 s, or the
+    /// server's `Retry-After` for 429 and 503. Cancelling stops the wait.
+    fn send_with_retries(host: &Host, request: HttpRequest) -> Result<glossa_net::HttpResponse> {
+        let _slot = Slot::take(host)?;
+        let mut attempt = 0;
+        loop {
+            host.check_cancelled()?;
+            let outcome = host.http.send(request.clone());
+            let wait = match &outcome {
+                Ok(r) if (200..300).contains(&r.status) => return outcome,
+                Ok(r) if RETRYABLE.contains(&r.status) && attempt < MAX_RETRIES => {
+                    let after = r
+                        .headers
+                        .iter()
+                        .find(|(k, _)| k.eq_ignore_ascii_case("retry-after"))
+                        .and_then(|(_, v)| retry_after(v))
+                        .filter(|_| matches!(r.status, 429 | 503));
+                    after.unwrap_or_else(|| backoff(attempt))
+                }
+                Ok(r) => {
+                    let body = String::from_utf8_lossy(&r.body).chars().take(300).collect();
+                    return Err(Error::HttpStatus { provider: NAME.into(), status: r.status, body });
+                }
+                Err(Error::Network(_) | Error::Timeout(_)) if attempt < MAX_RETRIES => backoff(attempt),
+                Err(_) => return outcome,
+            };
+            tracing::debug!(attempt, wait_ms = wait.as_millis() as u64, "Lens: trying again");
+            attempt += 1;
+            let until = std::time::Instant::now() + wait;
+            while std::time::Instant::now() < until {
+                host.check_cancelled()?;
+                std::thread::sleep(Duration::from_millis(50).min(until - std::time::Instant::now()));
+            }
+        }
+    }
+
+    /// `min(30 s, 2^attempt s)`, scaled by a random 50–100 % so several
+    /// clients do not retry in step.
+    fn backoff(attempt: u32) -> Duration {
+        use std::hash::{BuildHasher, Hasher};
+        let mut h = std::collections::hash_map::RandomState::new().build_hasher();
+        h.write_u32(attempt);
+        let jitter = 0.5 + 0.5 * (h.finish() % 1000) as f64 / 1000.0;
+        Duration::from_secs_f64((2f64.powi(attempt as i32)).min(30.0) * jitter)
+    }
+
+    /// A `Retry-After` in seconds (an HTTP date is ignored), at most 30 s.
+    fn retry_after(value: &str) -> Option<Duration> {
+        value.trim().parse::<u64>().ok().map(|s| Duration::from_secs(s.min(30)))
     }
 
     /// The page as our result, its boxes in pixels of the picture as given
@@ -658,6 +741,27 @@ mod native {
             translation: page.translation.clone().filter(|s| !s.trim().is_empty()),
             image_size: Some(size),
             ..Default::default()
+        }
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use super::*;
+
+        #[test]
+        fn backoff_grows_and_stays_capped() {
+            for attempt in 0..8 {
+                let d = backoff(attempt).as_secs_f64();
+                let full = 2f64.powi(attempt as i32).min(30.0);
+                assert!(d >= full * 0.5 && d <= full, "attempt {attempt}: {d}");
+            }
+        }
+
+        #[test]
+        fn retry_after_takes_seconds_only() {
+            assert_eq!(retry_after(" 3 "), Some(Duration::from_secs(3)));
+            assert_eq!(retry_after("600"), Some(Duration::from_secs(30)));
+            assert_eq!(retry_after("Wed, 21 Oct 2026 07:28:00 GMT"), None);
         }
     }
 }
@@ -1545,6 +1649,41 @@ mod tests {
             };
             Ok(HttpResponse { status: 200, body: reply.encode_to_vec(), ..Default::default() })
         }
+    }
+
+    /// Lens answering 503 first, then like [`FakeLens`].
+    struct BusyLens {
+        lens: FakeLens,
+        refused: AtomicBool,
+    }
+
+    impl Http for BusyLens {
+        fn send(&self, request: HttpRequest) -> Result<HttpResponse> {
+            if !self.refused.swap(true, Ordering::SeqCst) {
+                return Ok(HttpResponse {
+                    status: 503,
+                    headers: vec![("Retry-After".into(), "0".into())],
+                    ..Default::default()
+                });
+            }
+            self.lens.send(request)
+        }
+    }
+
+    #[test]
+    fn a_busy_lens_is_asked_again() {
+        let fx = Fixture::new("busy");
+        let p = LensProvider::with_locator(cfg(LensMode::Native), fx.locator(None))
+            .with_loopback_http(Arc::new(MockHttp::new()));
+        let lens = BusyLens { lens: FakeLens { seen: Mutex::new(Vec::new()) }, refused: AtomicBool::new(false) };
+        let mut png = Vec::new();
+        image::RgbImage::from_pixel(40, 20, image::Rgb([255, 255, 255]))
+            .write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png)
+            .unwrap();
+        let request = OcrRequest::new(ImageSource::Bytes(png));
+        let opts = OptionValues::new();
+        let r = with_test_host(&lens, &opts, |host| p.recognize(host, &request)).unwrap();
+        assert_eq!(r.text, "Hello, world");
     }
 
     #[test]
