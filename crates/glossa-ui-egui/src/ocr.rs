@@ -81,6 +81,16 @@ pub struct Background {
 const ID: &str = "glossa-ocr";
 
 pub fn begin(app: &mut GlossaApp, action: Action, image: image::RgbaImage, origin: (i32, i32)) {
+    if action == Action::TranslateScreenInPlace {
+        // The whole monitor whose top-left is `origin`: nothing to select.
+        let monitor = glossa_platform::window::monitors().into_iter().find(|m| (m.x, m.y) == origin);
+        let region = match monitor {
+            Some(m) => m.bounds(),
+            None => GRect::new(origin.0 as f32, origin.1 as f32, image.width() as f32, image.height() as f32),
+        };
+        start_in_place(app, image, region, app.cfg.ocr.language);
+        return;
+    }
     let scale = glossa_platform::window::monitor_at(origin.0, origin.1)
         .or_else(|| glossa_platform::window::monitors().into_iter().find(|m| m.is_primary))
         .map(|m| m.scale)

@@ -270,6 +270,7 @@ fn ocr_menu(app: &mut GlossaApp, ui: &mut egui::Ui) {
         (Action::RecognizeAndTranslate, "ocr.menu.recognize_translate"),
         (Action::RecognizeToClipboard, "ocr.menu.copy"),
         (Action::TranslateRegionInPlace, "ocr.menu.in_place"),
+        (Action::TranslateScreenInPlace, "ocr.menu.screen_in_place"),
         (Action::WatchRegion, "ocr.menu.watch"),
         (Action::RepeatLastRecognition, "ocr.menu.repeat"),
     ];

@@ -108,6 +108,7 @@ pub fn perform(app: &mut GlossaApp, action: Action, text: Option<String>) {
             }
             grab_screen(app, action);
         }
+        Action::TranslateScreenInPlace => grab_monitor(app, action),
         Action::RepeatLastRecognition => match app.last_region {
             Some(rect) => crate::ocr::recognize_region(app, rect),
             None => grab_screen(app, Action::TextRecognition),
@@ -197,6 +198,41 @@ fn grab_screen(app: &mut GlossaApp, action: Action) {
                 image: image::RgbaImage::new(1, 1),
                 origin: (0, 0),
                 error: Some(e.to_string()),
+            },
+        };
+        let _ = tx.send(task);
+        ctx.request_repaint();
+    });
+}
+
+/// Capture the monitor under the pointer (the primary one when the pointer
+/// cannot be told), for translating everything on it in place.
+fn grab_monitor(app: &mut GlossaApp, action: Action) {
+    let tx = app.tasks_tx.clone();
+    let ctx = app.ctx.clone();
+    std::thread::spawn(move || {
+        // Let the hotkey's own key-up and any menu close before the shot.
+        std::thread::sleep(Duration::from_millis(120));
+        use glossa_platform::window;
+        let monitor = window::cursor_position()
+            .and_then(|(x, y)| window::monitor_at(x, y))
+            .or_else(|| window::monitors().into_iter().find(|m| m.is_primary))
+            .or_else(|| window::monitors().into_iter().next());
+        let task = match monitor {
+            Some(m) => match glossa_platform::capture::capture_rect(m.bounds()) {
+                Ok(image) => Task::Screenshot { action, image, origin: (m.x, m.y), error: None },
+                Err(e) => Task::Screenshot {
+                    action,
+                    image: image::RgbaImage::new(1, 1),
+                    origin: (0, 0),
+                    error: Some(e.to_string()),
+                },
+            },
+            None => Task::Screenshot {
+                action,
+                image: image::RgbaImage::new(1, 1),
+                origin: (0, 0),
+                error: Some("no monitors found to capture".into()),
             },
         };
         let _ = tx.send(task);

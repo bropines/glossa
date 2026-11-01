@@ -56,6 +56,9 @@ pub enum Action {
     /// window laid exactly over the region (the way Chrome's Lens overlay
     /// does it).
     TranslateRegionInPlace,
+    /// The same over the whole monitor under the pointer, with no region to
+    /// select: every text on the screen translated where it is.
+    TranslateScreenInPlace,
     /// Swap the source and target language of the main window.
     SwapLanguages,
     /// Cycle to the next enabled translation service.
@@ -87,7 +90,7 @@ impl Action {
         Action::SpeechInput,
     ];
 
-    pub const ALL: [Action; 26] = [
+    pub const ALL: [Action; 27] = [
         Action::ShowMainWindow,
         Action::ShowPopup,
         Action::ShowDictionary,
@@ -110,6 +113,7 @@ impl Action {
         Action::RecognizeToClipboard,
         Action::WatchRegion,
         Action::TranslateRegionInPlace,
+        Action::TranslateScreenInPlace,
         Action::SwapLanguages,
         Action::NextService,
         Action::ShowOptions,
@@ -179,6 +183,7 @@ impl Action {
             Action::RecognizeToClipboard => "Recognise a screen region to the clipboard",
             Action::WatchRegion => "Watch a screen region and translate changes",
             Action::TranslateRegionInPlace => "Translate a screen region in place",
+            Action::TranslateScreenInPlace => "Translate the whole screen in place",
             Action::SwapLanguages => "Swap translation direction",
             Action::NextService => "Switch to the next service",
             Action::ShowOptions => "Show options",
@@ -211,6 +216,7 @@ impl Action {
             Action::RecognizeToClipboard => "recognize_to_clipboard",
             Action::WatchRegion => "watch_region",
             Action::TranslateRegionInPlace => "translate_region_in_place",
+            Action::TranslateScreenInPlace => "translate_screen_in_place",
             Action::SwapLanguages => "swap_languages",
             Action::NextService => "next_service",
             Action::ShowOptions => "show_options",

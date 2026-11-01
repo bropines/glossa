@@ -121,6 +121,7 @@ fn build_menu(locale: &Locale) -> (Menu, CheckMenuItem, CheckMenuItem) {
         Box::new(item("ocr", "tray.text_recognition")),
         Box::new(action(Action::RecognizeToClipboard, "ocr.menu.copy")),
         Box::new(action(Action::TranslateRegionInPlace, "ocr.menu.in_place")),
+        Box::new(action(Action::TranslateScreenInPlace, "ocr.menu.screen_in_place")),
     ];
     if let Some(m) = more {
         ocr_items.push(Box::new(m));

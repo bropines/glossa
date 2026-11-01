@@ -298,6 +298,7 @@ pub fn default_hotkeys(os: Os) -> &'static [(Action, &'static str)] {
             (Action::TextRecognition, "Ctrl+Shift+O"),
             (Action::RecognizeAndTranslate, "Win+Alt+O"),
             (Action::RecognizeToClipboard, "Win+Alt+C"),
+            (Action::TranslateScreenInPlace, "Win+Alt+S"),
             (Action::ShowMainWindow, "Win+Alt+Q"),
         ],
         Os::MacOs | Os::Unix => &[
@@ -305,6 +306,7 @@ pub fn default_hotkeys(os: Os) -> &'static [(Action, &'static str)] {
             (Action::TextRecognition, "Ctrl+Shift+O"),
             (Action::RecognizeAndTranslate, "Ctrl+Alt+O"),
             (Action::RecognizeToClipboard, "Ctrl+Alt+C"),
+            (Action::TranslateScreenInPlace, "Ctrl+Alt+S"),
             (Action::ShowMainWindow, "Ctrl+Alt+Q"),
         ],
     }

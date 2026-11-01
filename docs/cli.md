@@ -600,6 +600,7 @@ reading the selection by the actions marked "text"; the others ignore it.
 | `recognize_to_clipboard` | Recognise a region straight to the clipboard. | |
 | `watch_region` | Watch a region and re-translate when it changes. | |
 | `translate_region_in_place` | Translate a region over the picture itself. | |
+| `translate_screen_in_place` | The same over the whole monitor under the pointer, with no region to select. | |
 | `swap_languages` | Swap the main window's direction. | |
 | `next_service` | Switch to the next enabled translation service. | |
 | `show_options` | Open the options. | |

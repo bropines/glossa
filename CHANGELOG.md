@@ -20,6 +20,10 @@ for Windows, macOS and Linux.
   dictionary and history windows; every classic options page plus OCR,
   Modules and Control API; a tray icon with the classic menu. Hotkeys wake a
   hidden app, and a second launch hands over to the running one.
+- **Translate the whole screen in place** (Ctrl+Alt+S, Windows: Win+Alt+S):
+  the monitor under the pointer is recognised and every text on it is
+  translated where it is, over a still of the screen, with no region to
+  select.
 - **The commit in the version**: About, `glossa-cli --version` and the
   control API's `/health` show the commit Glossa was built from
   (`0.1.0 (1a2b3c4d)`, `-dirty` for uncommitted changes).

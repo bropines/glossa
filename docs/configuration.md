@@ -154,6 +154,7 @@ to = 17
 show_popup = "Ctrl+Shift+Q"
 text_recognition = "Ctrl+Shift+O"
 recognize_and_translate = "Ctrl+Alt+O"   # Windows: Win+Alt+O
+translate_screen_in_place = "Ctrl+Alt+S" # Windows: Win+Alt+S
 recognize_to_clipboard = "Ctrl+Alt+C"    # Windows: Win+Alt+C
 show_main_window = "Ctrl+Alt+Q"          # Windows: Win+Alt+Q
 ```

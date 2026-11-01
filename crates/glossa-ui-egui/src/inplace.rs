@@ -11,6 +11,10 @@
 //! its paragraph's box instead. A strip under the image (above it at the
 //! bottom of the screen) toggles the original and copies the translation;
 //! Escape or a click anywhere else closes it.
+//!
+//! Over a whole monitor (Translate the whole screen) the window covers the
+//! monitor exactly and the strip floats over the picture, at the bottom in
+//! the middle: only the places that had text are painted over.
 
 use std::sync::Arc;
 
@@ -42,6 +46,8 @@ pub struct InPlace {
     /// click elsewhere, which closes it.
     focused: bool,
     bar_on_top: bool,
+    /// The region is a whole monitor: no room around it for the strip.
+    full_screen: bool,
 }
 
 /// One thing to paint: a line (Lens) or a paragraph (anything else).
@@ -66,8 +72,9 @@ pub fn open(app: &mut GlossaApp, image: image::RgbaImage, region: GRect, outcome
     let monitor = glossa_platform::window::monitor_at(cx as i32, cy as i32)
         .or_else(|| glossa_platform::window::monitors().into_iter().find(|m| m.is_primary));
     let scale = monitor.as_ref().map(|m| m.desktop_scale()).unwrap_or(1.0);
+    let full_screen = monitor.as_ref().is_some_and(|m| covers(region, m.bounds()));
     let bottom = monitor.map(|m| m.work_area.y + m.work_area.height).unwrap_or(f32::MAX);
-    let bar_on_top = region.y + region.height + BAR * scale > bottom;
+    let bar_on_top = !full_screen && region.y + region.height + BAR * scale > bottom;
     tracing::debug!(?region, scale, bar_on_top, blocks = outcome.blocks.len(), "in-place window");
     let items = items_for(&image, &outcome);
     for item in &items {
@@ -83,8 +90,18 @@ pub fn open(app: &mut GlossaApp, image: image::RgbaImage, region: GRect, outcome
         show_original: false,
         focused: false,
         bar_on_top,
+        full_screen,
     });
     app.ctx.request_repaint();
+}
+
+/// Whether `region` is `monitor` (to within a pixel or two of rounding).
+fn covers(region: GRect, monitor: GRect) -> bool {
+    let near = |a: f32, b: f32| (a - b).abs() <= 2.0;
+    near(region.x, monitor.x)
+        && near(region.y, monitor.y)
+        && near(region.width, monitor.width)
+        && near(region.height, monitor.height)
 }
 
 /// What to paint for each translated block, with colours sampled from the
@@ -123,6 +140,8 @@ pub fn show(app: &mut GlossaApp, ctx: &egui::Context) {
     let (w, h) = (st.region.width / s, st.region.height / s);
     let x = st.region.x / s;
     let y = st.region.y / s - if st.bar_on_top { BAR } else { 0.0 };
+    // Over a whole monitor the strip floats on the picture.
+    let inner = if st.full_screen { vec2(w, h) } else { vec2(w.max(MIN_WIDTH), h + BAR) };
     let builder = egui::ViewportBuilder::default()
         .with_title(TITLE)
         .with_decorations(false)
@@ -131,7 +150,7 @@ pub fn show(app: &mut GlossaApp, ctx: &egui::Context) {
         .with_transparent(true)
         .with_window_level(egui::WindowLevel::AlwaysOnTop)
         .with_position(pos2(x, y))
-        .with_inner_size([w.max(MIN_WIDTH), h + BAR])
+        .with_inner_size(inner)
         .with_active(true);
     let mut keep = true;
     ctx.show_viewport_immediate(egui::ViewportId::from_hash_of(TITLE), builder, |ui, _| {
@@ -181,8 +200,13 @@ fn body(app: &mut GlossaApp, ui: &mut egui::Ui, st: &mut InPlace, size: Vec2) ->
         let full = ui.max_rect();
         let top = if st.bar_on_top { full.min.y + BAR } else { full.min.y };
         let picture = Rect::from_min_size(pos2(full.min.x, top), size);
-        let bar_y = if st.bar_on_top { full.min.y } else { picture.max.y };
-        let bar = Rect::from_min_size(pos2(full.min.x, bar_y), vec2(full.width(), BAR));
+        let bar = if st.full_screen {
+            let width = (full.width() - 32.0).min(620.0);
+            Rect::from_center_size(pos2(full.center().x, full.max.y - 32.0 - BAR / 2.0), vec2(width, BAR))
+        } else {
+            let bar_y = if st.bar_on_top { full.min.y } else { picture.max.y };
+            Rect::from_min_size(pos2(full.min.x, bar_y), vec2(full.width(), BAR))
+        };
         let p = ui.painter().clone();
         p.image(texture.id(), picture, Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0)), Color32::WHITE);
         let held = ui.allocate_rect(picture, Sense::click());
@@ -195,8 +219,22 @@ fn body(app: &mut GlossaApp, ui: &mut egui::Ui, st: &mut InPlace, size: Vec2) ->
                 paint_item(&p, picture.min, k, item);
             }
         }
-        p.rect_filled(bar, 0.0, look.popup_back);
-        let mut child = ui.new_child(egui::UiBuilder::new().max_rect(bar.shrink2(vec2(4.0, 2.0))));
+        if st.full_screen {
+            let r = egui::CornerRadius::same((BAR / 2.0) as u8);
+            let shadow = egui::Shadow { offset: [0, 4], blur: 16, spread: 0, color: Color32::from_black_alpha(90) };
+            p.add(shadow.as_shape(bar, r));
+            p.rect(
+                bar,
+                r,
+                look.popup_back.to_opaque(),
+                egui::Stroke::new(1.0, look.border()),
+                egui::StrokeKind::Inside,
+            );
+        } else {
+            p.rect_filled(bar, 0.0, look.popup_back);
+        }
+        let inset = if st.full_screen { vec2(12.0, 2.0) } else { vec2(4.0, 2.0) };
+        let mut child = ui.new_child(egui::UiBuilder::new().max_rect(bar.shrink2(inset)));
         child.horizontal_centered(|ui| {
             ui.spacing_mut().item_spacing.x = 2.0;
             ui.spacing_mut().interact_size.y = BAR - 4.0;
@@ -409,6 +447,15 @@ fn luminance(c: [u8; 3]) -> f32 {
 
 #[cfg(test)]
 mod tests {
+
+    #[test]
+    fn a_whole_monitor_is_told_from_a_region() {
+        let monitor = GRect::new(-1920.0, 0.0, 1920.0, 1080.0);
+        assert!(covers(GRect::new(-1920.0, 0.0, 1920.0, 1080.0), monitor));
+        assert!(covers(GRect::new(-1919.5, 0.4, 1920.6, 1079.2), monitor), "rounding");
+        assert!(!covers(GRect::new(-1800.0, 100.0, 600.0, 300.0), monitor));
+    }
+
     use super::*;
 
     /// A cream image with a block of dark blue "text" in a box.

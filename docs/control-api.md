@@ -346,7 +346,7 @@ The action ids are listed in [cli.md](cli.md#action): `show_main_window`,
 `translate_clipboard_in_popup`, `dictionary_from_clipboard`,
 `convert_layout`, `listen_translation`, `text_recognition`, `speech_input`,
 `recognize_and_translate`, `repeat_last_recognition`,
-`recognize_to_clipboard`, `watch_region`, `translate_region_in_place`,
+`recognize_to_clipboard`, `watch_region`, `translate_region_in_place`, `translate_screen_in_place`,
 `swap_languages`, `next_service`,
 `show_options`, `quit`.
 
