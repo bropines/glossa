@@ -28,6 +28,7 @@ mod options;
 mod popup;
 mod preview;
 mod rich;
+mod spell;
 mod style;
 mod text_menu;
 mod tray;

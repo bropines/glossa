@@ -44,6 +44,8 @@ pub struct MainState {
     /// Stacked layout: one result per provider id, by job.
     pub stacked: HashMap<String, Result<Arc<TranslationOutcome>, String>>,
     pub stacked_jobs: HashMap<u64, String>,
+    /// Spell checking of `source`.
+    pub spell: crate::spell::Spelling,
 }
 
 impl MainState {
@@ -61,6 +63,7 @@ impl MainState {
             translated_source: String::new(),
             stacked: HashMap::new(),
             stacked_jobs: HashMap::new(),
+            spell: Default::default(),
         }
     }
 }

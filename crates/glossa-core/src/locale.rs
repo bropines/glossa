@@ -1009,6 +1009,9 @@ pub static STRINGS: &[(&str, &str, Option<&str>)] = &[
     ("edit.translate", "Translate", Some("m:2:75")),
     ("edit.dictionary", "Dictionary search for", Some("m:2:80")),
     ("edit.listen", "Listen", Some("m:2:90")),
+    ("edit.no_suggestions", "No suggestions", None),
+    ("edit.ignore_word", "Ignore", None),
+    ("edit.add_to_dictionary", "Add to dictionary", None),
     // -- history item menu ---------------------------------------------------------------------
     ("history.open", "Open", Some("m:3:10")),
     ("history.copy_text", "Copy text", Some("m:3:15")),
