@@ -57,7 +57,7 @@ pub fn show_about(app: &mut GlossaApp, ctx: &egui::Context) {
     }
     let title = app.t("msg.about");
     let builder =
-        crate::chrome::builder(app, &title).with_inner_size([520.0, 520.0]).with_min_inner_size([420.0, 470.0]);
+        crate::chrome::builder(app, &title).with_inner_size([520.0, 472.0]).with_min_inner_size([420.0, 452.0]);
     let (look, custom) = (app.look.clone(), crate::chrome::custom(&app.cfg));
     let mut open = true;
     ctx.show_viewport_immediate(crate::chrome::viewport(crate::chrome::ABOUT), builder, |ui, _| {
