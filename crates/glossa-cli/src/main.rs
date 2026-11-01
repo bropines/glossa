@@ -55,10 +55,11 @@ COMMANDS
     translate  [-f FROM] [-t TO] [-s SERVICE] [--back] [TEXT…]   (stdin if no text)
     detect     [TEXT…]
     dict       [-f FROM] [-t TO] [-s SERVICE] WORD
-    ocr        IMAGE [-l LANG] [-t TO] [-e ENGINE] [--in-place] [--join-lines]
+    ocr        IMAGE [-l LANG] [-t TO] [-e ENGINE] [--in-place] [--join-lines] [--translate-with W]
                ENGINE: lens, windows-ocr, oneocr, macos-vision, tesseract, command-ocr…;
                --in-place translates block by block (each block with its box under --json);
-               --join-lines joins lines into paragraphs
+               --join-lines joins lines into paragraphs; W: ocr (the OCR engine translates
+               when it can, as Google Lens does) or translator (always the current translator)
     speak      [-l LANG] [--slow] -o OUT.mp3 TEXT…
     services   [-c CAPABILITY]        translate | dictionary | listen | ocr | detect_language
     modules                           what loaded, what failed and why
@@ -111,6 +112,7 @@ const VALUED: &[&str] = &[
     "--search",
     "--export",
     "--home",
+    "--translate-with",
 ];
 
 fn parse(argv: Vec<String>) -> Result<Args, String> {
@@ -349,12 +351,21 @@ fn run(args: &Args) -> Result<(), Fail> {
             let from = lang(args.flag(&["-l", "--lang"]), LangId::AUTO)?;
             let in_place = args.has(&["--in-place"]);
             let join = args.has(&["--join-lines"]);
+            let translate_with = match args.flag(&["--translate-with"]) {
+                None => None,
+                Some("ocr" | "engine" | "ocr_engine") => Some(glossa_core::config::OcrTranslateWith::OcrEngine),
+                Some("translator") => Some(glossa_core::config::OcrTranslateWith::Translator),
+                Some(other) => {
+                    return Err(Fail::Usage(format!("--translate-with takes ocr or translator, not {other}")));
+                }
+            };
             let opts = glossa_engine::RecognizeOptions {
                 lang: from,
                 translate_to: if in_place { Some(to.unwrap_or(e.config().general.first_language)) } else { to },
                 provider: args.flag(&["-e", "--engine", "-s", "--service"]).map(str::to_owned),
                 in_place,
                 layout: join,
+                translate_with,
             };
             let out = e.recognize_with_options(image, &opts)?;
             let text = glossa_engine::ocr::copy_text(&out.ocr, join);

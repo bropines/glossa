@@ -121,8 +121,11 @@ pub struct Paragraph {
 /// OCR, OneOCR) has them grouped: a line joins the paragraph above when it
 /// is about as tall, starts close below it, and overlaps it sideways.
 pub fn paragraphs(ocr: &OcrResult) -> Vec<Paragraph> {
-    let placed: Vec<&OcrBlock> =
-        ocr.blocks.iter().filter(|b| b.bounds.is_some_and(|r| !r.is_empty()) && !block_text(b).trim().is_empty()).collect();
+    let placed: Vec<&OcrBlock> = ocr
+        .blocks
+        .iter()
+        .filter(|b| b.bounds.is_some_and(|r| !r.is_empty()) && !block_text(b).trim().is_empty())
+        .collect();
     if placed.iter().any(|b| !b.children.is_empty()) {
         return placed
             .iter()

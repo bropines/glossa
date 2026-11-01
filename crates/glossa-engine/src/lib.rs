@@ -26,8 +26,8 @@ use std::sync::mpsc::{self, Receiver, Sender};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use glossa_core::history::{HistoryEntry, HistoryResult};
 use glossa_core::config::OcrTranslateWith;
+use glossa_core::history::{HistoryEntry, HistoryResult};
 use glossa_core::ocr::{ImageSource, OcrGranularity, OcrRequest};
 use glossa_core::{
     Action, Article, Audio, Capabilities, Config, Detection, DictRequest, Error, History, LangId, LangPair, Locale,
@@ -39,8 +39,8 @@ use glossa_net::HttpClient;
 use parking_lot::{Mutex, RwLock};
 
 pub use catalog::{LocaleCatalog, LocaleEntry, ThemeCatalog, ThemeEntry};
-pub use ocr::{TranslatedBlock, TranslatedLine};
 pub use export::ExportFormat;
+pub use ocr::{TranslatedBlock, TranslatedLine};
 pub use pipeline::{Pipeline, Progress, TranslateOptions, TranslationOutcome};
 
 /// The presets an AI endpoint can start from, for front ends.
@@ -57,6 +57,9 @@ pub enum Slot {
     Popup,
     Dictionary,
     Ocr,
+    /// Translations made in the OCR result window, apart from recognition so
+    /// that translating there does not cancel a region being recognised.
+    OcrResult,
     Speech,
     /// A one-off request (the control API, the command line).
     Detached,
@@ -142,6 +145,9 @@ pub struct RecognizeOptions {
     /// Ask for the layout too (paragraphs or lines with their places), as
     /// joining lines by paragraph needs; `in_place` implies it.
     pub layout: bool,
+    /// Who translates, overriding `ocr.translate_with` for this request (the
+    /// OCR result window's translator choice).
+    pub translate_with: Option<OcrTranslateWith>,
 }
 
 /// The translation an OCR provider made in the same request, as an outcome
@@ -739,7 +745,7 @@ impl Engine {
     pub fn translate_async(&self, slot: Slot, text: String, pair: LangPair, mut opts: TranslateOptions) -> u64 {
         let (job, cancel) = self.begin(slot);
         // Windows that show translations get them as they are written.
-        if opts.progress.is_none() && matches!(slot, Slot::Main | Slot::Popup) {
+        if opts.progress.is_none() && matches!(slot, Slot::Main | Slot::Popup | Slot::OcrResult) {
             let (me, cancel) = (self.clone(), cancel.clone());
             opts.progress = Some(Progress::new(move |text| {
                 if !cancel.is_cancelled() && me.current(slot, job) {
@@ -753,7 +759,7 @@ impl Engine {
             if cancel.is_cancelled() || !me.current(slot, job) {
                 return;
             }
-            if let (Ok(out), true) = (&result, matches!(slot, Slot::Main | Slot::Popup)) {
+            if let (Ok(out), true) = (&result, matches!(slot, Slot::Main | Slot::Popup | Slot::OcrResult)) {
                 me.record_history(out);
             }
             me.emit(Event::Translated { slot, job, result: result.map(Arc::new).map_err(Arc::new) });
@@ -880,6 +886,7 @@ impl Engine {
             provider: provider.map(str::to_owned),
             in_place: true,
             layout: true,
+            translate_with: None,
         };
         self.recognize_with(image, &opts, &CancelToken::new())
     }
@@ -927,7 +934,8 @@ impl Engine {
         req.lang = opts.lang;
         // The provider translates in the same request only when allowed to;
         // otherwise the current translator does it afterwards.
-        req.translate_to = to.filter(|_| cfg.ocr.translate_with == OcrTranslateWith::OcrEngine);
+        let translate_with = opts.translate_with.unwrap_or(cfg.ocr.translate_with);
+        req.translate_to = to.filter(|_| translate_with == OcrTranslateWith::OcrEngine);
         req.preserve_line_breaks = cfg.ocr.preserve_line_breaks;
         if opts.in_place || opts.layout {
             req.granularity = OcrGranularity::Blocks;
