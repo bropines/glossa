@@ -187,6 +187,15 @@ for Windows and Linux.
   opens, and every script in the language table has a font on Windows and
   through fontconfig. Right-to-left names read the right way round.
 - The source and translation panes have the same inner margins.
+- Arabic, Persian, Urdu and Hebrew text came out backwards with letters
+  joined wrongly: a hand-made reversal fought egui's own shaping. The text
+  now goes through the Unicode bidi algorithm (`bidi` module): each run is
+  shaped in its own direction, rows wrap in logical order and their runs
+  are placed in visual order, so mixed Arabic and Latin lines, numbers,
+  brackets and wrapped paragraphs read right, in the popup, the main
+  window (both panes), the stacked view, history, dictionary articles and
+  the language lists. Copying still copies the logical text. Indic, Khmer,
+  Myanmar and Sinhala text was already shaped correctly and is unchanged.
 
 ### Known gaps
 
@@ -194,3 +203,7 @@ for Windows and Linux.
   not available on macOS yet.
 - On Wayland, global hotkeys, mouse mode and reading the selection depend on
   the compositor; bind keys to the control API instead.
+- In a right-to-left row, the caret and a mouse selection that starts or
+  ends inside the row are approximate (egui's cursor code expects positions
+  to grow with the character index); selecting whole rows and *Copy all*
+  work.

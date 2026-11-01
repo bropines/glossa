@@ -82,6 +82,40 @@ are loaded only when text in that script first appears; a Python module's
 process starts on first use and stops when idle; the renderer is selectable
 (OpenGL is the lightest).
 
+## Text rendering
+
+egui's text engine (epaint 0.37) shapes text with HarfRust, the Rust port of
+HarfBuzz, so scripts that need shaping (Devanagari and the other Indic
+scripts, Sinhala, Khmer, Myanmar, Thai, Arabic joining) render correctly
+once a font is loaded (`fonts.rs` loads one per script, on first sight). It
+does not run the bidirectional algorithm: it guesses one direction per font
+run and places runs and wraps rows in logical order.
+
+`glossa-ui-egui/src/bidi.rs` adds that on top, without patching epaint, for
+text with right-to-left characters (and for text mixing a script that needs
+shaping with another, where one face could cover both):
+
+1. `unicode-bidi` resolves an embedding level per character.
+2. The text becomes a `LayoutJob` whose sections never mix levels or
+   scripts; right-to-left stretches are cut at spaces, so each word is shaped
+   right to left on its own and epaint's logical-order row wrapping is
+   right.
+3. After layout, each row's runs move into visual order (UAX #9 rule L2) by
+   shifting their glyphs and their vertices in the tessellated mesh; lone
+   brackets in right-to-left text get the mirrored glyph; the empty padding
+   glyphs epaint appends to right-to-left runs are dropped so glyphs pair up
+   with characters again. Each section's index rides in the lowest bits of
+   its line height, the only per-glyph field readable from outside epaint.
+
+The galley keeps the logical text, so copying gives what the service sent.
+Results are cached per epaint galley (`Arc` identity) in the context's
+temporary data. Everything else (Latin, Cyrillic, CJK, a single Indic
+script) takes egui's own path at no cost. Read-only text uses
+`bidi::label`/`bidi::rich`; the source editor uses `bidi::editor_layout` as
+its layouter. Known limit: inside a right-to-left row the caret and partial
+mouse selections are approximate, since egui's cursor code assumes x grows
+with the character index.
+
 ## Threads
 
 - The UI thread runs egui. It never blocks: anything that touches another
