@@ -8,7 +8,7 @@
 use egui::{Color32, CornerRadius, Margin, Shadow, Stroke, Visuals};
 use glossa_core::config::Backdrop;
 use glossa_core::theme::Surface;
-use glossa_core::theme::{Theme, WidgetState};
+use glossa_core::theme::{ControlStyle, Theme, WidgetState};
 use glossa_core::Color;
 
 pub fn c(color: Color) -> Color32 {
@@ -143,7 +143,11 @@ impl Look {
         v.window_fill = c(t.window.back);
         v.window_stroke = Stroke::new(t.metrics.border_width, c(t.window.border));
         v.window_corner_radius = win_radius;
-        v.menu_corner_radius = radius;
+        v.menu_corner_radius = if t.metrics.overlay_radius > 0.0 {
+            CornerRadius::same(t.metrics.overlay_radius.round().clamp(0.0, 20.0) as u8)
+        } else {
+            radius
+        };
         v.extreme_bg_color = c(t.edit.normal.back);
         v.text_edit_bg_color = Some(c(t.edit.normal.back));
         v.faint_bg_color = c(t.window.client_back);
@@ -193,7 +197,15 @@ impl Look {
             v.text_edit_bg_color = v.text_edit_bg_color.map(|c| c.gamma_multiply(a.max(0.3)));
             v.faint_bg_color = v.faint_bg_color.gamma_multiply(a);
         }
-        ctx.set_visuals(v);
+        let fluent = t.metrics.controls == ControlStyle::Fluent;
+        if fluent {
+            fluent_visuals(&mut v, t);
+        }
+        // egui keeps a style per system theme and picks one per viewport; a
+        // window that resolves to the other one (Options on a dark system
+        // with a light theme) would otherwise draw with egui's defaults.
+        ctx.set_visuals_of(egui::Theme::Dark, v.clone());
+        ctx.set_visuals_of(egui::Theme::Light, v);
         ctx.all_styles_mut(|s| {
             let sp = t.metrics.spacing.clamp(0.0, 24.0);
             let pad = t.metrics.padding.clamp(0.0, 24.0);
@@ -208,6 +220,12 @@ impl Look {
             s.text_styles.insert(egui::TextStyle::Small, egui::FontId::proportional(t.fonts.size * 1.1));
             s.text_styles.insert(egui::TextStyle::Heading, egui::FontId::proportional(t.fonts.size * 1.8));
             s.text_styles.insert(egui::TextStyle::Monospace, egui::FontId::monospace(t.fonts.size * 1.25));
+            if t.metrics.control_height > 0.0 {
+                s.spacing.interact_size.y = t.metrics.control_height.clamp(16.0, 64.0);
+            }
+            if fluent {
+                fluent_spacing(s, t);
+            }
         });
         ctx.set_zoom_factor(ui_scale.clamp(0.5, 3.0));
     }
@@ -216,6 +234,69 @@ impl Look {
     pub fn text_font(&self) -> egui::FontId {
         egui::FontId::proportional(self.text_size * 1.33)
     }
+}
+
+/// WinUI 3's conventions on top of the colours [`Look::apply`] mapped; see
+/// `docs/research/fluent.md` for where each number comes from.
+fn fluent_visuals(v: &mut Visuals, t: &Theme) {
+    let w = &mut v.widgets;
+    for state in [&mut w.noninteractive, &mut w.inactive, &mut w.hovered, &mut w.active, &mut w.open] {
+        // WinUI controls change fill, never size, between states.
+        state.expansion = 0.0;
+    }
+    // Secondary text (hints, captions): TextFillColorSecondary, about
+    // three quarters of the way from the base to the primary text.
+    v.weak_text_color = Some(c(t.window.back.lerp(t.window.text, 0.75)));
+    // The caret is a 1 px line in the text colour, not the accent.
+    v.text_cursor.stroke = Stroke::new(1.0, c(t.window.text));
+    // The part of a slider's track before the thumb is accent-filled.
+    v.slider_trailing_fill = true;
+    // Flyouts sit at elevation 32, windows and dialogs at 128: Fluent 2's
+    // shadow16 and shadow28 key shadows, twice as dark on dark themes.
+    let alpha = if t.dark { 71 } else { 36 };
+    v.popup_shadow = Shadow { offset: [0, 8], blur: 16, spread: 0, color: Color32::from_black_alpha(alpha) };
+    v.window_shadow = Shadow { offset: [0, 14], blur: 28, spread: 0, color: Color32::from_black_alpha(alpha) };
+}
+
+/// WinUI 3's sizes; the 32 px control height comes from
+/// `metrics.control_height`.
+fn fluent_spacing(s: &mut egui::Style, t: &Theme) {
+    let body = t.fonts.size * 1.33;
+    let sp = &mut s.spacing;
+    // ButtonPadding is 11,5,11,6 (ComboBoxPadding 12,5,0,7); 10 across
+    // keeps the main window's language row from crowding its Translate
+    // button at the default width, and the 32 px height comes from
+    // `control_height` either way.
+    sp.button_padding = egui::vec2(10.0, 5.0);
+    // 8 px between controls side by side; rows of 32 px controls 4 px apart.
+    sp.item_spacing = egui::vec2(8.0, 4.0);
+    // MenuFlyoutPresenter: items inset 4 px from the flyout's edge.
+    sp.menu_margin = Margin::same(4);
+    // WinUI's check box is 20 px with a 12 px glyph, 8 px from its label;
+    // egui sizes combo box arrows from the same setting, and at 20 they
+    // would be twice WinUI's chevron, so 16 / 10.
+    sp.icon_width = 16.0;
+    sp.icon_width_inner = 10.0;
+    sp.icon_spacing = 8.0;
+    // SliderTrackThemeHeight 4.
+    sp.slider_rail_height = 4.0;
+    // ScrollBar: a 2 px indicator that widens to a 6 px thumb under the
+    // pointer, 2 px off the edge, the thumb at least 30 px long.
+    sp.scroll = egui::style::ScrollStyle {
+        bar_width: 6.0,
+        floating_width: 2.0,
+        bar_inner_margin: 2.0,
+        bar_outer_margin: 2.0,
+        handle_min_length: 30.0,
+        dormant_handle_opacity: 0.35,
+        active_handle_opacity: 0.55,
+        interact_handle_opacity: 0.7,
+        interact_background_opacity: 0.3,
+        ..egui::style::ScrollStyle::floating()
+    };
+    // The type ramp: caption 12, body 14, subtitle 20 (for a 14 px body).
+    s.text_styles.insert(egui::TextStyle::Small, egui::FontId::proportional(body * 12.0 / 14.0));
+    s.text_styles.insert(egui::TextStyle::Heading, egui::FontId::proportional(body * 20.0 / 14.0));
 }
 
 #[cfg(test)]

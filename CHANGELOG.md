@@ -120,6 +120,11 @@ for Windows and Linux.
 - Windows opened while the main window was hidden (popup, OCR overlay,
   options from a hotkey or the tray) made egui panic; eframe is vendored with
   a fix (`third_party/README.md`).
+- A theme's own font (`[fonts] family` / `fallbacks`) was never loaded, so
+  the Fluent themes drew in Segoe UI rather than Segoe UI Variable; it is
+  now, and again after a theme change.
+- Windows that egui resolved to the other system theme (Options with a
+  light theme on a dark system) drew with egui's default colours.
 - Python installed through pyenv-win, or behind another `.bat`/`.cmd` shim,
   is found.
 - The control API token generated on first run is saved, so `glossa-cli

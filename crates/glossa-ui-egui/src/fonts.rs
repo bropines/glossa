@@ -66,18 +66,36 @@ impl Script {
 pub struct Fonts {
     loaded: HashSet<Script>,
     tried: HashSet<Script>,
+    /// The interface face in use, so a theme change only loads a new one
+    /// when it differs.
+    base: Option<PathBuf>,
+}
+
+/// The interface faces to try, in order: the one chosen in the options,
+/// then the theme's (`fonts.family`, then `fonts.fallbacks`).
+pub fn base_families<'a>(chosen: &'a str, theme: &'a glossa_core::Theme) -> Vec<&'a str> {
+    std::iter::once(chosen).filter(|f| !f.trim().is_empty()).chain(theme.fonts.candidates()).collect()
 }
 
 impl Fonts {
-    /// Install the interface face. On Windows that is Segoe UI, which also
-    /// covers Arabic, Hebrew, Armenian and Georgian, so those scripts need no
-    /// further loading there.
-    pub fn install_base(&mut self, ctx: &egui::Context, family: &str) {
-        if let Some((path, index)) = base_font(family) {
-            if self.add(ctx, "ui", &path, index, FontPriority::Highest) && cfg!(windows) {
+    /// Install the interface face: the first of `families` the system has,
+    /// else Segoe UI on Windows. Segoe UI also covers Arabic, Hebrew,
+    /// Armenian and Georgian, so with it those scripts need no further
+    /// loading. Called again after a theme change; a face once loaded stays
+    /// (egui cannot drop one), the new one just goes first.
+    pub fn install_base(&mut self, ctx: &egui::Context, families: &[&str]) {
+        let Some((path, index)) = base_font(families) else { return };
+        if self.base.as_ref() == Some(&path) {
+            return;
+        }
+        let name = format!("ui:{}", path.display());
+        if self.add(ctx, &name, &path, index, FontPriority::Highest) {
+            let stem = path.file_stem().map(|s| s.to_string_lossy().to_lowercase()).unwrap_or_default();
+            if cfg!(windows) && stem == "segoeui" {
                 self.loaded.insert(Script::ArabicHebrew);
                 self.loaded.insert(Script::ArmenianGeorgian);
             }
+            self.base = Some(path);
         }
     }
 
@@ -144,11 +162,17 @@ fn fonts_dir() -> PathBuf {
     std::env::var_os("WINDIR").map(PathBuf::from).unwrap_or_else(|| PathBuf::from(r"C:\Windows")).join("Fonts")
 }
 
+/// A family name without spaces, lower case: how it is matched to a file
+/// name on Windows and to fontconfig's answer elsewhere.
+fn squash(family: &str) -> String {
+    family.chars().filter(|c| !c.is_whitespace()).collect::<String>().to_lowercase()
+}
+
 #[cfg(windows)]
-fn base_font(family: &str) -> Option<(PathBuf, u32)> {
+fn base_font(families: &[&str]) -> Option<(PathBuf, u32)> {
     let dir = fonts_dir();
-    if !family.trim().is_empty() {
-        let squashed: String = family.chars().filter(|c| !c.is_whitespace()).collect::<String>().to_lowercase();
+    for family in families.iter().filter(|f| !f.trim().is_empty()) {
+        let squashed = squash(family);
         for name in [format!("{squashed}.ttf"), format!("{squashed}.ttc"), format!("{squashed}.otf")] {
             let p = dir.join(&name);
             if p.is_file() {
@@ -186,14 +210,17 @@ fn fc_match(pattern: &str) -> Option<(PathBuf, u32)> {
     path.is_file().then_some((path, index))
 }
 
+/// The first of `families` fontconfig really has. fontconfig always answers
+/// with its closest face, so an answer for another family (DejaVu Sans for
+/// "Segoe UI Variable") is passed over; with none left, egui's own face is
+/// fine for the chrome.
 #[cfg(not(windows))]
-fn base_font(family: &str) -> Option<(PathBuf, u32)> {
-    if family.trim().is_empty() {
-        // egui's own face is fine for the chrome on Unix; only load what was
-        // asked for.
-        return None;
-    }
-    fc_match(family)
+fn base_font(families: &[&str]) -> Option<(PathBuf, u32)> {
+    families.iter().filter(|f| !f.trim().is_empty()).find_map(|family| {
+        let out = std::process::Command::new("fc-match").args(["-f", "%{family}", family]).output().ok()?;
+        let found = squash(&String::from_utf8_lossy(&out.stdout));
+        found.split(',').any(|f| f == squash(family)).then(|| fc_match(family)).flatten()
+    })
 }
 
 #[cfg(not(windows))]

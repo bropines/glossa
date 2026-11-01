@@ -6,10 +6,12 @@ file. Pick one in *Options → Appearance*; after editing a theme file, press
 
 Five themes are built in: **Glossa Dark**, **Glossa Light**, **Glossa
 Midnight**, and **Fluent Dark** and **Fluent Light**, which look like
-Windows 11 (WinUI 3) apps: Segoe UI Variable, 4 px control and 8 px window
-corners, hairline strokes, the Fluent neutral palette and the system accent
-colour. Themes from a classic QTranslate installation appear alongside
-them (see [modules/classic-scripts.md](modules/classic-scripts.md)).
+Windows 11 (WinUI 3) apps: Segoe UI Variable on the Windows type ramp,
+32 px controls, 4 px control and 8 px window and menu corners, hairline
+strokes, thin scroll bars, the Fluent neutral palette and the system accent
+colour ([research/fluent.md](research/fluent.md) lists every number and
+where it comes from). Themes from a classic QTranslate installation appear
+alongside them (see [modules/classic-scripts.md](modules/classic-scripts.md)).
 
 ## Where theme files go
 
@@ -66,11 +68,19 @@ The classic shorthand is accepted too: `"b"` is `#bbbbbb`, `"57"` is
 | `[window_button.*]` | minimise / maximise / close in the title bar: `main` (the glyph), `back` |
 | `[icon.*]` | toolbar and pane icons |
 | `[popup]` | the selection popup: `back`, `text`, `frame`, `frame_thickness`, `opacity` |
-| `[metrics]` | `button_radius`, `window_radius`, `spacing`, `padding`, `border_width`, `service_tab_height`, `icon_size` |
+| `[metrics]` | `button_radius`, `window_radius`, `spacing`, `padding`, `border_width`, `service_tab_height`, `icon_size`, `control_height` (0 = from the font), `overlay_radius` (menus and drop-downs; 0 = `button_radius`), `controls` (see below) |
 | `[fonts]` | `family`, `size`, `fallbacks` (see below) |
 | `[backdrop]` | fills used while a window backdrop is active (see *Backdrops*) |
 
 A state that is not given falls back to `normal`.
+
+`metrics.controls` is `"classic"` (the default) or `"fluent"`. Fluent
+keeps every control the same size in every state (classic ones grow a
+pixel under the pointer), uses thin scroll bars that widen under the
+pointer, fills a slider's track up to the thumb with the accent, gives
+menus WinUI's flyout shadow, a 1 px caret and secondary-coloured hint text,
+and sizes captions 12 and headings 20 for a 14 px body. A theme extending
+a Fluent theme inherits it.
 
 ### Fonts
 
