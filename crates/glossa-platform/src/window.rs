@@ -170,6 +170,75 @@ pub fn place_popup(anchor: Rect, size: (f32, f32), monitors: &[Monitor]) -> (f32
     (x, y)
 }
 
+/// Where a dropdown list goes: the result of [`place_dropdown`].
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct DropdownPlace {
+    pub x: f32,
+    pub y: f32,
+    /// The height it gets: what it asked for, or less when neither side of
+    /// the anchor has that much room (it then scrolls).
+    pub height: f32,
+    /// It opens upwards, ending at the anchor's top.
+    pub above: bool,
+}
+
+/// Where to put a dropdown list of `size` for the control at `anchor`, as a
+/// native combo box does: under the control and aligned with its left edge;
+/// above it only when the work area of its monitor has no room below and
+/// more above. Horizontally it is kept inside the work area. With no
+/// monitors it goes under the anchor at the size asked.
+pub fn place_dropdown(anchor: Rect, size: (f32, f32), monitors: &[Monitor]) -> DropdownPlace {
+    let (w, h) = (size.0.max(0.0), size.1.max(0.0));
+    let bottom = anchor.y + anchor.height.max(0.0);
+    let Some(mon) = pick_monitor(anchor, monitors) else {
+        return DropdownPlace { x: anchor.x, y: bottom, height: h, above: false };
+    };
+    let area = if mon.work_area.is_empty() { mon.bounds() } else { mon.work_area };
+    let (lo_x, hi_x) = (area.x, area.x + area.width);
+    let x = if anchor.x + w <= hi_x { anchor.x.max(lo_x) } else { (hi_x - w).max(lo_x) };
+    let below = (area.y + area.height - bottom).max(0.0);
+    let above = (anchor.y - area.y).max(0.0);
+    if h <= below || below >= above {
+        DropdownPlace { x, y: bottom, height: h.min(below.max(1.0)), above: false }
+    } else {
+        let height = h.min(above);
+        DropdownPlace { x, y: anchor.y - height, height, above: true }
+    }
+}
+
+/// A top-level window of this process with exactly this title, visible or
+/// not, as a Win32 `HWND`: for windows egui creates (immediate viewports),
+/// whose handles it does not hand out. Always `None` off Windows.
+pub fn own_window_by_title(title: &str) -> Option<isize> {
+    #[cfg(windows)]
+    {
+        win::own_window_by_title(title)
+    }
+    #[cfg(not(windows))]
+    {
+        let _ = title;
+        None
+    }
+}
+
+/// Make a window one that clicks do not activate (`WS_EX_NOACTIVATE`), like
+/// a combo box's list or a menu: the window it belongs to keeps the focus
+/// and an active title bar, and closing the list hands the focus to no one
+/// else. Cheap when it is already so; call it every frame, as the window
+/// toolkit rewrites the extended style whenever the window changes.
+/// Returns whether the style had to be set. Does nothing off Windows.
+pub fn keep_from_activating(hwnd: isize) -> bool {
+    #[cfg(windows)]
+    {
+        win::keep_from_activating(hwnd)
+    }
+    #[cfg(not(windows))]
+    {
+        let _ = hwnd;
+        false
+    }
+}
+
 /// Place a span of `len` on one axis: after the anchor (`end`), else before
 /// it (ending at `start`), else clamped into `[lo, hi]`.
 fn fit_axis(start: f32, end: f32, len: f32, lo: f32, hi: f32) -> f32 {
@@ -208,18 +277,78 @@ mod win {
     use super::{Monitor, WindowInfo};
     use glossa_core::ocr::Rect;
     use windows::core::{BOOL, PWSTR};
-    use windows::Win32::Foundation::{CloseHandle, LPARAM, POINT, RECT};
+    use windows::Win32::Foundation::{CloseHandle, HWND, LPARAM, POINT, RECT};
     use windows::Win32::Graphics::Gdi::{
         EnumDisplayMonitors, GetMonitorInfoW, MapWindowPoints, HDC, HMONITOR, MONITORINFO,
     };
     use windows::Win32::System::Threading::{
-        OpenProcess, QueryFullProcessImageNameW, PROCESS_NAME_WIN32, PROCESS_QUERY_LIMITED_INFORMATION,
+        GetCurrentProcessId, OpenProcess, QueryFullProcessImageNameW, PROCESS_NAME_WIN32,
+        PROCESS_QUERY_LIMITED_INFORMATION,
     };
     use windows::Win32::UI::HiDpi::{GetDpiForMonitor, MDT_EFFECTIVE_DPI};
     use windows::Win32::UI::WindowsAndMessaging::{
-        GetClassNameW, GetCursorPos, GetForegroundWindow, GetGUIThreadInfo, GetWindowTextLengthW, GetWindowTextW,
-        GetWindowThreadProcessId, GUITHREADINFO, MONITORINFOF_PRIMARY,
+        EnumWindows, GetClassNameW, GetCursorPos, GetForegroundWindow, GetGUIThreadInfo, GetWindowLongPtrW,
+        GetWindowTextLengthW, GetWindowTextW, GetWindowThreadProcessId, SetWindowLongPtrW, GUITHREADINFO, GWL_EXSTYLE,
+        MONITORINFOF_PRIMARY, WS_EX_NOACTIVATE,
     };
+
+    struct TitleSearch {
+        pid: u32,
+        title: Vec<u16>,
+        found: Option<isize>,
+    }
+
+    unsafe extern "system" fn visit_title(hwnd: HWND, lparam: LPARAM) -> BOOL {
+        // SAFETY: `lparam` is the `TitleSearch` passed by
+        // `own_window_by_title`, alive for the whole enumeration.
+        let search = unsafe { &mut *(lparam.0 as *mut TitleSearch) };
+        let mut pid = 0u32;
+        // SAFETY: EnumWindows hands us valid top-level window handles.
+        unsafe { GetWindowThreadProcessId(hwnd, Some(&mut pid)) };
+        if pid != search.pid {
+            return BOOL(1);
+        }
+        // SAFETY: as above; the buffer is sized from the reported length.
+        let len = unsafe { GetWindowTextLengthW(hwnd) }.max(0) as usize;
+        if len != search.title.len() {
+            return BOOL(1);
+        }
+        let mut buf = vec![0u16; len + 1];
+        // SAFETY: as above.
+        let got = unsafe { GetWindowTextW(hwnd, &mut buf) }.max(0) as usize;
+        if got == len && buf[..got] == search.title[..] {
+            search.found = Some(hwnd.0 as isize);
+            return BOOL(0);
+        }
+        BOOL(1)
+    }
+
+    pub fn own_window_by_title(title: &str) -> Option<isize> {
+        let mut search = TitleSearch {
+            // SAFETY: no preconditions.
+            pid: unsafe { GetCurrentProcessId() },
+            title: title.encode_utf16().collect(),
+            found: None,
+        };
+        // SAFETY: `visit_title` only uses `search` through the pointer while
+        // EnumWindows runs; it stops early (an "error" result) once found.
+        let _ = unsafe { EnumWindows(Some(visit_title), LPARAM(&mut search as *mut TitleSearch as isize)) };
+        search.found
+    }
+
+    pub fn keep_from_activating(hwnd: isize) -> bool {
+        let hwnd = HWND(hwnd as *mut core::ffi::c_void);
+        // SAFETY: a stale handle makes both calls fail, which is harmless.
+        unsafe {
+            let style = GetWindowLongPtrW(hwnd, GWL_EXSTYLE);
+            let wanted = style | WS_EX_NOACTIVATE.0 as isize;
+            if style == 0 || style == wanted {
+                return false;
+            }
+            SetWindowLongPtrW(hwnd, GWL_EXSTYLE, wanted);
+            true
+        }
+    }
 
     pub fn foreground_window() -> Option<WindowInfo> {
         // SAFETY: every buffer passed is a live, correctly sized local; the
@@ -492,6 +621,47 @@ mod tests {
         let mut m = mon(0, 0, 1000, 1000);
         m.work_area = Rect::default();
         assert_eq!(place_popup(cursor(900.0, 900.0), POPUP, &[m]), (500.0, 600.0));
+    }
+
+    const LIST: (f32, f32) = (200.0, 300.0);
+
+    #[test]
+    fn dropdowns_open_below_aligned_left() {
+        let combo = Rect::new(100.0, 100.0, 150.0, 26.0);
+        let p = place_dropdown(combo, LIST, &[with_taskbar(0, 0)]);
+        assert_eq!(p, DropdownPlace { x: 100.0, y: 126.0, height: 300.0, above: false });
+    }
+
+    #[test]
+    fn dropdowns_flip_above_only_without_room_below() {
+        // 1040 - 926 = 114 below, 900 above.
+        let combo = Rect::new(100.0, 900.0, 150.0, 26.0);
+        let p = place_dropdown(combo, LIST, &[with_taskbar(0, 0)]);
+        assert_eq!(p, DropdownPlace { x: 100.0, y: 600.0, height: 300.0, above: true });
+        // Room for all 300 below, if only just: stays below.
+        let combo = Rect::new(100.0, 714.0, 150.0, 26.0);
+        assert!(!place_dropdown(combo, LIST, &[with_taskbar(0, 0)]).above);
+    }
+
+    #[test]
+    fn dropdowns_shrink_on_the_roomier_side_when_neither_fits() {
+        let short = mon(0, 0, 800, 400);
+        let combo = Rect::new(10.0, 150.0, 100.0, 26.0);
+        let p = place_dropdown(combo, LIST, &[short]);
+        assert_eq!(p, DropdownPlace { x: 10.0, y: 176.0, height: 224.0, above: false });
+        let combo = Rect::new(10.0, 300.0, 100.0, 26.0);
+        let p = place_dropdown(combo, LIST, &[short]);
+        assert_eq!(p, DropdownPlace { x: 10.0, y: 0.0, height: 300.0, above: true });
+    }
+
+    #[test]
+    fn dropdowns_stay_on_their_monitor_horizontally() {
+        let two = [with_taskbar(0, 0), with_taskbar(1920, 0)];
+        let combo = Rect::new(1850.0, 100.0, 60.0, 26.0);
+        assert_eq!(place_dropdown(combo, LIST, &two).x, 1920.0 - 200.0);
+        let combo = Rect::new(1930.0, 100.0, 60.0, 26.0);
+        assert_eq!(place_dropdown(combo, LIST, &two).x, 1930.0);
+        assert_eq!(place_dropdown(combo, LIST, &[]).y, 126.0);
     }
 
     #[test]
