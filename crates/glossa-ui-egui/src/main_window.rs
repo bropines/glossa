@@ -341,6 +341,10 @@ fn main_menu(app: &mut GlossaApp, ui: &mut egui::Ui) {
         app.open_url(HELP_URL);
         ui.close();
     }
+    if ui.button(app.t("menu.support")).on_hover_text(glossa_core::SUPPORT_URL).clicked() {
+        app.open_url(glossa_core::SUPPORT_URL);
+        ui.close();
+    }
     if ui.button(app.t("menu.about")).clicked() {
         app.open_about();
         ui.close();

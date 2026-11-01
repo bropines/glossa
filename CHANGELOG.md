@@ -7,6 +7,12 @@ the notes of its GitHub release.
 
 ## [Unreleased]
 
+### Added
+
+- **Support the project**: a link to the author's Boosty page in the About
+  window, the main window's menu, the tray menu, the macOS app menu, the
+  command-line help and the README.
+
 ## [0.1.0-beta.1] - 2026-11-01
 
 The first public beta of Glossa, a clean-room successor to QTranslate in

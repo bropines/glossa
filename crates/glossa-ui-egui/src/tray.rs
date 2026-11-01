@@ -30,6 +30,8 @@ pub enum TrayEvent {
     Action(Action),
     ToggleHotkeys,
     About,
+    /// Open the page where the project can be supported.
+    Support,
 }
 
 /// Something that woke the GUI while it was unloaded.
@@ -136,6 +138,7 @@ fn build_menu(locale: &Locale) -> (Menu, CheckMenuItem, CheckMenuItem) {
         &mouse,
         &hotkeys,
         &item("options", "tray.options"),
+        &item("support", "tray.support"),
         &item("about", "tray.about"),
         &PredefinedMenuItem::separator(),
         &item("exit", "tray.exit"),
@@ -157,6 +160,7 @@ fn install_handlers(wake: WakeFn) -> Receiver<TrayEvent> {
             "mouse" => Some(TrayEvent::ToggleMouseMode),
             "options" => Some(TrayEvent::Action(Action::ShowOptions)),
             "about" => Some(TrayEvent::About),
+            "support" => Some(TrayEvent::Support),
             "exit" => Some(TrayEvent::Action(Action::Quit)),
             other => other.strip_prefix("action:").and_then(Action::from_id).map(TrayEvent::Action),
         };
@@ -304,5 +308,6 @@ pub fn handle(app: &mut GlossaApp, e: TrayEvent) {
             let _ = app.engine.update_config(move |c| c.hotkeys.enabled = on);
         }
         TrayEvent::About => app.open_about(),
+        TrayEvent::Support => app.open_url(glossa_core::SUPPORT_URL),
     }
 }

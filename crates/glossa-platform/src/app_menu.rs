@@ -20,6 +20,8 @@
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum MenuCommand {
     About,
+    /// Open the page where the project can be supported.
+    Support,
     Settings,
     /// Close the focused window (Cmd+W).
     CloseWindow,
@@ -30,6 +32,7 @@ pub enum MenuCommand {
 #[derive(Debug, Clone, Default)]
 pub struct MenuLabels {
     pub about: String,
+    pub support: String,
     pub settings: String,
     pub hide: String,
     pub hide_others: String,
@@ -81,6 +84,7 @@ mod imp {
     const TAG_SETTINGS: isize = 2;
     const TAG_CLOSE: isize = 3;
     const TAG_QUIT: isize = 4;
+    const TAG_SUPPORT: isize = 5;
 
     pub struct TargetIvars {
         sink: Sink,
@@ -103,6 +107,7 @@ mod imp {
                     Some(TAG_SETTINGS) => MenuCommand::Settings,
                     Some(TAG_CLOSE) => MenuCommand::CloseWindow,
                     Some(TAG_QUIT) => MenuCommand::Quit,
+                    Some(TAG_SUPPORT) => MenuCommand::Support,
                     _ => return,
                 };
                 (self.ivars().sink)(command);
@@ -233,6 +238,7 @@ mod imp {
             "Glossa",
             vec![
                 item(mtm, &l.about, sel!(glossaCommand:), "", none, Some((t, TAG_ABOUT))),
+                item(mtm, &l.support, sel!(glossaCommand:), "", none, Some((t, TAG_SUPPORT))),
                 sep(),
                 item(mtm, &l.settings, sel!(glossaCommand:), ",", cmd, Some((t, TAG_SETTINGS))),
                 sep(),

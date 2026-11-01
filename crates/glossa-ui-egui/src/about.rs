@@ -57,7 +57,7 @@ pub fn show_about(app: &mut GlossaApp, ctx: &egui::Context) {
     }
     let title = app.t("msg.about");
     let builder =
-        crate::chrome::builder(app, &title).with_inner_size([520.0, 442.0]).with_min_inner_size([420.0, 392.0]);
+        crate::chrome::builder(app, &title).with_inner_size([520.0, 520.0]).with_min_inner_size([420.0, 470.0]);
     let (look, custom) = (app.look.clone(), crate::chrome::custom(&app.cfg));
     let mut open = true;
     ctx.show_viewport_immediate(crate::chrome::viewport(crate::chrome::ABOUT), builder, |ui, _| {
@@ -123,6 +123,12 @@ fn summary(app: &mut GlossaApp, ui: &mut egui::Ui, doc: &mut Option<Doc>) {
             app.open_url(AUTHOR_URL);
         }
         ui.label("Claude (Anthropic)");
+
+        ui.add_space(14.0);
+        ui.add(egui::Label::new(RichText::new(app.t("about.support_hint")).small().color(look.weak_text())).wrap());
+        if ui.button(app.t("menu.support")).on_hover_text(glossa_core::SUPPORT_URL).clicked() {
+            app.open_url(glossa_core::SUPPORT_URL);
+        }
 
         ui.add_space(14.0);
         ui.label(app.locale.fmt_args("about.license", &["MIT OR Apache-2.0"]));
