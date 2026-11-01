@@ -70,14 +70,17 @@ impl Look {
         let popup_backdrop = if supported { p.backdrop } else { Backdrop::None };
         // With a backdrop the theme's fills turn translucent, so the material
         // shows through everywhere they are used.
+        // The backdrop opacity settings thin them further.
+        let fade = |c: Color, percent: u8| c.with_alpha((c.a as f32 * percent.min(100) as f32 / 100.0).round() as u8);
         if window_backdrop != Backdrop::None {
-            theme.window.back = theme.backdrop_fill(Surface::Window, window_backdrop);
-            theme.window.client_back = theme.backdrop_fill(Surface::Client, window_backdrop);
-            let edit = theme.backdrop_fill(Surface::Edit, window_backdrop);
+            let k = cfg.appearance.backdrop_opacity;
+            theme.window.back = fade(theme.backdrop_fill(Surface::Window, window_backdrop), k);
+            theme.window.client_back = fade(theme.backdrop_fill(Surface::Client, window_backdrop), k);
+            let edit = fade(theme.backdrop_fill(Surface::Edit, window_backdrop), k);
             theme.edit.normal.back = edit;
         }
         if popup_backdrop != Backdrop::None {
-            theme.popup.back = theme.backdrop_fill(Surface::Popup, popup_backdrop);
+            theme.popup.back = fade(theme.backdrop_fill(Surface::Popup, popup_backdrop), p.backdrop_opacity);
         }
         // With window style on (the default) the popup follows the theme; the
         // separate popup colours apply only when it is off — as the classic

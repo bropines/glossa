@@ -143,6 +143,10 @@ pub struct GlossaApp {
     backdrop_generation: u64,
     /// Whether the popup's backdrop really blurs (else it is shaded).
     pub popup_blurred: bool,
+    /// A target language picked in the popup's header, used by later
+    /// popups too until "automatic direction" is picked again (for this run
+    /// of the program only).
+    pub popup_target: Option<glossa_core::LangId>,
     /// The last OCR region, for "repeat last recognition".
     pub last_region: Option<glossa_core::ocr::Rect>,
 }
@@ -222,6 +226,7 @@ impl GlossaApp {
             child_frames: HashMap::new(),
             backdrop_generation: 0,
             popup_blurred: false,
+            popup_target: None,
             last_region: None,
         }
     }
@@ -332,7 +337,8 @@ impl GlossaApp {
             egui::ViewportId::ROOT,
             egui::ViewportCommand::SetTheme(if dark { egui::SystemTheme::Dark } else { egui::SystemTheme::Light }),
         );
-        if let Err(e) = glossa_platform::backdrop::apply(frame, kind, dark) {
+        let options = glossa_platform::backdrop::Options::new(dark).with_tint(self.cfg.appearance.backdrop_opacity);
+        if let Err(e) = glossa_platform::backdrop::apply_with(frame, kind, options) {
             tracing::debug!("main window backdrop: {e}");
         }
     }
@@ -426,7 +432,11 @@ impl GlossaApp {
             return;
         }
         let dark = self.look.theme.dark;
-        let options = if popup { backdrop::Options::unfocused(dark) } else { backdrop::Options::new(dark) };
+        let options = if popup {
+            backdrop::Options::unfocused(dark).with_tint(self.cfg.appearance.popup.backdrop_opacity)
+        } else {
+            backdrop::Options::new(dark).with_tint(self.cfg.appearance.backdrop_opacity)
+        };
         let result = backdrop::apply_hwnd_with(hwnd, kind, options);
         if popup {
             self.popup_blurred = result.as_ref().is_ok_and(|a| a.blurs());
@@ -697,6 +707,11 @@ impl GlossaApp {
         crate::actions::perform(self, action, text);
     }
 
+    /// Whether the control API is serving now (it starts with the program).
+    pub fn server_running(&self) -> bool {
+        self.server.is_some()
+    }
+
     pub fn quit(&mut self) {
         self.quitting = true;
         self.ctx.send_viewport_cmd_to(egui::ViewportId::ROOT, egui::ViewportCommand::Close);
@@ -880,6 +895,7 @@ impl eframe::App for GlossaApp {
         }
         self.frames += 1;
         let ctx = ui.ctx().clone();
+        tracing::trace!(frame = self.frames, causes = ?ctx.repaint_causes(), "DBGFRAME");
         self.fonts.serve_requests(&ctx);
         self.save_zoom_later();
         if self.main_visible {

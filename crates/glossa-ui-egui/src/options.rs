@@ -85,6 +85,101 @@ pub struct OptionsState {
     /// A running "load models" / "test" request, and the last outcome.
     ai_task: Option<std::sync::mpsc::Receiver<AiReply>>,
     ai_status: Option<(String, bool)>,
+    /// The installed font families, for the font picker.
+    fonts: FontList,
+}
+
+/// The installed font families, listed on a worker the first time the font
+/// picker opens.
+#[derive(Default)]
+struct FontList {
+    names: Option<Vec<String>>,
+    pending: Option<std::sync::mpsc::Receiver<Vec<String>>>,
+}
+
+impl FontList {
+    fn load(&mut self, ctx: &egui::Context) {
+        if self.names.is_some() || self.pending.is_some() {
+            return;
+        }
+        let (tx, rx) = std::sync::mpsc::channel();
+        let ctx = ctx.clone();
+        std::thread::spawn(move || {
+            let _ = tx.send(glossa_platform::fonts::families());
+            ctx.request_repaint();
+        });
+        self.pending = Some(rx);
+    }
+
+    fn poll(&mut self) {
+        if let Some(names) = self.pending.as_ref().and_then(|rx| rx.try_recv().ok()) {
+            self.names = Some(names);
+            self.pending = None;
+        }
+    }
+}
+
+/// The interface font: a button opening a searchable list of the installed
+/// families, "Default" (the theme's font) first. Enter takes the first
+/// match, or the typed name when nothing matches.
+fn font_picker(app: &GlossaApp, ui: &mut egui::Ui, list: &mut FontList, value: &mut String) {
+    use crate::dropdown;
+    let id = ui.make_persistent_id("font-picker");
+    let search_id = id.with("search");
+    let default = app.t("options.basics.font_default");
+    let shown = if value.trim().is_empty() { default.clone() } else { value.clone() };
+    let button = dropdown::combo_button(ui, &shown, 240.0, dropdown::is_open(ui.ctx(), id));
+    if button.clicked() {
+        dropdown::toggle(ui.ctx(), id);
+        ui.ctx().data_mut(|d| d.remove::<String>(search_id));
+        list.load(ui.ctx());
+    }
+    list.poll();
+    dropdown::show(ui, id, button.rect, 240.0, 460.0, |ui, settling| {
+        let mut search: String = ui.ctx().data(|d| d.get_temp(search_id)).unwrap_or_default();
+        let r = ui
+            .add(egui::TextEdit::singleline(&mut search).hint_text(app.t("lang.search")).desired_width(f32::INFINITY));
+        if !r.has_focus() {
+            r.request_focus();
+        }
+        let needle = search.trim().to_lowercase();
+        let mut picked: Option<String> = None;
+        if needle.is_empty() && ui.selectable_label(value.trim().is_empty(), &default).clicked() {
+            picked = Some(String::new());
+        }
+        match &list.names {
+            None => {
+                ui.horizontal(|ui| {
+                    ui.add(egui::Spinner::new().size(14.0));
+                    ui.label("…");
+                });
+            }
+            Some(names) => {
+                let matches: Vec<&String> =
+                    names.iter().filter(|n| needle.is_empty() || n.to_lowercase().contains(&needle)).collect();
+                if ui.input(|i| i.key_pressed(egui::Key::Enter)) && !needle.is_empty() {
+                    picked = Some(matches.first().map(|n| (*n).clone()).unwrap_or_else(|| search.trim().to_owned()));
+                }
+                egui::ScrollArea::vertical().id_salt("font-list").max_height(360.0).show(ui, |ui| {
+                    for n in matches {
+                        let current = n.eq_ignore_ascii_case(value.trim());
+                        let resp = ui.selectable_label(current, n.as_str());
+                        if current && settling {
+                            resp.scroll_to_me(Some(egui::Align::Center));
+                        }
+                        if resp.clicked() {
+                            picked = Some(n.clone());
+                        }
+                    }
+                });
+            }
+        }
+        ui.ctx().data_mut(|d| d.insert_temp(search_id, search));
+        if let Some(p) = picked {
+            *value = p;
+            ui.close();
+        }
+    });
 }
 
 /// What a background request from the AI endpoint settings returned.
@@ -124,6 +219,7 @@ pub fn open(app: &mut GlossaApp) {
             ai_models: Default::default(),
             ai_task: None,
             ai_status: None,
+            fonts: FontList::default(),
         });
     }
     app.ctx.request_repaint();
@@ -150,6 +246,9 @@ pub fn show(app: &mut GlossaApp, ctx: &egui::Context) {
 }
 
 fn apply(app: &mut GlossaApp, st: &mut OptionsState) {
+    // The checkbox shows the system's own autostart entry; the setting
+    // follows it, so the program can keep the entry pointing at itself.
+    st.draft.general.start_with_system = st.autostart;
     let draft = st.draft.clone();
     let current = app.engine.config();
     if draft.appearance.renderer != current.appearance.renderer
@@ -300,11 +399,7 @@ fn basics(app: &mut GlossaApp, ui: &mut egui::Ui, st: &mut OptionsState) {
             });
         });
         row(ui, &app.t("options.basics.font"), |ui| {
-            ui.add(
-                egui::TextEdit::singleline(&mut d.appearance.font_family)
-                    .hint_text(app.t("options.basics.font_default"))
-                    .desired_width(240.0),
-            );
+            font_picker(app, ui, &mut st.fonts, &mut d.appearance.font_family);
         });
         row(ui, &app.t("options.basics.text_size"), |ui| {
             ui.add(egui::Slider::new(&mut d.appearance.text_size, 7.0..=28.0).step_by(0.5));
@@ -404,9 +499,11 @@ fn internet(app: &mut GlossaApp, ui: &mut egui::Ui, st: &mut OptionsState) {
             (ProxyMode::System, app.t("options.internet.proxy_system")),
             (ProxyMode::None, app.t("options.internet.proxy_none")),
             (ProxyMode::Manual, app.t("options.internet.proxy_manual")),
-            (ProxyMode::Auto, app.t("options.internet.proxy_auto")),
         ];
-        let current = names.iter().find(|(m, _)| *m == p.mode).map(|(_, n)| n.clone()).unwrap_or_default();
+        // "Automatic" (the classic choice) finds the proxy the way "System" does,
+        // so it is shown as that.
+        let shown = if p.mode == ProxyMode::Auto { ProxyMode::System } else { p.mode };
+        let current = names.iter().find(|(m, _)| *m == shown).map(|(_, n)| n.clone()).unwrap_or_default();
         crate::dropdown::ComboBox::from_id_salt("proxy-mode")
             .width(ui.available_width())
             .selected_text(current)
@@ -687,6 +784,21 @@ fn backdrop_row(
         .response
         .on_disabled_hover_text(app.t("options.backdrop.needs_opengl"));
     });
+}
+
+/// The backdrop opacity slider under a backdrop choice, with what it does.
+fn backdrop_opacity_row(app: &GlossaApp, ui: &mut egui::Ui, look: &crate::style::Look, enabled: bool, value: &mut u8) {
+    ui.add_enabled_ui(enabled, |ui| {
+        row(ui, &app.t("options.appearance.backdrop_opacity"), |ui| {
+            ui.add(egui::Slider::new(value, 0..=100).suffix(" %"));
+        });
+        hint(ui, look, &app.t("options.appearance.backdrop_opacity_hint"));
+    });
+}
+
+/// A line of quiet text explaining the setting above it.
+fn hint(ui: &mut egui::Ui, look: &crate::style::Look, text: &str) {
+    ui.label(RichText::new(text).small().color(look.weak_text()));
 }
 
 /// Where a provider comes from, in the interface language. Module runtime
@@ -1046,6 +1158,8 @@ fn appearance(app: &mut GlossaApp, ui: &mut egui::Ui, st: &mut OptionsState) {
             ui.add(egui::Slider::new(&mut d.appearance.window_transparency, 0..=90));
         });
         backdrop_row(app, ui, &app.t("options.appearance.backdrop"), "backdrop", &mut d.appearance.backdrop);
+        let has_backdrop = d.appearance.backdrop != glossa_core::config::Backdrop::None;
+        backdrop_opacity_row(app, ui, &look, has_backdrop, &mut d.appearance.backdrop_opacity);
         row(ui, &app.t("options.appearance.icon_scale"), |ui| {
             ui.add(egui::Slider::new(&mut d.appearance.icon_scale, 0.75..=2.5).step_by(0.05));
         });
@@ -1077,6 +1191,11 @@ fn appearance(app: &mut GlossaApp, ui: &mut egui::Ui, st: &mut OptionsState) {
         ui.checkbox(&mut p.pin_when_dragging, app.t("options.appearance.pin_when_dragging"));
         ui.checkbox(&mut p.show_border, app.t("options.appearance.show_border"));
         backdrop_row(app, ui, &app.t("options.appearance.popup_backdrop"), "popup-backdrop", &mut p.backdrop);
+        let has_backdrop = p.backdrop != glossa_core::config::Backdrop::None;
+        backdrop_opacity_row(app, ui, &look, has_backdrop, &mut p.backdrop_opacity);
+        row(ui, &app.t("options.appearance.popup_icon_scale"), |ui| {
+            ui.add(egui::Slider::new(&mut p.icon_scale, 0.75..=2.5).step_by(0.05));
+        });
         row(ui, &app.t("options.appearance.popup_shade"), |ui| {
             ui.add(egui::Slider::new(&mut p.shade, 0..=90));
         });
@@ -1240,6 +1359,7 @@ fn advanced(app: &mut GlossaApp, ui: &mut egui::Ui, st: &mut OptionsState) {
                     .desired_width(260.0),
             );
         });
+        hint(ui, &look, &app.t("options.advanced.browser_hint"));
         row(ui, &app.t("options.advanced.copy_action"), |ui| {
             let names = [
                 (CopyAction::CtrlC, "Ctrl + C".to_owned()),
@@ -1254,6 +1374,7 @@ fn advanced(app: &mut GlossaApp, ui: &mut egui::Ui, st: &mut OptionsState) {
                 }
             });
         });
+        hint(ui, &look, &app.t("options.advanced.copy_action_hint"));
         row(ui, &app.t("options.advanced.preferred_domain"), |ui| {
             crate::dropdown::ComboBox::from_id_salt("domain")
                 .width(260.0)
@@ -1267,11 +1388,15 @@ fn advanced(app: &mut GlossaApp, ui: &mut egui::Ui, st: &mut OptionsState) {
                     }
                 });
         });
+        hint(ui, &look, &app.t("options.advanced.preferred_domain_hint"));
         row(ui, &app.t("options.advanced.copy_wait"), |ui| {
             ui.add(egui::DragValue::new(&mut d.advanced.copy_wait_ms).range(20..=3000));
         });
+        hint(ui, &look, &app.t("options.advanced.copy_wait_hint"));
         ui.checkbox(&mut d.advanced.slower_listen_repeat, app.t("options.advanced.slower_listen"));
+        hint(ui, &look, &app.t("options.advanced.slower_listen_hint"));
         ui.checkbox(&mut d.advanced.remove_line_breaks, app.t("options.advanced.remove_line_breaks"));
+        hint(ui, &look, &app.t("options.advanced.remove_line_breaks_hint"));
     });
     group(ui, &look, &app.t("options.advanced.mouse_mode_group"), |ui| {
         ui.checkbox(&mut d.mouse_mode.enabled, app.t("tray.mouse_enabled"));
@@ -1548,12 +1673,16 @@ fn api(app: &mut GlossaApp, ui: &mut egui::Ui, st: &mut OptionsState) {
         ui.add(egui::TextEdit::singleline(&mut s.token).password(!st.show_secrets).desired_width(320.0));
     });
     ui.checkbox(&mut st.show_secrets, app.t("options.server.show_token"));
-    match &app.server_error {
-        Some(e) => {
+    // What is running now; turning it on or off takes a restart.
+    match (&app.server_error, app.server_running()) {
+        (Some(e), _) => {
             ui.label(RichText::new(app.locale.fmt("options.server.not_running", e)).color(look.error()));
         }
-        None => {
+        (None, true) => {
             ui.label(RichText::new(app.t("options.server.running")).color(look.weak_text()));
+        }
+        (None, false) => {
+            ui.label(RichText::new(app.t("options.server.stopped")).color(look.weak_text()));
         }
     }
     ui.add_space(8.0);
@@ -1577,9 +1706,9 @@ fn api(app: &mut GlossaApp, ui: &mut egui::Ui, st: &mut OptionsState) {
     }
 }
 
-fn updates(app: &mut GlossaApp, ui: &mut egui::Ui, st: &mut OptionsState) {
-    ui.checkbox(&mut st.draft.updates.check_automatically, app.t("options.updates.auto"));
-    ui.add_space(8.0);
+fn updates(app: &mut GlossaApp, ui: &mut egui::Ui, _st: &mut OptionsState) {
+    // There is no update server yet, so no "check automatically" switch:
+    // `updates.check_automatically` is kept in the settings, unused.
     ui.label(format!("{}{}", app.t("msg.version"), glossa_core::VERSION));
     ui.label(RichText::new(app.t("options.updates.no_server")).color(app.look.weak_text()));
 }

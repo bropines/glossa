@@ -421,12 +421,20 @@ fn squash(family: &str) -> String {
 #[cfg(windows)]
 fn base_font(families: &[&str]) -> Option<(PathBuf, u32)> {
     let dir = fonts_dir();
-    for family in families.iter().filter(|f| !f.trim().is_empty()) {
+    for (i, family) in families.iter().filter(|f| !f.trim().is_empty()).enumerate() {
         let squashed = squash(family);
         for name in [format!("{squashed}.ttf"), format!("{squashed}.ttc"), format!("{squashed}.otf")] {
             let p = dir.join(&name);
             if p.is_file() {
                 return Some((p, 0));
+            }
+        }
+        // The first is the one picked in the options (from the installed
+        // families) when there is one; most files are not named after
+        // their family ("Times New Roman" is times.ttf), so look it up.
+        if i == 0 {
+            if let Some(found) = glossa_platform::fonts::find_family(family) {
+                return Some(found);
             }
         }
     }

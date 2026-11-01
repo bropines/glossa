@@ -163,7 +163,6 @@ fn main_menu(app: &mut GlossaApp, ui: &mut egui::Ui) {
     let before = g.clone();
     ui.checkbox(&mut g.instant_translation, app.t("menu.instant_translation"));
     ui.checkbox(&mut g.back_translation, app.t("menu.back_translation"));
-    ui.checkbox(&mut g.read_phonetically, app.t("menu.read_phonetically"));
     ui.checkbox(&mut g.clear_on_drag_drop, app.t("menu.clear_on_drop"));
     ui.checkbox(&mut g.auto_cleanup_translation, app.t("menu.auto_cleanup"));
     ui.checkbox(&mut g.save_contents_on_exit, app.t("menu.save_on_exit"));
