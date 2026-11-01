@@ -2,6 +2,8 @@
 **/*.rs.bk
 *.pdb
 /dist/
+# The release workflow's scratch (icon set, universal binaries), when run locally.
+/build/
 /data/
 .claude/worktrees/
 
