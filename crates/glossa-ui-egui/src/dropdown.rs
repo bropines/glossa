@@ -11,9 +11,12 @@
 //! The list's window does not take the focus (on Windows it is made
 //! non-activating), so the window it belongs to keeps an active title bar
 //! and gets the focus back with nothing in between. Keys pressed there are
-//! passed on to the list, so its search box and arrow keys work. It closes
-//! on Escape, on a click anywhere else, when the program loses the focus,
-//! or when its content calls `ui.close()`.
+//! passed on to the list, so its search box and arrow keys work. Where the
+//! system gives the list the focus anyway (macOS, X11), that counts as the
+//! focus staying put. It closes on Escape, on a click anywhere else in the
+//! window it belongs to, when the focus goes to a window that is neither
+//! that one nor the list, or when its content calls `ui.close()` (see
+//! [`keep_open`]).
 //!
 //! It opens hidden for a frame or two, to measure its content and take its
 //! size before it shows. Where windows cannot be placed (Wayland gives no
@@ -39,9 +42,10 @@ struct State {
     content: Option<Vec2>,
     /// The window is on screen. It starts hidden, until measured and sized.
     shown: bool,
-    /// The list's window had the focus last frame (where the platform gave
-    /// it the focus despite asking it not to).
-    focused: bool,
+    /// What the focus has done since it opened.
+    focus: FocusTrack,
+    /// The pointer was moved onto the list for it (see [`seed_pointer`]).
+    seeded: bool,
     /// The fallback popup's rectangle last frame, in the parent's points.
     area: Option<Rect>,
     #[cfg_attr(not(windows), allow(dead_code))]
@@ -53,6 +57,64 @@ struct State {
     ignore_focus: bool,
     /// The pointer was over the list last frame.
     hovered: bool,
+}
+
+/// What a dropdown saw in one frame, for [`keep_open`].
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+struct Seen {
+    /// A mouse button went down in the window the list belongs to, outside
+    /// the control and the list.
+    press_outside: bool,
+    /// The window the list belongs to has the keyboard focus.
+    owner_focused: bool,
+    /// The list's own window has it (the system gave it the focus despite
+    /// being asked not to, or the user clicked it where clicks activate).
+    list_focused: bool,
+}
+
+/// What the focus has done since the dropdown opened.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+struct FocusTrack {
+    /// The owner or the list had the focus at some point.
+    had_focus: bool,
+    /// Frames in a row in which neither had it.
+    unfocused_frames: u8,
+}
+
+/// Frames in a row neither window may have the focus before the list
+/// closes. The focus moving from one window to another arrives as two
+/// events (one loses it, the other gains it), which can land in different
+/// frames; a single frame with neither focused is a hand-over, not a loss.
+const FOCUS_GRACE: u8 = 2;
+
+/// Whether a dropdown stays open after a frame in which it saw `seen`.
+/// `ignore_focus` is for a list belonging to a window that never keeps the
+/// focus (the selection popup). Pure, so the rules are tested rather than
+/// promised:
+///
+/// - a press elsewhere in the window it belongs to closes it;
+/// - the focus moving between that window and the list keeps it;
+/// - the focus going anywhere else (another program, another of Glossa's
+///   windows) closes it, after [`FOCUS_GRACE`] frames;
+/// - a list opened while neither window had the focus (the owner was not
+///   in the foreground) stays until one of them gets it and loses it again,
+///   rather than closing at once.
+fn keep_open(track: &mut FocusTrack, ignore_focus: bool, seen: Seen) -> bool {
+    if seen.press_outside {
+        return false;
+    }
+    if ignore_focus {
+        return true;
+    }
+    if seen.owner_focused || seen.list_focused {
+        *track = FocusTrack { had_focus: true, unfocused_frames: 0 };
+        return true;
+    }
+    if !track.had_focus {
+        return true;
+    }
+    track.unfocused_frames = track.unfocused_frames.saturating_add(1);
+    track.unfocused_frames < FOCUS_GRACE
 }
 
 fn state(ctx: &Context, id: Id) -> Option<State> {
@@ -163,11 +225,12 @@ pub fn show<R>(
     let pass = ctx.cumulative_pass_nr();
     ctx.data_mut(|d| d.insert_temp(any_open_id(), pass));
 
-    // A click anywhere else in the window it belongs to, or the program
-    // losing the focus, closes it.
+    // A click anywhere else in the window it belongs to closes it, as does
+    // the focus leaving for a window that is neither that one nor the list
+    // (decided below, once the list has seen this frame's input).
     // (From the events: a press and release in one frame leave no press
     // origin behind.)
-    let (presses, parent_focused, inner, ppp) = ctx.input(|i| {
+    let (presses, owner_focused, inner, ppp) = ctx.input(|i| {
         let presses: Vec<Pos2> = i
             .events
             .iter()
@@ -179,22 +242,29 @@ pub fn show<R>(
         (presses, i.focused, i.viewport().inner_rect, i.pixels_per_point())
     });
     let inside = |p: &Pos2| anchor.contains(*p) || st.area.is_some_and(|a| a.contains(*p));
-    let lost_focus = st.age > 3 && !st.ignore_focus && !parent_focused && !st.focused;
-    if presses.iter().any(|p| !inside(p)) || lost_focus {
-        tracing::trace!(?presses, lost_focus, "dropdown closed from outside");
-        close(&ctx, id);
-        return None;
-    }
+    let press_outside = presses.iter().any(|p| !inside(p));
 
     let monitors = window::monitors();
     let windowed = inner.is_some() && !monitors.is_empty();
-    let (result, close_now) = if windowed {
+    let (result, close_now, list_focused) = if windowed {
         show_window(&ctx, id, &mut st, anchor, inner.unwrap_or(Rect::ZERO), ppp, &monitors, min_width, max_height, add)
     } else {
-        show_area(&ctx, id, &mut st, anchor, min_width, max_height, add)
+        let (r, c) = show_area(&ctx, id, &mut st, anchor, min_width, max_height, add);
+        // In the same window: its focus is the owner's.
+        (r, c, false)
     };
-    if close_now {
-        tracing::trace!("dropdown closed from inside");
+    // The focus as both windows saw it in this same frame: the list's
+    // window has just run its pass, so a click that moved the focus to it
+    // is seen together with the owner losing it.
+    let seen = Seen { press_outside, owner_focused, list_focused };
+    let keep = keep_open(&mut st.focus, st.ignore_focus, seen);
+    if !keep {
+        tracing::trace!(?seen, ?presses, "dropdown closed from outside");
+    }
+    if close_now || !keep {
+        if close_now {
+            tracing::trace!("dropdown closed from inside");
+        }
         close(&ctx, id);
     } else {
         ctx.data_mut(|d| d.insert_temp(id, st));
@@ -217,7 +287,7 @@ fn show_window<R>(
     min_width: f32,
     max_height: f32,
     add: impl FnOnce(&mut Ui, bool) -> R,
-) -> (Option<R>, bool) {
+) -> (Option<R>, bool, bool) {
     // The anchor on screen, in physical pixels.
     let to_px = |p: Pos2| (inner.min + p.to_vec2()) * ppp;
     let (a0, a1) = (to_px(anchor.min), to_px(anchor.max));
@@ -276,9 +346,14 @@ fn show_window<R>(
     // The viewport callback may in principle run more than once; the content
     // is drawn the first time.
     let (mut add, mut forwarded) = (Some(add), Some(forwarded));
+    let seed = st.shown && !st.seeded;
+    let mut seeded = false;
     ctx.show_viewport_immediate(viewport, builder, |ui, _class| {
         focused = ui.input(|i| i.focused);
         hovered = ui.input(|i| i.pointer.has_pointer());
+        if seed {
+            seeded = seed_pointer(ui);
+        }
         if let Some(events) = forwarded.take().filter(|e| !focused && !e.is_empty()) {
             ui.ctx().input_mut(|i| i.events.extend(events));
         }
@@ -294,8 +369,8 @@ fn show_window<R>(
             close_now |= closing;
         });
     });
-    st.focused = focused;
     st.hovered = hovered;
+    st.seeded |= seeded || st.age > 12;
 
     if let Some(c) = measured {
         let c = (c + Vec2::splat(2.0 * EDGE)).ceil();
@@ -323,15 +398,50 @@ fn show_window<R>(
             st.shown = true;
         }
     }
-    keep_from_activating(st, &title);
-    (result, close_now)
+    let border = ctx.global_style().visuals.window_stroke.color;
+    keep_from_activating(st, &title, (border.r(), border.g(), border.b()));
+    (result, close_now, focused)
 }
 
-/// On Windows, make the list's window one that clicks do not activate.
+/// A list that appears under a pointer that is not moving knows nothing of
+/// the pointer until it moves (the window system reports positions as it
+/// moves), and a click before that is dropped: the user sees the item under
+/// the pointer and clicks, and nothing happens. Where the pointer is over
+/// the list and the list has no position for it, put the pointer where it
+/// already is, which makes the system report it. Not on macOS, where moving
+/// the pointer from a program stalls it for a moment, and a click there
+/// carries its own position anyway. Returns whether it is done (or not
+/// needed).
+fn seed_pointer(ui: &Ui) -> bool {
+    if cfg!(target_os = "macos") {
+        return true;
+    }
+    let (known, inner, ppp) =
+        ui.input(|i| (i.pointer.latest_pos().is_some(), i.viewport().inner_rect, i.pixels_per_point()));
+    if known {
+        return true;
+    }
+    let (Some(inner), Some((x, y))) = (inner, window::cursor_position()) else { return false };
+    let local = pos2(x as f32 / ppp, y as f32 / ppp) - inner.min.to_vec2();
+    if !Rect::from_min_size(Pos2::ZERO, inner.size()).contains(local) {
+        return true; // not over the list: nothing to lose
+    }
+    tracing::trace!(?local, "dropdown: telling the list where the pointer is");
+    ui.ctx().send_viewport_cmd(egui::ViewportCommand::CursorPosition(local));
+    true
+}
+
+/// On Windows, make the list's window one that clicks do not activate, and
+/// round its corners as the system rounds menus (Windows 11).
 #[cfg(windows)]
-fn keep_from_activating(st: &mut State, title: &str) {
+fn keep_from_activating(st: &mut State, title: &str, border: (u8, u8, u8)) {
     if st.hwnd.is_none() {
         st.hwnd = window::own_window_by_title(title);
+        if let Some(hwnd) = st.hwnd {
+            if let Err(e) = glossa_platform::backdrop::style_frame(hwnd, Some(border)) {
+                tracing::debug!("dropdown corners: {e}");
+            }
+        }
     }
     if let Some(hwnd) = st.hwnd {
         window::keep_from_activating(hwnd);
@@ -339,7 +449,7 @@ fn keep_from_activating(st: &mut State, title: &str) {
 }
 
 #[cfg(not(windows))]
-fn keep_from_activating(_: &mut State, _: &str) {}
+fn keep_from_activating(_: &mut State, _: &str, _: (u8, u8, u8)) {}
 
 /// The fallback: an ordinary popup inside the window.
 fn show_area<R>(
@@ -500,5 +610,74 @@ impl ComboBox {
             }
         });
         button
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn frame(owner: bool, list: bool) -> Seen {
+        Seen { press_outside: false, owner_focused: owner, list_focused: list }
+    }
+
+    #[test]
+    fn a_click_in_the_list_that_takes_the_focus_keeps_it_open() {
+        let mut t = FocusTrack::default();
+        assert!(keep_open(&mut t, false, frame(true, false)));
+        // macOS, X11: the click moves the focus from the owner to the list,
+        // both seen in the same frame.
+        assert!(keep_open(&mut t, false, frame(false, true)));
+        assert!(keep_open(&mut t, false, frame(false, true)));
+        // And back.
+        assert!(keep_open(&mut t, false, frame(true, false)));
+    }
+
+    #[test]
+    fn a_hand_over_split_across_frames_is_not_a_loss() {
+        let mut t = FocusTrack::default();
+        assert!(keep_open(&mut t, false, frame(true, false)));
+        assert!(keep_open(&mut t, false, frame(false, false)), "one frame with neither focused");
+        assert!(keep_open(&mut t, false, frame(false, true)));
+    }
+
+    #[test]
+    fn the_focus_going_elsewhere_closes_it() {
+        let mut t = FocusTrack::default();
+        assert!(keep_open(&mut t, false, frame(true, false)));
+        assert!(keep_open(&mut t, false, frame(false, false)));
+        assert!(!keep_open(&mut t, false, frame(false, false)));
+        // From the list too.
+        let mut t = FocusTrack::default();
+        assert!(keep_open(&mut t, false, frame(false, true)));
+        assert!(keep_open(&mut t, false, frame(false, false)));
+        assert!(!keep_open(&mut t, false, frame(false, false)));
+    }
+
+    #[test]
+    fn an_owner_not_in_the_foreground_does_not_close_it_by_itself() {
+        let mut t = FocusTrack::default();
+        for _ in 0..20 {
+            assert!(keep_open(&mut t, false, frame(false, false)));
+        }
+        // Once it had the focus, losing it counts.
+        assert!(keep_open(&mut t, false, frame(true, false)));
+        assert!(keep_open(&mut t, false, frame(false, false)));
+        assert!(!keep_open(&mut t, false, frame(false, false)));
+    }
+
+    #[test]
+    fn a_click_outside_closes_it_whatever_the_focus() {
+        let outside = Seen { press_outside: true, owner_focused: true, list_focused: false };
+        assert!(!keep_open(&mut FocusTrack::default(), false, outside));
+        assert!(!keep_open(&mut FocusTrack::default(), true, outside));
+    }
+
+    #[test]
+    fn a_list_of_a_window_without_focus_ignores_the_focus() {
+        let mut t = FocusTrack { had_focus: true, unfocused_frames: 0 };
+        for _ in 0..10 {
+            assert!(keep_open(&mut t, true, frame(false, false)));
+        }
     }
 }
