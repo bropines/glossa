@@ -1,0 +1,17 @@
+[package]
+name = "glossa-lens"
+description = "A Google Lens client in Rust: Chromium's lens_server_proto, the request Chrome sends, the image as Chrome encodes it, and the reply as text with its layout."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+
+[dependencies]
+prost = "0.14"
+image = { workspace = true }
+
+[build-dependencies]
+prost = "0.14"
+prost-build = "0.14"
+prost-types = "0.14"

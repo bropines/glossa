@@ -8,6 +8,7 @@ members = [
     "crates/glossa-services",
     "crates/glossa-dict",
     "crates/glossa-ocr",
+    "crates/glossa-lens",
     "crates/glossa-platform",
     "crates/glossa-engine",
     "crates/glossa-cli",
@@ -32,6 +33,7 @@ glossa-net = { path = "crates/glossa-net" }
 glossa-modules = { path = "crates/glossa-modules", default-features = false }
 glossa-services = { path = "crates/glossa-services" }
 glossa-ocr = { path = "crates/glossa-ocr" }
+glossa-lens = { path = "crates/glossa-lens" }
 glossa-dict = { path = "crates/glossa-dict" }
 glossa-engine = { path = "crates/glossa-engine" }
 glossa-platform = { path = "crates/glossa-platform" }
