@@ -205,9 +205,58 @@ pub fn looks_like_a_dictionary_lookup(text: &str) -> bool {
     trimmed.unicode_words().count() <= 2
 }
 
+/// Levenshtein distance between two strings, counted in characters and
+/// ignoring ASCII case: how many single-character edits turn one into the
+/// other.
+pub fn edit_distance(a: &str, b: &str) -> usize {
+    let a: Vec<char> = a.chars().map(|c| c.to_ascii_lowercase()).collect();
+    let b: Vec<char> = b.chars().map(|c| c.to_ascii_lowercase()).collect();
+    let mut prev: Vec<usize> = (0..=b.len()).collect();
+    let mut row = vec![0; b.len() + 1];
+    for (i, ca) in a.iter().enumerate() {
+        row[0] = i + 1;
+        for (j, cb) in b.iter().enumerate() {
+            let cost = usize::from(ca != cb);
+            row[j + 1] = (prev[j] + cost).min(prev[j + 1] + 1).min(row[j] + 1);
+        }
+        std::mem::swap(&mut prev, &mut row);
+    }
+    prev[b.len()]
+}
+
+/// Up to `max` of `candidates` that look like a misspelling of `needle`,
+/// closest first: for "did you mean" hints after an unknown flag or id. A
+/// candidate qualifies when it contains `needle`, or is within a third of
+/// its length in edits (at least two).
+pub fn closest<'a>(needle: &str, candidates: impl IntoIterator<Item = &'a str>, max: usize) -> Vec<&'a str> {
+    let lower = needle.to_ascii_lowercase();
+    let limit = (needle.chars().count() / 3).max(2);
+    let mut scored: Vec<(usize, &str)> = candidates
+        .into_iter()
+        .filter_map(|c| {
+            let d = edit_distance(needle, c);
+            let related = lower.len() > 1 && c.to_ascii_lowercase().contains(&lower);
+            (d <= limit || related).then_some((if related { d.min(limit) } else { d }, c))
+        })
+        .collect();
+    scored.sort_by(|a, b| a.0.cmp(&b.0).then(a.1.cmp(b.1)));
+    scored.dedup_by(|a, b| a.1 == b.1);
+    scored.into_iter().take(max).map(|(_, c)| c).collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn misspellings_find_their_closest_matches() {
+        assert_eq!(edit_distance("slwo", "slow"), 2);
+        assert_eq!(edit_distance("Google", "google"), 0);
+        assert_eq!(closest("--slwo", ["--slow", "--search", "--service"], 3), ["--slow"]);
+        assert_eq!(closest("gogle", ["google", "google-dictionary", "bing"], 3)[0], "google");
+        assert_eq!(closest("deep", ["deepl", "deepl-web", "deeplx", "lara"], 3), ["deepl", "deepl-web", "deeplx"]);
+        assert!(closest("zzzzzz", ["google", "bing"], 3).is_empty());
+    }
 
     #[test]
     fn newlines_collapse_to_unix() {
