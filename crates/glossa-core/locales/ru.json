@@ -79,7 +79,7 @@
     "options.appearance.popup_shade": "Затемнение без размытия (0 - 90):",
     "options.backdrop.none": "Нет",
     "options.backdrop.blur": "Размытие",
-    "options.backdrop.needs_opengl": "Фон окна работает только в Windows или macOS с движком OpenGL.",
+    "options.backdrop.needs_opengl": "Фон окна работает в Windows, а в macOS только с движком OpenGL.",
     "popup.close": "Закрыть",
     "popup.pin": "Не скрывать",
     "popup.unpin": "Снова скрывать автоматически",

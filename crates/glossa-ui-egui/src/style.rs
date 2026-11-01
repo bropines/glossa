@@ -41,10 +41,12 @@ pub struct Look {
     pub popup_backdrop: Backdrop,
 }
 
-/// Whether window backdrops can show at all: Windows or macOS, with the
-/// OpenGL renderer (under wgpu the client area stays opaque).
+/// Whether window backdrops can show at all: on Windows with any renderer
+/// (wgpu presents through DirectComposition when one is wanted; see
+/// `choose_renderer` in `main.rs`), on macOS with OpenGL (wgpu's Metal layer
+/// there is opaque).
 pub fn backdrops_supported(cfg: &glossa_core::Config) -> bool {
-    (cfg!(windows) || cfg!(target_os = "macos")) && cfg.appearance.renderer == glossa_core::config::Renderer::OpenGl
+    cfg!(windows) || (cfg!(target_os = "macos") && cfg.appearance.renderer == glossa_core::config::Renderer::OpenGl)
 }
 
 /// Whether the main window has to be created with an alpha channel: child

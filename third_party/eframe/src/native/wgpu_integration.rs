@@ -128,6 +128,51 @@ impl Drop for Viewport {
 
 // ----------------------------------------------------------------------------
 
+/// Glossa patch: whether wgpu presents through DirectComposition (DX12 with
+/// `Dx12SwapchainKind::DxgiFromVisual`), set when the app starts.
+///
+/// A transparent window presented that way must be created with
+/// `WS_EX_NOREDIRECTIONBITMAP`: otherwise the composition visual is drawn
+/// over the window's ordinary redirection surface, which nothing paints
+/// (opaque white), and neither the desktop nor a DWM backdrop (Mica,
+/// Acrylic) shows through. winit then also skips its blur-behind trick,
+/// which only a redirection surface needs.
+static COMPOSITED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+fn presents_through_composition(native_options: &NativeOptions) -> bool {
+    match &native_options.wgpu_options.wgpu_setup {
+        egui_wgpu::WgpuSetup::CreateNew(create) => {
+            let desc = &create.instance_descriptor;
+            desc.backends == egui_wgpu::wgpu::Backends::DX12
+                && desc.backend_options.dx12.presentation_system == egui_wgpu::wgpu::Dx12SwapchainKind::DxgiFromVisual
+        }
+        egui_wgpu::WgpuSetup::Existing(_) => false,
+    }
+}
+
+/// `egui_winit::create_window`, plus `WS_EX_NOREDIRECTIONBITMAP` for a
+/// transparent window under [`COMPOSITED`]. Glossa patch.
+fn create_winit_window(
+    egui_ctx: &egui::Context,
+    event_loop: &ActiveEventLoop,
+    viewport_builder: &ViewportBuilder,
+) -> Result<Window, winit::error::OsError> {
+    #[allow(unused_mut)]
+    let mut attributes = egui_winit::apply_monitor_to_window_attributes(
+        egui_winit::create_winit_window_attributes(egui_ctx, viewport_builder.clone()),
+        viewport_builder,
+        event_loop,
+    );
+    #[cfg(windows)]
+    if viewport_builder.transparent == Some(true) && COMPOSITED.load(std::sync::atomic::Ordering::Relaxed) {
+        use winit::platform::windows::WindowAttributesExtWindows as _;
+        attributes = attributes.with_no_redirection_bitmap(true);
+    }
+    let window = event_loop.create_window(attributes)?;
+    egui_winit::apply_viewport_builder_to_window(egui_ctx, &window, viewport_builder);
+    Ok(window)
+}
+
 impl<'app> WgpuWinitApp<'app> {
     pub fn new(
         event_loop: &EventLoop<UserEvent>,
@@ -143,6 +188,8 @@ impl<'app> WgpuWinitApp<'app> {
             std::env::var("EFRAME_SCREENSHOT_TO").is_err(),
             "EFRAME_SCREENSHOT_TO not yet implemented for wgpu backend"
         );
+
+        COMPOSITED.store(presents_through_composition(&native_options), std::sync::atomic::Ordering::Relaxed);
 
         Self {
             repaint_proxy: Arc::new(Mutex::new(event_loop.create_proxy())),
@@ -1126,7 +1173,7 @@ impl Viewport {
 
         let viewport_id = self.ids.this;
 
-        match egui_winit::create_window(egui_ctx, event_loop, &self.builder) {
+        match create_winit_window(egui_ctx, event_loop, &self.builder) {
             Ok(window) => {
                 windows_id.insert(window.id(), viewport_id);
 
@@ -1176,7 +1223,7 @@ fn create_window(
     )
     .with_visible(false); // Start hidden until we render the first frame to fix white flash on startup (https://github.com/emilk/egui/pull/3631)
 
-    let window = egui_winit::create_window(egui_ctx, event_loop, &viewport_builder)?;
+    let window = create_winit_window(egui_ctx, event_loop, &viewport_builder)?;
     epi_integration::apply_window_settings(&window, window_settings);
     Ok((window, viewport_builder))
 }

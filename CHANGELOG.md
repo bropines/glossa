@@ -106,10 +106,15 @@ for Windows and Linux.
   below a line in the middle of a fixed-size popup; border optional; a shade
   when nothing blurs behind it.
 - **Look**: Fluent Dark and Fluent Light (WinUI 3) themes following the
-  system accent colour; Mica, Mica Alt, Acrylic and blur backdrops for the
-  windows and the popup (Windows 11, vibrancy on macOS; OpenGL engine);
-  Ctrl+wheel scales the interface; an icon size setting; changing the
-  graphics engine offers to restart.
+  system accent colour, sized and spaced to Microsoft's WinUI 3 numbers
+  (32 px controls, 4 / 8 px corners, Segoe UI Variable on the type ramp,
+  thin scroll bars, flyout shadows; `docs/research/fluent.md`), with new
+  theme metrics `control_height`, `overlay_radius` and `controls`; Mica,
+  Mica Alt, Acrylic and blur backdrops for the windows and the popup
+  (Windows 11 with any graphics engine, the GPU one presenting through
+  DirectComposition; vibrancy on macOS with OpenGL); the tray menu dark or
+  light with the theme (Windows 10 1809+); Ctrl+wheel scales the interface;
+  an icon size setting; changing the graphics engine offers to restart.
 - **Options**: the Services page uses the whole window, the list in a
   resizable pane beside the settings.
 - Licenses (MIT or Apache-2.0), NOTICE, CI on Linux and Windows, release

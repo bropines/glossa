@@ -134,6 +134,19 @@ older acrylic blur, which does not depend on activation. Windows 10 before
 1803 gets plain blur for every kind. On other Linux desktops and on Wayland
 there is no backdrop; the popup's *shade* is the fallback.
 
+**Graphics engines.** On Windows backdrops and window transparency work
+with every engine. With OpenGL the window's redirection surface carries
+per-pixel alpha (winit's blur-behind trick). wgpu's usual swapchains, a
+Vulkan one or DX12 made for the window handle, are opaque: DWM composes
+nothing behind them. So while a backdrop or transparency is on, the GPU and
+software engines use Direct3D 12 presenting to a DirectComposition visual
+(wgpu's `Dx12SwapchainKind::DxgiFromVisual`, premultiplied alpha), and the
+transparent windows are created without a redirection surface
+(`WS_EX_NOREDIRECTIONBITMAP`, the eframe patch in `third_party/`), which is
+how WinUI 3 windows are built. With neither on, wgpu keeps its default
+backends. Turning backdrops or transparency on or off, like changing the
+engine, takes a restart (switching between materials does not). On macOS backdrops need OpenGL: wgpu's Metal layer is opaque.
+
 A material only shows where the window paints nothing or something
 translucent, so while one is active the window draws its surfaces with the
 theme's `[backdrop]` fills instead of its ordinary colours:
