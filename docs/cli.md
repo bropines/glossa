@@ -594,7 +594,7 @@ The same ids name the actions in `[hotkeys.bindings]`.
 | `GLOSSA_LANG` | desktop program | The interface language when `[general] ui_language` is empty (`ru`, `de-DE`). Overrides the system language. |
 | `LC_ALL`, `LC_MESSAGES`, `LANG` | desktop program | The system language, when `GLOSSA_LANG` is not set (on Windows, the display language comes first). |
 | `HTTPS_PROXY`, `ALL_PROXY`, `HTTP_PROXY` (and lower-case), `NO_PROXY` | both programs | With `[network.proxy] mode = "system"`, the first one set is the proxy, and `NO_PROXY` lists hosts that bypass it. On Windows, if none is set, the system (WinINet) proxy is used. |
-| `GLOSSA_RENDERER` | desktop program | Overrides `[appearance] renderer` for one run: `glow` (or `opengl`, `gl`), `gpu` (or `wgpu`); any other value means software rendering. `config.toml` accepts these names too (it writes `open_gl`). |
+| `GLOSSA_RENDERER` | desktop program | Overrides `[appearance] renderer` for one run, with the same names `config.toml` takes: `open_gl` (or `glow`, `opengl`, `gl`), `gpu` (or `wgpu`), `software` (or `cpu`, `warp`). An unknown value is ignored. |
 | `GLOSSA_PYTHON_SDK` | both programs | A folder holding `glossa_module.py`, searched first when starting Python modules. |
 | `GTK_THEME` | desktop program, Linux | A name containing `dark` means the system prefers dark. |
 | `XDG_SESSION_TYPE`, `WAYLAND_DISPLAY`, `DISPLAY`, `XDG_CURRENT_DESKTOP` | desktop program, Linux | How the session (Wayland or X11) and desktop are detected. |

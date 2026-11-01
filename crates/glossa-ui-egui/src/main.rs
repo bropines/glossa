@@ -473,10 +473,13 @@ fn choose_renderer(options: &mut eframe::NativeOptions, configured: glossa_core:
                 wgpu::Dx12SwapchainKind::DxgiFromVisual;
         }
     };
-    let choice = std::env::var("GLOSSA_RENDERER").unwrap_or_else(|_| configured.as_str().into());
-    match choice.as_str() {
-        "glow" | "opengl" | "gl" => options.renderer = eframe::Renderer::Glow,
-        "gpu" | "wgpu" => {
+    use glossa_core::config::Renderer;
+    // The variable takes every spelling the config file does (`open_gl`,
+    // `glow`, `gpu`, `wgpu`, `software`…); an unknown one is ignored.
+    let choice = std::env::var("GLOSSA_RENDERER").ok().and_then(|v| Renderer::from_name(&v)).unwrap_or(configured);
+    match choice {
+        Renderer::OpenGl => options.renderer = eframe::Renderer::Glow,
+        Renderer::Gpu => {
             options.renderer = eframe::Renderer::Wgpu;
             if let egui_wgpu::WgpuSetup::CreateNew(setup) = &mut options.wgpu_options.wgpu_setup {
                 composited(setup);
