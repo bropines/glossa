@@ -423,7 +423,7 @@ fn hello(app: &mut GlossaApp, ui: &mut egui::Ui, pal: &Palette) {
         ui.label(RichText::new(app.t("options.appearance.theme")).color(pal.text));
         ui.add_space(6.0);
         let entries = app.engine.theme_entries();
-        let system_dark = glossa_platform::appearance::system_prefers_dark();
+        let system_dark = app.engine.system_dark();
         let current = cfg.appearance.effective_theme(system_dark).to_owned();
         let mut pick = None;
         ui.horizontal_wrapped(|ui| {

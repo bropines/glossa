@@ -523,7 +523,7 @@ fn theme_picker(app: &GlossaApp, ui: &mut egui::Ui, salt: &str, value: &mut Stri
 
 /// How the draft will look, above the appearance settings.
 fn appearance_preview(app: &GlossaApp, ui: &mut egui::Ui, look: &crate::style::Look, draft: &Config) {
-    let system_dark = glossa_platform::appearance::system_prefers_dark();
+    let system_dark = app.engine.system_dark();
     let theme = app.engine.theme(draft.appearance.effective_theme(system_dark));
     let preview = crate::style::Look::new(theme, draft);
     let to = crate::langs::name(draft.general.first_language);
@@ -1335,7 +1335,7 @@ fn appearance(app: &mut GlossaApp, ui: &mut egui::Ui, st: &mut OptionsState) {
     group(ui, &look, &app.t("options.appearance.general"), |ui| {
         ui.checkbox(&mut d.appearance.custom_frame, app.t("options.appearance.window_style"));
         // Light and dark themes for a system that switches, or one theme.
-        let system_dark = glossa_platform::appearance::system_prefers_dark();
+        let system_dark = app.engine.system_dark();
         ui.checkbox(&mut d.appearance.follow_system_theme, app.t("options.appearance.follow_system"));
         if d.appearance.follow_system_theme {
             row(ui, &app.t("options.appearance.theme_light"), |ui| {

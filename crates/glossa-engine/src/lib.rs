@@ -732,6 +732,12 @@ impl Engine {
         self.inner.config.read().appearance.effective_theme(dark).to_owned()
     }
 
+    /// Whether the system is in dark mode, as last told
+    /// ([`Engine::set_system_dark`]): cheap, unlike asking the system.
+    pub fn system_dark(&self) -> Option<bool> {
+        *self.inner.system_dark.read()
+    }
+
     /// Tell the engine whether the system is in dark mode (`None`: it cannot
     /// be told). When that changes the theme in effect, the windows are told
     /// to restyle (`Event::ConfigChanged`). Cheap to call often.
