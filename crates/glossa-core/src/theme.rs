@@ -27,6 +27,35 @@ use crate::color::Color;
 use crate::config::Backdrop;
 use crate::jsonc;
 
+/// Text must reach WCAG AA against what it sits on.
+pub const MIN_TEXT_CONTRAST: f32 = 4.5;
+/// Icons, caption glyphs, links and text on the accent: WCAG's 3:1 for
+/// graphics and large text.
+pub const MIN_GLYPH_CONTRAST: f32 = 3.0;
+/// Text on a coloured plate: the caption, the accent, a hovered or pressed
+/// button. Classic themes draw white on #3399ff there (2.9:1), which reads
+/// at those sizes and is the look they were made for.
+pub const MIN_PLATE_CONTRAST: f32 = 2.5;
+/// Disabled text is exempt from WCAG, but must stay visible.
+pub const MIN_DISABLED_CONTRAST: f32 = 1.8;
+
+/// The first candidate that reads on every one of `backs` (WCAG AA), else
+/// black or white, whichever reads better.
+fn readable(candidates: &[Option<Color>], backs: &[Color]) -> Color {
+    readable_at(candidates, backs, MIN_TEXT_CONTRAST)
+}
+
+fn readable_at(candidates: &[Option<Color>], backs: &[Color], min: f32) -> Color {
+    let worst = |c: Color| backs.iter().map(|b| c.contrast(*b)).fold(f32::INFINITY, f32::min);
+    candidates.iter().flatten().copied().find(|c| worst(*c) >= min).unwrap_or_else(|| {
+        if worst(Color::BLACK) >= worst(Color::WHITE) {
+            Color::BLACK
+        } else {
+            Color::WHITE
+        }
+    })
+}
+
 /// A fully resolved theme: every field has a value.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
@@ -90,6 +119,11 @@ pub struct WindowStyle {
     pub border_inner: Option<Color>,
     /// The title bar, when it differs from the body.
     pub caption: Option<Color>,
+    /// The title bar's text, when it differs from the body text. Classic
+    /// themes' `Window.Text` is this: the caption text, often white on a
+    /// coloured caption, and so unusable for labels on the body.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub caption_text: Option<Color>,
     /// The area inside the frame — panes, lists.
     pub client_back: Color,
     /// The rule and caption of a group box.
@@ -468,7 +502,7 @@ impl Theme {
         if lower.ends_with(".toml") {
             let value: toml::Value = toml::from_str(text).map_err(|e| ThemeError::Parse(e.to_string()))?;
             let json = serde_json::to_value(value).map_err(|e| ThemeError::Parse(e.to_string()))?;
-            return Theme::from_native_value(json, file_name_hint, resolve, 0);
+            return Theme::from_native_value(json, file_name_hint, resolve, 0).map(Theme::readable);
         }
 
         let value: Value = serde_json::from_str(&jsonc::strip(text)).map_err(|e| ThemeError::Parse(e.to_string()))?;
@@ -479,7 +513,7 @@ impl Theme {
             }
             Ok(theme)
         } else {
-            Theme::from_native_value(value, file_name_hint, resolve, 0)
+            Theme::from_native_value(value, file_name_hint, resolve, 0).map(Theme::readable)
         }
     }
 
@@ -567,8 +601,23 @@ impl Theme {
         let req = |path: &[&str], fallback: Color| -> Result<Color, ThemeError> { Ok(get(path)?.unwrap_or(fallback)) };
 
         let window_back = req(&["Window", "Normal", "Back"], Color::grey(0x20))?;
-        let window_text = req(&["Window", "Normal", "Text"], Color::grey(0xbb))?;
+        let caption_text = req(&["Window", "Normal", "Text"], Color::grey(0xbb))?;
         let dark = window_back.is_dark();
+        let client_back = get(&["Common", "ClientBackColor"])?.unwrap_or(window_back);
+        // `Window.Text` is what the classic program wrote the caption in
+        // (Metro: white on a blue caption, over a white body); its dialogs
+        // used system colours for labels. So the labels take the first
+        // colour the theme uses for text that reads on the body.
+        let text = readable(
+            &[
+                Some(caption_text),
+                get(&["Edit", "Normal", "Text"])?,
+                get(&["Button", "Normal", "Text"])?,
+                get(&["Icon", "Normal", "Main"])?,
+            ],
+            &[window_back, client_back],
+        );
+        let window_text = text;
 
         let button = |state: &str| -> Result<Option<ButtonStyle>, ThemeError> {
             if v.get("Button").and_then(|b| b.get(state)).is_none() {
@@ -593,7 +642,7 @@ impl Theme {
             }
             let p = |k: &str| get(&["Edit", state, k]);
             Ok(Some(EditStyle {
-                back: p("Back")?.unwrap_or(Color::grey(0x16)),
+                back: p("Back")?.unwrap_or(client_back),
                 border: p("Border")?.unwrap_or(Color::grey(0x33)),
                 text: p("Text")?.unwrap_or(window_text),
                 shadow_top: p("ShadowTop")?,
@@ -626,11 +675,19 @@ impl Theme {
         }
 
         let button_states: States<ButtonStyle> = states_of(&button, ButtonStyle::default())?;
-        let edit_states: States<EditStyle> = states_of(&edit, EditStyle::default())?;
+        // A theme without an `Edit` section (Metro) had text fields in the
+        // body's colours, not the dark defaults.
+        let plain_edit = EditStyle {
+            back: client_back,
+            border: get(&["Common", "GroupBoxColor"])?.unwrap_or(window_back.shifted(0.2)),
+            text: window_text,
+            shadow_top: None,
+            shadow_bottom: None,
+        };
+        let edit_states: States<EditStyle> = states_of(&edit, plain_edit)?;
         let window_button: States<GlyphStyle> = states_of(&|s| glyph("WindowButton", s), GlyphStyle::default())?;
         let icon: States<GlyphStyle> = states_of(&|s| glyph("Icon", s), GlyphStyle::default())?;
 
-        let client_back = get(&["Common", "ClientBackColor"])?.unwrap_or(window_back);
         let group_box = get(&["Common", "GroupBoxColor"])?.unwrap_or(window_text);
         let int = |k: &str| common.and_then(|c| c.get(k)).and_then(Value::as_i64).unwrap_or(0);
 
@@ -651,10 +708,15 @@ impl Theme {
             window: WindowStyle {
                 back: window_back,
                 text: window_text,
-                text_disabled: req(&["Window", "Disabled", "Text"], window_text.lerp(window_back, 0.5))?,
+                // Like `Text`, the disabled text is the caption's; it must
+                // still be visible on the body, if dimmer.
+                text_disabled: get(&["Window", "Disabled", "Text"])?
+                    .filter(|t| t.contrast(window_back) >= MIN_DISABLED_CONTRAST)
+                    .unwrap_or(window_text.lerp(window_back, 0.45)),
                 border: req(&["Window", "Normal", "Border"], window_back.shifted(0.15))?,
                 border_inner: get(&["Window", "Normal", "BorderInner"])?,
                 caption: get(&["Window", "Normal", "Caption"])?,
+                caption_text: Some(caption_text),
                 client_back,
                 group_box,
                 classic_focus: common
@@ -695,7 +757,93 @@ impl Theme {
         if let Some(name) = v.get("Name").and_then(Value::as_str) {
             theme.name = name.to_owned();
         }
+        theme.ensure_readable();
         Ok(theme)
+    }
+
+    /// Repair colour pairs that cannot be read: text the colour of what it
+    /// sits on. A slot whose text falls below [`MIN_TEXT_CONTRAST`] against
+    /// its background takes the most readable of the theme's other text
+    /// colours, or black or white; disabled text only has to stay visible.
+    /// Colours that already read are left as the theme wrote them, so a
+    /// well-made theme comes through unchanged.
+    pub fn ensure_readable(&mut self) {
+        let w = &mut self.window;
+        let caption = w.caption.unwrap_or(w.back);
+        let text = readable(&[Some(w.text), Some(self.edit.normal.text)], &[w.back, w.client_back]);
+        w.text = text;
+        if w.text_disabled.contrast(w.back) < MIN_DISABLED_CONTRAST {
+            w.text_disabled = text.lerp(w.back, 0.45);
+        }
+        if let Some(ct) = w.caption_text {
+            w.caption_text = Some(readable_at(&[Some(ct), Some(text)], &[caption], MIN_PLATE_CONTRAST));
+        }
+        let fix_edit = |e: &mut EditStyle| e.text = readable(&[Some(e.text), Some(text)], &[e.back]);
+        fix_edit(&mut self.edit.normal);
+        for e in [&mut self.edit.hover, &mut self.edit.focused].into_iter().flatten() {
+            fix_edit(e);
+        }
+        let fix_button =
+            |b: &mut ButtonStyle, min: f32| b.text = readable_at(&[Some(b.text), Some(text)], &[b.back()], min);
+        fix_button(&mut self.button.normal, MIN_TEXT_CONTRAST);
+        for b in [&mut self.button.hover, &mut self.button.pressed, &mut self.button.focused].into_iter().flatten() {
+            fix_button(b, MIN_PLATE_CONTRAST);
+        }
+        self.popup.text = readable(&[Some(self.popup.text), Some(text)], &[self.popup.back]);
+        self.accent_text = readable_at(&[Some(self.accent_text)], &[self.accent], MIN_PLATE_CONTRAST);
+        // Links are underlined, so on a coloured body the text colour will do.
+        let (light_link, dark_link) = (Color::rgb(0x6f, 0xb5, 0xf1), Color::rgb(0x00, 0x55, 0xad));
+        self.link = readable_at(
+            &[Some(self.link), Some(light_link), Some(dark_link), Some(text)],
+            &[self.window.back],
+            MIN_GLYPH_CONTRAST,
+        );
+        let back = self.window.back;
+        if self.icon.normal.main.contrast(back) < MIN_GLYPH_CONTRAST {
+            self.icon.normal.main = self.window.text.lerp(back, 0.25);
+        }
+        let caption_glyph = &mut self.window_button.normal;
+        let plate = caption_glyph.back.unwrap_or(caption);
+        if caption_glyph.main.contrast(plate) < MIN_PLATE_CONTRAST {
+            caption_glyph.main =
+                readable_at(&[self.window.caption_text, Some(self.window.text)], &[plate], MIN_PLATE_CONTRAST);
+        }
+    }
+
+    /// [`Theme::ensure_readable`], by value.
+    pub fn readable(mut self) -> Theme {
+        self.ensure_readable();
+        self
+    }
+
+    /// Every text-on-background pair the interface draws, with its contrast
+    /// ratio and the minimum it should reach: for tests and `theme show`.
+    pub fn contrast_report(&self) -> Vec<(&'static str, f32, f32)> {
+        let w = &self.window;
+        let caption = w.caption.unwrap_or(w.back);
+        let mut out = vec![
+            ("window.text on window.back", w.text.contrast(w.back), MIN_TEXT_CONTRAST),
+            ("window.text on window.client_back", w.text.contrast(w.client_back), MIN_TEXT_CONTRAST),
+            ("window.text_disabled on window.back", w.text_disabled.contrast(w.back), MIN_DISABLED_CONTRAST),
+            ("caption text on caption", w.caption_text.unwrap_or(w.text).contrast(caption), MIN_PLATE_CONTRAST),
+            ("edit text on edit back", self.edit.normal.text.contrast(self.edit.normal.back), MIN_TEXT_CONTRAST),
+            (
+                "button text on button back",
+                self.button.normal.text.contrast(self.button.normal.back()),
+                MIN_TEXT_CONTRAST,
+            ),
+            ("popup.text on popup.back", self.popup.text.contrast(self.popup.back), MIN_TEXT_CONTRAST),
+            ("accent_text on accent", self.accent_text.contrast(self.accent), MIN_PLATE_CONTRAST),
+            ("icon.normal on window.back", self.icon.normal.main.contrast(w.back), MIN_GLYPH_CONTRAST),
+            ("link on window.back", self.link.contrast(w.back), MIN_GLYPH_CONTRAST),
+        ];
+        for (name, state) in [("button.hover", WidgetState::Hover), ("button.pressed", WidgetState::Pressed)] {
+            let b = self.button.get(state);
+            out.push((name, b.text.contrast(b.back()), MIN_PLATE_CONTRAST));
+        }
+        let g = &self.window_button.normal;
+        out.push(("caption buttons on caption", g.main.contrast(g.back.unwrap_or(caption)), MIN_PLATE_CONTRAST));
+        out
     }
 
     /// Serialise in the native format.
@@ -878,6 +1026,7 @@ pub mod builtin {
                 border: Color::grey(0x33),
                 border_inner: None,
                 caption: None,
+                caption_text: None,
                 client_back: Color::grey(0x16),
                 group_box: Color::grey(0x48),
                 classic_focus: false,
@@ -966,6 +1115,7 @@ pub mod builtin {
             border: Color::grey(0xc8),
             border_inner: None,
             caption: None,
+            caption_text: None,
             client_back: Color::WHITE,
             group_box: Color::grey(0xb4),
             classic_focus: false,
@@ -1138,6 +1288,7 @@ pub mod builtin {
             border: surface_stroke,
             border_inner: None,
             caption: None,
+            caption_text: None,
             client_back: Color::grey(0x28), // LayerFillColorDefault #4C3A3A3A
             group_box: Color::grey(0x32),   // DividerStrokeColorDefault #15FFFFFF
             classic_focus: false,
@@ -1226,6 +1377,7 @@ pub mod builtin {
             border: surface_stroke,
             border_inner: None,
             caption: None,
+            caption_text: None,
             client_back: Color::grey(0xf9), // LayerFillColorDefault #80FFFFFF
             group_box: Color::grey(0xe0),   // DividerStrokeColorDefault
             classic_focus: false,
@@ -1532,6 +1684,93 @@ mod tests {
             assert!(ratio >= 4.5, "{}: body text contrast {ratio:.1} is below WCAG AA", theme.name);
             let ratio = theme.edit.normal.text.contrast(theme.edit.normal.back);
             assert!(ratio >= 4.5, "{}: edit text contrast {ratio:.1} is below WCAG AA", theme.name);
+        }
+    }
+
+    fn assert_readable(theme: &Theme) {
+        for (pair, ratio, min) in theme.contrast_report() {
+            assert!(ratio >= min, "{}: {pair} is {ratio:.2}:1, below {min}:1", theme.name);
+        }
+    }
+
+    #[test]
+    fn builtin_themes_read_on_every_surface_and_need_no_repair() {
+        for theme in builtin::all() {
+            assert_readable(&theme);
+            assert_eq!(theme.clone().readable(), theme, "{}: ensure_readable changed a built-in theme", theme.name);
+        }
+    }
+
+    /// The shape of the classic themes whose labels vanished: `Window.Text`
+    /// is the caption's text, white on a coloured caption, over a white
+    /// body; there is no `Edit` section, and the disabled text is white too.
+    const WHITE_BODY_COLOURED_CAPTION: &str = r#"{
+        "Common": { "ClientBackColor": "f", "GroupBoxColor": "d0" },
+        "Window": {
+            "Normal":   { "Back": "f", "Text": "f", "Border": "2a7fd4", "Caption": "2a7fd4" },
+            "Disabled": { "Back": "f", "Text": "f", "Border": "2a7fd4", "Caption": "2a7fd4" }
+        },
+        "WindowButton": {
+            "Normal": { "Main": "f", "Back": "2a7fd4" },
+            "Hover":  { "Main": "2a7fd4", "Back": "f" }
+        },
+        "Button": {
+            "Normal":  { "BackTop": "d0", "BackBottom": "d0", "Border": "d0", "Text": "50" },
+            "Pressed": { "BackTop": "2a7fd4", "BackBottom": "2a7fd4", "Border": "2a7fd4", "Text": "f" }
+        },
+        "Icon": { "Normal": { "Main": "50" } }
+    }"#;
+
+    #[test]
+    fn classic_caption_text_is_not_used_for_labels() {
+        let t = Theme::load(WHITE_BODY_COLOURED_CAPTION, "White.json", &no_resolver).unwrap();
+        assert_readable(&t);
+        // The labels take the theme's other text colour; the caption keeps
+        // its white on blue.
+        assert_eq!(t.window.text, Color::grey(0x50));
+        assert_eq!(t.window.caption_text, Some(Color::WHITE));
+        assert_eq!(t.window.caption, Some(Color::rgb(0x2a, 0x7f, 0xd4)));
+        // Text fields without an `Edit` section are in the body's colours.
+        assert_eq!(t.edit.normal.back, Color::WHITE);
+        assert_eq!(t.edit.normal.text, Color::grey(0x50));
+        assert_eq!(t.popup.text, Color::grey(0x50));
+        assert!(t.window.text_disabled.contrast(t.window.back) >= MIN_DISABLED_CONTRAST);
+        // The pressed button's white on blue is how the theme looks: kept.
+        assert_eq!(t.button.get(WidgetState::Pressed).text, Color::WHITE);
+    }
+
+    #[test]
+    fn classic_themes_that_already_read_keep_their_colours() {
+        let t = Theme::load(FLAT_DARK, "Flat Dark.json", &no_resolver).unwrap();
+        assert_readable(&t);
+        assert_eq!(t.window.text, Color::grey(0xbb));
+        assert_eq!(t.window.caption_text, Some(Color::grey(0xbb)));
+    }
+
+    #[test]
+    fn unreadable_native_theme_is_repaired_when_loaded() {
+        let text = "extends = \"Glossa Light\"\n[window]\ntext = \"#f3f3f3\"\n";
+        let t = Theme::load(text, "Pale.toml", &no_resolver).unwrap();
+        assert_readable(&t);
+        assert_ne!(t.window.text, Color::grey(0xf3));
+    }
+
+    /// The classic themes of a real installation, if one is configured:
+    /// `GLOSSA_CLASSIC_THEMES=C:\…\QTranslate\Themes cargo test`. They are
+    /// never copied into the repository.
+    #[test]
+    fn installed_classic_themes_read_on_every_surface() {
+        let Ok(dir) = std::env::var("GLOSSA_CLASSIC_THEMES") else { return };
+        for entry in std::fs::read_dir(dir).unwrap().flatten() {
+            let path = entry.path();
+            if path.extension().and_then(|e| e.to_str()) != Some("json") {
+                continue;
+            }
+            let text = std::fs::read_to_string(&path).unwrap();
+            let name = path.file_name().unwrap().to_string_lossy().into_owned();
+            if let Ok(t) = Theme::load(&text, &name, &no_resolver) {
+                assert_readable(&t);
+            }
         }
     }
 }

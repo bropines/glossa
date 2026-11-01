@@ -207,20 +207,22 @@ pub fn show_keyboard(app: &mut GlossaApp, ctx: &egui::Context) {
         return;
     }
     let mut st: KbState = ctx.data(|d| d.get_temp(state_id())).unwrap_or_else(|| KbState::new(app));
-    let builder = egui::ViewportBuilder::default()
-        .with_title(app.t("msg.keyboard"))
+    let title = app.t("msg.keyboard");
+    let builder = crate::chrome::builder(app, &title)
         .with_inner_size(st.open_size)
-        .with_min_inner_size(st.chrome + keyboard_size(MIN_SCALE))
-        .with_icon(crate::app_icon(32));
+        .with_min_inner_size(st.chrome + keyboard_size(MIN_SCALE));
+    let (look, custom) = (app.look.clone(), crate::chrome::custom(&app.cfg));
     let mut open = true;
     // No `zoom_input` here: Ctrl+wheel over the keyboard sizes the keyboard,
     // not the interface.
-    ctx.show_viewport_immediate(egui::ViewportId::from_hash_of("glossa-keyboard"), builder, |ui, _| {
+    ctx.show_viewport_immediate(crate::chrome::viewport(crate::chrome::KEYBOARD), builder, |ui, _| {
         if ui.input(|i| i.viewport().close_requested()) {
             open = false;
         }
+        crate::chrome::frame(ui, &look, custom, &crate::chrome::Caption::new(&title));
         egui::CentralPanel::default().show(ui, |ui| contents(app, ui, &mut st));
     });
+    app.child_backdrop(&title, false);
     // Save a new scale once it has been still for a moment, or at once when
     // the window closes.
     if let Some(at) = st.changed_at {

@@ -8,6 +8,7 @@
 mod about;
 mod actions;
 mod app;
+mod chrome;
 mod dictionary;
 mod fonts;
 mod history;
@@ -190,7 +191,7 @@ fn main() -> eframe::Result<()> {
             .with_app_id("glossa")
             .with_inner_size(geometry.map(|g| [g.width, g.height]).unwrap_or([680.0, 470.0]))
             .with_min_inner_size([420.0, 300.0])
-            .with_decorations(!cfg.appearance.custom_frame)
+            .with_decorations(!chrome::custom(&cfg))
             .with_transparent(style::needs_transparent_root(&cfg))
             .with_visible(start_visible)
             .with_icon(app_icon(64));
@@ -450,6 +451,16 @@ fn choose_renderer(options: &mut eframe::NativeOptions, configured: glossa_core:
                         .ok_or_else(|| "no graphics adapter".to_owned())
                 }));
             options.wgpu_options.wgpu_setup = egui_wgpu::WgpuSetup::CreateNew(setup);
+        }
+    }
+    // A DXGI swap chain made from the window handle is always opaque, so
+    // under wgpu a translucent window came out solid. One made for a
+    // DirectComposition visual over the window carries alpha.
+    if cfg!(windows) && options.renderer == eframe::Renderer::Wgpu && options.viewport.transparent == Some(true) {
+        if let egui_wgpu::WgpuSetup::CreateNew(setup) = &mut options.wgpu_options.wgpu_setup {
+            setup.instance_descriptor.backends = wgpu::Backends::DX12;
+            setup.instance_descriptor.backend_options.dx12.presentation_system =
+                wgpu::Dx12SwapchainKind::DxgiFromVisual;
         }
     }
 }

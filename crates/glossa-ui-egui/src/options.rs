@@ -94,7 +94,9 @@ enum AiReply {
 }
 
 pub fn open(app: &mut GlossaApp) {
-    if app.options.is_none() {
+    if app.options.is_some() {
+        crate::chrome::raise(&app.ctx, crate::chrome::viewport(crate::chrome::OPTIONS));
+    } else {
         let autostart = glossa_platform::autostart::is_autostart_enabled();
         app.options = Some(OptionsState {
             draft: app.engine.config(),
@@ -120,17 +122,15 @@ pub fn open(app: &mut GlossaApp) {
 pub fn show(app: &mut GlossaApp, ctx: &egui::Context) {
     let Some(mut st) = app.options.take() else { return };
     let title = app.t("options.title");
-    let builder = egui::ViewportBuilder::default()
-        .with_title(title.clone())
-        .with_transparent(app.look.window_backdrop != glossa_core::config::Backdrop::None)
-        .with_inner_size([900.0, 600.0])
-        .with_min_inner_size([680.0, 420.0])
-        .with_icon(crate::app_icon(32));
+    let builder =
+        crate::chrome::builder(app, &title).with_inner_size([900.0, 600.0]).with_min_inner_size([680.0, 420.0]);
     let mut open = true;
-    ctx.show_viewport_immediate(egui::ViewportId::from_hash_of("glossa-options"), builder, |ui, _| {
+    let custom = crate::chrome::custom(&app.cfg);
+    ctx.show_viewport_immediate(crate::chrome::viewport(crate::chrome::OPTIONS), builder, |ui, _| {
         if ui.input(|i| i.viewport().close_requested()) {
             open = false;
         }
+        crate::chrome::frame(ui, &app.look, custom, &crate::chrome::Caption::new(&title));
         app.zoom_input(ui);
         open &= body(app, ui, &mut st);
     });

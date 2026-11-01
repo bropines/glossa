@@ -697,7 +697,7 @@ fn body(app: &mut GlossaApp, ui: &mut egui::Ui, st: &mut PopupState) -> (bool, e
         })
     });
 
-    if crate::main_window::resize_edges(ui, "popup") {
+    if crate::chrome::resize_edges(ui, "popup") {
         st.resizing = true;
         st.pinned = true;
     }

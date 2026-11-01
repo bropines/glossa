@@ -132,6 +132,11 @@ pub struct GlossaApp {
     /// Child windows' backdrops as applied: title -> (window, kind, settings
     /// generation), so a recreated window or new settings apply again.
     child_backdrops: HashMap<String, (isize, glossa_core::config::Backdrop, u64)>,
+    /// Child windows' frames as styled (rounded corners, border colour):
+    /// title -> (the root pass it was last drawn in, the settings generation
+    /// it was styled for). A window not drawn in the previous pass was
+    /// closed in between, and its new window is styled again.
+    child_frames: HashMap<String, (u64, Option<u64>)>,
     backdrop_generation: u64,
     /// Whether the popup's backdrop really blurs (else it is shaded).
     pub popup_blurred: bool,
@@ -208,6 +213,7 @@ impl GlossaApp {
             transparent_root,
             backdrop_dirty: true,
             child_backdrops: HashMap::new(),
+            child_frames: HashMap::new(),
             backdrop_generation: 0,
             popup_blurred: false,
             last_region: None,
@@ -325,13 +331,83 @@ impl GlossaApp {
         }
     }
 
+    fn style_main_frame(&self, frame: &eframe::Frame) {
+        if crate::chrome::custom(&self.cfg) {
+            if let Err(e) = glossa_platform::backdrop::style_frame_of(frame, Some(self.frame_border())) {
+                tracing::debug!("main window frame: {e}");
+            }
+        }
+    }
+
+    /// Open the on-screen keyboard, or bring it to the front if it is open.
+    pub fn open_keyboard(&mut self) {
+        if self.keyboard_open {
+            crate::chrome::raise(&self.ctx, crate::chrome::viewport(crate::chrome::KEYBOARD));
+        }
+        self.keyboard_open = true;
+        self.ctx.request_repaint();
+    }
+
+    /// Open the About window, or bring it to the front if it is open.
+    pub fn open_about(&mut self) {
+        if self.about_open {
+            crate::chrome::raise(&self.ctx, crate::chrome::viewport(crate::chrome::ABOUT));
+        }
+        self.about_open = true;
+        self.ctx.request_repaint();
+    }
+
+    /// Whether the main window was created with an alpha channel, which the
+    /// other windows then share (see [`crate::chrome::builder`]).
+    pub fn transparent_root(&self) -> bool {
+        self.transparent_root
+    }
+
+    /// The border colour the system draws around a custom-framed window.
+    fn frame_border(&self) -> (u8, u8, u8) {
+        let b = self.look.theme.window.border;
+        (b.r, b.g, b.b)
+    }
+
+    /// Round the corners and colour the border of a child window that draws
+    /// its own frame, once per window it is shown in and again after the
+    /// settings change. Called after each pass that drew the window.
+    fn style_child_frame(&mut self, title: &str) {
+        if !crate::chrome::custom(&self.cfg) {
+            return;
+        }
+        let pass = self.ctx.cumulative_pass_nr();
+        let generation = self.backdrop_generation;
+        let border = self.frame_border();
+        let entry = self.child_frames.entry(title.to_owned()).or_insert((0, None));
+        if pass > entry.0 + 2 {
+            entry.1 = None; // closed and opened again: a new window
+        }
+        entry.0 = pass;
+        if entry.1 == Some(generation) {
+            return;
+        }
+        let Some(hwnd) = glossa_platform::backdrop::find_own_window(title) else { return };
+        if let Err(e) = glossa_platform::backdrop::style_frame(hwnd, Some(border)) {
+            tracing::debug!("frame for {title}: {e}");
+        }
+        entry.1 = Some(generation);
+    }
+
     /// Give a child window (popup, options…) its backdrop once it exists,
-    /// and again when it is recreated or the settings change. egui does not
-    /// expose child windows' handles, so the window is found by its title.
+    /// and again when it is recreated or the settings change; a tool window
+    /// also gets its frame styled. egui does not expose child windows'
+    /// handles, so the window is found by its title.
     pub fn child_backdrop(&mut self, title: &str, popup: bool) {
         use glossa_core::config::Backdrop;
         use glossa_platform::backdrop;
-        if !cfg!(windows) || !self.transparent_root {
+        if !cfg!(windows) {
+            return;
+        }
+        if !popup {
+            self.style_child_frame(title);
+        }
+        if !self.transparent_root {
             return;
         }
         let kind = if popup { self.look.popup_backdrop } else { self.look.window_backdrop };
@@ -757,6 +833,7 @@ impl eframe::App for GlossaApp {
     fn ui(&mut self, ui: &mut egui::Ui, frame: &mut eframe::Frame) {
         if std::mem::take(&mut self.backdrop_dirty) {
             self.apply_main_backdrop(ui.ctx(), frame);
+            self.style_main_frame(frame);
         }
         self.frames += 1;
         let ctx = ui.ctx().clone();

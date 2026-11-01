@@ -63,7 +63,7 @@ The classic shorthand is accepted too: `"b"` is `#bbbbbb`, `"57"` is
 | `[window]` | window background, text, borders, the text panes' background (`client_back`), group frames |
 | `[button.normal]`, `.hover`, `.pressed`, `.disabled` | buttons: `back_top` / `back_bottom` (classic themes' gradient ends; drawn as their mix), `border`, `text` |
 | `[edit.normal]`, `.hover`, `.focused`, `.disabled` | text fields |
-| `[window_button.*]` | minimise / maximise / close in the title bar: `main` (the glyph), `back` |
+| `[window_button.*]` | minimise / maximise / close in the title bar of every window: `main` (the glyph), `back` (without one, WinUI's subtle hover fills; close always turns red on hover) |
 | `[icon.*]` | toolbar and pane icons |
 | `[popup]` | the selection popup: `back`, `text`, `frame`, `frame_thickness`, `opacity` |
 | `[metrics]` | `button_radius`, `window_radius`, `spacing`, `padding`, `border_width`, `service_tab_height`, `icon_size` |
@@ -159,6 +159,29 @@ Two settings in *Options → Appearance*, independent of the theme:
 - **Window transparency** for the main window and the other windows;
 - **Popup transparency** for the selection popup (the theme's
   `popup.opacity` is the starting point).
+
+Limits: turning window transparency on (from 0) or off needs a restart,
+because the windows must be created with an alpha channel. It works with
+all three engines; under GPU and software rendering on Windows the windows
+then draw through a DirectComposition swap chain. While a window backdrop
+is selected, the backdrop decides how see-through the windows are and the
+slider is ignored. A text pane sits on the window body, so it ends up a
+little more opaque than the body around it.
+
+## Readability
+
+Every theme is checked when it loads: text that does not reach WCAG AA
+(4.5:1) against what it sits on (window body, panes, text fields, buttons,
+the popup) takes the theme's most readable other text colour, or black or
+white; disabled text only has to stay visible, and text on coloured plates
+(the caption, the accent, hovered and pressed buttons) needs 2.5:1, which
+keeps the classic white-on-blue looks. A theme whose colours already read
+comes through unchanged.
+
+`[window] caption_text` is the title bar's text when it differs from the
+body text. Classic themes put the caption's text in `Window.Text` (Metro:
+white on a blue caption, over a white body); it becomes `caption_text`, and
+the labels take the theme's button or icon colour instead.
 
 ## Classic themes
 

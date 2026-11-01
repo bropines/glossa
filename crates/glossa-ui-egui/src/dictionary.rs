@@ -23,6 +23,9 @@ pub struct DictState {
 }
 
 pub fn open(app: &mut GlossaApp, word: Option<String>) {
+    if app.dictionary.is_some() {
+        crate::chrome::raise(&app.ctx, crate::chrome::viewport(crate::chrome::DICTIONARY));
+    }
     let (from, to) = (LangId::AUTO, app.cfg.dictionary.language);
     let mut st = app.dictionary.take().unwrap_or(DictState {
         query: String::new(),
@@ -83,17 +86,15 @@ impl DictState {
 pub fn show(app: &mut GlossaApp, ctx: &egui::Context) {
     let Some(mut st) = app.dictionary.take() else { return };
     let title = app.t("dict.title");
-    let builder = egui::ViewportBuilder::default()
-        .with_title(title.clone())
-        .with_transparent(app.look.window_backdrop != glossa_core::config::Backdrop::None)
-        .with_inner_size([820.0, 560.0])
-        .with_min_inner_size([480.0, 320.0])
-        .with_icon(crate::app_icon(32));
+    let builder =
+        crate::chrome::builder(app, &title).with_inner_size([820.0, 560.0]).with_min_inner_size([480.0, 320.0]);
     let mut open = true;
-    ctx.show_viewport_immediate(egui::ViewportId::from_hash_of("glossa-dictionary"), builder, |ui, _| {
+    let custom = crate::chrome::custom(&app.cfg);
+    ctx.show_viewport_immediate(crate::chrome::viewport(crate::chrome::DICTIONARY), builder, |ui, _| {
         if ui.input(|i| i.viewport().close_requested()) {
             open = false;
         }
+        crate::chrome::frame(ui, &app.look, custom, &crate::chrome::Caption::new(&title));
         app.zoom_input(ui);
         body(app, ui, &mut st);
     });

@@ -22,8 +22,6 @@ pub enum Icon {
     Replace,
     Pin,
     Close,
-    Minimize,
-    Maximize,
     Restore,
     Star,
     StarFilled,
@@ -126,10 +124,6 @@ pub fn paint(painter: &egui::Painter, rect: Rect, icon: Icon, color: Color32) {
         Icon::Close => {
             line(p(3.5, 3.5), p(12.5, 12.5));
             line(p(12.5, 3.5), p(3.5, 12.5));
-        }
-        Icon::Minimize => line(p(3.0, 11.5), p(13.0, 11.5)),
-        Icon::Maximize => {
-            painter.rect_stroke(Rect::from_min_max(p(3.0, 3.0), p(13.0, 13.0)), 0.0, st, egui::StrokeKind::Middle);
         }
         Icon::Restore => {
             painter.rect_stroke(Rect::from_min_max(p(3.0, 5.5), p(10.5, 13.0)), 0.0, st, egui::StrokeKind::Middle);
@@ -270,8 +264,6 @@ mod tests {
                 Icon::Replace,
                 Icon::Pin,
                 Icon::Close,
-                Icon::Minimize,
-                Icon::Maximize,
                 Icon::Restore,
                 Icon::Star,
                 Icon::StarFilled,

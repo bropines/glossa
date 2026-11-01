@@ -55,18 +55,24 @@ pub fn show_about(app: &mut GlossaApp, ctx: &egui::Context) {
     if !app.about_open {
         return;
     }
-    let builder = egui::ViewportBuilder::default()
-        .with_title(app.t("msg.about"))
-        .with_inner_size([520.0, 410.0])
-        .with_min_inner_size([420.0, 360.0])
-        .with_icon(crate::app_icon(32));
+    let title = app.t("msg.about");
+    let builder =
+        crate::chrome::builder(app, &title).with_inner_size([520.0, 442.0]).with_min_inner_size([420.0, 392.0]);
+    let (look, custom) = (app.look.clone(), crate::chrome::custom(&app.cfg));
     let mut open = true;
-    ctx.show_viewport_immediate(egui::ViewportId::from_hash_of("glossa-about"), builder, |ui, _| {
+    ctx.show_viewport_immediate(crate::chrome::viewport(crate::chrome::ABOUT), builder, |ui, _| {
         if ui.input(|i| i.viewport().close_requested()) {
             open = false;
         }
+        crate::chrome::frame(
+            ui,
+            &look,
+            custom,
+            &crate::chrome::Caption { minimize: false, maximize: false, ..crate::chrome::Caption::new(&title) },
+        );
         egui::CentralPanel::default().show(ui, |ui| contents(app, ui, &mut open));
     });
+    app.child_backdrop(&title, false);
     if !open {
         ctx.data_mut(|d| d.remove::<Option<Doc>>(doc_id()));
     }
