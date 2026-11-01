@@ -51,6 +51,12 @@ xcap-linux = { package = "xcap", version = "0.9", optional = true }
 zbus = { workspace = true }
 async-io = "2.6"
 futures-lite = "2.6"
+# Spell checking (`spell`): Hunspell dictionaries in pure Rust (MPL-2.0,
+# like `option-ext` already in the tree), their legacy encodings (already
+# here through rodio) and word boundaries (already here through glossa-core).
+spellbook = "0.4"
+encoding_rs = "0.8"
+unicode-segmentation = { workspace = true }
 
 [target.'cfg(target_os = "macos")'.dependencies]
 # The Keychain (`secrets`); already in the tree through TLS.
@@ -60,7 +66,7 @@ enigo = { version = "0.6", default-features = false }
 # in the tree (with these features) through the clipboard, the tray and the
 # file dialogs.
 objc2 = "0.6"
-objc2-foundation = { version = "0.3", default-features = false, features = ["std", "NSString", "NSUserDefaults", "NSArray", "NSGeometry"] }
+objc2-foundation = { version = "0.3", default-features = false, features = ["std", "NSString", "NSUserDefaults", "NSArray", "NSGeometry", "NSRange"] }
 objc2-app-kit = { version = "0.3", default-features = false, features = [
     "std",
     "NSAppearance",
@@ -74,6 +80,7 @@ objc2-app-kit = { version = "0.3", default-features = false, features = [
     "NSMenu",
     "NSMenuItem",
     "NSResponder",
+    "NSSpellChecker",
     "NSUserInterfaceItemIdentification",
     "NSView",
     "NSVisualEffectView",
@@ -84,6 +91,7 @@ objc2-app-kit = { version = "0.3", default-features = false, features = [
 [target.'cfg(windows)'.dependencies]
 windows = { workspace = true, features = [
     "Win32_Foundation",
+    "Win32_Globalization",
     "Win32_Graphics_Dwm",
     "Win32_Graphics_Gdi",
     "Win32_Security",
