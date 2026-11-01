@@ -172,6 +172,12 @@ for Windows, macOS and Linux.
   XDXF, tab-separated), with articles simplified for display.
 - **Text to speech** with the classic slower repeat; MP3, WAV and Ogg Vorbis
   playback.
+- **System voice** (`system-tts`): text to speech offline with the voices
+  the system already has, chosen by the text's language: the Windows voices
+  (WinRT `SpeechSynthesis`), `say` on macOS, `espeak-ng` (or `espeak`) on
+  Linux. A language with no installed voice falls over to the next speech
+  service; without espeak the service says it is not installed. Pick it in
+  *Options → Services → Speech*; Google stays the default.
 - **Modules** in JavaScript (on boa), Python (child processes over stdio,
   stopped when idle) and native shared libraries (C ABI in
   `include/glossa_module.h`, `glossa-module-sdk` for Rust), all speaking one
