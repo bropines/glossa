@@ -299,13 +299,16 @@ fn show_window<R>(
     max_height: f32,
     add: impl FnOnce(&mut Ui, bool) -> R,
 ) -> (Option<R>, bool, bool) {
-    // The anchor on screen, in physical pixels.
-    let to_px = |p: Pos2| (inner.min + p.to_vec2()) * ppp;
+    // The anchor on screen, in the desktop's units: physical pixels, except
+    // on macOS, whose desktop is laid out in points (a Retina screen's ppp
+    // of 2 would put the list twice as far from the corner).
+    let zoom = ctx.zoom_factor();
+    let desktop = window::desktop_scale(ppp / zoom.max(0.1)) * zoom;
+    let to_px = |p: Pos2| (inner.min + p.to_vec2()) * desktop;
     let (a0, a1) = (to_px(anchor.min), to_px(anchor.max));
     let anchor_px = glossa_core::ocr::Rect::new(a0.x, a0.y, a1.x - a0.x, a1.y - a0.y);
     // The list's window lives on the anchor's monitor, at that monitor's
     // scale; egui's zoom (the interface scale) applies on top.
-    let zoom = ctx.zoom_factor();
     let centre = a0 + (a1 - a0) / 2.0;
     let scale = monitors
         .iter()
