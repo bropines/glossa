@@ -319,6 +319,8 @@
     "options.modules.native": "Загружать нативные модули (они работают с полными правами Glossa)",
     "options.modules.python": "Интерпретатор Python:",
     "options.modules.python_hint": "python3 / py -3 из PATH",
+    "options.modules.java": "Java (для модулей на Java):",
+    "options.modules.java_hint": "JAVA_HOME, затем java из PATH",
     "options.modules.call_timeout": "Время ожидания вызова, мс:",
     "options.modules.classic": "Установка классического QTranslate",
     "options.modules.choose": "Выбрать…",

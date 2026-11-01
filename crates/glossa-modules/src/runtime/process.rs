@@ -40,6 +40,18 @@ pub const JAVA_MISSING: &str = "Java not found. Install a Java 17 or newer runti
      `sudo apt install openjdk-17-jre-headless` on Debian or Ubuntu, `brew install --cask temurin` on macOS), \
      then set JAVA_HOME or put java on PATH, or give the path to java in Options > Modules";
 
+/// [`JAVA_MISSING`], naming the configured path when the setting is what
+/// failed, since searching stops at an explicit setting.
+fn java_missing(ctx: &RuntimeContext) -> String {
+    match ctx.java.trim() {
+        "" => JAVA_MISSING.to_owned(),
+        configured => format!(
+            "{configured} is not a Java runtime (the Java setting in Options > Modules); clear it to look in \
+             JAVA_HOME and PATH. {JAVA_MISSING}"
+        ),
+    }
+}
+
 /// JVM options every Java module gets, before its own `jvm_args` (so those
 /// win): the serial collector keeps a small heap small, and headless AWT
 /// lets a module use `java.awt.image` without a window or a Dock icon.
@@ -91,7 +103,7 @@ pub fn java_launch(dir: &Path, manifest: &Manifest, ctx: &RuntimeContext) -> Res
         };
         let jar = dir.join(expand(entry, dir));
         if !jar.is_file() {
-            return Err(format!("{} not found; build the module first (see its README)", jar.display()));
+            return Err(format!("{} not found; build the module first", jar.display()));
         }
         args.push("-jar".into());
         args.push(jar.into_os_string());
@@ -121,7 +133,7 @@ pub fn java_launch(dir: &Path, manifest: &Manifest, ctx: &RuntimeContext) -> Res
         args.push(m.main_class.trim().into());
     }
     args.extend(m.args.iter().map(|a| OsString::from(expand(a, dir))));
-    let java = find_java(&ctx.java).ok_or_else(|| JAVA_MISSING.to_owned())?;
+    let java = find_java(&ctx.java).ok_or_else(|| java_missing(ctx))?;
     Ok(Launch { program: java.into_os_string(), args, cwd: working_dir(dir, manifest)?, env: env(dir, manifest) })
 }
 
@@ -148,7 +160,7 @@ fn env(dir: &Path, manifest: &Manifest) -> Vec<(OsString, OsString)> {
 fn resolve(name: &str, dir: &Path, ctx: &RuntimeContext) -> Result<PathBuf, String> {
     let stem = name.trim().trim_end_matches(".exe");
     if stem == "java" || stem == "javaw" {
-        return find_java(&ctx.java).ok_or_else(|| JAVA_MISSING.to_owned());
+        return find_java(&ctx.java).ok_or_else(|| java_missing(ctx));
     }
     find_program(name, dir).ok_or_else(|| {
         if name.contains('/') || name.contains('\\') {
@@ -315,7 +327,8 @@ mod tests {
             &[("module.jar", "")],
         );
         let no_java = RuntimeContext { java: "/definitely/not/java".into(), ..ctx() };
-        assert_eq!(java_launch(&m.dir, &m.manifest, &no_java).unwrap_err(), JAVA_MISSING);
+        let err = java_launch(&m.dir, &m.manifest, &no_java).unwrap_err();
+        assert!(err.starts_with("/definitely/not/java is not a Java runtime") && err.ends_with(JAVA_MISSING), "{err}");
         if let Some(java) = find_java("") {
             let launch = java_launch(&m.dir, &m.manifest, &ctx()).unwrap();
             assert_eq!(launch.program, java.into_os_string());

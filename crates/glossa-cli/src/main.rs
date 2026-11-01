@@ -409,8 +409,14 @@ fn run(args: &Args) -> Result<(), Fail> {
                 );
             } else {
                 out!("loaded ({}):", s.loaded.len());
+                let reg = e.registry();
                 for id in &s.loaded {
-                    out!("  {id}");
+                    match reg.entry(id).map(|entry| &entry.origin) {
+                        Some(glossa_modules::Origin::Module { runtime, .. }) => {
+                            out!("  {id:32} [{}]", runtime.label())
+                        }
+                        _ => out!("  {id}"),
+                    }
                 }
                 if !s.failed.is_empty() {
                     out!("failed ({}):", s.failed.len());

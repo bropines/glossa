@@ -682,6 +682,8 @@ pub static STRINGS: &[(&str, &str, Option<&str>)] = &[
     ("options.modules.native", "Load native modules (they run with Glossa's full privileges)", None),
     ("options.modules.python", "Python interpreter:", None),
     ("options.modules.python_hint", "python3 / py -3 from PATH", None),
+    ("options.modules.java", "Java (for Java modules):", None),
+    ("options.modules.java_hint", "JAVA_HOME, then java from PATH", None),
     ("options.modules.call_timeout", "Call timeout, ms:", None),
     ("options.modules.classic", "Classic QTranslate installation", None),
     ("options.modules.choose", "Choose…", None),
