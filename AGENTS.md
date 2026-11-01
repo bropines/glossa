@@ -7,26 +7,75 @@ rules.
 ## Build and test in WSL, never on the Windows host
 
 The Windows machine this lives on has no usable MSVC toolchain, and nothing
-should be installed there for building. All cargo work runs in WSL (Debian),
-with the target directory on the Linux filesystem:
+should be installed there for building. All cargo work runs in WSL (Debian)
+through `scripts/wsl-cargo.sh`, which puts the target directory on the Linux
+filesystem (`$CARGO_TARGET_DIR`, default `~/.cache/glossa-target`):
 
 ```bash
-# from Windows (PowerShell / Git Bash):
+# from Windows (PowerShell / Git Bash); from a worktree, cd to the worktree instead:
 wsl.exe -d Debian -e bash -lc 'cd /mnt/f/bropi/Projects/ocr-translate/glossa && ./scripts/wsl-cargo.sh test --workspace'
 
 # inside WSL:
 ./scripts/wsl-cargo.sh test --workspace
-./scripts/wsl-cargo.sh clippy --workspace
+./scripts/wsl-cargo.sh clippy --workspace --all-targets -- -D warnings                                    # Linux code
+./scripts/wsl-cargo.sh clippy --workspace --all-targets --target x86_64-pc-windows-gnu -- -D warnings     # cfg(windows) code
+./scripts/wsl-cargo.sh fmt --all -- --check
 ./scripts/wsl-cargo.sh build --release -p glossa-ui-egui -p glossa-cli                                    # Linux
 ./scripts/wsl-cargo.sh build --release -p glossa-ui-egui -p glossa-cli --target x86_64-pc-windows-gnu     # Windows
 ```
 
-Built binaries land in `~/.cache/glossa-target/{release,x86_64-pc-windows-gnu/release}/`.
+Built binaries land in `$CARGO_TARGET_DIR/{release,x86_64-pc-windows-gnu/release}/`.
 Copy them to `dist/windows/` or `dist/linux/` (ignored by git) to run them.
 Stop a running `glossa.exe` first: Windows locks the file.
 
+**One shared target directory.** The WSL disk image lives on a nearly full
+drive; per-agent target directories once filled it and the distribution
+went read-only. Use `~/.cache/glossa-target`, or the single extra directory
+you were told to use for a parallel session (`CARGO_TARGET_DIR=...`). Never
+create a new one per task, and delete an extra one when its work is done.
+Do not install anything and do not use `sudo` in WSL.
+
+`cfg(windows)` code (UI Automation, the clipboard, synthetic input, WinRT)
+is compiled and linted here through the `x86_64-pc-windows-gnu` target; CI's
+Windows job runs its tests. macOS code is built and tested on the author's
+Mac or in CI.
+
 `cargo test` does not rebuild a binary it does not test: after changing
 `glossa-cli` or `glossa-ui-egui`, build them explicitly before trying them.
+
+## Where things are
+
+[docs/architecture.md](docs/architecture.md) is the map. In short:
+
+| path | what |
+|---|---|
+| `crates/glossa-core` | types, `config.rs` (every setting), `paths.rs` (data folders), `locale.rs` (English strings), `secrets.rs` |
+| `crates/glossa-core/locales/ru.json` | the built-in Russian pack |
+| `crates/glossa-engine` | the pipeline, history, control API, D-Bus, bundled modules (`src/bundled/`) |
+| `crates/glossa-services` | built-in services and the system voice (`system_tts/`) |
+| `crates/glossa-ocr`, `crates/glossa-lens` | OCR engines; the built-in Google Lens client |
+| `crates/glossa-modules`, `crates/glossa-module-sdk` | module runtimes and registry; the wire types and the native ABI |
+| `crates/glossa-platform` | everything OS-specific ([its AGENTS.md](crates/glossa-platform/AGENTS.md)) |
+| `crates/glossa-ui-egui` | the desktop app ([its AGENTS.md](crates/glossa-ui-egui/AGENTS.md)) |
+| `crates/glossa-cli` | `glossa-cli`, and `doctor.rs` |
+| `modules/`, `sdk/` | example and bundled modules; the Python and Java SDKs ([modules/AGENTS.md](modules/AGENTS.md), [sdk/AGENTS.md](sdk/AGENTS.md)) |
+| `packaging/`, `.github/` | installers, packages, CI and the release ([packaging/AGENTS.md](packaging/AGENTS.md), [.github/AGENTS.md](.github/AGENTS.md)) |
+| `docs/` | user and module-author documentation |
+
+## Code per operating system
+
+- OS calls live in `glossa-platform`, one file per system (`foo/win.rs`,
+  `foo/mac.rs`, `foo/linux.rs`) behind a common function that compiles on
+  every OS and fails politely (`Err(Error::Platform(..))` or `None`). The
+  OS OCR engines in `glossa-ocr` and the system voice in
+  `glossa-services/src/system_tts` follow the same layout.
+- How the window systems differ (own title bar, points or pixels, Cmd or
+  Ctrl, a menu bar…) is answered by `glossa_platform::shell::SHELL`, one
+  `shell/{win,mac,linux}.rs` per system. UI code asks `SHELL` instead of
+  testing `cfg(target_os)`.
+- "Linux" in the code is `not(any(windows, target_os = "macos"))`, so the
+  BSDs come along. Linux has not been tested on real hardware yet; say so
+  rather than claim it works.
 
 ## Trying the desktop app on Windows
 
@@ -42,8 +91,8 @@ Get-Content "$env:GLOSSA_HOME\cache\glossa.log" -Tail 30
 - `--hidden` starts in the tray; `--popup TEXT` opens a popup;
   `--screenshot WHAT` opens one window (options, dictionary, history…) for a
   screenshot.
-- `[appearance] unload_graphics_after_secs` is set low (8) in the test
-  config, to exercise the unload cycle quickly.
+- Set `[appearance] unload_graphics_after_secs` low (8) in the test
+  config to exercise the unload cycle quickly.
 - QTranslate itself runs elevated on this machine; Windows blocks synthetic
   input from an unelevated process into it. Do not try to elevate.
 - Never close or type into windows you did not open. Send keystrokes only to
@@ -80,14 +129,16 @@ loads (see `actions::read_selection`).
 draws and dispatches; it does not own logic another front end would need.
 
 **Platform code stays in `glossa-platform`**, behind functions that compile
-(and fail politely) on every OS.
+(and fail politely) on every OS ([above](#code-per-operating-system)).
 
 **No emoji or symbol glyphs in the UI.** Most fonts lack them and they
 render as boxes. Draw icons with `icons::paint`, or use words.
 
 **Locale strings.** User-facing text goes through `app.t("key")` with an
-English default in `glossa-core::locale`; classic `lang.json` files map onto
-the same keys by their numeric ids.
+English default in `glossa-core::locale` (`STRINGS`) and the Russian text in
+`crates/glossa-core/locales/ru.json`; tests fail when either lacks a key the
+UI uses. Classic `lang.json` files map onto the same keys by their numeric
+ids.
 
 **Config compatibility.** `config.toml` is user-editable and must keep
 loading: new fields get `#[serde(default)]`, renamed ones get an alias.
@@ -95,6 +146,10 @@ loading: new fields get `#[serde(default)]`, renamed ones get an alias.
 **Module protocol.** Changing `glossa-module-sdk::wire` changes a public
 contract: only add optional fields; anything else bumps `PROTOCOL_VERSION`
 and needs the docs in `docs/modules/` updated in the same change.
+
+**Docs follow the code.** A new setting goes into `docs/configuration.md`, a
+new flag into `docs/cli.md`, and anything a user would notice into
+`CHANGELOG.md` under *Unreleased*, in the same change.
 
 ## Style
 
@@ -106,7 +161,8 @@ and needs the docs in `docs/modules/` updated in the same change.
   user messages in the UI's `describe`).
 - Tests sit next to the code. Anything network-facing is tested with
   `glossa_net::mock::MockHttp`; live tests are `#[ignore]`.
-- `cargo test --workspace` stays green and warning-free before a commit.
+- `cargo test --workspace` stays green, and clippy clean for Linux and the
+  Windows target, before a commit.
 
 ## Vendored code
 
