@@ -327,8 +327,22 @@ fn middle_bar(app: &mut GlossaApp, ui: &mut egui::Ui) {
                 let _ = app.engine.update_config(move |c| c.general.always_detect_language = always);
             }
         });
+        // What is left goes to the two language buttons (their labels are
+        // cut short to fit). The Translate button keeps its word while the
+        // languages get a sensible width, and becomes an icon when not.
         let avail = ui.available_width();
-        let combo_w = ((avail - 26.0 - 120.0 - 30.0) / 2.0).max(90.0);
+        let gap = ui.spacing().item_spacing.x;
+        let icon_w = (26.0 * look.icon_scale).round();
+        let translate_label = app.t("main.translate");
+        let text_w = {
+            let font = egui::TextStyle::Button.resolve(ui.style());
+            let galley = ui.fonts_mut(|f| f.layout_no_wrap(translate_label.clone(), font, egui::Color32::WHITE));
+            galley.size().x + 2.0 * ui.spacing().button_padding.x
+        };
+        let translate_w = text_w.max(110.0);
+        let combos = |translate: f32| ((avail - icon_w - translate - 3.0 * gap - 1.0) / 2.0).floor();
+        let compact = combos(translate_w) < 120.0;
+        let combo_w = combos(if compact { icon_w } else { translate_w }).max(60.0);
         let disabled = app.cfg.languages.disabled.clone();
         let pair = app.cfg.general.pair;
         let auto = app.t("main.auto_detect");
@@ -372,9 +386,12 @@ fn middle_bar(app: &mut GlossaApp, ui: &mut egui::Ui) {
             retranslate(app);
         }
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-            let b = ui
-                .add(egui::Button::new(app.t("main.translate")).min_size(vec2(110.0, 26.0)))
-                .on_hover_text(app.t("msg.translate_tip"));
+            let tip = app.t("msg.translate_tip");
+            let b = if compact {
+                icons::sized_button(ui, &look, Icon::Translate, &tip, 26.0, true)
+            } else {
+                ui.add(egui::Button::new(translate_label).min_size(vec2(translate_w, 26.0))).on_hover_text(tip)
+            };
             if b.clicked() {
                 retranslate(app);
             }

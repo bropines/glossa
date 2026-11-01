@@ -29,6 +29,8 @@ const COLS: f32 = 15.0;
 const ROWS: f32 = 5.0;
 const MIN_SCALE: f32 = 0.5;
 const MAX_SCALE: f32 = 3.0;
+/// How much one Ctrl+plus or Ctrl+minus scales the keyboard.
+const KEY_STEP: f32 = 1.1;
 /// Holding a key down types it again after this, then at the repeat rate.
 const REPEAT_DELAY: Duration = Duration::from_millis(450);
 const REPEAT_EVERY: Duration = Duration::from_millis(45);
@@ -276,15 +278,38 @@ fn contents(app: &mut GlossaApp, ui: &mut egui::Ui, st: &mut KbState) {
     }
     let fit = (area.width() / (COLS + 2.0 * CASE)).min(area.height() / (ROWS + 2.0 * CASE)).max(1.0);
 
-    // Ctrl+wheel (or a pinch) scales the keyboard and the window with it.
+    // Ctrl+wheel (or a pinch) scales the keyboard and the window with it,
+    // and so do Ctrl+plus, Ctrl+minus and Ctrl+0 (the interface scale's keys
+    // elsewhere; egui's own handling of them is off).
     let zoom = ui.input(|i| i.zoom_delta());
+    let (bigger, smaller, reset) = ui.ctx().input_mut(|i| {
+        use egui::gui_zoom::kb_shortcuts as k;
+        (
+            i.consume_shortcut(&k::ZOOM_IN) || i.consume_shortcut(&k::ZOOM_IN_SECONDARY),
+            i.consume_shortcut(&k::ZOOM_OUT),
+            i.consume_shortcut(&k::ZOOM_RESET),
+        )
+    });
     let mut request = st.fresh && inner.is_some();
     if request {
         st.fresh = false;
     }
+    let old_scale = st.scale;
     if (zoom - 1.0).abs() > 1e-3 {
         // egui's step is over 20% a notch, coarse for a window this wide.
-        st.scale = (st.scale * zoom.powf(0.5)).clamp(MIN_SCALE, MAX_SCALE);
+        st.scale *= zoom.powf(0.5);
+    }
+    if bigger {
+        st.scale *= KEY_STEP;
+    }
+    if smaller {
+        st.scale /= KEY_STEP;
+    }
+    if reset {
+        st.scale = 1.0;
+    }
+    st.scale = st.scale.clamp(MIN_SCALE, MAX_SCALE);
+    if (st.scale - old_scale).abs() > 1e-4 {
         st.changed_at = Some(now);
         request = true;
     }
