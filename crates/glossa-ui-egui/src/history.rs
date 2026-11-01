@@ -85,7 +85,7 @@ fn body(app: &mut GlossaApp, ui: &mut egui::Ui, st: &mut HistoryState, open: &mu
             if ui.button(app.t("history.save_as")).clicked() {
                 let mut dialog = rfd::FileDialog::new().set_file_name("glossa-history.html");
                 for f in ExportFormat::ALL {
-                    dialog = dialog.add_filter(f.description(), &[f.extension()]);
+                    dialog = dialog.add_filter(app.t(format_key(f)), &[f.extension()]);
                 }
                 if let Some(path) = dialog.save_file() {
                     let ext = path.extension().and_then(|e| e.to_str()).unwrap_or("txt").to_owned();
@@ -97,13 +97,13 @@ fn body(app: &mut GlossaApp, ui: &mut egui::Ui, st: &mut HistoryState, open: &mu
                 }
             }
             if st.confirm_clear {
-                ui.label(RichText::new("Clear all non-favourite entries?").color(look.error()));
-                if ui.button("Yes").clicked() {
+                ui.label(RichText::new(app.t("history.confirm_clear")).color(look.error()));
+                if ui.button(app.t("msg.yes")).clicked() {
                     app.engine.clear_history(false);
                     st.confirm_clear = false;
                     st.dirty = true;
                 }
-                if ui.button("No").clicked() {
+                if ui.button(app.t("msg.no")).clicked() {
                     st.confirm_clear = false;
                 }
             } else if ui.button(app.t("history.clear")).clicked() {
@@ -226,6 +226,16 @@ fn body(app: &mut GlossaApp, ui: &mut egui::Ui, st: &mut HistoryState, open: &mu
             }
         }
     });
+}
+
+/// The locale key naming an export format in the save dialog.
+fn format_key(f: ExportFormat) -> &'static str {
+    match f {
+        ExportFormat::Text => "history.format_text",
+        ExportFormat::Csv => "history.format_csv",
+        ExportFormat::Html => "history.format_html",
+        ExportFormat::Json => "history.format_json",
+    }
 }
 
 fn one_line(s: &str, max: usize) -> String {

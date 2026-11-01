@@ -65,7 +65,7 @@ pub fn perform(app: &mut GlossaApp, action: Action, text: Option<String>) {
             let _ = app.engine.update_config(move |c| c.mouse_mode.enabled = on);
         }
         Action::SpeechInput => {
-            let m = format!("{} — not available in this version.", app.t("action.speech_input"));
+            let m = app.locale.fmt("msg.not_available", &app.t("action.speech_input"));
             app.notify(m, true);
         }
         Action::TranslateClipboard | Action::TranslateClipboardInMain | Action::TranslateClipboardInPopup => {
@@ -95,7 +95,8 @@ pub fn perform(app: &mut GlossaApp, action: Action, text: Option<String>) {
                 // Pressing the watch hotkey again stops watching.
                 w.stop();
                 if action == Action::WatchRegion {
-                    app.notify("Stopped watching the region.", false);
+                    let m = app.t("msg.watch_stopped");
+                    app.notify(m, false);
                     return;
                 }
             }

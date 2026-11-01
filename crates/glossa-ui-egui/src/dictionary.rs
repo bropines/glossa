@@ -126,11 +126,22 @@ fn body(app: &mut GlossaApp, ui: &mut egui::Ui, st: &mut DictState) {
             }
             let disabled = app.cfg.languages.disabled.clone();
             let auto = app.t("main.auto_detect");
-            if let Some(l) = crate::widgets::lang_combo(ui, "dict-from", st.from, true, &auto, &disabled, 110.0) {
+            if let Some(l) = crate::widgets::lang_combo(
+                ui,
+                "dict-from",
+                st.from,
+                true,
+                &auto,
+                &app.t("lang.search"),
+                &disabled,
+                110.0,
+            ) {
                 st.from = l;
             }
             ui.label("→");
-            if let Some(l) = crate::widgets::lang_combo(ui, "dict-to", st.to, false, &auto, &disabled, 110.0) {
+            if let Some(l) =
+                crate::widgets::lang_combo(ui, "dict-to", st.to, false, &auto, &app.t("lang.search"), &disabled, 110.0)
+            {
                 st.to = l;
                 let _ = app.engine.update_config(move |c| c.dictionary.language = l);
                 lookup(app, st);
@@ -205,7 +216,13 @@ fn body(app: &mut GlossaApp, ui: &mut egui::Ui, st: &mut DictState) {
                 click = crate::rich::article(ui, &look, &a, zoom);
                 ui.add_space(8.0);
                 ui.label(
-                    RichText::new(format!("{} · {} ms", a.provider_id, a.elapsed_ms)).small().color(look.weak_text()),
+                    RichText::new(format!(
+                        "{} · {}",
+                        a.provider_id,
+                        app.locale.fmt("msg.ms", &a.elapsed_ms.to_string())
+                    ))
+                    .small()
+                    .color(look.weak_text()),
                 );
             } else {
                 ui.add_space(30.0);

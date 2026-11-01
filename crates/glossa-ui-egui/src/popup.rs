@@ -238,7 +238,8 @@ impl PopupState {
         match &self.outcome {
             Some(o) => {
                 let short = short_service(&service_name);
-                format!("{} to {} ({short})", o.pair.from.english_name(), o.pair.to.english_name())
+                app.locale
+                    .fmt_args("popup.title_direction", &[o.pair.from.english_name(), o.pair.to.english_name(), &short])
             }
             None if self.busy => app.t("msg.translating"),
             None => service_name,

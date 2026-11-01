@@ -105,13 +105,15 @@ pub fn service_tab(ui: &mut Ui, look: &Look, id: &str, name: &str, selected: boo
 }
 
 /// A language picker: a button showing the language, opening a searchable
-/// list (English and native names).
+/// list (English and native names). `search_hint` fills the empty search box.
+#[allow(clippy::too_many_arguments)] // the labels come from the caller's locale
 pub fn lang_combo(
     ui: &mut Ui,
     id_salt: &str,
     current: LangId,
     allow_auto: bool,
     auto_label: &str,
+    search_hint: &str,
     disabled: &[LangId],
     width: f32,
 ) -> Option<LangId> {
@@ -120,7 +122,7 @@ pub fn lang_combo(
     let search_id = ui.make_persistent_id((id_salt, "search"));
     egui::ComboBox::from_id_salt(id_salt).width(width).selected_text(label).height(420.0).show_ui(ui, |ui| {
         let mut search: String = ui.data_mut(|d| d.get_temp::<String>(search_id).unwrap_or_default());
-        let r = ui.add(egui::TextEdit::singleline(&mut search).hint_text("Search…").desired_width(f32::INFINITY));
+        let r = ui.add(egui::TextEdit::singleline(&mut search).hint_text(search_hint).desired_width(f32::INFINITY));
         if !r.has_focus() && search.is_empty() {
             r.request_focus();
         }
