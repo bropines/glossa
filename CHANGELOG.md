@@ -234,6 +234,44 @@ for Windows and Linux.
   window (both panes), the stacked view, history, dictionary articles and
   the language lists. Copying still copies the logical text. Indic, Khmer,
   Myanmar and Sinhala text was already shaped correctly and is unchanged.
+- `glossa-cli` accepts `--flag=value` for every option (`--home=DIR` was
+  silently ignored), and an unknown flag, or one the command does not take,
+  is a usage error (64) naming the closest real flag instead of doing
+  nothing.
+- An unknown service id (`-s`, `-e`, the API's `service`/`engine`) is an
+  error listing similar ids (CLI exit 64, API 400) instead of being skipped
+  while another service answered.
+- The control API rejects an unknown language code, capability or boolean
+  with 400, as the command line does, instead of reading it as `auto` or
+  `translate`; `back` and `slow` are read from the query string too.
+- Piped `glossa-cli translate` output is the translation alone, as
+  documented; romanisation and dictionary senses stay on a terminal or
+  with `--full`.
+- Google (and Lingva) put the source's pronunciation in `romanization`
+  ("hello" into Russian gave `həˈlō`): the translation's romanisation and
+  the source's transliteration now have fields of their own
+  (`source_romanization`).
+- The control API token can no longer end up empty: clearing it makes a new
+  one, saved at once, and an empty token never disables the check.
+- pot-app key bindings work unchanged: its routes accept requests without
+  the token from loopback with no `Origin` header
+  (`[server] pot_compat_without_token`, on by default). `Origin: null` is
+  refused like any other browser origin.
+- `glossa-cli serve` notes that it ignores `[server] enabled`;
+  `glossa-cli action` connects to loopback when `bind` is `0.0.0.0` or `::`.
+- `[appearance] renderer` also reads `glow`, `opengl`, `gl` and `wgpu`.
+- An invalid `first_language` falls back to the default (Russian), not
+  English; `recent_pairs` drops every repeat, not only adjacent ones.
+- A `history.json` that cannot be parsed is copied to
+  `history.json.corrupt-<time>` before a new history starts, and is never
+  overwritten when it cannot be copied; switching the history on reads the
+  file before anything saves over it.
+- The CLI and the API give translations the same JSON shape (with `failed`,
+  `alternatives`, `source_romanization`) and can record them in the history
+  on request (`--save-history`, `"history": true`); `/v1/services` reports
+  `needs_credentials`; `/v1/ocr` takes `engine` and returns `elapsed_ms`; a
+  wrong method is 405 with `Allow`; an OCR engine that is not set up is 503.
+- Proxy mode `auto` is documented as what it is: an alias of `system`.
 
 ### Known gaps
 
