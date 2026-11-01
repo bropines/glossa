@@ -460,26 +460,39 @@ fn page_icon(ui: &mut egui::Ui, page: Page, size: f32) {
     crate::icons::paint(ui.painter(), glyph, page.icon(), Color32::WHITE);
 }
 
-/// One page in the list: its icon and name, the chosen one on the accent.
+/// One page in the list: its icon and name. The chosen one is drawn as the
+/// theme's system draws it: on the accent with Mac-style controls (System
+/// Settings), as a faint plate with an accent bar at its left otherwise
+/// (WinUI's NavigationView), where a light accent under light text would
+/// not read.
 fn nav_row(ui: &mut egui::Ui, look: &crate::style::Look, page: Page, name: &str, chosen: bool) -> egui::Response {
     let height = 28.0;
     let (rect, resp) = ui.allocate_exact_size(vec2(ui.available_width(), height), egui::Sense::click());
     let radius = egui::CornerRadius::same(7);
     let text = look.text();
-    if chosen {
+    let veil = |a: u8| Color32::from_rgba_unmultiplied(text.r(), text.g(), text.b(), a);
+    let mac = look.theme.metrics.controls == glossa_core::theme::ControlStyle::Mac;
+    let mut colour = text;
+    if chosen && mac {
         ui.painter().rect_filled(rect, radius, look.accent());
+        colour = crate::style::text_on(look.accent());
+    } else if chosen {
+        ui.painter().rect_filled(rect, radius, veil(22));
+        let bar = egui::Rect::from_center_size(egui::pos2(rect.left() + 1.5, rect.center().y), vec2(3.0, 16.0));
+        ui.painter().rect_filled(bar, egui::CornerRadius::same(2), look.accent());
     } else if resp.hovered() {
-        ui.painter().rect_filled(rect, radius, Color32::from_rgba_unmultiplied(text.r(), text.g(), text.b(), 18));
+        ui.painter().rect_filled(rect, radius, veil(14));
     }
     let mut child = ui.new_child(
         egui::UiBuilder::new()
-            .max_rect(rect.shrink2(vec2(6.0, 0.0)))
+            .max_rect(rect.shrink2(vec2(8.0, 0.0)))
             .layout(egui::Layout::left_to_right(egui::Align::Center)),
     );
     page_icon(&mut child, page, 20.0);
     child.add_space(4.0);
-    let colour = if chosen { crate::style::text_on(look.accent()) } else { text };
-    child.add(egui::Label::new(RichText::new(name).color(colour)).selectable(false).truncate());
+    let label = RichText::new(name).color(colour);
+    let label = if chosen && !mac { label.strong() } else { label };
+    child.add(egui::Label::new(label).selectable(false).truncate());
     resp
 }
 
