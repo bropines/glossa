@@ -8,7 +8,7 @@ the notes of its GitHub release.
 ## [Unreleased]
 
 The first version of Glossa, a clean-room successor to QTranslate in Rust,
-for Windows and Linux.
+for Windows, macOS and Linux.
 
 ### Added
 
@@ -93,7 +93,20 @@ for Windows and Linux.
   installed (Lens without chrome-lens-py): Windows OCR, Apple Vision or
   Tesseract, in that order of availability. OneOCR is never a fallback.
 - **macOS builds** in CI and the release: `Glossa.app` (a menu-bar app) and
-  `glossa-cli`, for Apple silicon and as a universal binary; not notarised.
+  `glossa-cli`, for Apple silicon and as a universal binary; not notarised
+  (the README's macOS section says how to open it the first time).
+- **Mouse mode on macOS**: a listen-only event tap reports drags and double
+  clicks outside Glossa's own windows, and the selection is read through
+  Accessibility. Options → Permissions has a row for Input Monitoring, which
+  the tap needs when Accessibility is not granted.
+- **A macOS menu bar** while a Glossa window is open: Glossa (About,
+  Settings… Cmd+,, Hide, Hide Others, Show All, Quit Cmd+Q, which saves the
+  settings like the tray's Exit), Edit (Undo, Redo, Cut, Copy, Paste, Select
+  All, with their shortcuts) and Window (Minimize Cmd+M, Close Window Cmd+W,
+  the window list).
+- **Apple Vision warms up** while the region overlay is open: the first
+  recognition by a newly installed or rebuilt Glossa (about 25 seconds on
+  an M4) now overlaps choosing the region.
 - **A standard OCR result**: every engine's result is one page of blocks,
   paragraphs, lines and words with boxes, rotation, outlines, confidence,
   baselines, language, writing direction and per-region translations (Lens's
@@ -286,6 +299,9 @@ for Windows and Linux.
 - Options → Control API said "Running." while the API was turned off.
 - On macOS the interface uses the system font (SF), so arrows and symbols
   no longer log "No font has".
+- "Open at login" on macOS starts `Glossa.app` by its bundle identifier
+  (`open -b`), so it keeps working after the app is moved, and never points
+  at the temporary path macOS runs a quarantined download from.
 - Arabic, Persian, Urdu and Hebrew text came out backwards with letters
   joined wrongly: a hand-made reversal fought egui's own shaping. The text
   now goes through the Unicode bidi algorithm (`bidi` module): each run is
@@ -336,8 +352,7 @@ for Windows and Linux.
 
 ### Known gaps
 
-- Speech input and the update check are not implemented yet; mouse mode is
-  not available on macOS yet.
+- Speech input and the update check are not implemented yet.
 - On Wayland, global hotkeys, mouse mode and reading the selection depend on
   the compositor; bind keys to the control API instead.
 - In a right-to-left row, the caret and a mouse selection that starts or

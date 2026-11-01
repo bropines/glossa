@@ -13,7 +13,7 @@
   <a href="https://github.com/bropines/glossa/actions/workflows/ci.yml"><img src="https://github.com/bropines/glossa/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
   <a href="https://github.com/bropines/glossa/releases/latest"><img src="https://img.shields.io/github/v/release/bropines/glossa?label=release" alt="Latest release"></a>
   <a href="#license"><img src="https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-blue" alt="MIT OR Apache-2.0"></a>
-  <img src="https://img.shields.io/badge/platforms-Windows%20%C2%B7%20Linux-555" alt="Windows and Linux">
+  <img src="https://img.shields.io/badge/platforms-Windows%20%C2%B7%20macOS%20%C2%B7%20Linux-555" alt="Windows, macOS and Linux">
 </p>
 
 <p align="center">
@@ -35,7 +35,7 @@
 
 ## Contents
 
-- [Features](#features) · [Getting started](#getting-started) · [Coming from QTranslate](#coming-from-qtranslate)
+- [Features](#features) · [Getting started](#getting-started) · [macOS](#macos) · [Coming from QTranslate](#coming-from-qtranslate)
 - [AI translators](#ai-translators) · [Modules](#modules) · [Command line](#command-line)
 - [Documentation](#documentation) · [Building](#building) · [Status](#status) · [Clean room](#clean-room) · [License](#license)
 
@@ -115,6 +115,48 @@ recognition* lists the engines this system has:
 | Tesseract | `tesseract` | offline | all | `apt install tesseract-ocr tesseract-ocr-rus`, `brew install tesseract tesseract-lang`, the UB Mannheim installer on Windows |
 | External command | `command-ocr` | either | all | a command line in its options |
 | Module | its id | either | all | a Python or JavaScript module with the OCR capability |
+
+### macOS
+
+The `-macos.zip` archives hold `Glossa.app`, a menu-bar app (no Dock icon
+until one of its windows is open), and `glossa-cli`. Move `Glossa.app` to
+`/Applications` (or anywhere) before the first launch.
+
+The app is signed ad hoc, not notarised, so macOS refuses the first launch
+of a download. On macOS 15 and later: open it once, then *System Settings →
+Privacy & Security*, scroll to the message about Glossa and press **Open
+Anyway**. Or clear the quarantine flag in Terminal:
+
+```bash
+xattr -dr com.apple.quarantine /Applications/Glossa.app
+```
+
+macOS asks before a program may read other programs' text or the screen.
+*Options → Permissions* shows what is granted, with buttons that ask again or
+open the right page of System Settings:
+
+| permission | for |
+|---|---|
+| **Accessibility** | reading the selected text in other programs and copying or replacing it: the translation hotkeys, and mouse mode |
+| **Screen Recording** | capturing a region for text recognition; applies after Glossa restarts |
+| **Input Monitoring** | mouse mode's watch on the mouse buttons, only if Accessibility is not granted |
+
+Global hotkeys need none of them. macOS ties a grant to the app's signature:
+after replacing Glossa.app with a new build, remove the old Glossa entry from
+each list and allow the new one.
+
+**Building it yourself** (Rust and the Xcode Command Line Tools):
+
+```bash
+cargo build --release -p glossa-ui-egui -p glossa-cli
+scripts/macos-bundle.sh            # Glossa.app in ~/Desktop/Glossa; or give a folder
+```
+
+An ad-hoc signature changes with every build, so macOS forgets the
+permissions each time. Run `scripts/macos-dev-identity.sh` once, in Terminal
+on the Mac (it asks for the keychain password): it creates a self-signed
+"Glossa Dev" identity, which `macos-bundle.sh` then signs with, and the
+permissions survive rebuilds.
 
 ## Coming from QTranslate
 
@@ -241,9 +283,9 @@ Ubuntu names). Windows binaries also cross-compile from Linux with the
 ## Status
 
 Working: everything listed under Features, on Windows (tested daily) and
-Linux X11; macOS builds but is untested.
+Linux X11; on macOS (Apple silicon) it is in early testing.
 
-Not yet: speech input, the update check; mouse mode on macOS. On Wayland,
+Not yet: speech input, the update check. On Wayland,
 global hotkeys, mouse mode and reading the selection depend on the
 compositor. On macOS, vibrancy needs the OpenGL engine.
 
