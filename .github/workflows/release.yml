@@ -464,10 +464,14 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           VERSION: ${{ needs.version.outputs.version }}
         run: |
-          # The notes are this version's section of CHANGELOG.md; GitHub's
-          # generated notes stand in when there is none.
-          awk -v v="$VERSION" '/^## \[/ { p = index($0, "[" v "]") > 0; next } p' CHANGELOG.md > notes.md
-          if [ -s notes.md ]; then
+          # A short page written for the release, packaging/release-notes/
+          # <version>.md, when there is one (the CHANGELOG section of a big
+          # release is too long to read there). Else this version's section
+          # of CHANGELOG.md with the downloads under it; GitHub's generated
+          # notes when there is neither.
+          if [ -f "packaging/release-notes/$VERSION.md" ]; then
+            notes=(--notes-file "packaging/release-notes/$VERSION.md")
+          elif awk -v v="$VERSION" '/^## \[/ { p = index($0, "[" v "]") > 0; next } p' CHANGELOG.md > notes.md && [ -s notes.md ]; then
             # What to download, for every platform, under the changes.
             cat >> notes.md <<'EOF'
 

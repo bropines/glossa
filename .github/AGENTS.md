@@ -23,10 +23,13 @@ the same checks run in WSL ([AGENTS.md](../AGENTS.md#build-and-test-in-wsl-never
   **draft** GitHub release, marked pre-release for a version with a `-`.
   Publishing is done by hand. Run by hand without a tag, it stops at the
   artifacts.
-- The release notes are that version's section of `CHANGELOG.md`
-  (`## [<version>]`), followed by a fixed *Downloads* list written in the
-  workflow. Rename *Unreleased* to the version before tagging, or the notes
-  fall back to GitHub's generated ones.
+- The release notes are `packaging/release-notes/<version>.md` when it
+  exists: a short page (what it is, a download table, first launch, known
+  issues, a link to the CHANGELOG). Write one for every release; the
+  CHANGELOG section of a big release is far too long to read there. Without
+  it, the notes are that version's section of `CHANGELOG.md`
+  (`## [<version>]`) with a fixed *Downloads* list from the workflow. Rename
+  *Unreleased* to the version before tagging either way.
 - The packaging scripts it calls are in `packaging/`
   ([packaging/AGENTS.md](../packaging/AGENTS.md)). File names are listed at
   the top of `release.yml`; they must match `docs/install.md`,
