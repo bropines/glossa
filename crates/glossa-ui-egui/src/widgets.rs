@@ -341,7 +341,7 @@ pub fn color_edit(ui: &mut Ui, color: &mut glossa_core::Color) -> bool {
 /// Escape cancels, Backspace clears. Returns `Some(new)` when it changed
 /// (`Some(None)` for cleared).
 pub fn hotkey_field(ui: &mut Ui, id_salt: &str, current: Option<&Hotkey>, prompt: &str) -> Option<Option<Hotkey>> {
-    let id = ui.make_persistent_id(("hotkey", id_salt));
+    let id = hotkey_capture_id(ui, id_salt);
     let capturing = ui.data(|d| d.get_temp::<bool>(id).unwrap_or(false));
     let text = if capturing {
         prompt.to_owned()
@@ -352,7 +352,19 @@ pub fn hotkey_field(ui: &mut Ui, id_salt: &str, current: Option<&Hotkey>, prompt
     if resp.clicked() {
         ui.data_mut(|d| d.insert_temp(id, !capturing));
     }
-    if !capturing {
+    hotkey_capture(ui, id)
+}
+
+/// Where a hotkey field keeps whether it is waiting for a combination.
+pub fn hotkey_capture_id(ui: &Ui, id_salt: &str) -> egui::Id {
+    ui.make_persistent_id(("hotkey", id_salt))
+}
+
+/// While the field `id` is waiting ([`hotkey_capture_id`] holds `true`),
+/// the combination pressed this frame: `Some(Some(hk))` for a new one,
+/// `Some(None)` for cleared (Backspace), and it stops waiting on Escape too.
+pub fn hotkey_capture(ui: &mut Ui, id: egui::Id) -> Option<Option<Hotkey>> {
+    if !ui.data(|d| d.get_temp::<bool>(id).unwrap_or(false)) {
         return None;
     }
     let mut out = None;
