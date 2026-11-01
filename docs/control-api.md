@@ -15,6 +15,40 @@ popup, recognise a screen region…), exactly as a hotkey would.
 On Linux and the BSDs the actions and translation are also on the session
 bus, with no token: see [D-Bus](#d-bus).
 
+## Contents
+
+- [Quick start](#quick-start)
+- [Enabling it](#enabling-it)
+- [The token](#the-token)
+- [Requests and responses](#requests-and-responses), [errors](#errors)
+- [Endpoints](#endpoints): [`/health`](#get-health),
+  [`/v1/services`](#get-v1services), [`/v1/translate`](#v1translate),
+  [`/v1/detect`](#post-v1detect), [`/v1/dictionary`](#v1dictionary),
+  [`/v1/ocr`](#post-v1ocr), [`/v1/speak`](#post-v1speak),
+  [`/v1/action`](#v1actionaction)
+- [pot-app compatibility](#pot-app-compatibility)
+- [D-Bus](#d-bus)
+- [Binding hotkeys to it](#binding-hotkeys-to-it)
+- [Security](#security)
+
+## Quick start
+
+The API is on by default, at `http://127.0.0.1:60828`.
+
+1. Copy the token: *Options → Control API → Show token*.
+2. Check that Glossa answers, then translate and show the popup:
+
+```bash
+T=0123456789abcdef…   # your token
+curl -s http://127.0.0.1:60828/health
+curl -s -H "Authorization: Bearer $T" -d '{"text":"Hello","to":"ru"}' \
+    http://127.0.0.1:60828/v1/translate
+curl -s -X POST "http://127.0.0.1:60828/v1/action/show_popup?token=$T&text=Hello"
+```
+
+[`glossa-cli action`](cli.md#action) sends action requests for you, reading
+the address and token from `config.toml`.
+
 ## Enabling it
 
 The API is on by default. *Options → Control API*:
@@ -136,7 +170,7 @@ Errors have a status code and a body of the form:
 | 429 | The service is rate-limiting. |
 | 500 | A bug in Glossa: the code handling the request panicked. The program keeps running; the log has the details. |
 | 502 | The service failed otherwise (network error, unexpected answer). |
-| 503 | `/v1/ocr` only: the OCR engine is not installed or not set up (Lens without chrome-lens-py, Tesseract missing, no engine at all). The request was fine; the machine needs setting up. |
+| 503 | `/v1/ocr` only: the OCR engine is not installed or not set up (Lens set to *CLI only* without chrome-lens-py, Tesseract missing, no engine at all). The request was fine; the machine needs setting up. |
 | 504 | The service timed out. |
 
 ## Endpoints
@@ -268,7 +302,7 @@ Two ways to send the image:
 |---|---|---|
 | `lang` | `auto` | Language of the text in the image. |
 | `translate_to` | none | Translate the recognised text into this language. |
-| `engine` | `[ocr] provider`, with fail-over | Use only this OCR engine (`lens`, `windows-ocr`, `oneocr`, `macos-vision`, `tesseract`, `command-ocr`, a module's id), as `glossa-cli ocr -e` does. `service` is accepted as another name. An id that is not an OCR engine is a 400. |
+| `engine` | `[ocr] provider`, with fail-over | Use only this OCR engine (`lens`, `windows-ocr`, `oneocr`, `macos-vision`, `tesseract`, `command-ocr`, an AI endpoint's id such as `openai`, a module's id), as `glossa-cli ocr -e` does. `service` is accepted as another name. An id that is not an OCR engine is a 400. |
 | `format` | none | `text`, `json` (the full layout: blocks, lines, words with boxes), `hocr` or `alto`: answer with that document instead of the summary below. |
 | `in_place` | `false` | Translate block by block, each block with its box, under `blocks` (into `translate_to`, else the first language). |
 
@@ -298,7 +332,9 @@ engine that is not installed or not set up answers 503 (see
 | `slow` | see below | `true` for slow speech, `false` for normal. |
 
 The response body is the audio, `audio/mpeg` (or `audio/wav` from a service
-that makes WAV).
+that makes WAV, such as the offline system voice, `system-tts`). The service
+is the one set for speech (`[services] tts`); if it fails, any other service
+that can speak is tried.
 
 ```console
 $ curl -s -H "Authorization: Bearer $T" -d '{"text":"Hello there","lang":"en"}' \
@@ -405,7 +441,10 @@ to the bindings' URLs.
 
 On Linux and the BSDs the desktop program (and [`glossa-cli
 serve`](cli.md#serve)) also offers its actions and translation on the
-session bus, the way desktop software there expects to be driven:
+session bus, the way desktop software there expects to be driven. Linux
+support is experimental: it has not yet been tested on real hardware, so
+this section and the Linux recipes below describe what the code does, not
+what has been confirmed on every desktop.
 
 | | |
 |---|---|
@@ -468,57 +507,38 @@ own settings. Elsewhere on Wayland (Sway and other wlroots compositors,
 older GNOME), and for actions without a hotkey, bind a desktop shortcut to
 a command.
 
-On Linux the D-Bus call needs no token, which makes it the simplest
-command:
+### The command
 
-```bash
-gdbus call --session --dest io.github.bropines.Glossa --object-path /io/github/bropines/Glossa --method io.github.bropines.Glossa1.Action show_popup ''
-```
+| where | command | token |
+|---|---|---|
+| Linux | `gdbus call --session --dest io.github.bropines.Glossa --object-path /io/github/bropines/Glossa --method io.github.bropines.Glossa1.Action show_popup ''` | not needed |
+| everywhere (Linux, macOS, Windows) | `curl -s "http://127.0.0.1:60828/v1/action/show_popup?token=TOKEN"` | replace `TOKEN` with yours |
 
-- **KDE Plasma**: *System Settings → Keyboard → Shortcuts → Add New →
-  Command or Script*, with the command above.
-- **GNOME**: *Settings → Keyboard → View and Customise Shortcuts → Custom
-  Shortcuts → +*, with the command above. To pass the highlighted text where
-  Glossa cannot read it (GNOME has no PRIMARY access for programs), use
-  `sh -c 'gdbus call --session --dest io.github.bropines.Glossa --object-path /io/github/bropines/Glossa --method io.github.bropines.Glossa1.ShowPopup "$(wl-paste --primary --no-newline)"'`.
-- **Sway**: `bindsym Ctrl+Shift+q exec gdbus call --session --dest io.github.bropines.Glossa --object-path /io/github/bropines/Glossa --method io.github.bropines.Glossa1.Action show_popup ''`.
-
-The recipes below use the HTTP API, which works everywhere (macOS and
-Windows included). Replace `TOKEN` with your token. The examples use
-`show_popup`; any action id works.
+The examples use `show_popup`; any [action id](#v1actionaction) works.
 
 When the binding fires, the foreground program still has the focus, so
 Glossa reads its selection as it would for its own hotkey. Where reading the
-selection does not work (some Wayland compositors), pass the text yourself:
-the primary selection is what is highlighted.
+selection does not work (some Wayland compositors; GNOME gives programs no
+PRIMARY access), pass the highlighted text yourself:
 
 ```bash
-# Wayland: send the highlighted text with the request
-wl-paste --primary --no-newline | curl -s --data-binary @- \
-  "http://127.0.0.1:60828/v1/action/show_popup?token=TOKEN"
+# Wayland, D-Bus
+sh -c 'gdbus call --session --dest io.github.bropines.Glossa --object-path /io/github/bropines/Glossa --method io.github.bropines.Glossa1.ShowPopup "$(wl-paste --primary --no-newline)"'
 
-# X11
-xclip -o -selection primary | curl -s --data-binary @- \
-  "http://127.0.0.1:60828/v1/action/show_popup?token=TOKEN"
+# Wayland, HTTP
+sh -c 'wl-paste --primary --no-newline | curl -s --data-binary @- "http://127.0.0.1:60828/v1/action/show_popup?token=TOKEN"'
+
+# X11, HTTP
+sh -c 'xclip -o -selection primary | curl -s --data-binary @- "http://127.0.0.1:60828/v1/action/show_popup?token=TOKEN"'
 ```
 
-### GNOME
+### Linux desktops
 
-*Settings → Keyboard → View and Customise Shortcuts → Custom Shortcuts → +*.
-Command:
-
-```bash
-curl -s "http://127.0.0.1:60828/v1/action/show_popup?token=TOKEN"
-```
-
-For the pipe version, wrap it: `sh -c 'wl-paste --primary --no-newline | curl -s --data-binary @- "…"'`.
-
-### KDE Plasma
-
-*System Settings → Keyboard → Shortcuts → Add New → Command or Script*, with
-the same command.
-
-### Sway, i3, Hyprland
+| desktop | where to add the command |
+|---|---|
+| KDE Plasma | *System Settings → Keyboard → Shortcuts → Add New → Command or Script* |
+| GNOME | *Settings → Keyboard → View and Customise Shortcuts → Custom Shortcuts → +* |
+| Sway, i3, Hyprland | the config file, as below |
 
 ```
 # ~/.config/sway/config (i3: ~/.config/i3/config)
@@ -530,6 +550,8 @@ bindsym Ctrl+Shift+o exec curl -s "http://127.0.0.1:60828/v1/action/text_recogni
 # ~/.config/hypr/hyprland.conf
 bind = CTRL SHIFT, Q, exec, curl -s "http://127.0.0.1:60828/v1/action/show_popup?token=TOKEN"
 ```
+
+The `gdbus` command works in the same places instead of `curl`.
 
 ### macOS
 
@@ -604,7 +626,9 @@ In Windows PowerShell 5.1, `curl` is an alias of `Invoke-WebRequest`; call
   `/health` and, unless `[server] pot_compat_without_token` is off, the
   window-opening [pot-app routes](#pot-app-compatibility). The token is
   never empty. Keep the data folder private: the token is stored there in
-  plain text, as are service keys.
+  plain text, and so are service keys unless they are kept in the system
+  keychain (`[general] secret_storage`, see
+  [configuration.md](configuration.md#general)).
 - **Prefer the header.** A token in the query string ends up in shell
   history and in the process list while `curl` runs.
 - **Browsers are refused.** A request with any of the headers only
