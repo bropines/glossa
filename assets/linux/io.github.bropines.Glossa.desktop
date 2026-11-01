@@ -1,0 +1,15 @@
+[Desktop Entry]
+Type=Application
+Name=Glossa
+GenericName=Translator
+GenericName[ru]=Переводчик
+Comment=Translate the selection anywhere, recognise text on screen
+Comment[ru]=Перевод выделенного текста в любой программе, распознавание текста на экране
+Exec=glossa
+Icon=io.github.bropines.Glossa
+Terminal=false
+Categories=Utility;Office;Dictionary;
+Keywords=translate;translator;dictionary;ocr;
+StartupNotify=false
+StartupWMClass=glossa
+DBusActivatable=false

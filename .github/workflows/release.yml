@@ -80,6 +80,11 @@ jobs:
           mkdir -p "dist/$NAME/examples/modules" "dist/$NAME/sdk"
           cp "target/$TARGET/release/glossa" "target/$TARGET/release/glossa-cli" "dist/$NAME/"
           cp README.md CHANGELOG.md LICENSE-MIT LICENSE-APACHE NOTICE "dist/$NAME/"
+          # The menu entry, its icon and a script that installs both for the
+          # user (desktops and the portal's shortcut settings name the app
+          # from it).
+          cp assets/linux/io.github.bropines.Glossa.desktop assets/linux/install.sh "dist/$NAME/"
+          cp assets/icons/glossa.png "dist/$NAME/glossa.png"
           # Next to the executable, modules/ is a live module folder that
           # Glossa scans; the examples go under examples/ so they do not
           # load until the user copies one there.

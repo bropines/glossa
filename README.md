@@ -100,8 +100,9 @@ and run `glossa`. It starts in the tray. Select text in any program and press:
 On Windows, Ctrl+Alt is what AltGr sends, so those hotkeys would eat
 characters typed with AltGr. On macOS, Ctrl+Alt is Control+Option. All of
 them, and the actions without a default key (reading the selection aloud
-among them), are in *Options → Hotkeys*. A `portable` file next to the executable keeps the settings beside
-it.
+among them), are in *Options → Hotkeys*. A `portable` file next to the
+executable keeps the settings beside it. On Linux, `./install.sh` from the
+unpacked folder adds Glossa to the application menu.
 
 For OCR, install chrome-lens-py (`pip install "chrome-lens-py[clipboard]"`);
 Glossa finds it, and keeps its daemon warm so a scan takes about 0.4 s.
