@@ -107,7 +107,7 @@ pub fn draw(app: &mut GlossaApp, ctx: &egui::Context) {
         .with_taskbar(false)
         // Rounded corners need the corners see-through; macOS's OpenGL makes
         // a translucent window only when the main one has an alpha channel.
-        .with_transparent(cfg!(not(target_os = "macos")) || app.transparent_root())
+        .with_transparent(!glossa_platform::shell::SHELL.transparency_needs_alpha_root || app.transparent_root())
         .with_active(false)
         .with_window_level(egui::WindowLevel::AlwaysOnTop)
         .with_position(pos)
@@ -143,9 +143,8 @@ pub fn draw(app: &mut GlossaApp, ctx: &egui::Context) {
     }
 }
 
-/// On Windows, make a click on the notice not activate it, so dismissing it
-/// leaves the focus where it was.
-#[cfg(windows)]
+/// Make a click on the notice not activate it, so dismissing it leaves the
+/// focus where it was (where the system allows it: Windows).
 fn keep_from_activating(app: &mut GlossaApp) {
     let Some(n) = app.notice.as_mut() else { return };
     if n.hwnd.is_none() {
@@ -155,9 +154,6 @@ fn keep_from_activating(app: &mut GlossaApp) {
         glossa_platform::window::keep_from_activating(hwnd);
     }
 }
-
-#[cfg(not(windows))]
-fn keep_from_activating(_: &mut GlossaApp) {}
 
 /// Where the notice goes, in desktop pixels: under the region's left edge,
 /// else above it, kept inside the work area.

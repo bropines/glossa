@@ -275,7 +275,7 @@ pub fn show<R>(
         let last: Option<Vec2> = ctx.data(|d| d.get_temp(last_size_id));
         let wanted = last.unwrap_or(vec2(min_width, max_height));
         let (inside, above) = in_window(room, anchor, wanted, max_height < MENU_MAX_HEIGHT);
-        st.in_window = Some(!can_window || (cfg!(target_os = "macos") && inside));
+        st.in_window = Some(!can_window || (glossa_platform::shell::SHELL.slow_child_windows && inside));
         st.above = above;
         st.opened = Some(std::time::Instant::now());
     }
@@ -432,10 +432,10 @@ fn show_window<R>(
     });
     st.hovered = hovered;
     st.seeded |= seeded || st.age > 12;
-    // macOS keeps a window's bottom-left corner where it was when the
-    // window changes size, so the list made shorter to fit its content
-    // would slide down from the control: put it back, once it has the size.
-    if cfg!(target_os = "macos") && actual.is_some() && actual != st.placed_at {
+    // A system that keeps a window's bottom-left corner where it was when
+    // the window changes size would slide the list, made shorter to fit its
+    // content, down from the control: put it back, once it has the size.
+    if glossa_platform::shell::SHELL.resize_keeps_bottom_left && actual.is_some() && actual != st.placed_at {
         ctx.send_viewport_cmd_to(viewport, egui::ViewportCommand::OuterPosition(pos));
         st.placed_at = actual;
     }
@@ -483,7 +483,7 @@ fn show_window<R>(
 /// carries its own position anyway. Returns whether it is done (or not
 /// needed).
 fn seed_pointer(ui: &Ui) -> bool {
-    if cfg!(target_os = "macos") {
+    if !glossa_platform::shell::SHELL.can_warp_pointer {
         return true;
     }
     let (known, inner, ppp) =

@@ -42,6 +42,31 @@ fourth without touching the rest.
 `third_party/eframe` is eframe 0.37 with one fix; see
 [../third_party/README.md](../third_party/README.md).
 
+## Where the systems differ
+
+The interface is one program for every system; what sets Windows, macOS
+and Linux apart is kept out of it:
+
+- **`glossa_platform::shell::SHELL`** says how this system's windows behave,
+  once per system in `shell/win.rs`, `shell/mac.rs` and `shell/linux.rs`:
+  whether desktop coordinates are pixels or points, which corner a window
+  keeps when it is resized, whether Glossa may draw its own title bar,
+  whether a translucent window needs a translucent main window, whether
+  dropdowns should stay inside their window, which renderers show
+  backdrops, how the shortcut modifier is named. The UI asks these
+  questions (`SHELL.resize_keeps_bottom_left`) and never tests for an
+  operating system to decide how windows behave.
+- **The implementations** sit with their subject, one file per system:
+  `window/win.rs` and `window/mac.rs` (finding Glossa's own windows,
+  monitors, the foreground window), `backdrop/win.rs`, `backdrop/mac.rs`
+  and `backdrop/x11.rs` (Mica and Acrylic, vibrancy, KWin's blur). A fix for
+  one system goes in that system's file.
+
+What remains behind `cfg` in `glossa-ui-egui` is either platform API with
+no common shape (the tray icon's look, font files) or a feature only one
+system has (Windows OCR and OneOCR, Apple Vision, the macOS permissions
+page).
+
 ## How a translation flows
 
 1. A hotkey fires (`glossa-platform::hotkeys`) or the user types.

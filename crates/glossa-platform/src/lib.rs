@@ -53,6 +53,7 @@ pub mod permissions;
 pub mod portal;
 pub mod selection;
 pub mod session;
+pub mod shell;
 pub mod window;
 
 #[cfg(target_os = "macos")]

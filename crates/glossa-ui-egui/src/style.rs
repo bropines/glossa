@@ -49,7 +49,12 @@ pub struct Look {
 /// `choose_renderer` in `main.rs`), on macOS with OpenGL (wgpu's Metal layer
 /// there is opaque).
 pub fn backdrops_supported(cfg: &glossa_core::Config) -> bool {
-    cfg!(windows) || (cfg!(target_os = "macos") && cfg.appearance.renderer == glossa_core::config::Renderer::OpenGl)
+    let shell = glossa_platform::shell::SHELL;
+    if cfg.appearance.renderer == glossa_core::config::Renderer::OpenGl {
+        shell.backdrops_with_gl
+    } else {
+        shell.backdrops_with_gpu
+    }
 }
 
 /// Whether the main window has to be created with an alpha channel: child

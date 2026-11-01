@@ -128,7 +128,8 @@ fn shortcut_text(cmd: Command) -> String {
     let Some((_, sc)) = SHORTCUTS.iter().find(|(c, _)| *c == cmd) else { return String::new() };
     let mut out = String::new();
     if sc.modifiers.command {
-        out.push_str(if cfg!(target_os = "macos") { "Cmd+" } else { "Ctrl+" });
+        out.push_str(glossa_platform::shell::SHELL.command_key);
+        out.push('+');
     }
     if sc.modifiers.shift {
         out.push_str("Shift+");
@@ -1027,7 +1028,7 @@ mod tests {
 
     #[test]
     fn shortcuts_read_as_words() {
-        let ctrl = if cfg!(target_os = "macos") { "Cmd" } else { "Ctrl" };
+        let ctrl = glossa_platform::shell::SHELL.command_key;
         assert_eq!(shortcut_text(Command::CopyText), format!("{ctrl}+Shift+C"));
         assert_eq!(shortcut_text(Command::Translate), format!("{ctrl}+Enter"));
     }

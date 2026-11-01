@@ -62,7 +62,7 @@ pub fn viewport(name: &str) -> egui::ViewportId {
 /// Whether windows draw their own frame: *window style* is on, and this is
 /// not macOS.
 pub fn custom(cfg: &glossa_core::Config) -> bool {
-    cfg.appearance.custom_frame && !cfg!(target_os = "macos")
+    cfg.appearance.custom_frame && glossa_platform::shell::SHELL.own_frame
 }
 
 /// The start of a tool window's viewport: its title and icon, undecorated
@@ -390,7 +390,7 @@ mod tests {
     fn macos_keeps_system_decorations() {
         let mut cfg = glossa_core::Config::default();
         cfg.appearance.custom_frame = true;
-        assert_eq!(custom(&cfg), !cfg!(target_os = "macos"));
+        assert_eq!(custom(&cfg), glossa_platform::shell::SHELL.own_frame);
         cfg.appearance.custom_frame = false;
         assert!(!custom(&cfg));
     }

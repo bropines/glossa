@@ -379,14 +379,7 @@ fn basics(app: &mut GlossaApp, ui: &mut egui::Ui, st: &mut OptionsState) {
     let look = app.look.clone();
     let d = &mut st.draft;
     group(ui, &look, &app.t("options.basics.general_group"), |ui| {
-        let autostart_label = if cfg!(target_os = "macos") {
-            "options.basics.start_with_system_macos"
-        } else if cfg!(windows) {
-            "options.basics.start_with_system"
-        } else {
-            "options.basics.start_with_system_linux"
-        };
-        ui.checkbox(&mut st.autostart, app.t(autostart_label));
+        ui.checkbox(&mut st.autostart, app.t(glossa_platform::shell::SHELL.autostart_label));
         row(ui, &app.t("options.basics.ui_language"), |ui| {
             let locales = app.engine.locales();
             let current = locales

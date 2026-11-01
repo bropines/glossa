@@ -360,7 +360,7 @@ pub fn hotkey_field(ui: &mut Ui, id_salt: &str, current: Option<&Hotkey>, prompt
                     k => {
                         if let Ok(hk) = format!(
                             "{}{}{}{}{}",
-                            if modifiers.ctrl || modifiers.command && !cfg!(target_os = "macos") {
+                            if modifiers.ctrl || modifiers.command && glossa_platform::shell::SHELL.command_is_ctrl {
                                 "Ctrl+"
                             } else {
                                 ""

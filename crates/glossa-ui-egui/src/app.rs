@@ -466,9 +466,6 @@ impl GlossaApp {
     pub fn child_backdrop(&mut self, title: &str, popup: bool) {
         use glossa_core::config::Backdrop;
         use glossa_platform::backdrop;
-        if !cfg!(any(windows, target_os = "macos")) {
-            return;
-        }
         if !popup {
             self.style_child_frame(title);
         }
@@ -630,7 +627,7 @@ impl GlossaApp {
             self.cfg.windows = windows;
         }
         let locale = self.engine.locale();
-        if cfg!(target_os = "macos") && !Arc::ptr_eq(&locale, &self.locale) {
+        if glossa_platform::shell::SHELL.app_menu && !Arc::ptr_eq(&locale, &self.locale) {
             self.app_menu = crate::app_menu::AppMenu::install(&self.ctx, &locale);
         }
         self.locale = locale;
@@ -963,7 +960,7 @@ impl eframe::App for GlossaApp {
             || self.history.is_some()
             || self.about_open
             || self.keyboard_open;
-        if cfg!(target_os = "macos") && windowed != self.in_app_switcher {
+        if glossa_platform::shell::SHELL.switcher_follows_windows && windowed != self.in_app_switcher {
             self.in_app_switcher = windowed;
             glossa_platform::window::set_in_app_switcher(windowed);
         }
@@ -1056,22 +1053,5 @@ impl eframe::App for GlossaApp {
 
 /// Open a URL or file with the system's default handler.
 pub fn open_with_system(target: &str) -> std::io::Result<()> {
-    #[cfg(windows)]
-    {
-        use std::os::windows::process::CommandExt;
-        const CREATE_NO_WINDOW: u32 = 0x0800_0000;
-        std::process::Command::new("rundll32")
-            .args(["url.dll,FileProtocolHandler", target])
-            .creation_flags(CREATE_NO_WINDOW)
-            .spawn()
-            .map(|_| ())
-    }
-    #[cfg(target_os = "macos")]
-    {
-        std::process::Command::new("open").arg(target).spawn().map(|_| ())
-    }
-    #[cfg(all(unix, not(target_os = "macos")))]
-    {
-        std::process::Command::new("xdg-open").arg(target).spawn().map(|_| ())
-    }
+    glossa_platform::shell::open(target)
 }

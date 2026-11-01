@@ -300,7 +300,7 @@ pub fn show(app: &mut GlossaApp, ctx: &egui::Context) {
         .with_window_level(egui::WindowLevel::AlwaysOnTop)
         // macOS's OpenGL refuses a translucent window unless the main window
         // was made with an alpha channel; it would not open at all.
-        .with_transparent(cfg!(not(target_os = "macos")) || app.transparent_root())
+        .with_transparent(!glossa_platform::shell::SHELL.transparency_needs_alpha_root || app.transparent_root())
         .with_active(cfg.activate_on_open)
         .with_position(state.pos)
         .with_inner_size(state.size);
@@ -391,7 +391,7 @@ fn body(app: &mut GlossaApp, ui: &mut egui::Ui, st: &mut PopupState) -> (bool, e
     // Rounded as the theme rounds overlays where the window's corners can
     // be see-through: a translucent window with no backdrop (a backdrop
     // fills the whole rectangle, and would show square behind them).
-    let see_through = cfg!(not(target_os = "macos")) || app.transparent_root();
+    let see_through = !glossa_platform::shell::SHELL.transparency_needs_alpha_root || app.transparent_root();
     let radius = if see_through && !look.popup_backdrop.is_some() {
         look.theme.metrics.overlay_radius.max(look.theme.metrics.button_radius).clamp(0.0, 12.0)
     } else {
