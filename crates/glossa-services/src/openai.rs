@@ -13,6 +13,9 @@
 //!
 //! Answers stream by default (server-sent events), so the popup fills in as
 //! the model writes instead of waiting for the whole answer.
+//!
+//! With a vision model, an endpoint also reads text out of pictures (see
+//! `openai_ocr.rs`), when chosen as the text recognition engine.
 
 use std::time::Duration;
 
@@ -22,6 +25,9 @@ use glossa_net::{HttpRequest, HttpResponse};
 use serde_json::{json, Value};
 
 use crate::common::{base_url, check_status, is_auto, parse_json};
+
+#[path = "openai_ocr.rs"]
+mod ocr;
 
 const DEFAULT_BASE: &str = "https://api.openai.com/v1";
 const DEFAULT_MODEL: &str = "gpt-4o-mini";
@@ -308,7 +314,8 @@ impl OpenAi {
     /// A user-defined endpoint made from a preset.
     pub fn endpoint(id: &str, name: &str, preset_id: &str) -> Self {
         let p = preset(preset_id);
-        let mut info = ProviderInfo::new(id, name, Capabilities::TRANSLATE | Capabilities::PROMPTABLE);
+        let mut info =
+            ProviderInfo::new(id, name, Capabilities::TRANSLATE | Capabilities::PROMPTABLE | Capabilities::OCR);
         info.description = format!("OpenAI-compatible endpoint ({}).", p.name);
         info.homepage = if p.keys_url.is_empty() {
             "https://platform.openai.com/docs/api-reference/chat".into()
@@ -350,11 +357,7 @@ impl OpenAi {
         if !req.to.is_language() {
             return Err(Error::TargetLanguageUnsupported { provider: self.name().to_owned(), lang: req.to });
         }
-        let model = match host.option_str("model").trim() {
-            "" if !self.preset.model.is_empty() => self.preset.model,
-            "" => DEFAULT_MODEL,
-            m => m,
-        };
+        let model = model_for(host, self.preset);
         let mut body = json!({
             "model": model,
             "messages": [
@@ -382,21 +385,7 @@ impl OpenAi {
         if stream {
             body["stream"] = json!(true);
         }
-        // Anything else the service understands, given as a JSON object.
-        let extra = host.option_str("extra_body").trim();
-        if !extra.is_empty() {
-            let Ok(Value::Object(fields)) = serde_json::from_str::<Value>(extra) else {
-                return Err(Error::Config(format!("{}: extra request fields must be a JSON object", self.name())));
-            };
-            for (k, v) in fields {
-                // `null` takes a field out, for a model that rejects one of ours.
-                if v.is_null() {
-                    body.as_object_mut().expect("the body is an object").remove(&k);
-                } else {
-                    body[k] = v;
-                }
-            }
-        }
+        merge_extra_body(&mut body, host, self.name())?;
         let url = format!("{}/chat/completions", self.root(host));
         Ok(self.with_headers(HttpRequest::post(url).json(&body), host))
     }
@@ -429,6 +418,36 @@ impl OpenAi {
         message_text(&v["choices"][0]["message"]["content"])
             .ok_or_else(|| Error::bad_response(self.name(), "missing choices[0].message.content"))
     }
+}
+
+/// The model to ask: the setting, else the preset's, else the default.
+fn model_for(host: &Host, preset: &AiPreset) -> String {
+    match host.option_str("model").trim() {
+        "" if !preset.model.is_empty() => preset.model.to_owned(),
+        "" => DEFAULT_MODEL.to_owned(),
+        m => m.to_owned(),
+    }
+}
+
+/// Anything else the service understands, given as a JSON object in the
+/// settings; `null` takes out a field Glossa would send, for a model that
+/// rejects it.
+fn merge_extra_body(body: &mut Value, host: &Host, name: &str) -> Result<()> {
+    let extra = host.option_str("extra_body").trim();
+    if extra.is_empty() {
+        return Ok(());
+    }
+    let Ok(Value::Object(fields)) = serde_json::from_str::<Value>(extra) else {
+        return Err(Error::Config(format!("{name}: extra request fields must be a JSON object")));
+    };
+    for (k, v) in fields {
+        if v.is_null() {
+            body.as_object_mut().expect("the body is an object").remove(&k);
+        } else {
+            body[k] = v;
+        }
+    }
+    Ok(())
 }
 
 /// What one streamed event contributes.
@@ -510,6 +529,36 @@ fn options_for(p: &AiPreset) -> Vec<OptionSpec> {
             "A JSON object merged into the request, e.g. {\"top_p\": 0.9} or OpenRouter's \
              {\"provider\": {\"sort\": \"price\"}}. null removes a field Glossa would send.",
         ),
+        // Text recognition, when this endpoint is chosen as the OCR engine.
+        OptionSpec::text("ocr_model", "Vision model (text recognition)", "").help(
+            "Used when this endpoint reads text from pictures (Options → Text recognition). Empty: the model \
+             above, which then has to accept images (GPT-4o, Gemini, Claude, Qwen2.5-VL, Gemma 3…).",
+        ),
+        OptionSpec::select(
+            "ocr_mode",
+            "Recognition answer",
+            "auto",
+            &[
+                ("auto", "Lines with boxes when they are needed, plain text otherwise"),
+                ("text", "Plain text only"),
+                ("lines", "Always lines with boxes"),
+            ],
+        )
+        .help("Boxes are needed to translate over the picture. Not every model places them well."),
+        OptionSpec::select(
+            "ocr_box_units",
+            "Box coordinates",
+            "auto",
+            &[
+                ("auto", "Work it out"),
+                ("pixels", "Pixels of the image"),
+                ("1000", "0–1000 (Qwen2-VL and others)"),
+                ("1000yx", "0–1000, y first (Gemini)"),
+                ("fraction", "Fractions, 0–1"),
+            ],
+        ),
+        OptionSpec::multiline("ocr_prompt", "Recognition instructions", "")
+            .help("Empty: Glossa's own, which ask for the text (or JSON lines with boxes) and nothing else."),
     ]
 }
 
@@ -606,6 +655,10 @@ impl Provider for OpenAi {
         ids.sort();
         ids.dedup();
         Ok(ids)
+    }
+
+    fn recognize(&self, host: &Host, req: &glossa_core::OcrRequest) -> Result<glossa_core::OcrResult> {
+        self.recognize_image(host, req)
     }
 }
 

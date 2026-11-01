@@ -1022,7 +1022,7 @@ fn origin_label(app: &GlossaApp, origin: &str) -> String {
 }
 
 fn is_ai_endpoint(id: &str) -> bool {
-    id == glossa_engine::ai::BUILTIN_ID || id.starts_with("ai-")
+    glossa_engine::ai::is_endpoint(id)
 }
 
 /// The AI endpoint builder: the endpoints the user added, and a row to add
@@ -1646,19 +1646,40 @@ fn ocr(app: &mut GlossaApp, ui: &mut egui::Ui, st: &mut OptionsState) {
     let look = app.look.clone();
     let d = &mut st.draft.ocr;
     group(ui, &look, &app.t("options.ocr"), |ui| {
+        let providers = app.engine.providers(Capabilities::OCR);
         row(ui, &app.t("options.ocr.provider"), |ui| {
-            let providers = app.engine.providers(Capabilities::OCR);
             let cur = providers
                 .iter()
                 .find(|p| p.info.id == d.provider)
                 .map(|p| p.info.name.clone())
                 .unwrap_or(d.provider.clone());
-            egui::ComboBox::from_id_salt("ocr-provider").width(280.0).selected_text(cur).show_ui(ui, |ui| {
-                for p in &providers {
+            // Recognition engines first, then the AI endpoints that can
+            // read pictures with a vision model.
+            let (ai, engines): (Vec<_>, Vec<_>) = providers.iter().partition(|p| is_ai_endpoint(&p.info.id));
+            crate::dropdown::ComboBox::from_id_salt("ocr-provider").width(280.0).selected_text(cur).show_ui(ui, |ui| {
+                for p in &engines {
                     ui.selectable_value(&mut d.provider, p.info.id.clone(), &p.info.name);
+                }
+                if !ai.is_empty() {
+                    ui.separator();
+                    ui.label(RichText::new(app.t("options.ocr.ai_group")).small().color(look.weak_text()));
+                    for p in &ai {
+                        ui.selectable_value(&mut d.provider, p.info.id.clone(), &p.info.name);
+                    }
                 }
             });
         });
+        if is_ai_endpoint(&d.provider) {
+            let name =
+                providers.iter().find(|p| p.info.id == d.provider).map(|p| p.info.name.clone()).unwrap_or_default();
+            ui.horizontal_wrapped(|ui| {
+                ui.label(RichText::new(app.locale.fmt("options.ocr.ai_hint", &name)).small().color(look.weak_text()));
+                if ui.small_button(app.t("options.ocr.ai_settings")).clicked() {
+                    st.selected_service = Some(d.provider.clone());
+                    st.page = Page::Services;
+                }
+            });
+        }
         let auto = app.t("main.auto_detect");
         row(ui, &app.t("ocr.language"), |ui| {
             if let Some(l) = crate::widgets::lang_combo(

@@ -9,7 +9,7 @@ over the picture the way Chrome's Google Lens overlay does it.
 
 Pick one in *Options → Text recognition → Provider*; the list shows the
 engines this system has. If the chosen engine fails, the others are tried in
-turn (except OneOCR, which only runs when chosen).
+turn (except OneOCR and the AI endpoints, which only run when chosen).
 
 | engine | id | works | platforms | setup |
 |---|---|---|---|---|
@@ -19,6 +19,7 @@ turn (except OneOCR, which only runs when chosen).
 | Apple Vision | `macos-vision` | offline | macOS 10.15+ | nothing |
 | Tesseract | `tesseract` | offline | all | Tesseract and its language data |
 | External command | `command-ocr` | either | all | a command line |
+| AI endpoint | `openai`, `ai-…` | either | all | a vision model behind the endpoint (below) |
 | Module | its id | either | all | a module with the OCR capability ([modules/ocr-modules.md](modules/ocr-modules.md)) |
 
 ### Google Lens (chrome-lens-py)
@@ -85,6 +86,50 @@ command line in the provider's options, for example
 `tesseract {image} - -l {lang3}`. `{image}` is a temporary PNG, `{lang}` the
 language as `en`/`zh-Hans`/`auto`, `{lang3}` Tesseract's code. It runs
 without a shell, so nothing in a path or language code can inject anything.
+
+### AI endpoints (vision models)
+
+Every AI endpoint (*Options → Services → AI endpoints*, see
+[ai-endpoints.md](ai-endpoints.md)) can also read text from pictures with a
+vision model: OpenAI's GPT-4o, Gemini, Claude through OpenRouter, or a local
+Qwen2.5-VL, Gemma 3 or MiniCPM-V served by **vLLM**, Ollama or LM Studio. They
+are listed under *AI endpoints (vision models)* in the provider list. Nothing
+else needs setting up: the endpoint's address, key and headers are used as
+they are. An endpoint reads pictures **only when chosen**; Glossa never falls
+back to one on its own, since that would send screenshots to a service picked
+for translation.
+
+The endpoint's settings (*Settings…* next to the provider, or *Services* and
+the endpoint) add:
+
+- **Vision model**: the model that reads pictures, when the one used for
+  translation does not take images. Empty: the translation model.
+- **Recognition answer**: *auto* asks for plain text, and for lines with
+  their boxes when they are needed (translating in place, the whole screen);
+  *plain text only*; *always lines with boxes*.
+- **Box coordinates**: how the model gives a box. Models differ: pixels of
+  the image (GPT-4o, Claude, Qwen2.5-VL on the image as sent), 0–1000 (Qwen2-VL
+  and others), 0–1000 with y first (Gemini's `box_2d`), or fractions. *Work it
+  out* takes values up to 1 as fractions, values past the image as 0–1000,
+  pixels otherwise.
+- **Recognition instructions**: a prompt of your own; empty uses Glossa's,
+  which ask for the text, or JSON lines with boxes, and nothing else.
+
+When *Options → Text recognition → Translate with* is *the OCR engine*, the
+model translates in the same request: one call reads and translates. Boxes
+from language models are less exact than Apple Vision's or Windows OCR's; for
+translating in place, models trained to locate text (Qwen2.5-VL, dots.ocr,
+PaddleOCR-VL) do best. vLLM resizes images to the model's limits; if boxes
+come out scaled, set *Box coordinates* to match what the model reports.
+
+A local vLLM server, for example:
+
+```
+vllm serve Qwen/Qwen2.5-VL-7B-Instruct --port 8000
+```
+
+then an endpoint from the *Custom* preset with base URL
+`http://localhost:8000/v1` and model `Qwen/Qwen2.5-VL-7B-Instruct`.
 
 ## Actions
 

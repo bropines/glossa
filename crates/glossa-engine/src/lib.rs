@@ -53,6 +53,12 @@ pub mod ai {
     pub use glossa_services::openai::{preset, AiPreset, PRESETS};
     /// The id of the built-in OpenAI-compatible translator.
     pub const BUILTIN_ID: &str = glossa_services::OpenAi::ID;
+
+    /// Whether `id` is an AI endpoint: the built-in one or one the user
+    /// added (`ai-…`).
+    pub fn is_endpoint(id: &str) -> bool {
+        id == BUILTIN_ID || id.starts_with("ai-")
+    }
 }
 
 /// Where a job's result goes. One job per slot at a time.
@@ -1112,13 +1118,12 @@ impl Engine {
             }
             None => {
                 let mut v: Vec<Arc<dyn Provider>> = registry.get(&cfg.ocr.provider).into_iter().collect();
-                // OneOCR copies about 55 MB of the Snipping Tool's libraries
-                // on first use, so it runs only when chosen, never as a
-                // quiet fallback.
-                v.extend(registry.with_capability(Capabilities::OCR).into_iter().filter(|p| {
-                    let id = &p.info().id;
-                    *id != cfg.ocr.provider && id != glossa_ocr::oneocr::ONEOCR_ID
-                }));
+                v.extend(
+                    registry
+                        .with_capability(Capabilities::OCR)
+                        .into_iter()
+                        .filter(|p| quiet_ocr_fallback(&p.info().id, &cfg.ocr.provider)),
+                );
                 v
             }
         };
@@ -1617,9 +1622,26 @@ fn ocr_falls_over(e: &Error) -> bool {
     e.should_try_next_provider() || e.is_configuration_fault()
 }
 
+/// Whether the engine `id` may be tried when the chosen one (`chosen`)
+/// fails. OneOCR copies about 55 MB of the Snipping Tool's libraries on
+/// first use, and an AI endpoint would send the picture to a service chosen
+/// for translation: both run only when chosen, never as a quiet fallback.
+fn quiet_ocr_fallback(id: &str, chosen: &str) -> bool {
+    id != chosen && id != glossa_ocr::oneocr::ONEOCR_ID && !ai::is_endpoint(id)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn pictures_go_to_an_ai_endpoint_or_oneocr_only_when_chosen() {
+        assert!(quiet_ocr_fallback("tesseract", "lens"));
+        assert!(!quiet_ocr_fallback("lens", "lens"));
+        assert!(!quiet_ocr_fallback(ai::BUILTIN_ID, "lens"));
+        assert!(!quiet_ocr_fallback("ai-local-vllm", "lens"));
+        assert!(!quiet_ocr_fallback(glossa_ocr::oneocr::ONEOCR_ID, "lens"));
+    }
 
     #[test]
     fn ocr_falls_over_past_engines_that_are_not_installed() {
