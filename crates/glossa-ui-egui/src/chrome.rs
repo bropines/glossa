@@ -141,7 +141,9 @@ fn title_bar(ui: &mut Ui, look: &Look, caption: &Caption, maximized: bool) {
     let t = &look.theme;
     let active = ui.input(|i| i.viewport().focused.unwrap_or(true));
     let fill = t.window.caption.map(c).unwrap_or(c(t.window.back)).gamma_multiply(look.window_alpha);
-    let caption_back = t.window.caption.unwrap_or(t.window.back);
+    // Opaque even under a backdrop (where `window.back` is clear): colours
+    // mixed from it would come out see-through.
+    let caption_back = t.window.caption.unwrap_or(crate::style::from32(look.overlay_back));
     let mut text = c(t.window.caption_text.unwrap_or(t.window.text));
     if !active {
         // WinUI dims the title of an inactive window to its disabled text.
@@ -237,7 +239,9 @@ fn caption_button(ui: &mut Ui, look: &Look, r: Rect, b: Button, active: bool) ->
         WidgetState::Normal
     };
     let style = t.window_button.get(state);
-    let caption_back = t.window.caption.unwrap_or(t.window.back);
+    // Opaque even under a backdrop (where `window.back` is clear): colours
+    // mixed from it would come out see-through.
+    let caption_back = t.window.caption.unwrap_or(crate::style::from32(look.overlay_back));
     let (plate, glyph) = match (b, state) {
         (Button::Close, WidgetState::Hover) => (Some(CLOSE_RED), Color32::WHITE),
         (Button::Close, WidgetState::Pressed) => (Some(CLOSE_RED.gamma_multiply(0.9)), Color32::from_white_alpha(179)),

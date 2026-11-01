@@ -226,7 +226,7 @@ impl Look {
         let fluent = t.metrics.controls == ControlStyle::Fluent;
         let mac = t.metrics.controls == ControlStyle::Mac;
         if fluent {
-            fluent_visuals(&mut v, t);
+            fluent_visuals(&mut v, t, from32(self.overlay_back));
         }
         if mac {
             mac_visuals(&mut v, t, from32(self.overlay_back));
@@ -281,7 +281,8 @@ impl Look {
 
 /// WinUI 3's conventions on top of the colours [`Look::apply`] mapped; see
 /// `docs/research/fluent.md` for where each number comes from.
-fn fluent_visuals(v: &mut Visuals, t: &Theme) {
+/// `base` is the theme's window colour before a backdrop made it clear.
+fn fluent_visuals(v: &mut Visuals, t: &Theme, base: Color) {
     let w = &mut v.widgets;
     for state in [&mut w.noninteractive, &mut w.inactive, &mut w.hovered, &mut w.active, &mut w.open] {
         // WinUI controls change fill, never size, between states.
@@ -289,7 +290,9 @@ fn fluent_visuals(v: &mut Visuals, t: &Theme) {
     }
     // Secondary text (hints, captions): TextFillColorSecondary, about
     // three quarters of the way from the base to the primary text.
-    v.weak_text_color = Some(c(t.window.back.lerp(t.window.text, 0.75)));
+    // Mixed from the opaque window colour: under Mica `window.back` is
+    // clear, and the text came out half transparent.
+    v.weak_text_color = Some(c(base.lerp(t.window.text, 0.75)));
     // The caret is a 1 px line in the text colour, not the accent.
     v.text_cursor.stroke = Stroke::new(1.0, c(t.window.text));
     // The part of a slider's track before the thumb is accent-filled.
@@ -412,6 +415,19 @@ mod tests {
         let translucent = from32(c(Color::rgba(10, 20, 30, 200)));
         assert_eq!(translucent.a, 200);
         assert!((translucent.b as i32 - 30).abs() <= 1);
+    }
+
+    #[test]
+    fn secondary_text_stays_opaque_under_a_backdrop() {
+        let mut cfg = glossa_core::Config::default();
+        cfg.appearance.backdrop = Backdrop::Mica;
+        for theme in [glossa_core::theme::builtin::fluent_dark(), glossa_core::theme::builtin::mac_light()] {
+            let name = theme.name.clone();
+            let ctx = egui::Context::default();
+            Look::new(theme, &cfg).apply(&ctx, 1.0);
+            let weak = ctx.global_style().visuals.weak_text_color.expect("set by the theme");
+            assert_eq!(weak.a(), 255, "{name}");
+        }
     }
 
     #[test]
