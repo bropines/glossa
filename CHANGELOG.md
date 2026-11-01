@@ -370,8 +370,9 @@ for Windows, macOS and Linux.
 
 - **Apple Vision in the Intel build under Rosetta** read nothing: macOS
   fails the accurate recogniser in a translated process (even from a minimal
-  Swift program). Glossa now drops to the fast recogniser when accurate fails
-  and fast works, and says why when fast cannot read the language.
+  Swift program). Under Rosetta, Glossa now drops to the fast recogniser when
+  accurate fails and fast works, and says why when fast cannot read the
+  language; the native build keeps accurate.
 
 - macOS: the popup and the dropdown menus and lists that open in windows of
   their own had square corners. They are rounded as the theme rounds

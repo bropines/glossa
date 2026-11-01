@@ -23,9 +23,11 @@
 //!
 //! An x86_64 build running under Rosetta only gets the fast recogniser: the
 //! accurate one fails at once (`CRImageReaderError` 9, or no error at all),
-//! even from a minimal Swift program. When accurate fails and fast reads the
-//! picture, the provider stays on fast for the rest of the run. Fast reads
-//! Latin scripts only, so Cyrillic and CJK need the native arm64 build there.
+//! even from a minimal Swift program. In a translated process only
+//! (`sysctl.proc_translated`), when accurate fails and fast reads the
+//! picture, the provider stays on fast for the rest of the run; a native
+//! build never gives up accurate over one failure. Fast reads Latin scripts
+//! only, so Cyrillic and CJK need the native arm64 build there.
 //!
 //! The provider is compiled on every OS so its pure parts are tested
 //! everywhere, but it is only registered on macOS.
@@ -51,7 +53,41 @@ pub struct MacVision {
     cfg: VisionConfig,
     warmed_up: AtomicBool,
     /// Set once the accurate level failed where fast worked (Rosetta).
+    #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
     accurate_broken: AtomicBool,
+}
+
+/// Whether this process is an Intel build that Rosetta translates, where
+/// Vision has only the fast recogniser. Asked once.
+#[cfg(target_os = "macos")]
+fn under_rosetta() -> bool {
+    use std::ffi::{c_char, c_int, c_void};
+    static TRANSLATED: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *TRANSLATED.get_or_init(|| {
+        unsafe extern "C" {
+            fn sysctlbyname(
+                name: *const c_char,
+                oldp: *mut c_void,
+                oldlenp: *mut usize,
+                newp: *mut c_void,
+                newlen: usize,
+            ) -> c_int;
+        }
+        let mut value: c_int = 0;
+        let mut len = std::mem::size_of::<c_int>();
+        // SAFETY: a C string name, and an int-sized buffer with its
+        // size; the key is absent (an error) on Intel Macs and older systems.
+        let ok = unsafe {
+            sysctlbyname(
+                b"sysctl.proc_translated\0".as_ptr().cast(),
+                (&mut value as *mut c_int).cast(),
+                &mut len,
+                std::ptr::null_mut(),
+                0,
+            )
+        };
+        ok == 0 && value == 1
+    })
 }
 
 impl MacVision {
@@ -65,7 +101,7 @@ impl MacVision {
     }
 
     /// Reads the picture at the configured level, dropping to fast for good
-    /// when only fast works on this system.
+    /// when only fast works: an Intel build under Rosetta.
     #[cfg(target_os = "macos")]
     fn read(&self, bytes: &[u8], lang: LangId) -> Result<Vec<VisionLine>> {
         let fast =
@@ -77,7 +113,7 @@ impl MacVision {
             auto_languages: split_list(&self.cfg.auto_languages),
         };
         let accurate_error = match sys::recognize(bytes, &settings) {
-            Err(e) if !fast => e,
+            Err(e) if !fast && under_rosetta() => e,
             done => return done,
         };
         settings.fast = true;
