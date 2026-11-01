@@ -8,9 +8,10 @@ license.workspace = true
 authors.workspace = true
 
 [features]
-default = ["js", "python", "native"]
+default = ["js", "python", "process", "native"]
 js = ["glossa-modules/js"]
 python = ["glossa-modules/python"]
+process = ["glossa-modules/process"]
 native = ["glossa-modules/native"]
 
 [dependencies]

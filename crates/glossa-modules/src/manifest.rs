@@ -6,8 +6,9 @@
 //! name = "My Translator"
 //! version = "1.0.0"
 //! api = 1                       # module protocol major version
-//! runtime = "js"                # js | python | native
-//! entry = "main.js"             # main.js | main.py | the library file stem
+//! runtime = "js"                # js | python | java | process | native
+//! entry = "main.js"             # main.js | main.py | module.jar | the library file stem
+//! command = ["node", "main.mjs"] # runtime = "process" only; or command.windows = […] etc.
 //! description = "…"
 //! homepage = "https://…"
 //! author = "…"
@@ -58,7 +59,7 @@ pub struct Manifest {
     pub options: Vec<OptionSpec>,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct ModuleSection {
     pub id: String,
     pub name: String,
@@ -80,14 +81,99 @@ pub struct ModuleSection {
     /// Longest input the service accepts, in characters.
     #[serde(default)]
     pub max_input_chars: Option<usize>,
-    /// For a Python module: how long it may sit idle before its process is
-    /// stopped, in seconds. Keeps resident memory down.
+    /// For a module running as a process (Python, Java, `process`): how long
+    /// it may sit idle before its process is stopped, in seconds. Keeps
+    /// resident memory down.
     #[serde(default)]
     pub idle_timeout_secs: Option<u64>,
     /// The module works with no setup, so Glossa may switch it on when it
     /// first appears. Leave it off for anything that needs a key or a server.
     #[serde(default)]
     pub ready_to_use: bool,
+
+    // -- process modules (runtime = "process", "java", "python") --------------
+    /// `runtime = "process"`: the program and its arguments, either one list
+    /// or one per platform (`command.windows`, `command.macos`,
+    /// `command.linux`, `command.unix`, `command.default`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub command: Option<CommandSpec>,
+    /// Extra arguments after the command (after the script or jar for the
+    /// Python and Java runtimes).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub args: Vec<String>,
+    /// Environment variables set for the module's process.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub env: BTreeMap<String, String>,
+    /// The process's working directory, relative to the module's directory
+    /// (the default).
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub cwd: String,
+    /// `runtime = "java"`: run this class from `classpath` instead of
+    /// `java -jar <entry>`.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub main_class: String,
+    /// `runtime = "java"` with `main_class`: classpath entries relative to
+    /// the module's directory (`lib/*` wildcards are Java's own).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub classpath: Vec<String>,
+    /// `runtime = "java"`: options for the JVM, before `-jar` / the class.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub jvm_args: Vec<String>,
+}
+
+/// A process module's command line: one for every platform, or one per
+/// platform.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(untagged)]
+pub enum CommandSpec {
+    /// `command = ["node", "main.mjs"]`.
+    Line(Vec<String>),
+    /// `command = "./my-module"`: a program with no arguments.
+    Program(String),
+    /// `command.windows = ["my-module.exe"]` and so on.
+    PerPlatform(PlatformCommands),
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct PlatformCommands {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub windows: Option<Vec<String>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub macos: Option<Vec<String>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub linux: Option<Vec<String>>,
+    /// Linux, macOS and the BSDs, when the specific key is absent.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub unix: Option<Vec<String>>,
+    /// Any platform without its own entry.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub default: Option<Vec<String>>,
+}
+
+impl CommandSpec {
+    /// The command line for the platform this build runs on, if any.
+    pub fn for_this_platform(&self) -> Option<Vec<String>> {
+        self.for_platform(std::env::consts::OS)
+    }
+
+    /// The command line for `os` (a `std::env::consts::OS` value).
+    pub fn for_platform(&self, os: &str) -> Option<Vec<String>> {
+        let line = match self {
+            CommandSpec::Line(l) => Some(l.clone()),
+            CommandSpec::Program(p) => Some(vec![p.clone()]),
+            CommandSpec::PerPlatform(p) => {
+                let specific = match os {
+                    "windows" => p.windows.clone(),
+                    "macos" => p.macos.clone(),
+                    "linux" => p.linux.clone(),
+                    _ => None,
+                };
+                let unix = (os != "windows").then(|| p.unix.clone()).flatten();
+                specific.or(unix).or_else(|| p.default.clone())
+            }
+        };
+        line.filter(|l| l.first().is_some_and(|p| !p.trim().is_empty()))
+    }
 }
 
 fn default_version() -> String {
@@ -98,15 +184,21 @@ fn default_api() -> u32 {
     1
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum Runtime {
     /// A Glossa JavaScript module.
+    #[default]
     Js,
     /// A Python module speaking the module protocol over stdio.
     Python,
     /// A shared library exporting the C ABI.
     Native,
+    /// Any program speaking the module protocol over stdio (`command`).
+    Process,
+    /// A Java program speaking the module protocol over stdio: `java -jar`
+    /// on `entry`, or `main_class` on `classpath`.
+    Java,
     /// A classic QTranslate `Service.js`.
     Qtranslate,
     /// A pot-app plugin (`info.json` + `main.js`, or a `.potext` archive).
@@ -119,6 +211,8 @@ impl Runtime {
             Runtime::Js => "JavaScript",
             Runtime::Python => "Python",
             Runtime::Native => "Native",
+            Runtime::Process => "Process",
+            Runtime::Java => "Java",
             Runtime::Qtranslate => "QTranslate script",
             Runtime::Pot => "pot-app plugin",
         }
@@ -208,6 +302,9 @@ impl Manifest {
         }
         if self.capabilities.is_empty() {
             return Err("the manifest lists no capabilities".into());
+        }
+        if self.module.runtime == Runtime::Process && self.module.command.is_none() {
+            return Err("runtime = \"process\" needs a command, e.g. command = [\"node\", \"main.mjs\"]".into());
         }
         Ok(())
     }
@@ -327,6 +424,39 @@ mod tests {
         assert!(!p.allows_url("https://user:pw@other.org/"));
         assert!(!Permissions::default().allows_url("https://api.example.com/"));
         assert!(Permissions::allow_all().allows_url("http://anything/"));
+    }
+
+    #[test]
+    fn process_commands_parse_in_every_form() {
+        let head = "capabilities = [\"translate\"]\n[module]\nid = \"p\"\nname = \"P\"\nruntime = \"process\"\n";
+        let m = Manifest::parse(&format!(
+            "{head}command = [\"node\", \"main.mjs\"]\nargs = [\"-q\"]\nenv = {{ A = \"1\" }}"
+        ))
+        .unwrap();
+        assert_eq!(m.module.runtime, Runtime::Process);
+        assert_eq!(m.module.command.unwrap().for_platform("linux").unwrap(), ["node", "main.mjs"]);
+        assert_eq!((m.module.args, m.module.env["A"].as_str()), (vec!["-q".to_owned()], "1"));
+
+        let m = Manifest::parse(&format!("{head}command = \"./tool\"")).unwrap();
+        assert_eq!(m.module.command.unwrap().for_platform("windows").unwrap(), ["./tool"]);
+
+        let m = Manifest::parse(&format!(
+            "{head}command.windows = [\"tool.exe\"]\ncommand.unix = [\"./tool\"]\ncommand.macos = [\"./tool-mac\"]\ncommand.default = [\"java\", \"-jar\", \"t.jar\"]"
+        ))
+        .unwrap();
+        let c = m.module.command.unwrap();
+        assert_eq!(c.for_platform("windows").unwrap(), ["tool.exe"]);
+        assert_eq!(c.for_platform("macos").unwrap(), ["./tool-mac"]);
+        assert_eq!(c.for_platform("linux").unwrap(), ["./tool"]);
+        assert_eq!(c.for_platform("freebsd").unwrap(), ["./tool"]);
+        let only_windows =
+            CommandSpec::PerPlatform(PlatformCommands { windows: Some(vec!["x.exe".into()]), ..Default::default() });
+        assert_eq!(only_windows.for_platform("linux"), None);
+        assert_eq!(CommandSpec::Line(vec![]).for_platform("linux"), None);
+
+        assert!(Manifest::parse(head).unwrap_err().contains("needs a command"));
+        let java = head.replace("\"process\"", "\"java\"") + "entry = \"m.jar\"\njvm_args = [\"-Xmx64m\"]";
+        assert_eq!(Manifest::parse(&java).unwrap().module.runtime, Runtime::Java);
     }
 
     #[test]

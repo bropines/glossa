@@ -434,6 +434,7 @@ Set in *Options → Modules*, except `disabled`. See
 |---|---|---|---|
 | `dirs` | array of paths | `[]` | Extra folders to look for modules in, after the built-in ones. |
 | `python` | string | `""` | The Python interpreter for Python modules. Empty finds one on `PATH`. |
+| `java` | string | `""` | `java` for Java modules: the executable or a Java home folder. Empty looks in `JAVA_HOME`, on `PATH` and in the usual install folders. |
 | `allow_native` | bool | `true` | Load native (shared library) modules. They run with the program's full privileges. |
 | `allow_legacy_scripts` | bool | `true` | Load classic QTranslate `Service.js` scripts. |
 | `call_timeout_ms` | integer | `30000` | Time limit for one call into a module, 1000–600 000 ms. |

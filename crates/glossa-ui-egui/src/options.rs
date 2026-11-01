@@ -1479,6 +1479,13 @@ fn modules(app: &mut GlossaApp, ui: &mut egui::Ui, st: &mut OptionsState) {
                     .desired_width(280.0),
             );
         });
+        row(ui, &app.t("options.modules.java"), |ui| {
+            ui.add(
+                egui::TextEdit::singleline(&mut d.modules.java)
+                    .hint_text(app.t("options.modules.java_hint"))
+                    .desired_width(280.0),
+            );
+        });
         row(ui, &app.t("options.modules.call_timeout"), |ui| {
             ui.add(egui::DragValue::new(&mut d.modules.call_timeout_ms).range(1000..=600000));
         });

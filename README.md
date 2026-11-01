@@ -67,9 +67,9 @@
 - **AI translators**: any number of OpenAI-compatible endpoints (OpenAI,
   OpenRouter, DeepSeek, Gemini, Groq, Mistral, a local Ollama or LM Studio),
   made from presets, with the answer streaming into the popup as it is written.
-- **Modules** in JavaScript, Python or as native libraries (Rust, C, anything
-  with a C ABI), with one protocol for all three. Classic QTranslate services
-  and pot-app plugins run unchanged.
+- **Modules** in JavaScript, Python, Java or any language over stdio, or
+  native libraries (Rust, C, anything with a C ABI), with one protocol for
+  all of them. Classic QTranslate services and pot-app plugins run unchanged.
 - **Themes** as plain files, classic QTranslate themes included; Fluent
   (WinUI 3) themes following the system accent colour; Mica, Acrylic or blur
   backdrops on Windows 11 (vibrancy on macOS); window and popup
@@ -158,10 +158,11 @@ Details: [docs/ai-endpoints.md](docs/ai-endpoints.md).
 ## Modules
 
 A module is a folder with a `module.toml` and code, dropped into a modules
-folder. Glossa calls JavaScript in process, starts Python as a child process
-when first needed, and loads native libraries directly; all three get the same
-JSON requests and the same host calls (HTTP through Glossa's proxy settings,
-limited to the hosts the module declares).
+folder. Glossa calls JavaScript in process, starts Python, Java or any other
+program (Node, Go, C#…) as a child process when first needed, and loads native
+libraries directly; all of them get the same JSON requests and the same host
+calls (HTTP through Glossa's proxy settings, limited to the hosts the module
+declares).
 
 ```js
 // modules/my-translator/main.js
@@ -175,8 +176,8 @@ function translate(req, host) {
 ```
 
 Start with the [modules overview](docs/modules/README.md). Examples live in
-[`modules/`](modules): a dictionary in JavaScript, Python and Rust/C samples,
-and a Lens OCR module. The services bundled with Glossa are modules too, in
+[`modules/`](modules): a dictionary in JavaScript, Python, Java, Node.js and
+Rust/C samples, and a Lens OCR module. The services bundled with Glossa are modules too, in
 [`modules/bundled/`](modules/bundled); copying one into your modules folder
 and editing it replaces the bundled copy.
 
@@ -211,8 +212,9 @@ All pages, by topic: [docs/README.md](docs/README.md)
   the data folder is
 - [Text recognition](docs/ocr.md)
 - [Modules](docs/modules/README.md): guides for
-  [JavaScript](docs/modules/js-modules.md), [Python](sdk/python/README.md) and
-  [native](docs/modules/native-modules.md) modules, the
+  [JavaScript](docs/modules/js-modules.md), [Python](sdk/python/README.md),
+  [Java and any other language over stdio](docs/modules/process-modules.md)
+  and [native](docs/modules/native-modules.md) modules, the
   [protocol](docs/modules/protocol.md), and
   [classic QTranslate and pot-app scripts](docs/modules/classic-scripts.md)
 - [AI endpoints](docs/ai-endpoints.md)

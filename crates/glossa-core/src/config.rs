@@ -1148,6 +1148,9 @@ pub struct ModulesConfig {
     pub dirs: Vec<PathBuf>,
     /// The Python interpreter for Python modules. Empty finds one on `PATH`.
     pub python: String,
+    /// `java` for Java modules: the executable or a Java home folder. Empty
+    /// looks in `JAVA_HOME`, on `PATH` and in the usual install folders.
+    pub java: String,
     /// Load native (shared library) modules at all. They run with the
     /// program's full privileges, so this is a deliberate switch.
     pub allow_native: bool,
@@ -1164,6 +1167,7 @@ impl Default for ModulesConfig {
         Self {
             dirs: Vec::new(),
             python: String::new(),
+            java: String::new(),
             allow_native: true,
             allow_legacy_scripts: true,
             call_timeout_ms: 30_000,

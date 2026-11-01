@@ -181,6 +181,7 @@ impl LegacyMeta {
                 // A classic install brings dozens; the imported settings or
                 // the user decide which to show.
                 ready_to_use: false,
+                ..Default::default()
             },
             capabilities: caps.names().into_iter().map(String::from).collect(),
             languages,

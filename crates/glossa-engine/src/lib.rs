@@ -317,6 +317,7 @@ impl Engine {
         let paths = &self.inner.paths;
         let ctx = RuntimeContext {
             python: cfg.modules.python.clone(),
+            java: cfg.modules.java.clone(),
             allow_native: cfg.modules.allow_native,
             allow_legacy_scripts: cfg.modules.allow_legacy_scripts,
             call_timeout: Duration::from_millis(cfg.modules.call_timeout_ms),
