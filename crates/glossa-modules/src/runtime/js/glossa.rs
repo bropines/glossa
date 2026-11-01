@@ -185,6 +185,98 @@ mod tests {
         assert!(http.requests().is_empty(), "the out-of-scope request never left");
     }
 
+    #[cfg(feature = "image")]
+    #[test]
+    fn a_recognize_module_preprocesses_with_the_image_api() {
+        let p = provider(
+            r#"
+            function recognize(req, host) {
+                var g = host.image.grayscale(req.image_handle);
+                var big = host.image.scaleToMinHeight(g, { min_height: 32 });
+                var png = host.image.encode(big, { format: "png" });
+                if (png.mime !== "image/png" || !png.data_base64) throw new Error("no png");
+                var back = host.image.mapBoxBack([0, 0, big.width, big.height], big);
+                return { text: big.width + "x" + big.height, image_size: [big.width, big.height],
+                         blocks: [{ level: "line", text: "t", bbox: [8, 0, 16, 32] }],
+                         transform: big.transform,
+                         translation: back.join(",") };
+            }
+            "#,
+            "",
+        );
+        let mut bytes = Vec::new();
+        image::DynamicImage::ImageRgba8(image::RgbaImage::new(16, 8))
+            .write_to(&mut std::io::Cursor::new(&mut bytes), image::ImageFormat::Png)
+            .unwrap();
+        let http = MockHttp::new();
+        let opts = OptionValues::new();
+        with_test_host(&http, &opts, |host| {
+            let req = glossa_core::OcrRequest::new(glossa_core::ocr::ImageSource::Bytes(bytes.clone()));
+            let r = p.recognize(host, &req).unwrap();
+            assert_eq!(r.text, "64x32");
+            assert_eq!(r.translation.as_deref(), Some("0,0,16,8"), "mapBoxBack undoes the scaling");
+            assert_eq!(r.blocks[0].bounds, Some(glossa_core::ocr::Rect::new(2.0, 0.0, 2.0, 8.0)));
+            assert_eq!(r.image_size, Some((16, 8)), "the input's size, not the copy's");
+        });
+    }
+
+    /// The Cloud Vision example against a canned reply: lines are rebuilt
+    /// from the breaks, outlines become boxes, and the enlargement of the
+    /// small capture is undone.
+    #[cfg(feature = "image")]
+    #[test]
+    fn the_cloud_vision_example_maps_its_layout() {
+        // Boa in a debug build needs more than a test thread's 2 MB to turn
+        // a result this deep into JSON (release builds need a fraction);
+        // engine workers get 8 MB.
+        std::thread::Builder::new().stack_size(8 << 20).spawn(cloud_vision_example).unwrap().join().unwrap();
+    }
+
+    #[cfg(feature = "image")]
+    fn cloud_vision_example() {
+        let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../modules/js/google-vision-ocr");
+        let manifest = crate::manifest::Manifest::load(&dir.join("module.toml")).unwrap();
+        let p = super::super::load_glossa(&dir, manifest, &crate::registry::RuntimeContext::default()).unwrap();
+        let v = |x: u32, y: u32| serde_json::json!({ "x": x, "y": y });
+        let word = |t: &str, x: u32, brk: &str| {
+            serde_json::json!({ "boundingBox": { "vertices": [v(x, 0), v(x + 40, 0), v(x + 40, 48), v(x, 48)] },
+                "confidence": 0.9,
+                "symbols": [{ "text": t, "property": { "detectedBreak": { "type": brk } } }] })
+        };
+        let reply = serde_json::json!({ "responses": [{ "fullTextAnnotation": {
+            "text": "Hi there\nyou\n",
+            "pages": [{ "width": 96, "height": 96, "property": { "detectedLanguages": [{ "languageCode": "en" }] },
+                "blocks": [{ "boundingBox": { "vertices": [{}, v(96, 0), v(96, 96), v(0, 96)] }, "confidence": 0.8,
+                    "paragraphs": [{ "boundingBox": { "vertices": [{}, v(96, 0), v(96, 96), v(0, 96)] },
+                        "words": [word("Hi", 0, "SPACE"), word("there", 48, "EOL_SURE_SPACE"), word("you", 0, "LINE_BREAK")] }] }] }]
+        } }] });
+        let http = MockHttp::new().on(Method::Post, "https://vision.googleapis.com/", 200, &reply.to_string());
+        let mut opts = OptionValues::new();
+        opts.insert("api_key".into(), serde_json::json!("fake-key"));
+        opts.insert("min_height".into(), serde_json::json!(48));
+        let mut bytes = Vec::new();
+        image::DynamicImage::ImageRgba8(image::RgbaImage::new(48, 24))
+            .write_to(&mut std::io::Cursor::new(&mut bytes), image::ImageFormat::Png)
+            .unwrap();
+        with_test_host(&http, &opts, |host| {
+            let req = glossa_core::OcrRequest::new(glossa_core::ocr::ImageSource::Bytes(bytes.clone()));
+            let r = p.recognize(host, &req).unwrap();
+            assert_eq!(r.text, "Hi there\nyou");
+            assert_eq!(r.detected_lang, Some(LangId::ENGLISH));
+            let para = &r.blocks[0].children[0];
+            let lines: Vec<&str> = para.children.iter().map(|l| l.text.as_str()).collect();
+            assert_eq!(lines, ["Hi there", "you"]);
+            // The capture was doubled to 48 px high; boxes come back halved.
+            assert_eq!(r.blocks[0].bounds, Some(glossa_core::ocr::Rect::new(0.0, 0.0, 48.0, 48.0)));
+            let hi = &para.children[0].children[0];
+            assert_eq!(hi.bounds, Some(glossa_core::ocr::Rect::new(0.0, 0.0, 20.0, 24.0)));
+            assert_eq!(hi.confidence, Some(0.9));
+            assert_eq!(r.image_size, Some((48, 24)));
+        });
+        let sent = &http.requests()[0];
+        assert!(sent.url.contains("key=fake-key"));
+    }
+
     #[test]
     fn missing_entry_points_are_unsupported_not_crashes() {
         let p = provider("function translate() { return 'x'; }", "");

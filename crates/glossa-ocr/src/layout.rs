@@ -5,7 +5,7 @@
 //! children when the caller asked for words. Kept free of any OS code so it
 //! is tested everywhere.
 
-use glossa_core::ocr::{OcrBlock, OcrGranularity, Rect};
+use glossa_core::ocr::{OcrBlock, OcrGranularity, OcrLevel, Rect};
 use glossa_core::{OcrRequest, OcrResult};
 
 /// A quadrilateral in image pixels, corners clockwise from the top left of
@@ -34,25 +34,24 @@ impl Shape {
     }
 }
 
-/// See [`Shape::geometry`].
+/// See [`Shape::geometry`]. Below a fraction of a degree is noise from the
+/// detector, and level text is reported as level so the overlay does not
+/// draw it tilted.
 pub fn quad_geometry(q: &Quad) -> (Rect, f32) {
-    let (x1, y1, x2, y2, x3, y3, x4, y4) = (q[0], q[1], q[2], q[3], q[4], q[5], q[6], q[7]);
-    let cx = (x1 + x2 + x3 + x4) / 4.0;
-    let cy = (y1 + y2 + y3 + y4) / 4.0;
-    // Average opposite edges: an engine's quads are rarely exact rectangles.
-    let w = (dist(x1, y1, x2, y2) + dist(x4, y4, x3, y3)) / 2.0;
-    let h = (dist(x1, y1, x4, y4) + dist(x2, y2, x3, y3)) / 2.0;
-    let mut angle = ((y2 - y1) + (y3 - y4)).atan2((x2 - x1) + (x3 - x4));
-    // Below a fraction of a degree is noise from the detector; report level
-    // text as level so the overlay does not draw it tilted.
-    if angle.abs() < 0.005 {
-        angle = 0.0;
-    }
-    (Rect::new(cx - w / 2.0, cy - h / 2.0, w, h), angle)
+    glossa_core::ocr::quad_geometry(&quad_points(q))
 }
 
-fn dist(ax: f32, ay: f32, bx: f32, by: f32) -> f32 {
-    ((bx - ax).powi(2) + (by - ay).powi(2)).sqrt()
+fn quad_points(q: &Quad) -> [[f32; 2]; 4] {
+    [[q[0], q[1]], [q[2], q[3]], [q[4], q[5]], [q[6], q[7]]]
+}
+
+/// The outline worth keeping: a quad's corners when the text is rotated
+/// (level text is described fully by its box).
+fn outline(shape: Option<Shape>) -> Vec<[f32; 2]> {
+    match shape {
+        Some(Shape::Quad(q)) if quad_geometry(&q).1 != 0.0 => quad_points(&q).to_vec(),
+        _ => Vec::new(),
+    }
 }
 
 /// The smallest rectangle holding all of `rects`.
@@ -73,6 +72,8 @@ pub fn union(rects: impl IntoIterator<Item = Rect>) -> Option<Rect> {
 pub struct RawWord {
     pub text: String,
     pub shape: Option<Shape>,
+    /// 0–1, when the engine reports it (OneOCR does).
+    pub confidence: Option<f32>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -99,13 +100,30 @@ impl RawLine {
                 .iter()
                 .map(|w| {
                     let (bounds, angle) = w.shape.map(|s| s.geometry()).map_or((None, 0.0), |(r, a)| (Some(r), a));
-                    OcrBlock { text: w.text.clone(), bounds, angle, children: Vec::new() }
+                    OcrBlock {
+                        bounds,
+                        angle,
+                        polygon: outline(w.shape),
+                        confidence: w.confidence.map(|c| c.clamp(0.0, 1.0)),
+                        ..OcrBlock::new(OcrLevel::Word, w.text.clone())
+                    }
                 })
                 .collect()
         } else {
             Vec::new()
         };
-        OcrBlock { text: self.text.clone(), bounds, angle, children }
+        // A line is as sure as its words on average, when they all say.
+        let confidences: Option<Vec<f32>> = self.words.iter().map(|w| w.confidence).collect();
+        let confidence =
+            confidences.filter(|c| !c.is_empty()).map(|c| (c.iter().sum::<f32>() / c.len() as f32).clamp(0.0, 1.0));
+        OcrBlock {
+            bounds,
+            angle,
+            children,
+            polygon: outline(self.shape),
+            confidence,
+            ..OcrBlock::new(OcrLevel::Line, self.text.clone())
+        }
     }
 }
 
@@ -192,6 +210,9 @@ pub fn unmap(blocks: &mut [OcrBlock], margin: f32, factor: f64) {
         if let Some(r) = &mut b.bounds {
             *r = Rect::new((r.x - margin) * k, (r.y - margin) * k, r.width * k, r.height * k);
         }
+        for p in &mut b.polygon {
+            *p = [(p[0] - margin) * k, (p[1] - margin) * k];
+        }
         unmap(&mut b.children, margin, factor);
     }
 }
@@ -209,7 +230,36 @@ mod tests {
     }
 
     fn word(text: &str, x: f32) -> RawWord {
-        RawWord { text: text.into(), shape: Some(Shape::Rect(Rect::new(x, 10.0, 20.0, 8.0))) }
+        RawWord { text: text.into(), shape: Some(Shape::Rect(Rect::new(x, 10.0, 20.0, 8.0))), confidence: None }
+    }
+
+    #[test]
+    fn levels_confidence_and_rotated_outlines_are_kept() {
+        let tilted = [55.0, 30.0, 55.0, 70.0, 45.0, 70.0, 45.0, 30.0];
+        let lines = vec![RawLine {
+            text: "a b".into(),
+            shape: Some(Shape::Quad(tilted)),
+            words: vec![
+                RawWord { text: "a".into(), shape: Some(Shape::Quad(tilted)), confidence: Some(0.9) },
+                RawWord { text: "b".into(), shape: None, confidence: Some(0.5) },
+            ],
+        }];
+        let r = build_result(&lines, &req(OcrGranularity::Words, true), (100, 100));
+        let line = &r.blocks[0];
+        assert_eq!(line.level, Some(OcrLevel::Line));
+        assert_eq!(line.children[0].level, Some(OcrLevel::Word));
+        assert_eq!(line.children[0].confidence, Some(0.9));
+        assert!((line.confidence.unwrap() - 0.7).abs() < 1e-6, "the mean of its words");
+        assert_eq!(line.polygon.len(), 4, "a rotated quad keeps its corners");
+        assert!(line.children[1].polygon.is_empty());
+        let level = vec![RawLine {
+            text: "x".into(),
+            shape: Some(Shape::Quad([0.0, 0.0, 9.0, 0.0, 9.0, 5.0, 0.0, 5.0])),
+            words: vec![],
+        }];
+        let r = build_result(&level, &req(OcrGranularity::Lines, true), (10, 10));
+        assert!(r.blocks[0].polygon.is_empty(), "a level box needs no outline");
+        assert_eq!(r.blocks[0].confidence, None);
     }
 
     fn sample() -> Vec<RawLine> {

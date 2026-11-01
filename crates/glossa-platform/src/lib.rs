@@ -45,6 +45,7 @@ pub mod idle;
 pub mod input;
 pub mod layout;
 pub mod mouse;
+pub mod permissions;
 pub mod selection;
 pub mod session;
 pub mod window;

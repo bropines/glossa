@@ -22,7 +22,14 @@
  *   detect       {text, options}                           {lang, confidence?}
  *   dictionary   {text, from, to, exact, options}          {headword, explanations, ...}
  *   speak        {text, lang, slow, options}               {audio_base64, mime}
- *   recognize    {image_base64, lang, ...,  options}       {text, translation?, ...}
+ *   recognize    {image_base64, image_handle?, lang,       {text, translation?, detected_lang?,
+ *                 translate_to?, granularity?,              blocks?, image_size?, hocr?, alto?,
+ *                 preserve_line_breaks, options}            transform?}
+ *
+ * A recognize result may carry its layout as "blocks" (a tree of
+ * {level, text, bounds|bbox, angle?, polygon?, confidence?, baseline?, lang?,
+ * direction?, translation?, children?}), or as an hOCR ("hocr") or ALTO
+ * ("alto") document. See docs/modules/ocr-modules.md.
  *
  * Languages are BCP 47 codes ("en", "zh-Hans") or "auto". Object keys may
  * arrive in any order and unknown keys must be ignored.
@@ -47,6 +54,20 @@
  *   log        {level: "trace"|"debug"|"info"|"warn"|"error", message} -> null
  *   cache_get  {key} -> value or null
  *   cache_set  {key, value, ttl_secs} -> null
+ *
+ *   image.<op> the image API, e.g. "image.grayscale" with {handle} or
+ *              {data_base64}, plus the operation's parameters
+ *              -> {handle, width, height, channels, transform, ...}
+ *              Operations: decode, info, encode, pixels, free, new, crop,
+ *              resize, scale_to_min_height, rotate, flip, grayscale, invert,
+ *              threshold, adaptive_threshold, adjust, normalize, blur,
+ *              sharpen, pad, deskew, split_tiles, paste, draw_rect. Handles
+ *              are valid until the call that created them returns; the
+ *              request image of recognize is "image_handle". "transform" is
+ *              [a, b, c, d, e, f] mapping a pixel (x, y) of the result back
+ *              to the original image: x' = a*x + b*y + c, y' = d*x + e*y + f
+ *              (glossa_map_point below). Parameters are documented in
+ *              docs/modules/ocr-modules.md.
  *
  * ---------------------------------------------------------------------------
  * Ownership — each side frees only what it allocated
@@ -158,6 +179,21 @@ typedef struct GlossaModuleVTable {
  *   }
  */
 typedef const GlossaModuleVTable *(*GlossaEntryFn)(void);
+
+/* Map a point of an image derived through the image API back onto the
+ * original, with the "transform" array an image.* call returned. To map a
+ * box back, map its four corners and take their bounding box. */
+#if defined(_MSC_VER) && !defined(__cplusplus)
+#  define GLOSSA_INLINE static __inline
+#else
+#  define GLOSSA_INLINE static inline
+#endif
+
+GLOSSA_INLINE void glossa_map_point(const double transform[6], double x, double y, double *out_x, double *out_y)
+{
+    *out_x = transform[0] * x + transform[1] * y + transform[2];
+    *out_y = transform[3] * x + transform[4] * y + transform[5];
+}
 
 #ifdef __cplusplus
 } /* extern "C" */

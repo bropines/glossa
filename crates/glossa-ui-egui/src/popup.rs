@@ -615,8 +615,9 @@ fn body(app: &mut GlossaApp, ui: &mut egui::Ui, st: &mut PopupState) -> (bool, e
                 cfg.max_height - 40.0 - icon - strip_h
             };
             if let Some(partial) = st.partial.clone().filter(|_| st.busy) {
+                let rtl = glossa_core::text::guessed_direction(&partial).is_rtl();
                 let out = egui::ScrollArea::vertical().max_height(scroll_h).stick_to_bottom(true).show(ui, |ui| {
-                    ui.add(egui::Label::new(RichText::new(partial).font(font.clone()).color(text_color)).wrap());
+                    crate::bidi::label(ui, RichText::new(partial).font(font.clone()).color(text_color), rtl);
                 });
                 overflow = (out.content_size.y - out.inner_rect.height()).max(0.0);
             } else if st.busy {
@@ -627,33 +628,17 @@ fn body(app: &mut GlossaApp, ui: &mut egui::Ui, st: &mut PopupState) -> (bool, e
             } else if let Some(e) = &st.error {
                 ui.label(RichText::new(e).color(look.error()).font(font.clone()));
             } else if let Some(o) = st.outcome.clone() {
-                let rtl = o.pair.to.is_rtl();
-                let primary = &o.translation.text;
-                let primary = if glossa_core::text::needs_bidi(primary) {
-                    glossa_core::text::for_display(primary, rtl)
-                } else {
-                    primary.clone()
-                };
+                let primary = o.translation.text.clone();
+                let rtl = o.pair.to.is_rtl() || glossa_core::text::guessed_direction(&primary).is_rtl();
                 let secondary = secondary_text(&o.translation);
                 let primary_label = |ui: &mut egui::Ui| {
-                    let label = egui::Label::new(RichText::new(primary.clone()).font(font.clone()).color(text_color))
-                        .selectable(true)
-                        .wrap();
-                    if rtl {
-                        ui.with_layout(egui::Layout::top_down(egui::Align::Max), |ui| ui.add(label));
-                    } else {
-                        ui.add(label);
-                    }
+                    crate::bidi::label(ui, RichText::new(primary.clone()).font(font.clone()).color(text_color), rtl);
                 };
                 let secondary_font = egui::FontId::proportional(font.size * 0.92);
                 let secondary_label = |ui: &mut egui::Ui, text: &str| {
-                    ui.add(
-                        egui::Label::new(
-                            RichText::new(text).font(secondary_font.clone()).color(text_color.gamma_multiply(0.62)),
-                        )
-                        .selectable(true)
-                        .wrap(),
-                    );
+                    let rtl = glossa_core::text::guessed_direction(text).is_rtl();
+                    let text = RichText::new(text).font(secondary_font.clone()).color(text_color.gamma_multiply(0.62));
+                    crate::bidi::label(ui, text, rtl);
                 };
                 match (&secondary, fixed) {
                     // A fixed window: the translation above, the rest below,

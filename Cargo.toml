@@ -13,6 +13,7 @@ members = [
     "crates/glossa-cli",
     "crates/glossa-ui-egui",
     "modules/native/example-rot13",
+    "modules/native/example-lines",
 ]
 exclude = ["third_party"]
 

@@ -1,6 +1,6 @@
 [package]
 name = "glossa-modules"
-description = "The provider API and the module runtimes: JavaScript (Glossa, classic QTranslate, pot-app), Python, native."
+description = "The provider API and the module runtimes: JavaScript (Glossa, classic QTranslate, pot-app), Python, Java and any program over stdio, native."
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -8,10 +8,14 @@ license.workspace = true
 authors.workspace = true
 
 [features]
-default = ["js", "python", "native"]
+default = ["js", "python", "process", "native", "image"]
 js = ["dep:boa_engine", "dep:boa_gc"]
 python = []
+# Any program over stdio (`runtime = "process"`) and Java modules (`runtime = "java"`).
+process = []
 native = ["dep:libloading"]
+# The image API offered to modules as `image.*` host calls.
+image = ["dep:image"]
 
 [dependencies]
 glossa-core = { workspace = true }
@@ -27,6 +31,7 @@ thiserror = { workspace = true }
 boa_engine = { workspace = true, optional = true }
 boa_gc = { version = "0.22", optional = true }
 libloading = { workspace = true, optional = true }
+image = { workspace = true, optional = true }
 md-5 = "0.10"
 sha1 = "0.10"
 sha2 = "0.10"

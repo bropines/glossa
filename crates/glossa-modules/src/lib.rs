@@ -4,11 +4,16 @@
 //!   speech and OCR source implements, built-in or loaded.
 //! * [`manifest`] — `module.toml`.
 //! * [`registry`] — finding modules on disk and keeping the provider list.
-//! * [`protocol`] / [`host_api`] — the module protocol, shared by the Python
-//!   and native runtimes.
-//! * [`runtime`] — the runtimes: JavaScript (three dialects), Python, native.
+//! * [`protocol`] / [`host_api`] — the module protocol, shared by the stdio
+//!   (Python, Java, any program) and native runtimes.
+//! * [`runtime`] — the runtimes: JavaScript (three dialects), Python, Java
+//!   and generic processes over one stdio transport, native.
+//! * [`image_ops`] — the image API modules reach through `image.*` host calls
+//!   (the `image` feature).
 
 pub mod host_api;
+#[cfg(feature = "image")]
+pub mod image_ops;
 pub mod manifest;
 pub mod protocol;
 pub mod provider;

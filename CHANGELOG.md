@@ -52,6 +52,32 @@ for Windows and Linux.
   Windows 11 Snipping Tool's engine, loaded from the user's own installation;
   nothing of Microsoft's is shipped). Both pick-able in *Options → Text
   recognition* and with `glossa-cli ocr --engine windows-ocr|oneocr`.
+- **Offline OCR on macOS and Linux**: Apple Vision (`macos-vision`, the Live
+  Text recogniser built into macOS 10.15 and later; accurate or fast,
+  language correction, automatic language on macOS 13+) and Tesseract
+  (`tesseract`, on every OS where it is installed; lines and words with
+  boxes from its TSV output, page segmentation and engine modes, clear
+  install instructions for a missing program or language). Both have their
+  own section in *Options → Text recognition*.
+- **OCR fail-over reaches an offline engine** when the chosen one is not
+  installed (Lens without chrome-lens-py): Windows OCR, Apple Vision or
+  Tesseract, in that order of availability. OneOCR is never a fallback.
+- **macOS builds** in CI and the release: `Glossa.app` (a menu-bar app) and
+  `glossa-cli`, for Apple silicon and as a universal binary; not notarised.
+- **A standard OCR result**: every engine's result is one page of blocks,
+  paragraphs, lines and words with boxes, rotation, outlines, confidence,
+  baselines, language, writing direction and per-region translations (Lens's
+  per-paragraph and per-line translations are kept; OneOCR reports word
+  confidence). It exports to hOCR 1.2, ALTO v4, JSON and text
+  (`glossa-cli ocr --format hocr|alto|json|text`, `format` on `POST /v1/ocr`),
+  and hOCR or ALTO from an engine or module is read back.
+- **OCR modules with an image API**: an OCR module may return the layout as
+  JSON blocks, hOCR or ALTO, and gets PIL/OpenCV-style preprocessing from
+  Glossa as `image.*` host calls in every runtime (crop, resize, rotate,
+  deskew, thresholds including Otsu and adaptive, levels, blur, sharpen, pad,
+  tiles, PNG/JPEG/WebP encoding…), on handles that carry the transform back to
+  the original picture. Guide: `docs/modules/ocr-modules.md`; examples
+  `google-vision-ocr` (JS), `ocr-space` (Python), `example-lines` (Rust).
 - **Dictionaries**: online (Google) and offline (StarDict with dictzip, DSL,
   XDXF, tab-separated), with articles simplified for display.
 - **Text to speech** with the classic slower repeat; MP3, WAV and Ogg Vorbis
@@ -62,8 +88,20 @@ for Windows and Linux.
   protocol, with per-module network permissions and options generated into
   the settings. Classic QTranslate service scripts (with a reimplemented
   `Common.js` helper API and WSH-style HTTP objects) and pot-app plugins run
-  unchanged. Examples: `free-dictionary` (JS), `example-reverse` and
-  `lens-ocr` (Python), `example-rot13` (Rust) and `example-c` (C).
+  unchanged. Examples: `free-dictionary` and `google-vision-ocr` (JS),
+  `example-reverse`, `lens-ocr` and `ocr-space` (Python), `example-rot13` and
+  `example-lines` (Rust) and `example-c` (C).
+- **Java and any-language modules**: `runtime = "process"` runs any program
+  that speaks the module protocol over stdio (`command`, per-platform
+  `command.windows` / `.macos` / `.linux`, `args`, `env`, `cwd`), and
+  `runtime = "java"` runs a jar or a main class with Java found through the
+  new *Java* setting, `JAVA_HOME`, `PATH` or the usual install folders (a
+  missing Java fails the load with install instructions). Python, Java and
+  process modules share one stdio transport: same timeouts, idle stop,
+  restart and logging, and every host call. A dependency-free Java 17 SDK
+  (`sdk/java`, usable from Kotlin) and examples `example-upper` (Java) and
+  `example-node` (Node.js, no SDK). `glossa-cli modules` shows each module's
+  runtime.
 - **Classic QTranslate**: point Glossa at an installation to use its
   services, themes and languages in place, or import its `Options.json` and
   history with `glossa-cli import-classic`. The import maps classic services
@@ -187,6 +225,15 @@ for Windows and Linux.
   opens, and every script in the language table has a font on Windows and
   through fontconfig. Right-to-left names read the right way round.
 - The source and translation panes have the same inner margins.
+- Arabic, Persian, Urdu and Hebrew text came out backwards with letters
+  joined wrongly: a hand-made reversal fought egui's own shaping. The text
+  now goes through the Unicode bidi algorithm (`bidi` module): each run is
+  shaped in its own direction, rows wrap in logical order and their runs
+  are placed in visual order, so mixed Arabic and Latin lines, numbers,
+  brackets and wrapped paragraphs read right, in the popup, the main
+  window (both panes), the stacked view, history, dictionary articles and
+  the language lists. Copying still copies the logical text. Indic, Khmer,
+  Myanmar and Sinhala text was already shaped correctly and is unchanged.
 
 ### Known gaps
 
@@ -194,3 +241,7 @@ for Windows and Linux.
   not available on macOS yet.
 - On Wayland, global hotkeys, mouse mode and reading the selection depend on
   the compositor; bind keys to the control API instead.
+- In a right-to-left row, the caret and a mouse selection that starts or
+  ends inside the row are approximate (egui's cursor code expects positions
+  to grow with the character index); selecting whole rows and *Copy all*
+  work.

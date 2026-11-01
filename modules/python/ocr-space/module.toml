@@ -1,0 +1,65 @@
+# Text recognition with the OCR.space API (a free key is needed:
+# https://ocr.space/ocrapi). An example of an OCR module in Python: it fits
+# the picture into the service's limits with the host's image API, calls the
+# service through host.http, and maps the word boxes back onto the original
+# picture with map_box_back.
+capabilities = ["ocr"]
+
+[module]
+id = "ocr-space"
+name = "OCR.space"
+version = "1.0.0"
+api = 1
+runtime = "python"
+entry = "main.py"
+description = "OCR.space's free OCR API: lines and words with boxes, 25+ languages."
+homepage = "https://ocr.space/ocrapi"
+license = "MIT"
+idle_timeout_secs = 120
+
+[language_map]
+# Glossa's codes -> the service's three-letter ones.
+"ar" = "ara"
+"bg" = "bul"
+"zh-Hans" = "chs"
+"zh-Hant" = "cht"
+"hr" = "hrv"
+"cs" = "cze"
+"da" = "dan"
+"nl" = "dut"
+"en" = "eng"
+"fi" = "fin"
+"fr" = "fre"
+"de" = "ger"
+"el" = "gre"
+"hu" = "hun"
+"ko" = "kor"
+"it" = "ita"
+"ja" = "jpn"
+"pl" = "pol"
+"pt" = "por"
+"ru" = "rus"
+"sl" = "slv"
+"es" = "spa"
+"sv" = "swe"
+"th" = "tha"
+"tr" = "tur"
+"uk" = "ukr"
+"vi" = "vnm"
+
+[permissions]
+network = ["api.ocr.space"]
+
+[[options]]
+key = "api_key"
+type = "secret"
+label = "API key"
+required = true
+help = "Register for a free key at https://ocr.space/ocrapi"
+
+[[options]]
+key = "engine"
+type = "select"
+label = "Engine"
+default = "2"
+choices = [{ value = "1", label = "Engine 1 (more languages)" }, { value = "2", label = "Engine 2 (automatic language, better with Latin scripts)" }]

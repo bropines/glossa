@@ -73,6 +73,33 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
       - run: cargo test --workspace --locked
+      # The Tesseract provider against the real program, on a picture the
+      # test draws itself.
+      - name: Tesseract live test
+        run: |
+          sudo apt-get install -y --no-install-recommends tesseract-ocr tesseract-ocr-eng tesseract-ocr-rus
+          cargo test -p glossa-ocr --locked tesseract:: -- --ignored --nocapture
+
+  macos:
+    # The code behind cfg(target_os = "macos") (Apple Vision OCR, AppKit,
+    # Accessibility) is only compiled, linted and tested here. macos-latest
+    # runs on Apple silicon.
+    name: clippy + test (macos)
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo clippy --workspace --all-targets --locked -- -D warnings
+      - run: cargo test --workspace --locked
+      # Vision ships with macOS, so the live test can run on the runner; it is
+      # informative rather than gating while the runners' Vision behaviour is
+      # unproven.
+      - name: Apple Vision live test
+        continue-on-error: true
+        run: cargo test -p glossa-ocr --locked vision::tests::recognises -- --ignored --nocapture
 
   windows:
     # The platform code behind cfg(windows) (UI Automation, the clipboard,

@@ -9,6 +9,8 @@ being rebuilt.
 |---|---|---|---|---|
 | JavaScript | `main.js` | inside Glossa (boa engine), a fresh context per call | web APIs: a few requests and some JSON | [js-modules.md](js-modules.md) |
 | Python | `main.py` | a child process, started on first use, stopped when idle | anything needing Python libraries (ML models, `chrome-lens-py`, scraping) | [../../sdk/python/README.md](../../sdk/python/README.md) |
+| Java | a `.jar` (Java, Kotlin, any JVM language) | a child process like Python, with Java found for you | JVM libraries and engines (Tess4J, ONNX Runtime for Java, Lucene), Kotlin code | [process-modules.md](process-modules.md#java-modules), [../../sdk/java/README.md](../../sdk/java/README.md) |
+| Process | any program: `node main.mjs`, a Go or C# binary, a script | a child process like Python | any language with stdin and stdout; no SDK needed | [process-modules.md](process-modules.md) |
 | Native | a `.dll` / `.so` / `.dylib` | loaded into Glossa | speed, offline engines, other languages with a C ABI (Rust, C, C++, Go, Zig) | [native-modules.md](native-modules.md) |
 
 Glossa also loads, without changes, scripts written for other programs:
@@ -16,10 +18,16 @@ classic **QTranslate** `Service.js` services and **pot-app** plugins
 (`info.json` + `main.js`, or a `.potext` archive). See
 [classic-scripts.md](classic-scripts.md).
 
-All three native kinds speak the same [module protocol](protocol.md): the same
+All the Glossa kinds speak the same [module protocol](protocol.md): the same
 JSON requests, the same results, the same host calls. To the engine they are
 interchangeable, and a module can move from one runtime to another without
-reshaping its data.
+reshaping its data. Python, Java and process modules share one transport (JSON
+lines over stdio), so they behave identically.
+
+Writing a text recognition module (a network OCR service, a local engine)?
+[ocr-modules.md](ocr-modules.md) covers the result format (JSON layout, hOCR
+or ALTO), the coordinate rules and the image API every runtime gets for
+preprocessing.
 
 ## Where modules live
 
@@ -44,6 +52,12 @@ modules/
 ├── lens-ocr/               a Python module
 │   ├── module.toml
 │   └── main.py
+├── example-upper/          a Java module
+│   ├── module.toml
+│   └── module.jar
+├── example-node/           a process module (Node.js)
+│   ├── module.toml
+│   └── main.mjs
 └── shout/                  a native module
     ├── module.toml
     └── shout.dll
@@ -96,15 +110,23 @@ id = "my-translator"          # lowercase letters, digits, - _ . ; unique
 name = "My Translator"        # shown in the UI
 version = "1.0.0"
 api = 1                       # module protocol major version
-runtime = "js"                # js | python | native
-entry = "main.js"             # main.js / main.py / the library's file stem
+runtime = "js"                # js | python | java | process | native
+entry = "main.js"             # main.js / main.py / module.jar / the library's file stem
 description = "One line for the services list."
 homepage = "https://example.com"
 author = "You"
 license = "MIT"
 max_input_chars = 5000        # optional: longer text is cut at a word boundary
-idle_timeout_secs = 300       # Python only: stop the process after this long unused
+idle_timeout_secs = 300       # Python, Java, process: stop the process after this long unused
 ready_to_use = true           # works with no key or setup: switched on when it first appears
+# Python, Java and process modules only (see process-modules.md):
+# command = ["node", "main.mjs"]   # process: the program; or command.windows / .macos / .linux / .unix / .default
+# args = ["--quiet"]               # appended after the command, script or jar
+# env = { KEY = "value" }          # environment for the process; ${MODULE_DIR} is the module's folder
+# cwd = "."                        # working directory, relative to the module's folder
+# main_class = "com.example.Main"  # java: run a class instead of `java -jar <entry>`
+# classpath = ["classes", "lib/*"] # java: with main_class
+# jvm_args = ["-Xmx64m"]           # java: JVM options
 
 [language_map]                # optional: Glossa's code -> the service's
 "zh-Hans" = "zh"
@@ -136,7 +158,7 @@ choices = [{ value = "default", label = "Default" }, { value = "more", label = "
 | `detect_language` | `detect` | a language detector |
 | `dictionary` | `dictionary` | a dictionary (dictionary window, single words) |
 | `listen` | `speak` | text to speech |
-| `ocr` | `recognize` | text recognition for screen regions |
+| `ocr` | `recognize` | text recognition for screen regions ([guide](ocr-modules.md)) |
 
 **Languages** are BCP 47 codes: `en`, `ru`, `zh-Hans`, `zh-Hant`, `pt-BR`…
 `glossa-cli services` and the languages list in the main window show the full
@@ -146,8 +168,8 @@ differently, map it in `[language_map]` instead of in code.
 **Permissions** limit the requests a module makes *through Glossa*
 (`host.fetch` / `host.http`): a request to a host not on the list never
 leaves, and the module gets an error naming the permission. Those requests use
-the user's proxy settings and Glossa's timeouts and retries. A Python or
-native module can open its own connections; permissions do not cover those
+the user's proxy settings and Glossa's timeouts and retries. A Python, Java,
+process or native module can open its own connections; permissions do not cover those
 (they are ordinary programs), which is one reason to prefer the host calls.
 
 **Switching on.** Glossa keeps no fixed list of services. When a provider
@@ -182,6 +204,20 @@ clean test with only your module in `<dir>/modules`.
   nothing to install for the user.
 - You need a Python library, or the code already exists in Python: **Python**.
   The process costs memory only while in use.
-- A local engine, heavy computation, or a language other than JS/Python:
-  **native**. Fastest, but a crash in it takes Glossa down, so it is for code
-  you trust.
+- The code is Java or Kotlin, or needs a JVM library: **Java**. Same process
+  model as Python; the user needs a Java 17+ runtime, and Glossa says how to
+  get one if it is missing.
+- Any other language (Node, Go, C#, Ruby, a compiled binary): **process**.
+  Read JSON lines on stdin, write them on stdout; no SDK, nothing linked into
+  Glossa, and a crash only costs that one call.
+- A local engine that must be as fast as possible, called from Rust, C, C++
+  or Zig: **native**. No process boundary, but a crash in it takes Glossa
+  down, so it is for code you trust.
+
+| | JavaScript | Python | Java | process | native |
+|---|---|---|---|---|---|
+| user installs | nothing | Python 3.8+ | Java 17+ | the program's runtime | nothing |
+| memory while idle | none | none (stopped) | none (stopped) | none (stopped) | the library |
+| start-up | instant | tens of ms | a fraction of a second | the program's | instant |
+| a crash takes down | the call | the call | the call | the call | Glossa |
+| SDK | built in | `sdk/python` | `sdk/java` | none needed | `glossa-module-sdk`, `glossa_module.h` |

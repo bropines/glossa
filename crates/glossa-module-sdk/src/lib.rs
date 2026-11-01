@@ -138,6 +138,41 @@ impl<'a> Host<'a> {
         let _ = self.call_host("cache_set", &serde_json::json!({ "key": key, "value": value, "ttl_secs": ttl_secs }));
     }
 
+    /// One operation of the host's image API (`image.<op>` host call), on a
+    /// handle valid for the current call:
+    ///
+    /// ```ignore
+    /// let gray = host.image("grayscale", json!({ "handle": req.image_handle }))?;
+    /// let big = host.image("scale_to_min_height", json!({ "handle": gray.handle, "min_height": 32 }))?;
+    /// ```
+    ///
+    /// The operations and their parameters are listed in
+    /// `docs/modules/ocr-modules.md`.
+    pub fn image(&self, op: &str, params: serde_json::Value) -> Result<ImageInfo, ModuleError> {
+        let out = self.call_host(&format!("image.{op}"), &params)?;
+        serde_json::from_value(out).map_err(|e| ModuleError::other(format!("host image.{op} reply: {e}")))
+    }
+
+    /// Register encoded image bytes (PNG, JPEG, WebP, BMP…) with the image
+    /// API.
+    pub fn image_decode(&self, bytes: &[u8]) -> Result<ImageInfo, ModuleError> {
+        use base64::Engine;
+        self.image(
+            "decode",
+            serde_json::json!({ "data_base64": base64::engine::general_purpose::STANDARD.encode(bytes) }),
+        )
+    }
+
+    /// Encode an image: `format` is `png`, `jpeg` or `webp` (lossless);
+    /// `quality` 1–100 applies to JPEG.
+    pub fn image_encode(&self, handle: u32, format: &str, quality: Option<u8>) -> Result<Vec<u8>, ModuleError> {
+        let mut params = serde_json::json!({ "handle": handle, "format": format });
+        if let Some(q) = quality {
+            params["quality"] = q.into();
+        }
+        self.image("encode", params)?.bytes()
+    }
+
     fn call_host(&self, method: &str, params: &serde_json::Value) -> Result<serde_json::Value, ModuleError> {
         let method_c = CString::new(method).expect("method names have no NUL");
         let params_c = CString::new(params.to_string()).map_err(|e| ModuleError::other(e.to_string()))?;
@@ -154,6 +189,12 @@ impl<'a> Host<'a> {
         let reply: Reply = serde_json::from_str(&text).map_err(|e| ModuleError::other(format!("host reply: {e}")))?;
         reply.into_result()
     }
+}
+
+/// The box, in the image the module was given, around `rect` found in a
+/// preprocessed copy whose image-API transform is `transform`.
+pub fn map_box_back(rect: Rect, transform: &Transform) -> Rect {
+    transform.map_rect(rect)
 }
 
 /// Export a [`Module`] implementation from a `cdylib`.

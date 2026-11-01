@@ -49,8 +49,9 @@
   click on the tray icon turns it on and off; the icon changes colour.
 - **Recognise text on screen** (OCR) and translate it: drag over a region,
   copy it, or watch it and re-translate when it changes. Google Lens through
-  [chrome-lens-py](https://github.com/bropines/chrome-lens-py); offline on
-  Windows with Windows OCR or the Snipping Tool's OneOCR engine.
+  [chrome-lens-py](https://github.com/bropines/chrome-lens-py); offline with
+  Windows OCR or the Snipping Tool's OneOCR engine on Windows, Apple Vision
+  on macOS, and Tesseract anywhere; or through a module or any command.
 - **Dictionary**: online (Google, Yandex, Multitran, ABBYY Lingvo Live,
   Oxford Learner's, Wiktionary, Youdao, Academic, Wikipedia, Urban
   Dictionary, and the classic dictionary scripts) and offline (StarDict, DSL,
@@ -66,9 +67,9 @@
 - **AI translators**: any number of OpenAI-compatible endpoints (OpenAI,
   OpenRouter, DeepSeek, Gemini, Groq, Mistral, a local Ollama or LM Studio),
   made from presets, with the answer streaming into the popup as it is written.
-- **Modules** in JavaScript, Python or as native libraries (Rust, C, anything
-  with a C ABI), with one protocol for all three. Classic QTranslate services
-  and pot-app plugins run unchanged.
+- **Modules** in JavaScript, Python, Java or any language over stdio, or
+  native libraries (Rust, C, anything with a C ABI), with one protocol for
+  all of them. Classic QTranslate services and pot-app plugins run unchanged.
 - **Themes** as plain files, classic QTranslate themes included; Fluent
   (WinUI 3) themes following the system accent colour; Mica, Acrylic or blur
   backdrops on Windows 11 (vibrancy on macOS); window and popup
@@ -100,10 +101,19 @@ Hotkeys*. A `portable` file next to the executable keeps the settings beside
 it.
 
 For OCR, install chrome-lens-py (`pip install "chrome-lens-py[clipboard]"`);
-Glossa finds it, and keeps its daemon warm so a scan takes about 0.4 s. On
-Windows, *Options → Text recognition* also offers two offline engines that
-need nothing installed: Windows OCR and, on Windows 11, OneOCR from the
-Snipping Tool.
+Glossa finds it, and keeps its daemon warm so a scan takes about 0.4 s.
+Without it, recognition falls over to an offline engine. *Options → Text
+recognition* lists the engines this system has:
+
+| engine | id | works | platforms | setup |
+|---|---|---|---|---|
+| Google Lens | `lens` | online | all | `pip install "chrome-lens-py[clipboard]"` |
+| Windows OCR | `windows-ocr` | offline | Windows 10, 11 | the language's OCR pack (Settings → Time & language) |
+| OneOCR | `oneocr` | offline | Windows 11 | the Snipping Tool; chosen only explicitly, never a fallback |
+| Apple Vision | `macos-vision` | offline | macOS 10.15+ (Russian from 13) | nothing |
+| Tesseract | `tesseract` | offline | all | `apt install tesseract-ocr tesseract-ocr-rus`, `brew install tesseract tesseract-lang`, the UB Mannheim installer on Windows |
+| External command | `command-ocr` | either | all | a command line in its options |
+| Module | its id | either | all | a Python or JavaScript module with the OCR capability |
 
 ## Coming from QTranslate
 
@@ -148,10 +158,11 @@ Details: [docs/ai-endpoints.md](docs/ai-endpoints.md).
 ## Modules
 
 A module is a folder with a `module.toml` and code, dropped into a modules
-folder. Glossa calls JavaScript in process, starts Python as a child process
-when first needed, and loads native libraries directly; all three get the same
-JSON requests and the same host calls (HTTP through Glossa's proxy settings,
-limited to the hosts the module declares).
+folder. Glossa calls JavaScript in process, starts Python, Java or any other
+program (Node, Go, C#…) as a child process when first needed, and loads native
+libraries directly; all of them get the same JSON requests and the same host
+calls (HTTP through Glossa's proxy settings, limited to the hosts the module
+declares).
 
 ```js
 // modules/my-translator/main.js
@@ -165,8 +176,8 @@ function translate(req, host) {
 ```
 
 Start with the [modules overview](docs/modules/README.md). Examples live in
-[`modules/`](modules): a dictionary in JavaScript, Python and Rust/C samples,
-and a Lens OCR module. The services bundled with Glossa are modules too, in
+[`modules/`](modules): a dictionary in JavaScript, Python, Java, Node.js and
+Rust/C samples, and a Lens OCR module. The services bundled with Glossa are modules too, in
 [`modules/bundled/`](modules/bundled); copying one into your modules folder
 and editing it replaces the bundled copy.
 
@@ -178,19 +189,32 @@ echo "Bonjour" | glossa-cli translate -t en
 glossa-cli translate -s ai-deepseek -t de "streams to the terminal as it is written"
 glossa-cli dict -f en -t ru serendipity
 glossa-cli ocr screenshot.png -t en
-glossa-cli ocr screenshot.png --engine oneocr   # or windows-ocr, lens
+glossa-cli ocr screenshot.png --engine tesseract   # or lens, windows-ocr, oneocr, macos-vision
 glossa-cli services                  # what is available
 glossa-cli action show_popup "text"  # ask the running app to show a popup
 ```
 
 `glossa-cli` with no arguments lists every command; `--json` gives
-machine-readable output.
+machine-readable output. Every command and flag is in
+[docs/cli.md](docs/cli.md); the HTTP API other programs use is in
+[docs/control-api.md](docs/control-api.md).
 
 ## Documentation
 
+All pages, by topic: [docs/README.md](docs/README.md)
+([по-русски](docs/README.ru.md)).
+
+- [Command line](docs/cli.md): every `glossa-cli` command, flag, exit code and
+  environment variable
+- [Control API](docs/control-api.md): driving a running Glossa over HTTP, and
+  binding hotkeys to it on Wayland, macOS or with AutoHotkey
+- [Configuration](docs/configuration.md): every `config.toml` key, and where
+  the data folder is
+- [Text recognition](docs/ocr.md)
 - [Modules](docs/modules/README.md): guides for
-  [JavaScript](docs/modules/js-modules.md), [Python](sdk/python/README.md) and
-  [native](docs/modules/native-modules.md) modules, the
+  [JavaScript](docs/modules/js-modules.md), [Python](sdk/python/README.md),
+  [Java and any other language over stdio](docs/modules/process-modules.md)
+  and [native](docs/modules/native-modules.md) modules, the
   [protocol](docs/modules/protocol.md), and
   [classic QTranslate and pot-app scripts](docs/modules/classic-scripts.md)
 - [AI endpoints](docs/ai-endpoints.md)

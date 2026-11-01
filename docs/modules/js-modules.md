@@ -65,7 +65,7 @@ function translate(req, host) {
 | `detect(req, host)` | `text`, `options` | `{ lang, confidence }` |
 | `dictionary(req, host)` | `text`, `from`, `to`, `exact`, `options` | an article: `{ headword, pronunciations, explanations, examples, … }` |
 | `speak(req, host)` | `text`, `lang`, `slow`, `options` | `{ audio_base64, mime }` |
-| `recognize(req, host)` | `image_base64`, `lang`, `translate_to`?, `options` | `{ text, translation?, detected_lang? }` |
+| `recognize(req, host)` | `image_base64`, `image_handle`, `lang`, `translate_to`?, `granularity`, `options` | `{ text, translation?, detected_lang?, blocks?, hocr?, alto?, transform? }` ([OCR modules](ocr-modules.md)) |
 
 The exact shapes are in [protocol.md](protocol.md). A function may be `async`
 and return a promise; Glossa waits for it.
@@ -83,6 +83,7 @@ UI responsive, because every call runs on a worker thread.
 | `host.cache.get(key)` / `host.cache.set(key, value, ttlSecs?)` | A small store that outlives the call (see below). |
 | `host.log(level, message)` | Glossa's log; `console.log/info/warn/error/debug` go there too. |
 | `host.options` | The module's settings, the same object as `req.options`. |
+| `host.image.crop(img, {…})`, `.resize`, `.grayscale`, `.deskew`, `.encode`… | The image API: preprocessing on handles, each result carrying the transform back to the original; `host.image.mapBoxBack(box, img)` maps a box back. See [ocr-modules.md](ocr-modules.md#the-image-api). |
 
 `host.fetch` only reaches hosts in `permissions.network`, goes through the
 user's proxy, and uses Glossa's timeouts and retries. A non-2xx status is

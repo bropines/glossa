@@ -246,6 +246,21 @@ mod imp {
         Ok(())
     }
 
+    /// The C and V keys. On macOS by virtual key code (`kVK_ANSI_C`,
+    /// `kVK_ANSI_V`): looking a character up in the keyboard layout calls
+    /// the Text Input Sources API, which macOS only allows on the main thread
+    /// and kills the process for elsewhere, and copying runs on a worker.
+    /// Command shortcuts follow the key's Latin meaning on non-Latin layouts
+    /// (Russian included), so the physical key is right there too.
+    #[cfg(target_os = "macos")]
+    const KEY_C: Key = Key::Other(0x08);
+    #[cfg(target_os = "macos")]
+    const KEY_V: Key = Key::Other(0x09);
+    #[cfg(not(target_os = "macos"))]
+    const KEY_C: Key = Key::Unicode('c');
+    #[cfg(not(target_os = "macos"))]
+    const KEY_V: Key = Key::Unicode('v');
+
     pub fn send_copy(action: CopyAction) -> Result<()> {
         #[cfg(not(target_os = "macos"))]
         if action == CopyAction::CtrlInsert {
@@ -253,11 +268,11 @@ mod imp {
         }
         // macOS has no Insert key; Cmd+C is the only copy there.
         let _ = action;
-        chord(PRIMARY, Key::Unicode('c'))
+        chord(PRIMARY, KEY_C)
     }
 
     pub fn send_paste() -> Result<()> {
-        chord(PRIMARY, Key::Unicode('v'))
+        chord(PRIMARY, KEY_V)
     }
 
     pub fn type_text(text: &str) -> Result<()> {

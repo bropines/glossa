@@ -1,0 +1,34 @@
+# Text recognition with the Google Cloud Vision API (an API key is needed).
+# An example of an OCR module in JavaScript: it prepares the picture with the
+# host's image API, calls a network OCR service and returns the full layout
+# (blocks, paragraphs, lines, words with outlines and confidence).
+capabilities = ["ocr"]
+
+[module]
+id = "google-vision-ocr"
+name = "Google Cloud Vision OCR"
+version = "1.0.0"
+runtime = "js"
+entry = "main.js"
+description = "Document text recognition with the Cloud Vision API: layout down to words, with confidence."
+homepage = "https://cloud.google.com/vision/docs/fulltext-annotations"
+license = "MIT"
+
+[permissions]
+network = ["vision.googleapis.com"]
+
+[[options]]
+key = "api_key"
+type = "secret"
+label = "API key"
+required = true
+help = "A Google Cloud API key with the Cloud Vision API enabled."
+
+[[options]]
+key = "min_height"
+type = "number"
+label = "Enlarge pictures shorter than (px)"
+default = 48
+min = 0
+max = 400
+help = "Small captures are scaled up first; Vision reads tiny text poorly. 0 turns this off."
