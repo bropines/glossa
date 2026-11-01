@@ -5,12 +5,14 @@
 //! translation window, screen-region OCR, a dictionary, history, and options.
 #![cfg_attr(all(windows, not(debug_assertions)), windows_subsystem = "windows")]
 
+mod about;
 mod actions;
 mod app;
 mod dictionary;
 mod fonts;
 mod history;
 mod icons;
+mod keyboard;
 mod main_window;
 mod mouse;
 mod ocr;

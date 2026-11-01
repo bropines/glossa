@@ -22,6 +22,9 @@ pub enum Script {
     ArabicHebrew,
     ArmenianGeorgian,
     Symbols,
+    /// Pictographs (the 1F000 planes), which turn up in translated and
+    /// pasted text even though the interface never uses them.
+    Emoji,
 }
 
 impl Script {
@@ -42,6 +45,7 @@ impl Script {
             0x0590..=0x08FF | 0xFB1D..=0xFDFF | 0xFE70..=0xFEFF => Script::ArabicHebrew,
             0x0530..=0x058F | 0x10A0..=0x10FF | 0x2D00..=0x2D2F => Script::ArmenianGeorgian,
             0x2190..=0x2BFF => Script::Symbols,
+            0x1F000..=0x1FAFF => Script::Emoji,
             _ => return None,
         })
     }
@@ -58,6 +62,7 @@ impl Script {
             Script::ArabicHebrew => "ar",
             Script::ArmenianGeorgian => "hy",
             Script::Symbols => "en",
+            Script::Emoji => "und-zsye",
         }
     }
 }
@@ -172,6 +177,9 @@ fn script_font(s: Script) -> Option<(PathBuf, u32)> {
         Script::ArabicHebrew => &["segoeui.ttf", "arial.ttf"],
         Script::ArmenianGeorgian => &["segoeui.ttf", "sylfaen.ttf"],
         Script::Symbols => &["seguisym.ttf"],
+        // Segoe UI Emoji has plain outlines under its colour layers, which
+        // is what egui draws.
+        Script::Emoji => &["seguiemj.ttf", "seguisym.ttf"],
     };
     names.iter().map(|n| dir.join(n)).find(|p| p.is_file()).map(|p| (p, 0))
 }
@@ -198,6 +206,11 @@ fn base_font(family: &str) -> Option<(PathBuf, u32)> {
 
 #[cfg(not(windows))]
 fn script_font(s: Script) -> Option<(PathBuf, u32)> {
+    if s == Script::Emoji {
+        // What fontconfig offers for emoji is a colour bitmap font, which
+        // egui cannot draw; its own emoji subset is all there is.
+        return None;
+    }
     if let Some(found) = fc_match(&format!(":lang={}", s.fc_lang())) {
         return Some(found);
     }
@@ -211,6 +224,7 @@ fn script_font(s: Script) -> Option<(PathBuf, u32)> {
         Script::ArabicHebrew => &["/System/Library/Fonts/GeezaPro.ttc", "/System/Library/Fonts/SFHebrew.ttf"],
         Script::ArmenianGeorgian => &["/System/Library/Fonts/Supplemental/Arial Unicode.ttf"],
         Script::Symbols => &["/System/Library/Fonts/Apple Symbols.ttf"],
+        Script::Emoji => &[],
     };
     first_existing(mac)
 }
@@ -229,6 +243,7 @@ mod tests {
         assert_eq!(Script::of('ש'), Some(Script::ArabicHebrew));
         assert_eq!(Script::of('ع'), Some(Script::ArabicHebrew));
         assert_eq!(Script::of('ა'), Some(Script::ArmenianGeorgian));
+        assert_eq!(Script::of('\u{1F539}'), Some(Script::Emoji));
         assert_eq!(Script::of('ж'), None, "Cyrillic is built in");
         assert_eq!(Script::of('a'), None);
     }

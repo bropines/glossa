@@ -501,6 +501,9 @@ pub struct Appearance {
     pub text_size: f32,
     /// Size of toolbar and popup icons, as a multiple of their base size.
     pub icon_scale: f32,
+    /// Size of the on-screen keyboard, apart from the interface scale:
+    /// Ctrl+wheel over it, or resizing its window, changes this.
+    pub keyboard_scale: f32,
     /// 0 (opaque) to 90 percent transparent, for the main window — the same
     /// scale as the popup's.
     pub window_transparency: u8,
@@ -622,6 +625,7 @@ impl Default for Appearance {
             ui_scale: 1.0,
             text_size: 11.0,
             icon_scale: 1.2,
+            keyboard_scale: 1.0,
             window_transparency: 0,
             renderer: Renderer::OpenGl,
             unload_graphics_after_secs: 45,
@@ -1166,6 +1170,7 @@ impl Config {
         self.appearance.ui_scale = self.appearance.ui_scale.clamp(0.5, 3.0);
         self.appearance.text_size = self.appearance.text_size.clamp(6.0, 48.0);
         self.appearance.icon_scale = self.appearance.icon_scale.clamp(0.75, 3.0);
+        self.appearance.keyboard_scale = self.appearance.keyboard_scale.clamp(0.5, 3.0);
         self.appearance.window_transparency = self.appearance.window_transparency.min(90);
         self.dictionary.zoom = self.dictionary.zoom.clamp(50, 400);
         self.general.instant_delay_ms = self.general.instant_delay_ms.clamp(150, 5000);
@@ -1256,12 +1261,13 @@ mod tests {
     #[test]
     fn out_of_range_values_are_clamped() {
         let c = Config::from_toml(
-            "[network]\ntimeout_secs = 0\n[appearance.popup]\ntransparency = 250\n[appearance]\nui_scale = 99.0",
+            "[network]\ntimeout_secs = 0\n[appearance.popup]\ntransparency = 250\n[appearance]\nui_scale = 99.0\nkeyboard_scale = 0.1",
         )
         .unwrap();
         assert_eq!(c.network.timeout_secs, 1);
         assert_eq!(c.appearance.popup.transparency, 90);
         assert_eq!(c.appearance.ui_scale, 3.0);
+        assert_eq!(c.appearance.keyboard_scale, 0.5);
     }
 
     #[test]

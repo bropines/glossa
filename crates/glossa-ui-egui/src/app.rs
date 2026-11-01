@@ -771,8 +771,8 @@ impl eframe::App for GlossaApp {
         crate::options::show(self, &ctx);
         crate::dictionary::show(self, &ctx);
         crate::history::show(self, &ctx);
-        crate::main_window::show_about(self, &ctx);
-        crate::main_window::show_keyboard(self, &ctx);
+        crate::about::show_about(self, &ctx);
+        crate::keyboard::show_keyboard(self, &ctx);
         if let Some((what, path)) = self.launch.screenshot.clone() {
             crate::actions::screenshot_flow(self, &ctx, &what, &path);
         }

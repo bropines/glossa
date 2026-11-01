@@ -119,6 +119,10 @@ fn body(app: &mut GlossaApp, ui: &mut egui::Ui, st: &mut HistoryState, open: &mu
     });
     egui::CentralPanel::default().show(ui, |ui| {
         let mut action: Option<(u64, &'static str)> = None;
+        // Row icons are the size of the main window's toolbar icons, and the
+        // lines under the source start where the source does.
+        let icon = 24.0;
+        let indent = (icon * look.icon_scale).round() + ui.spacing().item_spacing.x;
         egui::ScrollArea::vertical().id_salt("hist-list").show(ui, |ui| {
             ui.set_width(ui.available_width());
             for e in &st.entries {
@@ -126,49 +130,54 @@ fn body(app: &mut GlossaApp, ui: &mut egui::Ui, st: &mut HistoryState, open: &mu
                 app.fonts.ensure(&app.ctx, &e.source);
                 app.fonts.ensure(&app.ctx, &tr);
                 let frame = egui::Frame::new().inner_margin(egui::Margin::symmetric(6, 4)).corner_radius(2);
-                let resp = frame
-                    .show(ui, |ui| {
-                        ui.set_width(ui.available_width());
-                        ui.horizontal(|ui| {
-                            let star = if e.favorite { Icon::StarFilled } else { Icon::Star };
-                            if icons::sized_button(ui, &look, star, "", 18.0, true).clicked() {
-                                action = Some((e.id, "fav"));
-                            }
-                            let src = one_line(&e.source, if expand { 400 } else { 90 });
-                            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                                if icons::sized_button(ui, &look, Icon::Trash, &app.t("history.delete"), 18.0, true)
-                                    .clicked()
-                                {
-                                    action = Some((e.id, "delete"));
+                // The row senses clicks behind its contents (a sensing
+                // scope registers before its children), so the icons on it
+                // still get the hover and the clicks.
+                let row = egui::UiBuilder::new().id_salt(("hist-row", e.id)).sense(egui::Sense::click());
+                let resp = ui
+                    .scope_builder(row, |ui| {
+                        frame.show(ui, |ui| {
+                            ui.set_width(ui.available_width());
+                            ui.horizontal(|ui| {
+                                let star = if e.favorite { Icon::StarFilled } else { Icon::Star };
+                                let tip = app.t("history.favorite");
+                                if icons::sized_button(ui, &look, star, &tip, icon, true).clicked() {
+                                    action = Some((e.id, "fav"));
                                 }
-                                ui.with_layout(egui::Layout::left_to_right(egui::Align::Center), |ui| {
-                                    ui.add(egui::Label::new(RichText::new(src).strong()).truncate());
+                                let src = one_line(&e.source, if expand { 400 } else { 90 });
+                                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                                    let tip = app.t("history.delete");
+                                    if icons::sized_button(ui, &look, Icon::Trash, &tip, icon, true).clicked() {
+                                        action = Some((e.id, "delete"));
+                                    }
+                                    ui.with_layout(egui::Layout::left_to_right(egui::Align::Center), |ui| {
+                                        ui.add(egui::Label::new(RichText::new(src).strong()).truncate());
+                                    });
                                 });
                             });
-                        });
-                        let shown = if expand { tr.clone() } else { one_line(&tr, 110) };
-                        ui.horizontal(|ui| {
-                            ui.add_space(24.0);
-                            ui.add(egui::Label::new(RichText::new(shown).color(look.weak_text())).wrap());
-                        });
-                        if let Some(r) = e.latest() {
+                            let shown = if expand { tr.clone() } else { one_line(&tr, 110) };
                             ui.horizontal(|ui| {
-                                ui.add_space(24.0);
-                                ui.label(
-                                    RichText::new(format!(
-                                        "{} · {} → {}",
-                                        r.provider_id,
-                                        r.from.english_name(),
-                                        r.to.english_name()
-                                    ))
-                                    .small()
-                                    .color(look.weak_text()),
-                                );
+                                ui.add_space(indent);
+                                ui.add(egui::Label::new(RichText::new(shown).color(look.weak_text())).wrap());
                             });
-                        }
+                            if let Some(r) = e.latest() {
+                                ui.horizontal(|ui| {
+                                    ui.add_space(indent);
+                                    ui.label(
+                                        RichText::new(format!(
+                                            "{} · {} → {}",
+                                            r.provider_id,
+                                            r.from.english_name(),
+                                            r.to.english_name()
+                                        ))
+                                        .small()
+                                        .color(look.weak_text()),
+                                    );
+                                });
+                            }
+                        });
                     })
-                    .response
-                    .interact(egui::Sense::click());
+                    .response;
                 if resp.hovered() {
                     ui.painter().rect_stroke(
                         resp.rect,
