@@ -264,8 +264,11 @@ mod tests {
     #[test]
     fn idle_worker_retires_and_a_new_one_starts_on_demand() {
         let p = AudioPlayer::with_idle_timeout(Duration::from_millis(50));
-        assert!(p.play(vec![1, 2, 3]).is_err());
-        assert!(p.shared.inbox().is_some());
+        // The decode error comes back from the worker, so one has started.
+        // (Checking the inbox here instead raced: a slow CI runner can let
+        // the 50 ms idle timeout pass before the check runs.)
+        let err = p.play(vec![1, 2, 3]).unwrap_err();
+        assert!(err.to_string().contains("decode"), "{err}");
         let deadline = Instant::now() + Duration::from_secs(5);
         while p.shared.inbox().is_some() && Instant::now() < deadline {
             std::thread::sleep(Duration::from_millis(20));
