@@ -32,7 +32,6 @@ mod imagesize;
 pub mod layout;
 pub mod lens;
 pub mod oneocr;
-mod process;
 mod tempimage;
 pub mod tesseract;
 #[cfg(test)]
@@ -46,6 +45,7 @@ use std::path::Path;
 use std::sync::Arc;
 
 use glossa_core::config::OcrConfig;
+use glossa_modules::child as process;
 use glossa_modules::Provider;
 
 pub use command::CommandOcr;
