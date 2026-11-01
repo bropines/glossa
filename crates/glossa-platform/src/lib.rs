@@ -32,6 +32,7 @@
 //! capture and screen capture block for tens to hundreds of milliseconds and
 //! belong on a worker thread, not the UI thread.
 
+pub mod app_menu;
 pub mod appearance;
 pub mod audio;
 pub mod autostart;

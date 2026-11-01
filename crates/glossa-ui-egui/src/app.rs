@@ -88,6 +88,8 @@ pub struct GlossaApp {
     pub audio: AudioPlayer,
     pub session: Session,
     tray: Option<crate::tray::Tray>,
+    /// macOS: the menu bar's commands.
+    pub app_menu: crate::app_menu::AppMenu,
     mouse: Option<crate::mouse::MouseHub>,
     /// The button mouse mode shows by the pointer.
     pub mouse_icon: Option<crate::mouse::MouseIcon>,
@@ -186,7 +188,11 @@ impl GlossaApp {
         if let Some(t) = &shell.tray {
             t.set_hotkeys_checked(cfg.hotkeys.enabled);
         }
+        // After winit put up its default menu (it does so before the app is
+        // created), so this one replaces it.
+        let app_menu = crate::app_menu::AppMenu::install(&ctx, &engine.locale());
         GlossaApp {
+            app_menu,
             locale: engine.locale(),
             main: MainState::new(&cfg),
             engine,
@@ -590,7 +596,11 @@ impl GlossaApp {
         if self.cfg.windows.is_empty() {
             self.cfg.windows = windows;
         }
-        self.locale = self.engine.locale();
+        let locale = self.engine.locale();
+        if cfg!(target_os = "macos") && !Arc::ptr_eq(&locale, &self.locale) {
+            self.app_menu = crate::app_menu::AppMenu::install(&self.ctx, &locale);
+        }
+        self.locale = locale;
         if let Some(scale) = unsaved_zoom {
             self.cfg.appearance.text_scale = scale;
         }
@@ -820,6 +830,7 @@ impl eframe::App for GlossaApp {
         for a in fired {
             self.perform(a, None);
         }
+        crate::app_menu::poll(self);
         let tray_events = self.tray.as_ref().map(|t| t.poll()).unwrap_or_default();
         for e in tray_events {
             crate::tray::handle(self, e);
