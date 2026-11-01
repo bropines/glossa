@@ -415,7 +415,7 @@ fn body(app: &mut GlossaApp, ui: &mut egui::Ui, st: &mut PopupState) -> (bool, e
     // maximum size; otherwise the width follows the content.
     let desired_w = match st.user_size {
         Some(s) => s.x,
-        None if cfg.auto_size => (text_w.max(title_w) + 16.0).clamp(min_w, max_w),
+        None if cfg.auto_size => soft_clamp(text_w.max(title_w) + 16.0, min_w, max_w),
         None => max_w,
     };
 
@@ -449,8 +449,11 @@ fn body(app: &mut GlossaApp, ui: &mut egui::Ui, st: &mut PopupState) -> (bool, e
             let actions_w = n_actions as f32 * (icon + 1.0);
             let row_h = icon.max(small) + 2.0;
             let (row, _) = ui.allocate_exact_size(vec2(ui.available_width(), row_h), Sense::hover());
-            let centre =
-                ui.ctx().content_rect().center().x.clamp(row.left() + actions_w / 2.0, row.right() - actions_w / 2.0);
+            let centre = soft_clamp(
+                ui.ctx().content_rect().center().x,
+                row.left() + actions_w / 2.0,
+                row.right() - actions_w / 2.0,
+            );
             let actions_rect = egui::Rect::from_center_size(egui::pos2(centre, row.center().y), vec2(actions_w, row_h));
             let controls_rect =
                 egui::Rect::from_min_max(egui::pos2(row.right() - controls_w, row.top()), row.right_bottom());
@@ -613,7 +616,7 @@ fn body(app: &mut GlossaApp, ui: &mut egui::Ui, st: &mut PopupState) -> (bool, e
                     // the line between them in the middle of the window.
                     (Some(extra), true) => {
                         let middle = ui.ctx().content_rect().center().y;
-                        let top_h = (middle - ui.cursor().top() - 4.0).clamp(20.0, scroll_h - 24.0);
+                        let top_h = soft_clamp(middle - ui.cursor().top() - 4.0, 20.0, scroll_h - 24.0);
                         egui::ScrollArea::vertical()
                             .id_salt("popup-primary")
                             .max_height(top_h)
@@ -705,10 +708,22 @@ fn body(app: &mut GlossaApp, ui: &mut egui::Ui, st: &mut PopupState) -> (bool, e
     let content = resp.inner.response.rect.size();
     let h = match st.user_size {
         Some(s) => s.y,
-        None if cfg.auto_size => (content.y + overflow).clamp(36.0, cfg.max_height),
+        None if cfg.auto_size => soft_clamp(content.y + overflow, 36.0, cfg.max_height),
         None => cfg.max_height,
     };
     (close, vec2(desired_w.ceil(), h.ceil()))
+}
+
+/// `f32::clamp` that cannot panic. When the window is smaller than the layout
+/// wants, the upper bound can fall below the lower one (a popup resized down
+/// to a sliver once aborted the whole program through `clamp(20.0, 2.0)`);
+/// then the lower bound wins. A NaN value or bound comes out as `lo`.
+fn soft_clamp(v: f32, lo: f32, hi: f32) -> f32 {
+    if v.is_nan() || hi.is_nan() || hi < lo {
+        lo
+    } else {
+        v.clamp(lo, hi)
+    }
 }
 
 /// What the popup shows: the translation, then any dictionary block the
@@ -728,6 +743,15 @@ fn secondary_text(t: &glossa_core::Translation) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn soft_clamp_never_panics() {
+        assert_eq!(soft_clamp(5.0, 20.0, 2.0), 20.0);
+        assert_eq!(soft_clamp(f32::NAN, 1.0, 3.0), 1.0);
+        assert_eq!(soft_clamp(2.0, 1.0, f32::NAN), 1.0);
+        assert_eq!(soft_clamp(9.0, 1.0, 3.0), 3.0);
+        assert_eq!(soft_clamp(2.0, 1.0, 3.0), 2.0);
+    }
 
     #[test]
     fn service_names_are_shortened_for_the_header() {

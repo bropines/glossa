@@ -312,6 +312,7 @@ impl Engine {
     /// user's modules, extra directories from the settings). A module with the
     /// id of an earlier provider replaces it.
     pub fn reload_modules(&self) {
+        let started = Instant::now();
         let cfg = self.config();
         let paths = &self.inner.paths;
         let ctx = RuntimeContext {
@@ -370,10 +371,15 @@ impl Engine {
             providers = reg.entries().len(),
             modules = report.loaded.len(),
             failed = report.failed.len(),
+            ms = started.elapsed().as_millis() as u64,
             "providers ready"
         );
         let old = std::mem::replace(&mut *self.inner.registry.write(), Arc::new(reg));
+        let suspending = Instant::now();
         old.suspend_all();
+        if suspending.elapsed() > Duration::from_millis(200) {
+            tracing::debug!(ms = suspending.elapsed().as_millis() as u64, "suspending the old modules was slow");
+        }
         *self.inner.modules.write() =
             ModuleStatus { loaded: report.loaded, failed: report.failed, skipped: report.skipped };
         self.adopt_providers();

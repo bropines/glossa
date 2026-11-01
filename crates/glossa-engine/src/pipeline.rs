@@ -146,6 +146,18 @@ impl Pipeline<'_> {
 
     /// Detect the language of `text` with the first provider that can.
     pub fn detect(&self, text: &str, preferred: Option<&str>) -> Result<Detection> {
+        self.detect_noting(text, preferred, &mut Vec::new())
+    }
+
+    /// [`detect`](Self::detect), adding to `unreachable` each provider that
+    /// failed for want of a connection (a timeout, a network error), so the
+    /// translation that follows does not wait for it a second time.
+    fn detect_noting(
+        &self,
+        text: &str,
+        preferred: Option<&str>,
+        unreachable: &mut Vec<(String, String)>,
+    ) -> Result<Detection> {
         let mut last = Error::NoProvider("language detection");
         for p in self.candidates(Capabilities::DETECT_LANGUAGE, preferred, true) {
             self.cancel_check()?;
@@ -153,7 +165,12 @@ impl Pipeline<'_> {
             match p.detect(&self.host(&opts), text) {
                 Ok(d) if d.is_usable() => return Ok(d),
                 Ok(_) => last = Error::LanguageNotDetected,
-                Err(e) => last = e,
+                Err(e) => {
+                    if matches!(e, Error::Timeout(_) | Error::Network(_)) {
+                        unreachable.push((p.info().id.clone(), e.to_string()));
+                    }
+                    last = e;
+                }
             }
         }
         Err(last)
@@ -166,13 +183,23 @@ impl Pipeline<'_> {
         pair: LangPair,
         preferred: Option<&str>,
     ) -> (LangPair, Option<Detection>) {
+        self.resolve_direction_noting(text, pair, preferred, &mut Vec::new())
+    }
+
+    fn resolve_direction_noting(
+        &self,
+        text: &str,
+        pair: LangPair,
+        preferred: Option<&str>,
+        unreachable: &mut Vec<(String, String)>,
+    ) -> (LangPair, Option<Detection>) {
         let g = &self.config.general;
         let must_detect =
             (pair.from == LangId::AUTO && (pair.to == LangId::AUTO || g.smart_direction)) || g.always_detect_language;
         if !must_detect {
             return (pair, None);
         }
-        match self.detect(text, preferred) {
+        match self.detect_noting(text, preferred, unreachable) {
             Ok(d) => {
                 let from = d.lang;
                 let to = if pair.to == LangId::AUTO || (g.smart_direction && pair.to == from) {
@@ -198,16 +225,31 @@ impl Pipeline<'_> {
         if candidates.is_empty() {
             return Err(Error::NoProvider("translation"));
         }
-        let (pair, detected) = self.resolve_direction(&source, pair, opts.provider.as_deref());
+        let mut unreachable = Vec::new();
+        let (pair, detected) = self.resolve_direction_noting(&source, pair, opts.provider.as_deref(), &mut unreachable);
         if pair.from.is_language() && pair.from == pair.to {
             return Err(Error::SameLanguage);
         }
 
+        let was_unreachable = |id: &str| unreachable.iter().find(|(u, _)| u == id);
+        // Skip those only while another candidate is left to try.
+        let skip_unreachable = candidates.iter().any(|c| was_unreachable(&c.info().id).is_none());
         let mut failed = Vec::new();
         let mut last_err = None;
         for provider in &candidates {
             self.cancel_check()?;
             let info = provider.info();
+            // It just timed out or could not connect while detecting; asking
+            // again would only double the wait before the next provider (a
+            // blocked host costs the whole timeout each time).
+            if skip_unreachable {
+                if let Some((_, why)) = was_unreachable(&info.id) {
+                    tracing::debug!(provider = %info.id, "skipped: unreachable while detecting the language");
+                    failed.push((info.id.clone(), why.clone()));
+                    last_err = Some(Error::Network(why.clone()));
+                    continue;
+                }
+            }
             if !info.supports_language(pair.to) {
                 failed.push((
                     info.id.clone(),
@@ -390,6 +432,41 @@ mod tests {
         assert_eq!(out.translation.provider_id, "b");
         assert_eq!(out.failed.len(), 1);
         assert_eq!(out.failed[0].0, "a");
+    }
+
+    #[test]
+    fn a_provider_unreachable_while_detecting_is_not_asked_to_translate() {
+        let translations = Arc::new(AtomicUsize::new(0));
+        let t = translations.clone();
+        let blocked = FnProvider {
+            info: ProviderInfo::new("a", "A", Capabilities::TRANSLATE | Capabilities::DETECT_LANGUAGE),
+            translate: Some(Box::new(move |_, _| {
+                t.fetch_add(1, Ordering::SeqCst);
+                Err(Error::Timeout(10_000))
+            })),
+            detect: Some(Box::new(|_, _| Err(Error::Timeout(10_000)))),
+        };
+        let (reg, cfg) = setup(vec![blocked, echo("b"), detector(LangId::ENGLISH)], "a", &["a", "b", "det"]);
+        let out = run(&reg, &cfg, "hello", LangPair::new(LangId::AUTO, LangId::AUTO)).unwrap();
+        assert_eq!(out.translation.provider_id, "b");
+        assert_eq!(out.pair, LangPair::new(LangId::ENGLISH, LangId::RUSSIAN), "the next detector answered");
+        assert_eq!(translations.load(Ordering::SeqCst), 0, "one timeout per provider and request");
+        assert_eq!(out.failed[0].0, "a");
+
+        // With nothing else left, it is still tried.
+        let translations = Arc::new(AtomicUsize::new(0));
+        let t = translations.clone();
+        let only = FnProvider {
+            info: ProviderInfo::new("a", "A", Capabilities::TRANSLATE | Capabilities::DETECT_LANGUAGE),
+            translate: Some(Box::new(move |_, _| {
+                t.fetch_add(1, Ordering::SeqCst);
+                Ok(Translation::plain("ok"))
+            })),
+            detect: Some(Box::new(|_, _| Err(Error::Network("reset".into())))),
+        };
+        let (reg, cfg) = setup(vec![only], "a", &["a"]);
+        assert_eq!(run(&reg, &cfg, "hello", LangPair::new(LangId::AUTO, LangId::AUTO)).unwrap().translation.text, "ok");
+        assert_eq!(translations.load(Ordering::SeqCst), 1);
     }
 
     #[test]

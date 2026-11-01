@@ -22,6 +22,7 @@ mod popup;
 mod rich;
 mod style;
 mod tray;
+mod watchdog;
 mod widgets;
 
 use std::cell::RefCell;
@@ -111,14 +112,22 @@ fn main() -> eframe::Result<()> {
         None => Paths::discover(),
     };
     init_logging(&paths);
+    glossa_platform::crash::install(&paths.log_file());
     // Release builds abort on panic; leave a trace in the log first.
     std::panic::set_hook(Box::new(|info| {
-        let bt = std::backtrace::Backtrace::force_capture();
-        tracing::error!(
-            "panic: {info}
-{bt}"
-        );
+        let thread = std::thread::current();
+        let thread = thread.name().unwrap_or("unnamed");
+        // A stripped build resolves no symbols; then the frames as
+        // module+offset are what can be looked up later.
+        let resolved = std::backtrace::Backtrace::force_capture().to_string();
+        let bt = if resolved.contains("<unknown>") || resolved.trim().is_empty() {
+            glossa_platform::crash::stack_trace(0)
+        } else {
+            format!("\n{resolved}")
+        };
+        tracing::error!("panic on thread '{thread}': {info}{bt}");
     }));
+    crash_test();
 
     // A second launch hands over to the running instance through its control
     // API, then leaves.
@@ -462,6 +471,22 @@ fn choose_renderer(options: &mut eframe::NativeOptions, configured: glossa_core:
             setup.instance_descriptor.backend_options.dx12.presentation_system =
                 wgpu::Dx12SwapchainKind::DxgiFromVisual;
         }
+    }
+}
+
+/// Development aid: `GLOSSA_CRASH_TEST=panic|native` crashes on purpose, to
+/// check what the crash loggers leave in the log.
+fn crash_test() {
+    match std::env::var("GLOSSA_CRASH_TEST").as_deref() {
+        Ok("panic") => {
+            let max = std::hint::black_box(2.0f32);
+            let _ = std::hint::black_box(1.0f32).clamp(20.0, max);
+        }
+        Ok("native") => {
+            // SAFETY: deliberately not safe; this is the crash being tested.
+            unsafe { std::ptr::write_volatile(std::hint::black_box(16usize) as *mut u32, 1) };
+        }
+        _ => {}
     }
 }
 

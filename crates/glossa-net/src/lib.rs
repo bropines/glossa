@@ -14,6 +14,7 @@
 mod codepage;
 mod form;
 
+use std::sync::{Mutex, RwLock};
 use std::time::{Duration, Instant};
 
 use glossa_core::config::{Network, ProxyMode};
@@ -210,11 +211,19 @@ pub trait Http: Send + Sync {
 
 /// The real client.
 pub struct HttpClient {
-    agent: ureq::Agent,
+    agent: RwLock<ureq::Agent>,
+    settings: Network,
+    /// With the system proxy: the one the agent was built with, and when the
+    /// system was last asked. `None` when the settings fix the proxy.
+    system: Option<Mutex<(Option<ProxySpec>, Instant)>>,
     timeout: Duration,
     max_retries: u32,
     user_agent: String,
 }
+
+/// How often the system proxy is looked up again (a registry read on
+/// Windows, environment variables elsewhere).
+const PROXY_RECHECK: Duration = Duration::from_secs(5);
 
 /// What we send when nobody asks for anything else: a current desktop
 /// browser, because several free endpoints refuse obvious bots.
@@ -225,26 +234,52 @@ pub const DEFAULT_USER_AGENT: &str =
 /// us allocate without bound.
 const MAX_BODY: u64 = 32 * 1024 * 1024;
 
+/// A request phase taking longer than this is logged (at debug level), so a
+/// "Glossa hangs" report can be read from the log.
+const SLOW: Duration = Duration::from_secs(2);
+
 impl HttpClient {
     pub fn new(settings: &Network) -> Result<HttpClient, Error> {
-        let timeout = Duration::from_secs(settings.timeout_secs.max(1));
-        let proxy = resolve_proxy(settings)?;
-        let mut cfg = ureq::Agent::config_builder()
-            .http_status_as_error(false)
-            .timeout_global(Some(timeout))
-            .max_redirects(8)
-            .user_agent(if settings.user_agent.is_empty() {
-                DEFAULT_USER_AGENT.to_owned()
-            } else {
-                settings.user_agent.clone()
-            });
-        cfg = cfg.proxy(proxy).tls_config(tls_config());
+        let spec = proxy_spec(settings);
+        let agent = build_agent(settings, spec.clone())?;
         Ok(HttpClient {
-            agent: cfg.build().into(),
-            timeout,
+            agent: RwLock::new(agent),
+            settings: settings.clone(),
+            system: follows_system(settings).then(|| Mutex::new((spec, Instant::now()))),
+            timeout: Duration::from_secs(settings.timeout_secs.max(1)),
             max_retries: settings.max_retries,
             user_agent: settings.user_agent.clone(),
         })
+    }
+
+    /// The agent to use now. Following the system proxy, it is rebuilt when
+    /// the system's proxy has changed since it was built: a proxy that was
+    /// switched off would otherwise fail every request (or one switched on
+    /// be ignored) until the program restarts.
+    fn agent(&self) -> ureq::Agent {
+        if let Some(system) = &self.system {
+            let mut guard = system.lock().unwrap_or_else(|e| e.into_inner());
+            let (seen, checked) = &mut *guard;
+            if checked.elapsed() >= PROXY_RECHECK {
+                *checked = Instant::now();
+                let now = proxy_spec(&self.settings);
+                if now != *seen {
+                    match build_agent(&self.settings, now.clone()) {
+                        Ok(agent) => {
+                            tracing::info!(
+                                from = %describe_proxy(seen.as_ref()),
+                                to = %describe_proxy(now.as_ref()),
+                                "the system proxy changed"
+                            );
+                            *self.agent.write().unwrap_or_else(|e| e.into_inner()) = agent;
+                            *seen = now;
+                        }
+                        Err(e) => tracing::warn!("the system proxy changed to one that cannot be used: {e}"),
+                    }
+                }
+            }
+        }
+        self.agent.read().unwrap_or_else(|e| e.into_inner()).clone()
     }
 
     /// A client with default settings and no proxy, for tools and tests.
@@ -258,7 +293,21 @@ impl HttpClient {
 
     fn send_once(&self, request: &HttpRequest) -> Result<HttpResponse, Error> {
         let provider = if request.provider.is_empty() { "http" } else { &request.provider };
-        let mut response = self.open(request)?;
+        let started = Instant::now();
+        let opened = self.open(request);
+        let to_headers = started.elapsed();
+        if to_headers >= SLOW {
+            // Connecting, TLS, sending and waiting for the status line: the
+            // part that stalls on a dead pooled connection, a broken route
+            // or a slow proxy.
+            tracing::debug!(
+                url = %redact(&request.url),
+                ms = to_headers.as_millis() as u64,
+                ok = opened.is_ok(),
+                "slow request: waited this long for the response headers"
+            );
+        }
+        let mut response = opened?;
         let (status, headers) = status_and_headers(&response);
         let body = if request.method == Method::Head {
             Vec::new()
@@ -270,6 +319,15 @@ impl HttpClient {
                 .read_to_vec()
                 .map_err(|e| Error::Network(format!("{provider}: reading body: {e}")))?
         };
+        let reading = started.elapsed() - to_headers;
+        if reading >= SLOW {
+            tracing::debug!(
+                url = %redact(&request.url),
+                ms = reading.as_millis() as u64,
+                bytes = body.len(),
+                "slow request: reading the body took this long"
+            );
+        }
         Ok(HttpResponse { status, headers, body, codepage: request.codepage })
     }
 
@@ -303,7 +361,15 @@ impl HttpClient {
         };
 
         call.map_err(|e| match e {
-            ureq::Error::Timeout(_) => Error::Timeout(request.timeout.unwrap_or(self.timeout).as_millis() as u64),
+            ureq::Error::Timeout(phase) => {
+                let budget = request.timeout.unwrap_or(self.timeout);
+                let ms = match phase {
+                    ureq::Timeout::Resolve | ureq::Timeout::Connect => budget.min(CONNECT_BUDGET),
+                    _ => budget,
+                };
+                tracing::debug!(url = %redact(&request.url), phase = %phase, "timed out");
+                Error::Timeout(ms.as_millis() as u64)
+            }
             other => Error::Network(format!("{provider}: {other}")),
         })
     }
@@ -314,14 +380,40 @@ impl HttpClient {
         req: ureq::http::Request<S>,
         timeout: Option<Duration>,
     ) -> Result<ureq::http::Response<ureq::Body>, ureq::Error> {
+        let agent = self.agent();
         match timeout {
             Some(t) => {
-                let req = self.agent.configure_request(req).timeout_global(Some(t)).build();
-                self.agent.run(req)
+                let req = agent.configure_request(req).timeout_global(Some(t)).build();
+                agent.run(req)
             }
-            None => self.agent.run(req),
+            None => agent.run(req),
         }
     }
+}
+
+/// The most that looking up a host, or connecting to it (TCP, any proxy
+/// negotiation and the TLS handshake), may take, within the overall timeout.
+/// These take a fraction of a second when they work; a server that answers
+/// slowly is given the rest of the budget, a host that cannot be reached is
+/// given up on early so the next service gets its turn.
+const CONNECT_BUDGET: Duration = Duration::from_secs(5);
+
+fn build_agent(settings: &Network, proxy: Option<ProxySpec>) -> Result<ureq::Agent, Error> {
+    let timeout = Duration::from_secs(settings.timeout_secs.max(1));
+    let cfg = ureq::Agent::config_builder()
+        .http_status_as_error(false)
+        .timeout_global(Some(timeout))
+        .timeout_resolve(Some(timeout.min(CONNECT_BUDGET)))
+        .timeout_connect(Some(timeout.min(CONNECT_BUDGET)))
+        .max_redirects(8)
+        .user_agent(if settings.user_agent.is_empty() {
+            DEFAULT_USER_AGENT.to_owned()
+        } else {
+            settings.user_agent.clone()
+        })
+        .proxy(make_proxy(proxy)?)
+        .tls_config(tls_config());
+    Ok(cfg.build().into())
 }
 
 fn status_and_headers(response: &ureq::http::Response<ureq::Body>) -> (u16, Vec<(String, String)>) {
@@ -376,13 +468,31 @@ impl Http for HttpClient {
         loop {
             let result = self.send_once(&request);
             let retry = match &result {
+                // A timeout has used the whole budget already; waiting for it
+                // again doubles the time before the engine moves on to the
+                // next service. A host the network black-holes (TLS to some
+                // CDNs is dropped by DPI on some networks) cost 20 s that way.
+                Err(Error::Timeout(_)) => false,
                 Err(e) if e.is_transient() => true,
                 Ok(r) => matches!(r.status, 429 | 500 | 502 | 503 | 504),
                 Err(_) => false,
             };
             if !retry || attempt >= self.max_retries {
                 if let Err(e) = &result {
-                    tracing::debug!(url = %redact(&request.url), error = %e, "request failed");
+                    tracing::debug!(
+                        url = %redact(&request.url),
+                        error = %e,
+                        attempts = attempt + 1,
+                        ms = started.elapsed().as_millis() as u64,
+                        "request failed"
+                    );
+                } else if started.elapsed() >= SLOW {
+                    tracing::debug!(
+                        url = %redact(&request.url),
+                        attempts = attempt + 1,
+                        ms = started.elapsed().as_millis() as u64,
+                        "slow request done"
+                    );
                 } else {
                     tracing::trace!(
                         url = %redact(&request.url),
@@ -394,7 +504,11 @@ impl Http for HttpClient {
             }
             attempt += 1;
             let backoff = Duration::from_millis(300 * (1 << attempt.min(4)));
-            tracing::debug!(url = %redact(&request.url), attempt, "retrying in {backoff:?}");
+            let why = match &result {
+                Err(e) => e.to_string(),
+                Ok(r) => format!("status {}", r.status),
+            };
+            tracing::debug!(url = %redact(&request.url), attempt, error = %why, "retrying in {backoff:?}");
             std::thread::sleep(backoff);
         }
     }
@@ -427,16 +541,42 @@ pub fn redact(url: &str) -> &str {
 /// or LibreTranslate, say) is unreachable from the proxy's side.
 const LOOPBACK: &[&str] = &["localhost", "127.0.0.1", "::1", "[::1]"];
 
-fn resolve_proxy(settings: &Network) -> Result<Option<ureq::Proxy>, Error> {
-    let (url, bypass) = match settings.proxy.mode {
-        ProxyMode::None => return Ok(None),
-        ProxyMode::Manual => (settings.proxy.url(), Vec::new()),
-        ProxyMode::System | ProxyMode::Auto => match system_proxy() {
-            Some((url, bypass)) => (Some(url), bypass),
-            None => (None, Vec::new()),
+/// A proxy URL and the hosts that bypass it.
+type ProxySpec = (String, Vec<String>);
+
+/// Whether the proxy comes from the system, and so can change while Glossa
+/// runs (a VPN client switching the system proxy on and off).
+fn follows_system(settings: &Network) -> bool {
+    matches!(settings.proxy.mode, ProxyMode::System | ProxyMode::Auto)
+}
+
+/// The proxy the settings call for right now.
+fn proxy_spec(settings: &Network) -> Option<ProxySpec> {
+    match settings.proxy.mode {
+        ProxyMode::None => None,
+        ProxyMode::Manual => settings.proxy.url().map(|u| (u, Vec::new())),
+        ProxyMode::System | ProxyMode::Auto => system_proxy(),
+    }
+}
+
+/// A proxy's address without any credentials in it, for the log.
+fn describe_proxy(spec: Option<&ProxySpec>) -> String {
+    match spec {
+        None => "none".to_owned(),
+        Some((url, _)) => match url.split_once("://") {
+            Some((scheme, rest)) => format!("{scheme}://{}", rest.rsplit('@').next().unwrap_or(rest)),
+            None => url.rsplit('@').next().unwrap_or(url).to_owned(),
         },
-    };
-    let Some(u) = url else { return Ok(None) };
+    }
+}
+
+#[cfg(test)]
+fn resolve_proxy(settings: &Network) -> Result<Option<ureq::Proxy>, Error> {
+    make_proxy(proxy_spec(settings))
+}
+
+fn make_proxy(spec: Option<ProxySpec>) -> Result<Option<ureq::Proxy>, Error> {
+    let Some((u, bypass)) = spec else { return Ok(None) };
     let bad = |e: ureq::Error| Error::Config(format!("proxy {u:?}: {e}"));
     // Parsed once for its parts, then rebuilt with the bypass list, which
     // only the builder takes.
@@ -695,5 +835,136 @@ mod tests {
             };
             assert!(HttpClient::new(&settings).is_ok(), "{mode:?}");
         }
+    }
+
+    #[test]
+    fn proxies_are_logged_without_credentials() {
+        let spec = |u: &str| Some((u.to_owned(), Vec::new()));
+        assert_eq!(describe_proxy(None), "none");
+        assert_eq!(describe_proxy(spec("http://user:secret@proxy.test:3128").as_ref()), "http://proxy.test:3128");
+        assert_eq!(describe_proxy(spec("127.0.0.1:2080").as_ref()), "127.0.0.1:2080");
+    }
+
+    #[test]
+    fn a_changed_system_proxy_rebuilds_the_agent() {
+        let settings = Network {
+            proxy: glossa_core::config::Proxy { mode: ProxyMode::System, ..Default::default() },
+            ..Default::default()
+        };
+        let http = HttpClient::new(&settings).unwrap();
+        let system = http.system.as_ref().expect("the system proxy is followed");
+        // Pretend the agent was built for another proxy, a while ago.
+        *system.lock().unwrap() =
+            (Some(("http://gone.test:1".to_owned(), Vec::new())), Instant::now() - PROXY_RECHECK * 2);
+        let _ = http.agent();
+        let (seen, checked) = &*system.lock().unwrap();
+        assert_eq!(*seen, proxy_spec(&settings), "rebuilt for the proxy the system names now");
+        assert!(checked.elapsed() < PROXY_RECHECK);
+
+        let fixed = Network {
+            proxy: glossa_core::config::Proxy { mode: ProxyMode::None, ..Default::default() },
+            ..Default::default()
+        };
+        assert!(HttpClient::new(&fixed).unwrap().system.is_none(), "a fixed proxy is never looked up again");
+    }
+
+    /// A local server that accepts connections and does whatever `serve`
+    /// says with each, on a thread of its own. Returns its address.
+    fn stalling_server(serve: fn(std::net::TcpStream)) -> String {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap();
+        std::thread::spawn(move || {
+            for stream in listener.incoming().flatten() {
+                std::thread::spawn(move || serve(stream));
+            }
+        });
+        format!("http://{addr}/")
+    }
+
+    fn client(timeout_secs: u64, max_retries: u32) -> HttpClient {
+        let settings = Network {
+            timeout_secs,
+            max_retries,
+            proxy: glossa_core::config::Proxy { mode: ProxyMode::None, ..Default::default() },
+            ..Default::default()
+        };
+        HttpClient::new(&settings).unwrap()
+    }
+
+    #[test]
+    fn a_server_that_never_answers_costs_the_timeout_not_more() {
+        // Accepts, reads the request, then says nothing: what a dead pooled
+        // connection or a black-holed proxy looks like from here.
+        let url = stalling_server(|mut s| {
+            use std::io::Read as _;
+            let mut buf = [0u8; 1024];
+            let _ = s.read(&mut buf);
+            std::thread::sleep(Duration::from_secs(30));
+        });
+        let started = Instant::now();
+        let err = client(1, 0).send(HttpRequest::get(&url)).unwrap_err();
+        assert!(matches!(err, Error::Timeout(_)), "{err:?}");
+        assert!(started.elapsed() < Duration::from_millis(2500), "took {:?}", started.elapsed());
+
+        // Retries are allowed, but a timeout is not repeated: the engine
+        // moves on to the next service instead.
+        let started = Instant::now();
+        assert!(client(1, 2).send(HttpRequest::get(&url)).is_err());
+        assert!(started.elapsed() < Duration::from_millis(2500), "took {:?}", started.elapsed());
+    }
+
+    #[test]
+    fn a_handshake_that_never_finishes_is_given_up_within_the_connect_budget() {
+        // Accepts TCP but never answers the TLS ClientHello: what a
+        // black-holed CDN looks like through DPI.
+        let url = stalling_server(|mut s| {
+            use std::io::Read as _;
+            let mut buf = [0u8; 2048];
+            let _ = s.read(&mut buf);
+            std::thread::sleep(Duration::from_secs(30));
+        });
+        let https = url.replacen("http://", "https://", 1);
+        let started = Instant::now();
+        let err = client(30, 2).send(HttpRequest::get(&https)).unwrap_err();
+        let took = started.elapsed();
+        assert!(matches!(err, Error::Timeout(ms) if ms == CONNECT_BUDGET.as_millis() as u64), "{err:?}");
+        assert!(took >= CONNECT_BUDGET && took < CONNECT_BUDGET + Duration::from_secs(2), "took {took:?}");
+    }
+
+    #[test]
+    fn a_body_that_stops_halfway_times_out() {
+        let url = stalling_server(|mut s| {
+            use std::io::{Read as _, Write as _};
+            let mut buf = [0u8; 1024];
+            let _ = s.read(&mut buf);
+            let _ = s.write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 100\r\n\r\nhalf");
+            let _ = s.flush();
+            std::thread::sleep(Duration::from_secs(30));
+        });
+        let started = Instant::now();
+        let err = client(1, 0).send(HttpRequest::get(&url)).unwrap_err();
+        assert!(matches!(err, Error::Timeout(_) | Error::Network(_)), "{err:?}");
+        assert!(started.elapsed() < Duration::from_millis(2500), "took {:?}", started.elapsed());
+    }
+
+    #[test]
+    fn a_kept_alive_connection_the_server_closed_is_replaced() {
+        // The server answers one request per connection and closes it while
+        // the client keeps it in its pool; the next request must not stall
+        // on the dead connection.
+        let url = stalling_server(|mut s| {
+            use std::io::{Read as _, Write as _};
+            let mut buf = [0u8; 1024];
+            let _ = s.read(&mut buf);
+            let _ = s.write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: keep-alive\r\n\r\nok");
+            let _ = s.flush();
+            std::thread::sleep(Duration::from_millis(50));
+        });
+        let http = client(5, 0);
+        assert_eq!(http.send(HttpRequest::get(&url)).unwrap().body, b"ok");
+        std::thread::sleep(Duration::from_millis(300));
+        let started = Instant::now();
+        assert_eq!(http.send(HttpRequest::get(&url)).unwrap().body, b"ok");
+        assert!(started.elapsed() < Duration::from_secs(1), "took {:?}", started.elapsed());
     }
 }

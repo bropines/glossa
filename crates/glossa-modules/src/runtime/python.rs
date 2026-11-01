@@ -30,6 +30,7 @@ use std::ffi::OsString;
 use std::io::{BufRead, BufReader, Read, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Child, ChildStdin, Command, Stdio};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{self, Receiver, RecvTimeoutError};
 use std::sync::{Arc, Weak};
 use std::time::{Duration, Instant};
@@ -75,6 +76,11 @@ struct Config {
 pub struct PythonTransport {
     cfg: Arc<Config>,
     inner: Arc<Mutex<Inner>>,
+    /// Set by a `suspend` that found a call in flight: the process stops
+    /// when that call ends. Suspending must not wait for the call, which
+    /// can take as long as the call timeout, because the settings are
+    /// applied (and the old modules suspended) on the UI thread.
+    stop_after_call: AtomicBool,
 }
 
 struct Inner {
@@ -149,6 +155,7 @@ impl PythonTransport {
         Ok(Self {
             cfg: Arc::new(cfg),
             inner: Arc::new(Mutex::new(Inner { proc: None, next_id: 0, generation: 0, last_used: Instant::now() })),
+            stop_after_call: AtomicBool::new(false),
         })
     }
 
@@ -306,7 +313,9 @@ impl Transport for PythonTransport {
         let id = inner.next_id;
         let (result, alive) = self.exchange(&mut proc, id, method, params, host);
         inner.last_used = Instant::now();
-        if alive {
+        if self.stop_after_call.swap(false, Ordering::SeqCst) {
+            tracing::debug!(module = %self.cfg.module_id, "Python module suspended after its call");
+        } else if alive {
             inner.proc = Some(proc);
         }
         // Otherwise `proc` is dropped here, which kills it.
@@ -314,8 +323,15 @@ impl Transport for PythonTransport {
     }
 
     fn suspend(&self) {
-        if self.inner.lock().proc.take().is_some() {
-            tracing::debug!(module = %self.cfg.module_id, "Python module suspended");
+        // A short wait rides out the idle watcher's brief look; a call in
+        // flight holds the lock for its whole length.
+        match self.inner.try_lock_for(Duration::from_millis(50)) {
+            Some(mut inner) => {
+                if inner.proc.take().is_some() {
+                    tracing::debug!(module = %self.cfg.module_id, "Python module suspended");
+                }
+            }
+            None => self.stop_after_call.store(true, Ordering::SeqCst),
         }
     }
 }
@@ -920,6 +936,41 @@ mod.run()
         assert_eq!(translate(&t, "b").unwrap()["text"], "ok", "and started again on demand");
         t.suspend();
         assert!(!t.is_running());
+    }
+
+    #[test]
+    fn suspend_does_not_wait_for_a_call_in_flight() {
+        if !have_python() {
+            return;
+        }
+        let m = TempModule::new(
+            "busy",
+            "",
+            "import time\nfrom glossa_module import Module\nmod = Module()\n\n@mod.translate\ndef translate(req, host):\n    if req['text'] == 'x':\n        host.log('info', 'busy')\n    time.sleep(1.5)\n    return {'text': 'done'}\n\nmod.run()\n",
+        );
+        let t = Arc::new(m.transport(Duration::from_secs(20)));
+        let (busy_tx, busy_rx) = mpsc::channel();
+        let worker = {
+            let t = t.clone();
+            std::thread::spawn(move || {
+                let host = |method: &str, _: Value| {
+                    if method == "log" {
+                        let _ = busy_tx.send(());
+                    }
+                    Reply::ok(Value::Null)
+                };
+                t.call("translate", serde_json::json!({"text": "x", "from": "auto", "to": "en", "options": {}}), &host)
+                    .map(|v| v["text"].clone())
+            })
+        };
+        busy_rx.recv_timeout(Duration::from_secs(20)).expect("the module starts its call");
+        let started = Instant::now();
+        t.suspend();
+        assert!(started.elapsed() < Duration::from_millis(500), "suspend waited {:?}", started.elapsed());
+        assert_eq!(worker.join().unwrap().unwrap(), "done", "the call in flight finishes");
+        assert!(!t.is_running(), "and the process stops after it");
+        assert_eq!(translate(&t, "y").unwrap()["text"], "done", "the next call starts it again");
+        assert!(t.is_running());
     }
 
     #[test]
