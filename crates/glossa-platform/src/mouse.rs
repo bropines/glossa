@@ -30,6 +30,13 @@ pub struct MouseWatcher {
 }
 
 impl MouseWatcher {
+    /// Whether mouse mode can work on this system at all, so the interface
+    /// can grey it out rather than offer a switch that only fails. (It may
+    /// still fail to start where it is supported, for want of a permission.)
+    pub fn supported() -> bool {
+        cfg!(any(windows, target_os = "linux"))
+    }
+
     pub fn start(on_gesture: impl Fn(Gesture) + Send + 'static) -> crate::Result<MouseWatcher> {
         Ok(MouseWatcher { imp: imp::Watcher::start(Box::new(on_gesture))? })
     }
