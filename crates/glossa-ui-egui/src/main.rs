@@ -484,16 +484,6 @@ fn choose_renderer(options: &mut eframe::NativeOptions, configured: glossa_core:
             options.wgpu_options.wgpu_setup = egui_wgpu::WgpuSetup::CreateNew(setup);
         }
     }
-    // A DXGI swap chain made from the window handle is always opaque, so
-    // under wgpu a translucent window came out solid. One made for a
-    // DirectComposition visual over the window carries alpha.
-    if cfg!(windows) && options.renderer == eframe::Renderer::Wgpu && options.viewport.transparent == Some(true) {
-        if let egui_wgpu::WgpuSetup::CreateNew(setup) = &mut options.wgpu_options.wgpu_setup {
-            setup.instance_descriptor.backends = wgpu::Backends::DX12;
-            setup.instance_descriptor.backend_options.dx12.presentation_system =
-                wgpu::Dx12SwapchainKind::DxgiFromVisual;
-        }
-    }
 }
 
 /// Development aid: `GLOSSA_CRASH_TEST=panic|native` crashes on purpose, to

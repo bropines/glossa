@@ -842,9 +842,13 @@ impl Engine {
             }
             None => {
                 let mut v: Vec<Arc<dyn Provider>> = registry.get(&cfg.ocr.provider).into_iter().collect();
-                v.extend(
-                    registry.with_capability(Capabilities::OCR).into_iter().filter(|p| p.info().id != cfg.ocr.provider),
-                );
+                // OneOCR copies about 55 MB of the Snipping Tool's libraries
+                // on first use, so it runs only when chosen, never as a
+                // quiet fallback.
+                v.extend(registry.with_capability(Capabilities::OCR).into_iter().filter(|p| {
+                    let id = &p.info().id;
+                    *id != cfg.ocr.provider && id != glossa_ocr::oneocr::ONEOCR_ID
+                }));
                 v
             }
         };
