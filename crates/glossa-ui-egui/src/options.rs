@@ -507,9 +507,25 @@ fn page_header(ui: &mut egui::Ui, look: &crate::style::Look, page: Page, name: &
     ui.add_space(10.0);
 }
 
+/// A list of the installed themes for `value`.
+fn theme_picker(app: &GlossaApp, ui: &mut egui::Ui, salt: &str, value: &mut String) {
+    let entries = app.engine.theme_entries();
+    crate::dropdown::ComboBox::from_id_salt(salt).width(260.0).selected_text(value.as_str()).show_ui(ui, |ui| {
+        for t in &entries {
+            let label =
+                if t.classic { app.locale.fmt("options.appearance.classic_theme", &t.name) } else { t.name.clone() };
+            if ui.selectable_label(t.name == *value, label).clicked() {
+                *value = t.name.clone();
+            }
+        }
+    });
+}
+
 /// How the draft will look, above the appearance settings.
 fn appearance_preview(app: &GlossaApp, ui: &mut egui::Ui, look: &crate::style::Look, draft: &Config) {
-    let preview = crate::style::Look::new(app.engine.theme(&draft.appearance.theme), draft);
+    let system_dark = glossa_platform::appearance::system_prefers_dark();
+    let theme = app.engine.theme(draft.appearance.effective_theme(system_dark));
+    let preview = crate::style::Look::new(theme, draft);
     let to = crate::langs::name(draft.general.first_language);
     let from = crate::langs::name(draft.general.second_language);
     let labels = crate::preview::Labels {
@@ -1318,40 +1334,51 @@ fn appearance(app: &mut GlossaApp, ui: &mut egui::Ui, st: &mut OptionsState) {
     let d = &mut st.draft;
     group(ui, &look, &app.t("options.appearance.general"), |ui| {
         ui.checkbox(&mut d.appearance.custom_frame, app.t("options.appearance.window_style"));
-        row(ui, &app.t("options.appearance.theme"), |ui| {
-            let entries = app.engine.theme_entries();
-            crate::dropdown::ComboBox::from_id_salt("theme").width(260.0).selected_text(&d.appearance.theme).show_ui(
-                ui,
-                |ui| {
-                    for t in &entries {
-                        let label = if t.classic {
-                            app.locale.fmt("options.appearance.classic_theme", &t.name)
-                        } else {
-                            t.name.clone()
-                        };
-                        if ui.selectable_label(t.name == d.appearance.theme, label).clicked() {
-                            d.appearance.theme = t.name.clone();
-                        }
-                    }
-                },
-            );
-        });
+        // Light and dark themes for a system that switches, or one theme.
+        let system_dark = glossa_platform::appearance::system_prefers_dark();
+        ui.checkbox(&mut d.appearance.follow_system_theme, app.t("options.appearance.follow_system"));
+        if d.appearance.follow_system_theme {
+            row(ui, &app.t("options.appearance.theme_light"), |ui| {
+                theme_picker(app, ui, "theme-light", &mut d.appearance.theme_light);
+            });
+            row(ui, &app.t("options.appearance.theme_dark"), |ui| {
+                theme_picker(app, ui, "theme-dark", &mut d.appearance.theme_dark);
+            });
+            // Without a mode to follow, the one theme is used: show it.
+            if system_dark.is_none() {
+                hint(ui, &look, &app.t("options.appearance.follow_system_unknown"));
+                row(ui, &app.t("options.appearance.theme"), |ui| {
+                    theme_picker(app, ui, "theme", &mut d.appearance.theme);
+                });
+            }
+        } else {
+            row(ui, &app.t("options.appearance.theme"), |ui| {
+                theme_picker(app, ui, "theme", &mut d.appearance.theme);
+            });
+        }
         ui.horizontal(|ui| {
             if ui.button(app.t("options.appearance.edit_theme")).clicked() {
-                // Built-in themes are exported to the user's theme folder as
-                // an editable TOML file that extends the original.
+                // The theme in effect now is the one edited. Built-in themes
+                // are exported to the user's theme folder as an editable
+                // TOML file that extends the original.
+                let a = &mut d.appearance;
+                let slot = match (a.follow_system_theme, system_dark) {
+                    (true, Some(true)) => &mut a.theme_dark,
+                    (true, Some(false)) => &mut a.theme_light,
+                    _ => &mut a.theme,
+                };
                 let entries = app.engine.theme_entries();
-                let path = match entries.iter().find(|t| t.name == d.appearance.theme).and_then(|t| t.path.clone()) {
+                let path = match entries.iter().find(|t| t.name == *slot).and_then(|t| t.path.clone()) {
                     Some(p) => p,
                     None => {
                         let dir = app.engine.paths().user_theme_dir();
                         let _ = std::fs::create_dir_all(&dir);
-                        let p = dir.join(format!("{} (custom).toml", d.appearance.theme));
+                        let p = dir.join(format!("{} (custom).toml", slot));
                         if !p.exists() {
-                            let text = format!("# A theme of your own. Anything not set here comes from \"{0}\".\nextends = \"{0}\"\nname = \"{0} (custom)\"\n\n# accent = \"#2a8de4\"\n# [popup]\n# opacity = 0.9\n", d.appearance.theme);
+                            let text = format!("# A theme of your own. Anything not set here comes from \"{0}\".\nextends = \"{0}\"\nname = \"{0} (custom)\"\n\n# accent = \"#2a8de4\"\n# [popup]\n# opacity = 0.9\n", slot);
                             let _ = std::fs::write(&p, text);
                         }
-                        d.appearance.theme = format!("{} (custom)", d.appearance.theme);
+                        *slot = format!("{} (custom)", slot);
                         p
                     }
                 };

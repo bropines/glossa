@@ -423,18 +423,36 @@ fn hello(app: &mut GlossaApp, ui: &mut egui::Ui, pal: &Palette) {
         ui.label(RichText::new(app.t("options.appearance.theme")).color(pal.text));
         ui.add_space(6.0);
         let entries = app.engine.theme_entries();
+        let system_dark = glossa_platform::appearance::system_prefers_dark();
+        let current = cfg.appearance.effective_theme(system_dark).to_owned();
         let mut pick = None;
         ui.horizontal_wrapped(|ui| {
             ui.spacing_mut().item_spacing = vec2(8.0, 10.0);
             for t in entries.iter().filter(|t| t.path.is_none()) {
                 let Some(theme) = glossa_core::theme::builtin::by_name(&t.name) else { continue };
-                if theme_swatch(ui, pal, &theme, &t.name, t.name == cfg.appearance.theme).clicked() {
-                    pick = Some(t.name.clone());
+                if theme_swatch(ui, pal, &theme, &t.name, t.name == current).clicked() {
+                    pick = Some((t.name.clone(), theme.dark));
                 }
             }
         });
-        if let Some(name) = pick {
-            let _ = app.engine.update_config(|c| c.appearance.theme = name);
+        // Following the system, a theme for the mode the system is in takes
+        // that mode's place and following goes on. A theme for the other
+        // mode would change nothing on screen, so choosing one means this
+        // theme, always: following is turned off.
+        if let Some((name, dark)) = pick {
+            let _ = app.engine.update_config(|c| {
+                let a = &mut c.appearance;
+                if a.follow_system_theme && system_dark == Some(dark) {
+                    if dark {
+                        a.theme_dark = name.clone();
+                    } else {
+                        a.theme_light = name.clone();
+                    }
+                } else {
+                    a.follow_system_theme = false;
+                }
+                a.theme = name;
+            });
         }
     });
 }
