@@ -7,7 +7,7 @@
 //! declares, so a module — JavaScript, Python, native, a classic script or a
 //! pot-app plugin — gets a settings form without shipping any UI code.
 
-use egui::{vec2, RichText};
+use egui::{vec2, Color32, RichText};
 use glossa_core::config::{
     CopyAction, ExceptionMode, ExceptionRule, LensMode, MouseBehaviour, ProxyMode, ProxyScheme, VisionLevel,
 };
@@ -15,6 +15,7 @@ use glossa_core::{Action, Capabilities, Config, LangId};
 use glossa_modules::{OptionKind, OptionSpec};
 
 use crate::app::GlossaApp;
+use crate::icons::Icon;
 use crate::widgets::{group, row};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -34,22 +35,101 @@ pub enum Page {
     Updates,
 }
 
+/// The groups the pages are listed in, under a small heading each.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Group {
+    General,
+    Translation,
+    Recognition,
+    System,
+}
+
+impl Group {
+    const ALL: [Group; 4] = [Group::General, Group::Translation, Group::Recognition, Group::System];
+
+    fn key(self) -> &'static str {
+        match self {
+            Group::General => "options.group.general",
+            Group::Translation => "options.group.translation",
+            Group::Recognition => "options.group.recognition",
+            Group::System => "options.group.system",
+        }
+    }
+}
+
 impl Page {
+    /// Every page, in the order the list shows them (by group).
     const ALL: [Page; 13] = [
         Page::Basics,
+        Page::Appearance,
         Page::Hotkeys,
-        Page::Internet,
         Page::Services,
         Page::Languages,
-        Page::Appearance,
         Page::Exceptions,
-        Page::Advanced,
         Page::Ocr,
+        Page::Internet,
+        Page::Permissions,
         Page::Modules,
         Page::Api,
-        Page::Permissions,
+        Page::Advanced,
         Page::Updates,
     ];
+
+    fn group(self) -> Group {
+        match self {
+            Page::Basics | Page::Appearance | Page::Hotkeys => Group::General,
+            Page::Services | Page::Languages | Page::Exceptions => Group::Translation,
+            Page::Ocr => Group::Recognition,
+            Page::Internet | Page::Permissions | Page::Modules | Page::Api | Page::Advanced | Page::Updates => {
+                Group::System
+            }
+        }
+    }
+
+    /// The page's icon, drawn white on its colour.
+    fn icon(self) -> Icon {
+        match self {
+            Page::Basics => Icon::Gear,
+            Page::Appearance => Icon::Palette,
+            Page::Hotkeys => Icon::Keyboard,
+            Page::Services => Icon::Translate,
+            Page::Languages => Icon::Globe,
+            Page::Exceptions => Icon::Block,
+            Page::Ocr => Icon::Camera,
+            Page::Internet => Icon::Wifi,
+            Page::Permissions => Icon::Lock,
+            Page::Modules => Icon::Boxes,
+            Page::Api => Icon::Code,
+            Page::Advanced => Icon::Sliders,
+            Page::Updates => Icon::Refresh,
+        }
+    }
+
+    /// A colour of its own, so a page is found by colour as much as by
+    /// name (the system colours macOS uses for its settings).
+    fn tint(self) -> Color32 {
+        let rgb = |v: u32| Color32::from_rgb((v >> 16) as u8, (v >> 8) as u8, v as u8);
+        match self {
+            Page::Basics => rgb(0x8e8e93),
+            Page::Appearance => rgb(0xbf5af2),
+            Page::Hotkeys => rgb(0x5e5ce6),
+            Page::Services => rgb(0x0a84ff),
+            Page::Languages => rgb(0x30b0c7),
+            Page::Exceptions => rgb(0xff453a),
+            Page::Ocr => rgb(0xff9f0a),
+            Page::Internet => rgb(0x34c759),
+            Page::Permissions => rgb(0x64748b),
+            Page::Modules => rgb(0xac8e68),
+            Page::Api => rgb(0x5856d6),
+            Page::Advanced => rgb(0x8e8e93),
+            Page::Updates => rgb(0x32ade6),
+        }
+    }
+
+    /// Whether this system has the page: only macOS asks for permissions.
+    fn shown(self) -> bool {
+        self != Page::Permissions || !glossa_platform::permissions::Permission::all().is_empty()
+    }
 
     fn key(self) -> &'static str {
         match self {
@@ -325,22 +405,26 @@ fn body(app: &mut GlossaApp, ui: &mut egui::Ui, st: &mut OptionsState) -> bool {
         });
         ui.add_space(6.0);
     });
-    egui::Panel::left("opt-nav").exact_size(190.0).resizable(false).show(ui, |ui| {
-        ui.add_space(6.0);
-        ui.with_layout(egui::Layout::top_down_justified(egui::Align::Min), |ui| {
-            for p in Page::ALL {
-                // Only macOS asks the user for permissions.
-                if p == Page::Permissions && glossa_platform::permissions::Permission::all().is_empty() {
+    egui::Panel::left("opt-nav").exact_size(214.0).resizable(false).show(ui, |ui| {
+        egui::ScrollArea::vertical().id_salt("opt-nav-scroll").show(ui, |ui| {
+            ui.add_space(4.0);
+            for g in Group::ALL {
+                let pages: Vec<Page> = Page::ALL.into_iter().filter(|p| p.group() == g && p.shown()).collect();
+                if pages.is_empty() {
                     continue;
                 }
-                let sel = st.page == p;
-                if ui.selectable_label(sel, app.t(p.key())).clicked() {
-                    st.page = p;
+                ui.add_space(6.0);
+                ui.label(RichText::new(app.t(g.key())).size(11.0).strong().color(look.weak_text()));
+                for p in pages {
+                    if nav_row(ui, &look, p, &app.t(p.key()), st.page == p).clicked() {
+                        st.page = p;
+                    }
                 }
             }
         });
     });
     egui::CentralPanel::default().show(ui, |ui| {
+        page_header(ui, &look, st.page, &app.t(st.page.key()));
         if st.page == Page::Services {
             // Two panes with their own scrolling.
             services(app, ui, st);
@@ -366,6 +450,67 @@ fn body(app: &mut GlossaApp, ui: &mut egui::Ui, st: &mut OptionsState) -> bool {
         });
     });
     keep
+}
+
+/// A page's icon: white on a rounded square of the page's colour.
+fn page_icon(ui: &mut egui::Ui, page: Page, size: f32) {
+    let (rect, _) = ui.allocate_exact_size(vec2(size, size), egui::Sense::hover());
+    ui.painter().rect_filled(rect, egui::CornerRadius::same((size * 0.26) as u8), page.tint());
+    let glyph = egui::Rect::from_center_size(rect.center(), vec2(size * 0.62, size * 0.62));
+    crate::icons::paint(ui.painter(), glyph, page.icon(), Color32::WHITE);
+}
+
+/// One page in the list: its icon and name, the chosen one on the accent.
+fn nav_row(ui: &mut egui::Ui, look: &crate::style::Look, page: Page, name: &str, chosen: bool) -> egui::Response {
+    let height = 28.0;
+    let (rect, resp) = ui.allocate_exact_size(vec2(ui.available_width(), height), egui::Sense::click());
+    let radius = egui::CornerRadius::same(7);
+    let text = look.text();
+    if chosen {
+        ui.painter().rect_filled(rect, radius, look.accent());
+    } else if resp.hovered() {
+        ui.painter().rect_filled(rect, radius, Color32::from_rgba_unmultiplied(text.r(), text.g(), text.b(), 18));
+    }
+    let mut child = ui.new_child(
+        egui::UiBuilder::new()
+            .max_rect(rect.shrink2(vec2(6.0, 0.0)))
+            .layout(egui::Layout::left_to_right(egui::Align::Center)),
+    );
+    page_icon(&mut child, page, 20.0);
+    child.add_space(4.0);
+    let colour = if chosen { crate::style::text_on(look.accent()) } else { text };
+    child.add(egui::Label::new(RichText::new(name).color(colour)).selectable(false).truncate());
+    resp
+}
+
+/// The page's icon and name over its content.
+fn page_header(ui: &mut egui::Ui, look: &crate::style::Look, page: Page, name: &str) {
+    ui.add_space(4.0);
+    ui.horizontal(|ui| {
+        page_icon(ui, page, 30.0);
+        ui.add_space(4.0);
+        ui.label(RichText::new(name).size(20.0).strong().color(look.text()));
+    });
+    ui.add_space(10.0);
+}
+
+/// How the draft will look, above the appearance settings.
+fn appearance_preview(app: &GlossaApp, ui: &mut egui::Ui, look: &crate::style::Look, draft: &Config) {
+    let preview = crate::style::Look::new(app.engine.theme(&draft.appearance.theme), draft);
+    let to = crate::langs::name(draft.general.first_language);
+    let from = crate::langs::name(draft.general.second_language);
+    let labels = crate::preview::Labels {
+        source: app.t("options.appearance.preview_source"),
+        translation: app.t("options.appearance.preview_translation"),
+        popup_title: format!("{from} \u{2192} {to} (Google)"),
+        from,
+        to,
+        translate: app.t("main.translate"),
+    };
+    group(ui, look, &app.t("options.appearance.preview"), |ui| {
+        crate::preview::show(ui, &preview, draft, 230.0, &labels);
+    });
+    ui.add_space(6.0);
 }
 
 fn lang_row(app: &GlossaApp, ui: &mut egui::Ui, label: &str, salt: &str, value: &mut LangId, allow_auto: bool) {
@@ -1156,6 +1301,7 @@ fn languages(app: &mut GlossaApp, ui: &mut egui::Ui, st: &mut OptionsState) {
 
 fn appearance(app: &mut GlossaApp, ui: &mut egui::Ui, st: &mut OptionsState) {
     let look = app.look.clone();
+    appearance_preview(app, ui, &look, &st.draft);
     let d = &mut st.draft;
     group(ui, &look, &app.t("options.appearance.general"), |ui| {
         ui.checkbox(&mut d.appearance.custom_frame, app.t("options.appearance.window_style"));

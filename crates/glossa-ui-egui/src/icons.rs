@@ -56,6 +56,18 @@ pub enum Icon {
     Lock,
     /// A check mark: done.
     Check,
+    /// A painter's palette: appearance.
+    Palette,
+    /// Arcs over a dot: the network.
+    Wifi,
+    /// A circle with a bar through it: not here (exceptions).
+    Block,
+    /// Three sliders: fine-tuning (advanced settings).
+    Sliders,
+    /// Angle brackets: a programming interface.
+    Code,
+    /// A circular arrow: updates.
+    Refresh,
 }
 
 /// Draw `icon` into `rect`.
@@ -270,6 +282,57 @@ pub fn paint(painter: &egui::Painter, rect: Rect, icon: Icon, color: Color32) {
         Icon::Check => {
             poly(vec![p(3.0, 8.5), p(6.5, 12.0), p(13.0, 4.5)], false);
         }
+        Icon::Palette => {
+            // A rounded blob with a thumb hole and three paint dots.
+            let blob: Vec<Pos2> = (0..=24)
+                .map(|i| {
+                    let a = std::f32::consts::TAU * i as f32 / 24.0;
+                    let r = if (a - 0.9).abs() < 0.45 { 4.2 } else { 6.2 };
+                    p(8.0 + r * a.cos(), 8.0 + r * a.sin())
+                })
+                .collect();
+            poly(blob, true);
+            for (x, y) in [(5.5, 6.0), (8.5, 4.5), (11.0, 6.5)] {
+                painter.circle_filled(p(x, y), 1.1 * u, color);
+            }
+        }
+        Icon::Wifi => {
+            for r in [3.0f32, 6.0, 9.0] {
+                let arc: Vec<Pos2> = (0..=10)
+                    .map(|i| {
+                        let a = -std::f32::consts::FRAC_PI_2 + (i as f32 / 10.0 - 0.5) * 1.6;
+                        p(8.0 + r * a.cos(), 13.0 + r * a.sin())
+                    })
+                    .collect();
+                poly(arc, false);
+            }
+            painter.circle_filled(p(8.0, 13.0), 1.1 * u, color);
+        }
+        Icon::Block => {
+            painter.circle_stroke(p(8.0, 8.0), 6.0 * u, st);
+            line(p(3.8, 3.8), p(12.2, 12.2));
+        }
+        Icon::Sliders => {
+            for (y, knob) in [(4.0, 10.5), (8.0, 5.0), (12.0, 9.0)] {
+                line(p(2.5, y), p(13.5, y));
+                painter.circle_filled(p(knob, y), 1.8 * u, color);
+            }
+        }
+        Icon::Code => {
+            poly(vec![p(5.5, 4.0), p(2.0, 8.0), p(5.5, 12.0)], false);
+            poly(vec![p(10.5, 4.0), p(14.0, 8.0), p(10.5, 12.0)], false);
+            line(p(9.0, 3.0), p(7.0, 13.0));
+        }
+        Icon::Refresh => {
+            let arc: Vec<Pos2> = (0..=18)
+                .map(|i| {
+                    let a = -0.6 + 4.9 * i as f32 / 18.0;
+                    p(8.0 + 5.5 * a.cos(), 8.0 + 5.5 * a.sin())
+                })
+                .collect();
+            poly(arc, false);
+            poly(vec![p(13.8, 1.8), p(12.6, 5.0), p(9.6, 3.8)], false);
+        }
     }
 }
 
@@ -403,6 +466,12 @@ mod tests {
                 Icon::Shrink,
                 Icon::Lock,
                 Icon::Check,
+                Icon::Palette,
+                Icon::Wifi,
+                Icon::Block,
+                Icon::Sliders,
+                Icon::Code,
+                Icon::Refresh,
             ] {
                 for s in [8.0, 16.0, 48.0] {
                     paint(painter, Rect::from_min_size(pos2(0.0, 0.0), vec2(s, s)), icon, Color32::WHITE);

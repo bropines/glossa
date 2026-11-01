@@ -99,7 +99,7 @@ impl Palette {
             accent,
             // White or black, whichever reads on the accent (the theme's own
             // accent text may not match a system accent).
-            accent_text: if luminance(accent) > 0.55 { Color32::BLACK } else { Color32::WHITE },
+            accent_text: crate::style::text_on(accent),
             accent_soft: Color32::from_rgba_unmultiplied(accent.r(), accent.g(), accent.b(), 40),
             text,
             weak: look.weak_text(),
@@ -107,11 +107,6 @@ impl Palette {
             card_border: veil(if look.theme.dark { 26 } else { 30 }),
         }
     }
-}
-
-/// Relative brightness, 0 to 1, of a colour as sRGB.
-fn luminance(c: Color32) -> f32 {
-    (0.2126 * c.r() as f32 + 0.7152 * c.g() as f32 + 0.0722 * c.b() as f32) / 255.0
 }
 
 pub fn show(app: &mut GlossaApp, ctx: &egui::Context) {
