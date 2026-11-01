@@ -502,6 +502,13 @@ pub static STRINGS: &[(&str, &str, Option<&str>)] = &[
     ("options.saved", "Saved.", None),
     ("options.remove", "Remove", None),
     // -- options: basics --------------------------------------------------------
+    ("options.appearance.preview", "Preview", None),
+    ("options.appearance.preview_source", "Hello, everyone! How are you today?", None),
+    ("options.appearance.preview_translation", "Bonjour à tous ! Comment allez-vous ?", None),
+    ("options.group.general", "General", None),
+    ("options.group.translation", "Translation", None),
+    ("options.group.recognition", "Recognition", None),
+    ("options.group.system", "System", None),
     ("options.basics", "Basics", Some("w:10:caption")),
     ("options.basics.start_with_system", "Start with Windows", Some("w:10:1045")),
     ("options.basics.ui_language", "Interface language:", Some("w:10:1070")),

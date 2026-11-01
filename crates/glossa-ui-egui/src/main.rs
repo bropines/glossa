@@ -26,6 +26,7 @@ mod ocr;
 mod ocr_result;
 mod options;
 mod popup;
+mod preview;
 mod rich;
 mod style;
 mod text_menu;

@@ -38,6 +38,12 @@ for Windows, macOS and Linux.
   (`general.secret_storage = "system"`): Windows Credential Manager, the
   macOS Keychain or the Secret Service on Linux keep the services' keys, the
   proxy password and the Lens token; the settings file holds a placeholder.
+- **Options, grouped**: the pages are listed under General, Translation,
+  Recognition and System, each with an icon on a colour of its own, and
+  the open page shows its icon and name over its content.
+- **Appearance preview**: the top of Options → Appearance shows the main
+  window and a popup in the chosen theme, transparency, backdrop, window
+  style and scale, over a made-up desktop, before Apply.
 - **macOS Dark and macOS Light themes** after AppKit's colours and metrics.
 - **Small resident cost**: when nothing has been on screen for a while
   (`appearance.unload_graphics_after_secs`), the GUI shuts down and the

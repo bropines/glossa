@@ -15,6 +15,17 @@ pub fn c(color: Color) -> Color32 {
     Color32::from_rgba_unmultiplied(color.r, color.g, color.b, color.a)
 }
 
+/// White or black, whichever reads on `fill` (an accent): a theme's own
+/// accent text may not suit the system accent it picked up.
+pub fn text_on(fill: Color32) -> Color32 {
+    let luminance = (0.2126 * fill.r() as f32 + 0.7152 * fill.g() as f32 + 0.0722 * fill.b() as f32) / 255.0;
+    if luminance > 0.55 {
+        Color32::BLACK
+    } else {
+        Color32::WHITE
+    }
+}
+
 pub fn from32(c: Color32) -> Color {
     let [r, g, b, a] = c.to_srgba_unmultiplied();
     Color::rgba(r, g, b, a)
