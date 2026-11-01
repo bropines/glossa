@@ -1506,8 +1506,8 @@ mod tests {
             self.seen.lock().unwrap().push(request.clone());
             assert_eq!(request.url, glossa_lens::ENDPOINT);
             let word = |t: &str, sep: &str| text_layout::Word {
-                plain_text: Some(t.into()),
-                text_separator: Some(sep.into()),
+                plain_text: t.into(),
+                text_separator: sep.into(),
                 ..Default::default()
             };
             let geometry = Some(Geometry {
@@ -1533,7 +1533,7 @@ mod tests {
                                 ..Default::default()
                             }],
                         }),
-                        content_language: Some("en".into()),
+                        content_language: "en".into(),
                     }),
                     ..Default::default()
                 }),

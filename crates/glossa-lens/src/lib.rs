@@ -185,27 +185,30 @@ pub fn objects_request(upload: &Upload, query: &Query, uuid: u64) -> Vec<u8> {
                     ..Default::default()
                 }),
                 client_context: Some(LensOverlayClientContext {
-                    platform: Some(Platform::Web as i32),
-                    surface: Some(Surface::Chromium as i32),
+                    platform: Platform::Web as i32,
+                    surface: Surface::Chromium as i32,
                     locale_context: Some(LocaleContext {
-                        language: Some(query.ocr_language.clone()),
-                        region: Some(query.region.clone()),
-                        time_zone: Some(query.time_zone.clone()),
+                        // Empty when Lens is to tell the language: with
+                        // implicit presence it is then left out, as Chromium
+                        // leaves it.
+                        language: query.ocr_language.clone(),
+                        region: query.region.clone(),
+                        time_zone: query.time_zone.clone(),
                     }),
                     client_filters: Some(AppliedFilters { filter: vec![filter] }),
                     // Chromium pairs SURFACE_CHROMIUM / PLATFORM_WEB with this
                     // (LensOverlayQueryController::CreateClientContext).
                     rendering_context: Some(RenderingContext {
-                        rendering_environment: Some(LensRenderingEnvironment::RenderingEnvLensOverlay as i32),
+                        rendering_environment: LensRenderingEnvironment::RenderingEnvLensOverlay as i32,
                     }),
                     ..Default::default()
                 }),
             }),
             image_data: Some(ImageData {
-                payload: Some(ImagePayload { image_bytes: Some(upload.jpeg.clone()) }),
+                payload: Some(ImagePayload { image_bytes: upload.jpeg.clone() }),
                 image_metadata: Some(ImageMetadata {
-                    width: Some(upload.width as i32),
-                    height: Some(upload.height as i32),
+                    width: upload.width as i32,
+                    height: upload.height as i32,
                     ..Default::default()
                 }),
                 ..Default::default()
@@ -354,7 +357,7 @@ pub fn parse_response(body: &[u8]) -> Result<Page, String> {
         .into_iter()
         .map(|p| Paragraph {
             bounds: bounds(p.geometry.as_ref()),
-            language: non_empty(p.content_language.as_ref()),
+            language: non_empty(Some(&p.content_language)),
             lines: p
                 .lines
                 .into_iter()
@@ -365,8 +368,8 @@ pub fn parse_response(body: &[u8]) -> Result<Page, String> {
                         .into_iter()
                         .map(|w| Word {
                             bounds: bounds(w.geometry.as_ref()),
-                            text: w.plain_text.unwrap_or_default(),
-                            separator: w.text_separator.unwrap_or_default(),
+                            text: w.plain_text,
+                            separator: w.text_separator,
                         })
                         .collect(),
                 })
@@ -398,7 +401,7 @@ pub fn parse_response(body: &[u8]) -> Result<Page, String> {
         })
         .filter(|t| !t.text.trim().is_empty())
         .collect();
-    Ok(Page { language: non_empty(text.content_language.as_ref()), paragraphs, translations })
+    Ok(Page { language: non_empty(Some(&text.content_language)), paragraphs, translations })
 }
 
 #[cfg(test)]
@@ -425,16 +428,22 @@ mod tests {
         assert_eq!((id.uuid, id.sequence_id, id.image_sequence_id), (Some(42), Some(1), Some(1)));
         assert!(id.time_usec.unwrap() > 1_600_000_000_000_000);
         let client = ctx.client_context.unwrap();
-        assert_eq!(client.platform, Some(Platform::Web as i32));
-        assert_eq!(client.surface, Some(Surface::Chromium as i32));
+        assert_eq!(client.platform, Platform::Web as i32);
+        assert_eq!(client.surface, Surface::Chromium as i32);
         assert_eq!(
             client.rendering_context.unwrap().rendering_environment,
-            Some(LensRenderingEnvironment::RenderingEnvLensOverlay as i32)
+            LensRenderingEnvironment::RenderingEnvLensOverlay as i32
         );
         let filters = client.client_filters.unwrap().filter;
         assert_eq!(filters.len(), 1);
         assert_eq!(filters[0].filter_type, Some(LensOverlayFilterType::AutoFilter as i32));
-        assert!(client.app_id.is_none(), "Chromium never sets it");
+        assert!(client.app_id.is_empty(), "Chromium never sets it");
+        // No OCR language: the field is left out, as Chromium leaves it
+        // (implicit presence), not sent empty.
+        let locale = client.locale_context.unwrap();
+        assert_eq!(locale.language, "");
+        let bytes = locale.encode_to_vec();
+        assert_eq!(bytes[0], 0x12, "the first field is the region (2), not an empty language (1)");
     }
 
     #[test]
@@ -448,7 +457,7 @@ mod tests {
         let Some(applied_filter::FilterPayload::Translate(t)) = &filters[0].filter_payload else { panic!() };
         assert_eq!((t.target_language.as_deref(), t.source_language.as_deref()), (Some("ru"), Some("en")));
         let meta = o.image_data.unwrap().image_metadata.unwrap();
-        assert_eq!((meta.width, meta.height), (Some(800), Some(600)));
+        assert_eq!((meta.width, meta.height), (800, 600));
     }
 
     #[test]
@@ -473,7 +482,7 @@ mod tests {
     }
 
     fn word(text: &str, sep: &str) -> text_layout::Word {
-        text_layout::Word { plain_text: Some(text.into()), text_separator: Some(sep.into()), ..Default::default() }
+        text_layout::Word { plain_text: text.into(), text_separator: sep.into(), ..Default::default() }
     }
 
     fn geometry(cx: f32, cy: f32) -> Option<Geometry> {
@@ -514,7 +523,7 @@ mod tests {
             objects_response: Some(LensOverlayObjectsResponse {
                 text: Some(Text {
                     text_layout: Some(TextLayout { paragraphs: vec![paragraph] }),
-                    content_language: Some("en".into()),
+                    content_language: "en".into(),
                 }),
                 deep_gleams: vec![DeepGleamData {
                     rendering_oneof: Some(deep_gleam_data::RenderingOneof::Translation(translation)),
