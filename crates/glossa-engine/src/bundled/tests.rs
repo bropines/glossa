@@ -630,6 +630,26 @@ fn translate_academic_passes_entries_on_as_html() {
 
     let none = MockHttp::new().on(Method::Get, "https://translate.academic.ru/", 200, "<html>Ничего не найдено</html>");
     assert!(look_up("translate-academic", &none, "qwzxv", "en", "ru").unwrap_err().to_string().contains("qwzxv"));
+    // A common word: many long entries, of which the first six are shown,
+    // and what follows the list is not taken for one.
+    let entry = |n: usize| {
+        format!(
+            "<li><p><strong>house</strong></p><div class=\"translate_definition\"><div>дом {n} {}</div></div>
+             <p class=\"src\"><a href=\"https://d{n}.academic.ru\">Словарь {n}</a></p>
+</li>
+",
+            "очень длинная статья ".repeat(400)
+        )
+    };
+    let many: String = (1..=20).map(entry).collect();
+    let page = format!(
+        "<html><ul class=\"terms-list\">
+{many}</ul><ul><li><p>not an entry</p></li></ul></html>"
+    );
+    let http = MockHttp::new().on(Method::Get, "https://translate.academic.ru/house/en/ru/", 200, &page);
+    let html = look_up("translate-academic", &http, "house", "en", "ru").unwrap().html.unwrap();
+    assert!(html.contains("дом 1 ") && html.contains("дом 6 ") && !html.contains("дом 7 "), "six entries");
+    assert!(!html.contains("not an entry"));
 }
 
 // -- in the engine ------------------------------------------------------------

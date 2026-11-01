@@ -1,19 +1,24 @@
 # Installing Glossa
 
 Every [release](https://github.com/bropines/glossa/releases) has these files
-(`1.2.3` stands for the version):
+(`1.2.3` stands for the version). Each comes for two kinds of processor:
+`x86_64` is an ordinary Intel or AMD PC and an Intel Mac, `arm64` is ARM
+(Apple silicon Macs, Snapdragon Windows laptops, ARM Linux boards).
 
 | system | file | what it is |
 |---|---|---|
-| Windows 10, 11 (x86-64) | `glossa-1.2.3-x86_64-windows-setup.exe` | installer |
-| | `glossa-1.2.3-x86_64-windows.zip` | portable archive |
+| Windows 10, 11 | `glossa-1.2.3-x86_64-windows-setup.exe`, `glossa-1.2.3-arm64-windows-setup.exe` | installer |
+| | `glossa-1.2.3-x86_64-windows-portable.zip`, `glossa-1.2.3-arm64-windows-portable.zip` | portable archive |
 | macOS 11+ Apple silicon | `glossa-1.2.3-arm64-macos.dmg` | disk image with `Glossa.app` |
-| macOS 10.15+ Apple silicon or Intel | `glossa-1.2.3-universal-macos.dmg` | the same, for both |
+| macOS 10.15+ Intel | `glossa-1.2.3-x86_64-macos.dmg` | the same, for Intel |
 | | `glossa-1.2.3-*-macos.zip` | `Glossa.app`, `glossa-cli` and the documents |
-| Debian 12, Ubuntu 22.04 and newer (x86-64) | `glossa_1.2.3_amd64.deb` | package |
-| other Linux (x86-64) | `glossa-1.2.3-x86_64.AppImage` | single file to run |
-| | `glossa-1.2.3-x86_64-linux.tar.gz` | archive |
+| Debian 12, Ubuntu 22.04 and newer | `glossa_1.2.3_amd64.deb`, `glossa_1.2.3_arm64.deb` | package |
+| other Linux | `glossa-1.2.3-x86_64.AppImage`, `glossa-1.2.3-aarch64.AppImage` | single file to run |
+| | `glossa-1.2.3-x86_64-linux-portable.tar.gz`, `glossa-1.2.3-arm64-linux-portable.tar.gz` | portable archive |
 | | `SHA256SUMS` | checksums of all of the above |
+
+The Linux builds have not been tried on real hardware yet: they are built
+and smoke-tested by the release workflow only. Reports are welcome.
 
 `Bropines.Glossa*.yaml` and `glossa.json` are winget and Scoop manifests (see
 [below](#winget-and-scoop)).
@@ -65,6 +70,9 @@ Glossa first; your settings stay.
 asks whether to delete your settings, history and modules too; the answer
 is no unless you say yes.
 
+Take the `arm64` installer on an ARM laptop; the `x86_64` one also installs
+there and runs under emulation, more slowly.
+
 **Unattended installs** take the usual Inno Setup switches:
 
 ```bat
@@ -78,10 +86,11 @@ again in the tray if it was running. A silent uninstall keeps the settings.
 
 ### The portable archive
 
-Unpack the `.zip` anywhere and run `glossa.exe`. Settings go to
-`%APPDATA%\Glossa`, as with the installer; put an empty file named
-`portable` next to `glossa.exe` to keep them in a `data` folder beside it
-instead (a USB stick, say). The installer never does that.
+Unpack the `-portable.zip` anywhere (a USB stick, say) and run `glossa.exe`.
+The `portable.txt` beside it keeps settings, history and modules in a `data`
+folder next to `glossa.exe`, so the folder carries them along. Delete
+`portable.txt` to keep them in `%APPDATA%\Glossa` instead, as the installer
+does. To upgrade, unpack the new version over the old folder; `data` stays.
 
 ### winget and Scoop
 
@@ -91,8 +100,9 @@ release is published; until then the download links behind them do not
 answer. After that:
 
 - **Scoop**: `scoop install https://github.com/bropines/glossa/releases/download/v1.2.3/glossa.json`
-  (or add the manifest to a bucket). It installs the portable archive and
-  puts `glossa-cli` on the `PATH`.
+  (or add the manifest to a bucket). It installs the portable archive for
+  your processor, keeps its `data` folder across updates, and puts
+  `glossa-cli` on the `PATH`.
 - **winget**: the three `Bropines.Glossa*.yaml` files go in a pull request to
   [winget-pkgs](https://github.com/microsoft/winget-pkgs) (under
   `manifests/b/Bropines/Glossa/1.2.3/`); once merged,
@@ -101,7 +111,8 @@ answer. After that:
 
 ## macOS
 
-Open the `.dmg` and drag `Glossa.app` onto *Applications*. Glossa is a
+Take `arm64` for an Apple silicon Mac (M1 and later) and `x86_64` for an
+Intel one. Open the `.dmg` and drag `Glossa.app` onto *Applications*. Glossa is a
 menu-bar app: it has no Dock icon until one of its windows is open.
 
 The app is signed ad hoc, not notarised, so macOS refuses the first launch.
@@ -117,14 +128,21 @@ The [README](../README.md#macos) lists the permissions it asks for. To remove
 Glossa, quit it from the menu bar and move `Glossa.app` to the Bin; settings
 are in `~/Library/Application Support/Glossa`.
 
-The `.zip` holds the same app plus `glossa-cli` and the documents.
+The `.zip` holds the same app plus `glossa-cli` and the documents. A Mac
+app keeps its settings in the user's Library rather than beside itself; to
+carry them elsewhere, start it with `GLOSSA_HOME` set (see
+[Configuration](configuration.md)).
 
 ## Linux
+
+Not yet tried on real hardware (see above). `x86_64` and `amd64` are for
+ordinary PCs, `arm64` and `aarch64` for ARM machines (a Raspberry Pi 4 or 5
+with a 64-bit system, ARM laptops).
 
 ### Debian and Ubuntu
 
 ```bash
-sudo apt install ./glossa_1.2.3_amd64.deb
+sudo apt install ./glossa_1.2.3_amd64.deb     # or glossa_1.2.3_arm64.deb
 ```
 
 apt pulls in what Glossa needs (GTK 3, ALSA, OpenGL) and, unless you turn
@@ -163,8 +181,10 @@ at login* registers the AppImage file, so keep it where it is afterwards.
 
 ### The archive
 
-Unpack the `.tar.gz` anywhere and run `./glossa`; `./install.sh` adds it to
-your application menu. It needs the same libraries as the AppImage.
+Unpack the `-portable.tar.gz` anywhere and run `./glossa`; `./install.sh`
+adds it to your application menu. It needs the same libraries as the
+AppImage. As on Windows, `portable.txt` keeps the settings in `data/` next to
+the program; delete it to use `~/.config/glossa`.
 
 ## Where Glossa keeps your files
 
@@ -191,11 +211,15 @@ a version tag. The scripts it calls work locally too:
 | script | makes | needs |
 |---|---|---|
 | `packaging/linux/build-deb.sh <bin-dir> <version> [out]` | `glossa_<version>_<arch>.deb` | `dpkg-deb`, `dpkg-shlibdeps` (dpkg-dev) |
-| `packaging/linux/build-appimage.sh <bin-dir> <version> [out]` | `glossa-<version>-x86_64.AppImage` | [appimagetool](https://github.com/AppImage/appimagetool) (`APPIMAGETOOL`, `APPIMAGE_RUNTIME`) |
-| `iscc /DMyAppVersion=<version> /DStageDir=<unpacked zip> packaging\windows\glossa.iss` | the Windows installer | Inno Setup 6.3+ |
-| `packaging/fill-manifests.sh <version> <dist>` | winget and Scoop manifests | the setup `.exe` and `.zip` in `<dist>` |
+| `packaging/linux/build-appimage.sh <bin-dir> <version> [out]` | `glossa-<version>-<arch>.AppImage` | [appimagetool](https://github.com/AppImage/appimagetool) (`APPIMAGETOOL`, `APPIMAGE_RUNTIME`, `APPIMAGE_ARCH`: `x86_64` or `aarch64`) |
+| `iscc /DMyAppVersion=<version> /DArch=<x64\|arm64> /DStageDir=<unpacked zip> packaging\windows\glossa.iss` | the Windows installer | Inno Setup 6.3+ |
+| `packaging/fill-manifests.sh <version> <dist>` | winget and Scoop manifests | the setup `.exe` and portable `.zip` of both architectures in `<dist>` |
 
 `<bin-dir>` holds `glossa` and `glossa-cli`, e.g.
 `target/x86_64-unknown-linux-gnu/release`. Build the `.deb` on the oldest
 system it should install on: its dependencies are read off that system's
 libraries. The macOS disk images are made by `hdiutil` in the workflow.
+The ARM builds for Windows and Linux are cross-compiled on x86-64 runners
+(Linux against Debian's arm64 libraries, with `DEB_HOST_ARCH=arm64` for
+`dpkg-shlibdeps`). Running the workflow by hand (*Actions → release → Run
+workflow*) builds everything without making a release.

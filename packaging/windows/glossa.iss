@@ -24,6 +24,21 @@
 #ifndef StageDir
   #error Pass /DStageDir=<folder holding glossa.exe and the rest>
 #endif
+; The processor the executables in StageDir are built for: x64 (default) or
+; arm64. An arm64 installer runs only on ARM Windows; the x64 one installs
+; there too, under emulation.
+#ifndef Arch
+  #define Arch "x64"
+#endif
+#if Arch == "arm64"
+  #define ArchAllowed "arm64"
+  #define ArchName "arm64"
+#elif Arch == "x64"
+  #define ArchAllowed "x64compatible"
+  #define ArchName "x86_64"
+#else
+  #error Arch must be x64 or arm64
+#endif
 
 ; Never change this: Windows knows the installed program by it.
 #define AppGuid "6101466B-422B-46CE-9B38-3DE5D1C61D58"
@@ -50,10 +65,10 @@ PrivilegesRequiredOverridesAllowed=dialog
 ; The Run value lives under HKCU even in an all-users install, as Glossa's
 ; own option keeps it.
 UsedUserAreasWarning=no
-ArchitecturesAllowed=x64compatible
-ArchitecturesInstallIn64BitMode=x64compatible
+ArchitecturesAllowed={#ArchAllowed}
+ArchitecturesInstallIn64BitMode={#ArchAllowed}
 MinVersion=10.0
-OutputBaseFilename=glossa-{#MyAppVersion}-x86_64-windows-setup
+OutputBaseFilename=glossa-{#MyAppVersion}-{#ArchName}-windows-setup
 SetupIconFile={#RepoDir}\assets\icons\glossa.ico
 UninstallDisplayIcon={app}\glossa.exe
 UninstallDisplayName=Glossa

@@ -1,0 +1,6 @@
+This copy of Glossa is portable: its settings, history and modules are kept
+in the "data" folder next to it, not in your user profile. Move the whole
+folder to take them along.
+
+Delete this file to keep the data in your profile instead (on Windows
+%APPDATA%\Glossa, on Linux ~/.config/glossa).
