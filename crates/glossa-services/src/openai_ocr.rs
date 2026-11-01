@@ -327,11 +327,8 @@ fn parse_lines(content: &str, size: Option<(u32, u32)>, units: Units) -> Option<
             if text.is_empty() {
                 return None;
             }
-            let b = l["box"].as_array().or_else(|| l["bbox"].as_array()).or_else(|| l["box_2d"].as_array());
-            let quad = b.filter(|b| b.len() == 4).and_then(|b| {
-                let n: Vec<f32> = b.iter().filter_map(|x| x.as_f64().map(|f| f as f32)).collect();
-                (n.len() == 4).then(|| [n[0], n[1], n[2], n[3]])
-            });
+            let b = [&l["box"], &l["bbox"], &l["box_2d"]].into_iter().find(|v| v.is_array());
+            let quad = b.and_then(quad_of);
             let translation = l["translation"].as_str().map(|t| t.trim().to_owned()).filter(|t| !t.is_empty());
             Some((text, quad, translation))
         })
@@ -364,6 +361,25 @@ fn parse_lines(content: &str, size: Option<(u32, u32)>, units: Units) -> Option<
         out.translation = Some(translations.join("\n"));
     }
     Some(out)
+}
+
+/// Four numbers from a box: `[a, b, c, d]`, or the same wrapped in another
+/// array (`[[a, b, c, d]]`, as Gemini Flash-Lite writes `box_2d`); several
+/// wrapped boxes are taken together. The order of the four is the units'
+/// business; this keeps the first two as one corner and the last two as
+/// the other.
+fn quad_of(v: &Value) -> Option<[f32; 4]> {
+    let flat = |a: &Vec<Value>| -> Option<[f32; 4]> {
+        let n: Vec<f32> = a.iter().filter_map(|x| x.as_f64().map(|f| f as f32)).collect();
+        (a.len() == 4 && n.len() == 4).then(|| [n[0], n[1], n[2], n[3]])
+    };
+    let a = v.as_array()?;
+    if let Some(q) = flat(a) {
+        return Some(q);
+    }
+    let quads: Vec<[f32; 4]> = a.iter().filter_map(|x| x.as_array().and_then(flat)).collect();
+    let first = *quads.first()?;
+    Some(quads.iter().fold(first, |acc, q| [acc[0].min(q[0]), acc[1].min(q[1]), acc[2].max(q[2]), acc[3].max(q[3])]))
 }
 
 /// What `auto` means for these boxes: fractions when nothing passes 1,
@@ -569,6 +585,18 @@ mod tests {
         let yx = r#"{"lines":[{"text":"A","box_2d":[500,100,900,500]}]}"#;
         let b = parse_lines(yx, Some((800, 600)), Units::ThousandYx).unwrap().blocks[0].bounds.unwrap();
         assert_eq!(b, Rect::new(80.0, 300.0, 320.0, 240.0));
+    }
+
+    #[test]
+    fn a_box_wrapped_in_another_array_is_read_too() {
+        // gemini-flash-lite-latest, for the 1800x800 test page.
+        let s = r#"{"lines":[{"text":"The quick brown fox","box_2d":[[332, 67, 396, 661]]}]}"#;
+        let b = parse_lines(s, Some((1800, 800)), Units::ThousandYx).unwrap().blocks[0].bounds.unwrap();
+        assert!((b.x - 120.6).abs() < 0.1 && (b.y - 265.6).abs() < 0.1, "{b:?}");
+        // Two pieces of one line: their union.
+        let s = r#"{"lines":[{"text":"A","box":[[10, 10, 50, 20], [60, 12, 90, 22]]}]}"#;
+        let b = parse_lines(s, Some((100, 100)), Units::Pixels).unwrap().blocks[0].bounds.unwrap();
+        assert_eq!(b, Rect::new(10.0, 10.0, 80.0, 12.0));
     }
 
     #[test]
