@@ -47,7 +47,7 @@ use std::time::{Duration, Instant};
 
 use base64::Engine;
 use glossa_core::config::{LensConfig, LensMode};
-use glossa_core::ocr::{OcrBlock, OcrGranularity, Rect};
+use glossa_core::ocr::{OcrBlock, OcrGranularity, OcrLevel, Rect};
 use glossa_core::{Capabilities, Error, LangId, OcrRequest, OcrResult, ProviderInfo, Result};
 use glossa_modules::{Host, Provider};
 use glossa_net::{Http, HttpRequest, HttpResponse, Method};
@@ -693,23 +693,71 @@ fn bounds_of(node: &Value, size: Option<(u32, u32)>) -> (Option<Rect>, f32) {
     (Some(rect), angle)
 }
 
-/// A block and its children, `depth` levels deep. Children are under
-/// `lines` (strings or nodes), then `words`.
-fn block_of(node: &Value, size: Option<(u32, u32)>, depth: usize) -> OcrBlock {
+/// A node of `level` and its children, `depth` levels deep. Children are
+/// under `lines` (strings or nodes), then `words`. Lens paragraphs are
+/// blocks, and the levels go block → line → word.
+fn block_of(node: &Value, size: Option<(u32, u32)>, level: OcrLevel, depth: usize) -> OcrBlock {
     if let Some(s) = node.as_str() {
-        return OcrBlock { text: s.to_owned(), ..Default::default() };
+        return OcrBlock::new(level, s);
     }
     let (bounds, angle) = bounds_of(node, size);
+    let below = if level == OcrLevel::Block { OcrLevel::Line } else { OcrLevel::Word };
     let children = if depth == 0 {
         Vec::new()
     } else {
         node.get("lines")
             .or_else(|| node.get("words"))
             .and_then(Value::as_array)
-            .map(|kids| kids.iter().map(|k| block_of(k, size, depth - 1)).collect())
+            .map(|kids| kids.iter().map(|k| block_of(k, size, below, depth - 1)).collect())
             .unwrap_or_default()
     };
-    OcrBlock { text: node.get("text").and_then(Value::as_str).unwrap_or("").to_owned(), bounds, angle, children }
+    OcrBlock { bounds, angle, children, ..OcrBlock::new(level, node.get("text").and_then(Value::as_str).unwrap_or("")) }
+}
+
+/// Hang Lens's per-paragraph translations (`translation_render_data`, one
+/// entry per translated paragraph) on the blocks they belong to, and each
+/// translated line on its line. An entry borrows its geometry from the
+/// source paragraph's lines, so the block is the one holding the centre of
+/// its first line; failing that, entries pair with blocks in order when
+/// there are as many of each.
+fn attach_translations(blocks: &mut [OcrBlock], render: &[Value], size: Option<(u32, u32)>) {
+    for (i, entry) in render.iter().enumerate() {
+        let Some(translation) = non_blank(entry.get("translation")) else { continue };
+        let lines = arr(entry, "lines").map(Vec::as_slice).unwrap_or_default();
+        let centre = lines
+            .first()
+            .and_then(|l| l.get("geometry"))
+            .and_then(|g| bounds_of(&serde_json::json!({ "geometry": g }), size).0)
+            .map(|r| r.centre());
+        let by_place = centre.and_then(|(cx, cy)| {
+            blocks.iter().position(|b| {
+                b.level == Some(OcrLevel::Block)
+                    && b.translation.is_none()
+                    && b.bbox().is_some_and(|r| r.expanded(2.0).contains(cx, cy))
+            })
+        });
+        let by_order = (render.len() == blocks.len()).then_some(i);
+        let Some(block) = by_place.or(by_order).and_then(|at| blocks.get_mut(at)) else { continue };
+        if block.level != Some(OcrLevel::Block) {
+            continue;
+        }
+        // Line ranges index the paragraph's translation in UTF-16 units.
+        let units: Vec<u16> = translation.encode_utf16().collect();
+        if lines.len() == block.children.len() {
+            for (line, rendered) in block.children.iter_mut().zip(lines) {
+                let range = rendered.get("range").and_then(Value::as_array);
+                let at = |k: usize| range.and_then(|r| r.get(k)).and_then(Value::as_u64).map(|v| v as usize);
+                if let (Some(start), Some(end)) = (at(0), at(1)) {
+                    let (start, end) = (start.min(units.len()), end.min(units.len()));
+                    let text = String::from_utf16_lossy(&units[start..end.max(start)]);
+                    if !text.trim().is_empty() {
+                        line.translation = Some(text.trim().to_owned());
+                    }
+                }
+            }
+        }
+        block.translation = Some(translation);
+    }
 }
 
 fn joined_text(blocks: &[OcrBlock], preserve_line_breaks: bool) -> String {
@@ -733,15 +781,18 @@ fn map_daemon_result(v: &Value, req: &OcrRequest) -> Result<OcrResult> {
         return Err(Error::BadResponse { provider: NAME.into(), detail: "the reply is not a JSON object".into() });
     }
     let size = v.get("image_size").and_then(Value::as_array).and_then(|a| size_from(a.first(), a.get(1)));
-    let blocks: Vec<OcrBlock> = if let Some(b) = arr(v, "detailed_blocks") {
-        b.iter().map(|n| block_of(n, size, 2)).collect()
+    let mut blocks: Vec<OcrBlock> = if let Some(b) = arr(v, "detailed_blocks") {
+        b.iter().map(|n| block_of(n, size, OcrLevel::Block, 2)).collect()
     } else if let Some(b) = arr(v, "text_blocks") {
-        b.iter().map(|n| block_of(n, size, 1)).collect()
+        b.iter().map(|n| block_of(n, size, OcrLevel::Block, 1)).collect()
     } else if let Some(b) = arr(v, "line_blocks") {
-        b.iter().map(|n| block_of(n, size, 0)).collect()
+        b.iter().map(|n| block_of(n, size, OcrLevel::Line, 0)).collect()
     } else {
         Vec::new()
     };
+    if let Some(render) = arr(v, "translation_render_data") {
+        attach_translations(&mut blocks, render, size);
+    }
     let text = match v.get("ocr_text").and_then(Value::as_str) {
         Some(t) => t.to_owned(),
         None => joined_text(&blocks, req.preserve_line_breaks),
@@ -774,11 +825,14 @@ fn map_cli_page(v: &Value, req: &OcrRequest) -> Result<OcrResult> {
     let tree = arr(page, "blocks").map(Vec::as_slice).unwrap_or_default();
     let blocks: Vec<OcrBlock> = match req.granularity {
         OcrGranularity::FullText => Vec::new(),
-        OcrGranularity::Blocks => tree.iter().map(|b| block_of(b, size, 1)).collect(),
-        OcrGranularity::Lines => {
-            tree.iter().filter_map(|b| arr(b, "lines")).flatten().map(|l| block_of(l, size, 0)).collect()
-        }
-        OcrGranularity::Words => tree.iter().map(|b| block_of(b, size, 2)).collect(),
+        OcrGranularity::Blocks => tree.iter().map(|b| block_of(b, size, OcrLevel::Block, 1)).collect(),
+        OcrGranularity::Lines => tree
+            .iter()
+            .filter_map(|b| arr(b, "lines"))
+            .flatten()
+            .map(|l| block_of(l, size, OcrLevel::Line, 0))
+            .collect(),
+        OcrGranularity::Words => tree.iter().map(|b| block_of(b, size, OcrLevel::Block, 2)).collect(),
     };
     Ok(OcrResult {
         text: page.get("ocr_text").and_then(Value::as_str).unwrap_or("").to_owned(),
@@ -1012,6 +1066,34 @@ mod tests {
         assert_eq!(r.text, "x");
         assert_eq!(r.blocks[0].bounds, Some(Rect::new(0.0, 0.0, 1.0, 1.0)), "no size: normalised as given");
         assert!(map_daemon_result(&serde_json::json!([1]), &req()).is_err());
+    }
+
+    #[test]
+    fn per_paragraph_translations_hang_on_their_blocks_and_lines() {
+        let g = |cy: f64| serde_json::json!({"center_x": 0.5, "center_y": cy, "width": 0.4, "height": 0.1, "angle_deg": 0.0});
+        let reply = serde_json::json!({
+            "image_size": [100, 100],
+            "translated_text": "Привет мир\nПока",
+            "detailed_blocks": [
+                {"text": "Hello\nworld", "geometry": g(0.2),
+                 "lines": [{"text": "Hello", "geometry": g(0.15), "words": []}, {"text": "world", "geometry": g(0.25), "words": []}]},
+                {"text": "Bye", "geometry": g(0.8), "lines": [{"text": "Bye", "geometry": g(0.8), "words": []}]}
+            ],
+            // Listed out of order: matched by where the first line sits.
+            "translation_render_data": [
+                {"translation": "Пока", "lines": [{"range": [0, 4], "geometry": g(0.8)}]},
+                {"translation": "Привет мир", "lines": [
+                    {"range": [0, 6], "geometry": g(0.15)}, {"range": [7, 10], "geometry": g(0.25)}]}
+            ]
+        });
+        let r = map_daemon_result(&reply, &req()).unwrap();
+        assert_eq!(r.blocks[0].level, Some(OcrLevel::Block));
+        assert_eq!(r.blocks[0].children[0].level, Some(OcrLevel::Line));
+        assert_eq!(r.blocks[0].translation.as_deref(), Some("Привет мир"));
+        assert_eq!(r.blocks[0].children[0].translation.as_deref(), Some("Привет"));
+        assert_eq!(r.blocks[0].children[1].translation.as_deref(), Some("мир"));
+        assert_eq!(r.blocks[1].translation.as_deref(), Some("Пока"));
+        assert_eq!(r.translation.as_deref(), Some("Привет мир\nПока"), "the whole translation stays");
     }
 
     #[test]

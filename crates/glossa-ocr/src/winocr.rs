@@ -174,6 +174,8 @@ mod sys {
                         .map(|w| RawWord {
                             text: w.Text().map(|t| t.to_string()).unwrap_or_default(),
                             shape: w.BoundingRect().ok().map(|r| Shape::Rect(Rect::new(r.X, r.Y, r.Width, r.Height))),
+                            // Windows.Media.Ocr reports no confidence.
+                            confidence: None,
                         })
                         .collect()
                 })

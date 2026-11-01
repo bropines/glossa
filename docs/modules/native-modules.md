@@ -153,8 +153,12 @@ UI turns each into a specific message, so pick the closest one.
 
 While handling a call the module may call back into the host with the same
 envelope convention: `http` (through the user's proxy, checked against
-`[permissions] network`), `log`, `cache_get` and `cache_set`. The message
-shapes are in the header and in `glossa-module-sdk/src/wire.rs`.
+`[permissions] network`), `log`, `cache_get`, `cache_set` and the
+`image.<operation>` calls of the image API (`Host::image` in the Rust SDK;
+see [ocr-modules.md](ocr-modules.md#the-image-api)). The message shapes are
+in the header and in `glossa-module-sdk/src/wire.rs`. An OCR module in Rust
+that uses the image API is
+[`modules/native/example-lines`](../../modules/native/example-lines).
 
 A C module that uppercases text, with a twenty-line JSON reader and nothing
 else, is in [`modules/native/example-c`](../../modules/native/example-c); the

@@ -64,6 +64,20 @@ for Windows and Linux.
   Tesseract, in that order of availability. OneOCR is never a fallback.
 - **macOS builds** in CI and the release: `Glossa.app` (a menu-bar app) and
   `glossa-cli`, for Apple silicon and as a universal binary; not notarised.
+- **A standard OCR result**: every engine's result is one page of blocks,
+  paragraphs, lines and words with boxes, rotation, outlines, confidence,
+  baselines, language, writing direction and per-region translations (Lens's
+  per-paragraph and per-line translations are kept; OneOCR reports word
+  confidence). It exports to hOCR 1.2, ALTO v4, JSON and text
+  (`glossa-cli ocr --format hocr|alto|json|text`, `format` on `POST /v1/ocr`),
+  and hOCR or ALTO from an engine or module is read back.
+- **OCR modules with an image API**: an OCR module may return the layout as
+  JSON blocks, hOCR or ALTO, and gets PIL/OpenCV-style preprocessing from
+  Glossa as `image.*` host calls in every runtime (crop, resize, rotate,
+  deskew, thresholds including Otsu and adaptive, levels, blur, sharpen, pad,
+  tiles, PNG/JPEG/WebP encoding…), on handles that carry the transform back to
+  the original picture. Guide: `docs/modules/ocr-modules.md`; examples
+  `google-vision-ocr` (JS), `ocr-space` (Python), `example-lines` (Rust).
 - **Dictionaries**: online (Google) and offline (StarDict with dictzip, DSL,
   XDXF, tab-separated), with articles simplified for display.
 - **Text to speech** with the classic slower repeat; MP3, WAV and Ogg Vorbis
@@ -74,8 +88,9 @@ for Windows and Linux.
   protocol, with per-module network permissions and options generated into
   the settings. Classic QTranslate service scripts (with a reimplemented
   `Common.js` helper API and WSH-style HTTP objects) and pot-app plugins run
-  unchanged. Examples: `free-dictionary` (JS), `example-reverse` and
-  `lens-ocr` (Python), `example-rot13` (Rust) and `example-c` (C).
+  unchanged. Examples: `free-dictionary` and `google-vision-ocr` (JS),
+  `example-reverse`, `lens-ocr` and `ocr-space` (Python), `example-rot13` and
+  `example-lines` (Rust) and `example-c` (C).
 - **Java and any-language modules**: `runtime = "process"` runs any program
   that speaks the module protocol over stdio (`command`, per-platform
   `command.windows` / `.macos` / `.linux`, `args`, `env`, `cwd`), and

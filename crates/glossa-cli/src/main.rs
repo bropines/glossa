@@ -55,7 +55,9 @@ COMMANDS
     translate  [-f FROM] [-t TO] [-s SERVICE] [--back] [TEXT…]   (stdin if no text)
     detect     [TEXT…]
     dict       [-f FROM] [-t TO] [-s SERVICE] WORD
-    ocr        IMAGE [-l LANG] [-t TO] [-e ENGINE]   ENGINE: lens, windows-ocr, oneocr, macos-vision, tesseract, command-ocr…
+    ocr        IMAGE [-l LANG] [-t TO] [-e ENGINE] [-F text|json|hocr|alto]
+                                      ENGINE: lens, windows-ocr, oneocr, macos-vision, tesseract, command-ocr…;
+                                      -F json/hocr/alto print the layout (blocks, lines, words with boxes)
     speak      [-l LANG] [--slow] -o OUT.mp3 TEXT…
     services   [-c CAPABILITY]        translate | dictionary | listen | ocr | detect_language
     modules                           what loaded, what failed and why
@@ -108,6 +110,8 @@ const VALUED: &[&str] = &[
     "--search",
     "--export",
     "--home",
+    "-F",
+    "--format",
 ];
 
 fn parse(argv: Vec<String>) -> Result<Args, String> {
@@ -344,7 +348,27 @@ fn run(args: &Args) -> Result<(), Fail> {
             let e = engine(args)?;
             let to = args.flag(&["-t", "--to"]).map(|c| lang(Some(c), LangId::ENGLISH)).transpose()?;
             let from = lang(args.flag(&["-l", "--lang"]), LangId::AUTO)?;
-            let out = match args.flag(&["-e", "--engine", "-s", "--service"]) {
+            let engine_id = args.flag(&["-e", "--engine", "-s", "--service"]);
+            if let Some(name) = args.flag(&["-F", "--format"]) {
+                use glossa_core::ocr::export::{self, OcrFormat};
+                use glossa_core::ocr::OcrGranularity;
+                let format = OcrFormat::from_name(name)
+                    .ok_or_else(|| Fail::Usage(format!("unknown format {name:?}: text, json, hocr or alto")))?;
+                let granularity =
+                    if format.wants_structure() { OcrGranularity::Words } else { OcrGranularity::FullText };
+                let out = e.recognize_detailed(image, from, to, engine_id, granularity)?;
+                let mut ocr = out.ocr.clone();
+                if let Some(t) = out.translated_text() {
+                    ocr.translation = Some(t.to_owned());
+                }
+                match format {
+                    OcrFormat::Text => out!("{}", ocr.translation.as_deref().unwrap_or(&export::text(&ocr))),
+                    other => outp!("{}", export::render(&ocr, other)),
+                }
+                eprintln!("[{} · {} ms]", ocr.provider_id, ocr.elapsed_ms);
+                return Ok(());
+            }
+            let out = match engine_id {
                 Some(engine) => e.recognize_using(engine, image, from, to)?,
                 None => e.recognize(image, from, to)?,
             };

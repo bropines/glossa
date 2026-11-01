@@ -1,0 +1,18 @@
+# An example native OCR module. Build the library with
+#   cargo build --release -p glossa-example-lines
+# and copy it beside this file (see ../example-rot13/module.toml for the
+# file names per platform).
+capabilities = ["ocr"]
+
+[module]
+id = "example-lines"
+name = "Text lines (native example)"
+version = "0.1.0"
+api = 1
+runtime = "native"
+entry = "glossa-example-lines"
+description = "Finds where the lines of text are, without reading them. Demonstrates the image API and the structured OCR result."
+license = "MIT OR Apache-2.0"
+
+[permissions]
+network = []

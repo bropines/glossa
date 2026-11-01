@@ -69,7 +69,7 @@ source may be `auto`.
 | `@mod.detect` | `text` | `{"lang", "confidence"}` or a code |
 | `@mod.dictionary` | `text`, `from`, `to`, `exact` | `{"headword", "pronunciations", "explanations": [{"trait", "explains"}], "examples"}` |
 | `@mod.speak` | `text`, `lang`, `slow` | `{"audio_base64", "mime"}` or `(bytes, mime)` |
-| `@mod.recognize` | `image_base64`, `lang`, `translate_to`?, `preserve_line_breaks` | `{"text", "translation"?, "detected_lang"?}` |
+| `@mod.recognize` | `image_base64`, `image_handle`, `lang`, `translate_to`?, `granularity`, `preserve_line_breaks` | `{"text", "translation"?, "detected_lang"?, "blocks"?, "hocr"?, "alto"?, "transform"?}` or the text ([OCR modules](../../docs/modules/ocr-modules.md)) |
 
 ## The host
 
@@ -80,6 +80,28 @@ source may be `auto`.
 | `host.log(level, message)` | Glossa's log (`trace` … `error`). |
 | `host.cache_get(key, default)` / `host.cache_set(key, value, ttl_secs=)` | A small in-memory cache kept by Glossa, so tokens survive the process being stopped for idleness. |
 | `host.option(key, default)` | A setting. |
+| `host.image.<op>(image, **params)` | The image API: `crop`, `resize`, `rotate`, `grayscale`, `threshold`, `deskew`, `pad`, `split_tiles`… on a handle (`req["image_handle"]`), an info dict or encoded bytes; `host.image.from_bytes(data)`, `host.image.to_bytes(img, "png"\|"jpeg"\|"webp", quality=)`. |
+| `map_box_back(box, img)` | (module-level) A box found in a prepared image, mapped back onto the original through `img["transform"]`. |
+
+### Preparing a picture for an OCR service
+
+```python
+from glossa_module import Module, ModuleError, map_box_back
+
+@mod.recognize
+def recognize(req, host):
+    img = host.image.grayscale(req["image_handle"])
+    img = host.image.scale_to_min_height(img, min_height=32)
+    words = my_service(host, host.image.to_bytes(img, "jpeg", quality=85))
+    return {"text": " ".join(w["text"] for w in words),
+            "blocks": [{"level": "word", "text": w["text"], "bbox": list(map_box_back(w["box"], img))}
+                       for w in words]}
+```
+
+The operations, their parameters, the result format and the coordinate
+rules are in [docs/modules/ocr-modules.md](../../docs/modules/ocr-modules.md);
+[`modules/python/ocr-space`](../../modules/python/ocr-space) is a complete
+example.
 
 ## Errors
 
@@ -111,6 +133,6 @@ One JSON object per line, UTF-8. Glossa sends
 `{"id": 1, "method": "translate", "params": {…}}`; the module answers
 `{"id": 1, "result": …}` or `{"id": 1, "error": {"kind": …, "message": …}}`.
 While working, the module may send `{"id": "h1", "method": "http", "params":
-{…}}` (also `log`, `cache_get`, `cache_set`) and reads back `{"id": "h1",
+{…}}` (also `log`, `cache_get`, `cache_set`, `image.<op>`) and reads back `{"id": "h1",
 "result" | "error": …}`. The SDK does all of this; the format is documented
 for debugging, and so a module can do without the SDK.
