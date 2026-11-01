@@ -47,6 +47,11 @@ for Windows and Linux.
   changes. Google Lens through
   [chrome-lens-py](https://github.com/bropines/chrome-lens-py) (its warm
   daemon, else its CLI), or any external command.
+- **Offline OCR on Windows**: Windows OCR (the recogniser built into Windows
+  10 and 11, for the languages whose OCR pack is installed) and OneOCR (the
+  Windows 11 Snipping Tool's engine, loaded from the user's own installation;
+  nothing of Microsoft's is shipped). Both pick-able in *Options → Text
+  recognition* and with `glossa-cli ocr --engine windows-ocr|oneocr`.
 - **Dictionaries**: online (Google) and offline (StarDict with dictzip, DSL,
   XDXF, tab-separated), with articles simplified for display.
 - **Text to speech** with the classic slower repeat; MP3, WAV and Ogg Vorbis
