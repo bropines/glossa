@@ -85,9 +85,11 @@
 
 ## Getting started
 
-Download the archive for your system from the
-[releases](https://github.com/bropines/glossa/releases), unpack it anywhere
-and run `glossa`. It starts in the tray. Select text in any program and press:
+Download Glossa for your system from the
+[releases](https://github.com/bropines/glossa/releases): the installer on
+Windows, the `.dmg` on macOS, the `.deb` or the AppImage on Linux, or an
+archive to unpack anywhere ([Installing](docs/install.md) has the details).
+Run `glossa`; it starts in the tray. Select text in any program and press:
 
 | hotkey | Windows | does |
 |---|---|---|
@@ -102,7 +104,8 @@ characters typed with AltGr. On macOS, Ctrl+Alt is Control+Option. All of
 them, and the actions without a default key (reading the selection aloud
 among them), are in *Options → Hotkeys*. A `portable` file next to the
 executable keeps the settings beside it. On Linux, `./install.sh` from the
-unpacked folder adds Glossa to the application menu.
+unpacked archive adds Glossa to the application menu (the `.deb` does that
+itself).
 
 For OCR, install chrome-lens-py (`pip install "chrome-lens-py[clipboard]"`);
 Glossa finds it, and keeps its daemon warm so a scan takes about 0.4 s.
@@ -121,9 +124,10 @@ recognition* lists the engines this system has:
 
 ### macOS
 
-The `-macos.zip` archives hold `Glossa.app`, a menu-bar app (no Dock icon
-until one of its windows is open), and `glossa-cli`. Move `Glossa.app` to
-`/Applications` (or anywhere) before the first launch.
+The `-macos.dmg` disk images hold `Glossa.app`, a menu-bar app (no Dock
+icon until one of its windows is open); the `-macos.zip` archives hold it
+and `glossa-cli`. Move `Glossa.app` to `/Applications` (or anywhere) before
+the first launch.
 
 The app is signed ad hoc, not notarised, so macOS refuses the first launch
 of a download. On macOS 15 and later: open it once, then *System Settings →
@@ -250,6 +254,8 @@ machine-readable output. Every command and flag is in
 All pages, by topic: [docs/README.md](docs/README.md)
 ([по-русски](docs/README.ru.md)).
 
+- [Installing](docs/install.md): the Windows installer, the macOS disk image,
+  the `.deb` and the AppImage, the archives, and removing Glossa.
 - [Command line](docs/cli.md): every `glossa-cli` command, flag, exit code and
   environment variable
 - [Control API](docs/control-api.md): driving a running Glossa over HTTP or
