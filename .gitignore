@@ -17,6 +17,13 @@ modules/native/**/*.dylib
 modules/native/**/*.o
 modules/native/**/*.obj
 
+# Java SDK and Java module builds (built by build.sh / build.ps1 or the tests)
+sdk/java/build/
+sdk/java/.gradle/
+modules/java/**/build/
+modules/java/**/*.jar
+*.class
+
 # Editors and OS clutter
 .idea/
 .vscode/

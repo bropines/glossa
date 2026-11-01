@@ -1,0 +1,19 @@
+# A module in Node.js through the generic process runtime: Glossa runs the
+# command and speaks the module protocol over its stdin and stdout. Any
+# language works the same way (Go, C#, Ruby, a compiled binary…).
+capabilities = ["translate", "detect_language"]
+
+[module]
+id = "example-node"
+name = "Reverse words (Node.js example)"
+version = "1.0.0"
+api = 1
+runtime = "process"
+command = ["node", "main.mjs"]   # node is looked for on PATH; relative paths start in this folder
+env = { NODE_NO_WARNINGS = "1" }
+idle_timeout_secs = 60
+description = "Reverses the order of the words. A process module with no SDK, to copy from; it never touches the network."
+license = "MIT OR Apache-2.0"
+
+[permissions]
+network = []

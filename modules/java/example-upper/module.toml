@@ -1,0 +1,20 @@
+# An example Java module. Build module.jar first:
+#   ./build.sh            (Linux, macOS, Git Bash)
+#   .\build.ps1           (PowerShell)
+# Both need a JDK 17 or newer; the jar then runs on any Java 17+ runtime.
+capabilities = ["translate", "ocr"]
+
+[module]
+id = "example-upper"
+name = "UPPER (Java example)"
+version = "1.0.0"
+api = 1
+runtime = "java"
+entry = "module.jar"          # java -jar module.jar; or main_class + classpath
+jvm_args = ["-Xmx64m"]        # a small heap is plenty for this
+idle_timeout_secs = 60
+description = "Uppercases text and 'recognises' a canned line. A minimal Java module to copy from; it never touches the network."
+license = "MIT OR Apache-2.0"
+
+[permissions]
+network = []
