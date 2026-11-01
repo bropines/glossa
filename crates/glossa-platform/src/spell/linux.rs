@@ -4,13 +4,16 @@
 //! `~/.hunspell_<name>` (`~/.hunspell_en_US`), which the `hunspell` command
 //! and other programs on Hunspell read too.
 //!
-//! A dictionary loads on first use and stays loaded.
+//! A dictionary loads on first use and stays loaded for as long as the
+//! thread that loaded it.
 
+use std::cell::RefCell;
 use std::collections::HashMap;
 use std::io::Write;
 use std::ops::Range;
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, Mutex, OnceLock, RwLock};
+use std::rc::Rc;
+use std::sync::OnceLock;
 
 use spellbook::Dictionary;
 use unicode_segmentation::UnicodeSegmentation;
@@ -77,21 +80,30 @@ pub fn languages() -> Vec<String> {
     installed().iter().map(|(t, _)| t.clone()).collect()
 }
 
-type Shared = Arc<RwLock<Dictionary>>;
+thread_local! {
+    /// Loaded dictionaries, per thread: they go when the thread that used
+    /// them ends (the app's spelling worker ends with its window state), so
+    /// a hidden app does not keep megabytes of word lists.
+    static LOADED: RefCell<HashMap<String, Option<Rc<RefCell<Dictionary>>>>> = RefCell::new(HashMap::new());
+}
 
-/// The dictionary for `tag`, loaded on first use. `None` when it is not
-/// installed or does not parse.
-fn dictionary(tag: &str) -> Option<Shared> {
-    static LOADED: OnceLock<Mutex<HashMap<String, Option<Shared>>>> = OnceLock::new();
-    let loaded = LOADED.get_or_init(Default::default);
-    let mut loaded = loaded.lock().ok()?;
-    if let Some(d) = loaded.get(tag) {
-        return d.clone();
-    }
-    let d =
-        installed().iter().find(|(t, _)| t == tag).and_then(|(_, base)| load(base)).map(|d| Arc::new(RwLock::new(d)));
-    loaded.insert(tag.to_owned(), d.clone());
-    d
+/// Run `f` with the dictionary for `tag`, loaded on first use. `None` when
+/// it is not installed or does not parse.
+fn with_dictionary<R>(tag: &str, f: impl FnOnce(&mut Dictionary) -> R) -> Option<R> {
+    let dict = LOADED.with(|loaded| {
+        if let Some(d) = loaded.borrow().get(tag) {
+            return d.clone();
+        }
+        let d = installed()
+            .iter()
+            .find(|(t, _)| t == tag)
+            .and_then(|(_, base)| load(base))
+            .map(|d| Rc::new(RefCell::new(d)));
+        loaded.borrow_mut().insert(tag.to_owned(), d.clone());
+        d
+    })?;
+    let mut d = dict.try_borrow_mut().ok()?;
+    Some(f(&mut d))
 }
 
 fn load(base: &Path) -> Option<Dictionary> {
@@ -175,9 +187,7 @@ fn known(dict: &Dictionary, word: &str) -> bool {
 }
 
 pub fn check(text: &str, tag: &str) -> Vec<Misspelling> {
-    let Some(dict) = dictionary(tag) else { return Vec::new() };
-    let Ok(dict) = dict.read() else { return Vec::new() };
-    check_with(&dict, text)
+    with_dictionary(tag, |dict| check_with(dict, text)).unwrap_or_default()
 }
 
 fn check_with(dict: &Dictionary, text: &str) -> Vec<Misspelling> {
@@ -189,10 +199,13 @@ fn check_with(dict: &Dictionary, text: &str) -> Vec<Misspelling> {
 }
 
 pub fn suggest(word: &str, tag: &str) -> Vec<String> {
-    let Some(dict) = dictionary(tag) else { return Vec::new() };
-    let Ok(dict) = dict.read() else { return Vec::new() };
-    let mut out = Vec::new();
-    dict.suggest(word, &mut out);
+    let Some(out) = with_dictionary(tag, |dict| {
+        let mut out = Vec::new();
+        dict.suggest(word, &mut out);
+        out
+    }) else {
+        return Vec::new();
+    };
     rank(word, out)
 }
 
@@ -269,9 +282,7 @@ pub fn add(word: &str, tag: &str) -> bool {
     if word.contains(['/', '\n']) {
         return false;
     }
-    let Some(dict) = dictionary(tag) else { return false };
-    let Ok(mut d) = dict.write() else { return false };
-    if d.add(word).is_err() {
+    if with_dictionary(tag, |dict| dict.add(word).is_ok()) != Some(true) {
         return false;
     }
     let base = installed().iter().find(|(t, _)| t == tag).map(|(_, b)| b.clone());
