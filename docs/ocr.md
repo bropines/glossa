@@ -72,6 +72,11 @@ to install. *Accurate* or *Fast*, optional language correction, and on macOS
 needs the **Screen Recording** permission to capture the screen; *Options →
 Permissions* shows it and opens the right page of System Settings.
 
+The Intel (x86_64) build running on Apple silicon through Rosetta only gets
+the *Fast* recogniser: macOS fails *Accurate* there. Glossa notices and stays
+on *Fast* for the rest of the run, which reads Latin scripts only; for
+Cyrillic or CJK on Apple silicon, use the arm64 build.
+
 ### Tesseract
 
 Offline, on every system where it is installed: `apt install tesseract-ocr

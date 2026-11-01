@@ -21,6 +21,12 @@
 //! not done at start-up: the models it loads stay resident (35 to 50 MB),
 //! which only a user of Vision should pay.
 //!
+//! An x86_64 build running under Rosetta only gets the fast recogniser: the
+//! accurate one fails at once (`CRImageReaderError` 9, or no error at all),
+//! even from a minimal Swift program. When accurate fails and fast reads the
+//! picture, the provider stays on fast for the rest of the run. Fast reads
+//! Latin scripts only, so Cyrillic and CJK need the native arm64 build there.
+//!
 //! The provider is compiled on every OS so its pure parts are tested
 //! everywhere, but it is only registered on macOS.
 
@@ -44,6 +50,8 @@ pub struct MacVision {
     info: ProviderInfo,
     cfg: VisionConfig,
     warmed_up: AtomicBool,
+    /// Set once the accurate level failed where fast worked (Rosetta).
+    accurate_broken: AtomicBool,
 }
 
 impl MacVision {
@@ -53,7 +61,44 @@ impl MacVision {
             "The text recognition built into macOS (Live Text). Offline; reads the languages your macOS version supports."
                 .into();
         info.homepage = "https://developer.apple.com/documentation/vision/vnrecognizetextrequest".into();
-        Self { info, cfg, warmed_up: AtomicBool::new(false) }
+        Self { info, cfg, warmed_up: AtomicBool::new(false), accurate_broken: AtomicBool::new(false) }
+    }
+
+    /// Reads the picture at the configured level, dropping to fast for good
+    /// when only fast works on this system.
+    #[cfg(target_os = "macos")]
+    fn read(&self, bytes: &[u8], lang: LangId) -> Result<Vec<VisionLine>> {
+        let fast =
+            self.cfg.level == glossa_core::config::VisionLevel::Fast || self.accurate_broken.load(Ordering::Relaxed);
+        let mut settings = sys::Settings {
+            fast,
+            language_correction: self.cfg.language_correction,
+            lang,
+            auto_languages: split_list(&self.cfg.auto_languages),
+        };
+        let accurate_error = match sys::recognize(bytes, &settings) {
+            Err(e) if !fast => e,
+            done => return done,
+        };
+        settings.fast = true;
+        // The fast error says which languages fast reads; the note says why
+        // only those, since upgrading macOS would not help.
+        let accurate_error = match accurate_error {
+            Error::Module { detail, .. } => detail,
+            other => other.to_string(),
+        };
+        let lines = sys::recognize(bytes, &settings).map_err(|e| match e {
+            Error::Module { module, detail } => Error::Module {
+                module,
+                detail: format!(
+                    "{detail} The accurate recogniser failed here too ({accurate_error}); an Intel build under Rosetta only has the fast one, so use the native build."
+                ),
+            },
+            other => other,
+        })?;
+        tracing::warn!("Vision: accurate recognition failed ({accurate_error}); using fast from now on");
+        self.accurate_broken.store(true, Ordering::Relaxed);
+        Ok(lines)
     }
 }
 
@@ -69,13 +114,7 @@ impl Provider for MacVision {
         #[cfg(target_os = "macos")]
         if first {
             let started = std::time::Instant::now();
-            let settings = sys::Settings {
-                fast: self.cfg.level == glossa_core::config::VisionLevel::Fast,
-                language_correction: self.cfg.language_correction,
-                lang: LangId::AUTO,
-                auto_languages: split_list(&self.cfg.auto_languages),
-            };
-            match sys::recognize(WARM_UP_PNG, &settings) {
+            match self.read(WARM_UP_PNG, LangId::AUTO) {
                 Ok(lines) => tracing::debug!(
                     lines = lines.len(),
                     elapsed_ms = started.elapsed().as_millis() as u64,
@@ -92,13 +131,7 @@ impl Provider for MacVision {
         {
             let started = std::time::Instant::now();
             let bytes = req.image.to_bytes()?;
-            let settings = sys::Settings {
-                fast: self.cfg.level == glossa_core::config::VisionLevel::Fast,
-                language_correction: self.cfg.language_correction,
-                lang: req.lang,
-                auto_languages: split_list(&self.cfg.auto_languages),
-            };
-            let lines = sys::recognize(&bytes, &settings)?;
+            let lines = self.read(&bytes, req.lang)?;
             let size = crate::imagesize::dimensions(&bytes);
             let raw: Vec<RawLine> = lines.iter().map(|l| l.to_raw(size)).collect();
             let mut out = crate::layout::build_result(&raw, req, size.unwrap_or_default());
