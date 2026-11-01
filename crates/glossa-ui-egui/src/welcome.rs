@@ -463,14 +463,31 @@ fn theme_swatch(
     let radius = CornerRadius::same(10);
     let back = c(theme.window.back).to_opaque();
     p.rect(r, radius, back, Stroke::new(1.0, c(theme.window.border).to_opaque()), StrokeKind::Inside);
-    // Title bar dots, a pane, text lines, an accent button.
-    for (i, colour) in [0xff5f57u32, 0xfebc2e, 0x28c840].iter().enumerate() {
-        let col = Color32::from_rgb((colour >> 16) as u8, (colour >> 8) as u8, *colour as u8);
-        p.circle_filled(pos2(r.left() + 10.0 + i as f32 * 8.0, r.top() + 9.0), 2.5, col);
+    // The system's title bar buttons (traffic lights where the system draws
+    // the frame, minimise, maximise and close where Glossa does), then a
+    // pane, text lines and an accent button.
+    let text = c(theme.window.text).to_opaque();
+    if SHELL.own_frame {
+        let glyph = Stroke::new(1.0, text.gamma_multiply(0.7));
+        let y = r.top() + 9.0;
+        let x = r.right() - 10.0;
+        p.line_segment([pos2(x - 2.5, y - 2.5), pos2(x + 2.5, y + 2.5)], glyph);
+        p.line_segment([pos2(x + 2.5, y - 2.5), pos2(x - 2.5, y + 2.5)], glyph);
+        p.rect_stroke(
+            Rect::from_center_size(pos2(x - 10.0, y), vec2(5.0, 5.0)),
+            CornerRadius::ZERO,
+            glyph,
+            StrokeKind::Middle,
+        );
+        p.line_segment([pos2(x - 22.5, y), pos2(x - 17.5, y)], glyph);
+    } else {
+        for (i, colour) in [0xff5f57u32, 0xfebc2e, 0x28c840].iter().enumerate() {
+            let col = Color32::from_rgb((colour >> 16) as u8, (colour >> 8) as u8, *colour as u8);
+            p.circle_filled(pos2(r.left() + 10.0 + i as f32 * 8.0, r.top() + 9.0), 2.5, col);
+        }
     }
     let pane = Rect::from_min_max(pos2(r.left() + 8.0, r.top() + 18.0), pos2(r.right() - 8.0, r.bottom() - 8.0));
     p.rect_filled(pane, CornerRadius::same(5), c(theme.edit.normal.back).to_opaque());
-    let text = c(theme.window.text).to_opaque();
     let line = |y: f32, w: f32| {
         let l = Rect::from_min_size(pos2(pane.left() + 7.0, pane.top() + y), vec2(pane.width() * w, 3.0));
         p.rect_filled(l, CornerRadius::same(2), text.gamma_multiply(0.75));
@@ -488,7 +505,9 @@ fn theme_swatch(
     } else if resp.hovered() {
         p.rect_stroke(r.expand(1.0), CornerRadius::same(11), Stroke::new(1.0, pal.weak), StrokeKind::Outside);
     }
-    let label = RichText::new(name).size(11.5).color(if chosen { pal.text } else { pal.weak });
+    // The names stay in the text colour: the disabled grey was too faint on
+    // light themes. The chosen one is bold.
+    let label = RichText::new(name).size(11.5).color(pal.text);
     let label = if chosen { label.strong() } else { label };
     let galley = egui::WidgetText::from(label).into_galley(
         ui,
