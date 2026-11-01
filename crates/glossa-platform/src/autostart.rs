@@ -6,7 +6,8 @@
 //!   `…\Explorer\StartupApproved\Run`, which we read, and clear when the
 //!   user turns autostart back on from our options.
 //! - **Linux**: `~/.config/autostart/glossa.desktop` (XDG autostart, honoured
-//!   by every major desktop).
+//!   by every major desktop). From an AppImage it starts the image file, not
+//!   the executable in the image's temporary mount.
 //! - **macOS**: `~/Library/LaunchAgents/app.glossa.plist` with `RunAtLoad`.
 //!   From `Glossa.app` it runs `/usr/bin/open -b <bundle id> --args …`, so
 //!   Launch Services finds the app wherever it has been moved, and the
@@ -16,9 +17,7 @@
 //!
 //! The file contents are built by pure functions so they can be tested.
 
-use std::path::Path;
-#[cfg(not(windows))]
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use crate::Result;
 
@@ -38,8 +37,13 @@ pub fn set_autostart(enabled: bool, exe_path: &Path, args: &[String]) -> Result<
     #[cfg(not(windows))]
     {
         let file = autostart_file()?;
-        let contents =
-            if cfg!(target_os = "macos") { launch_agent_plist(exe_path, args) } else { desktop_entry(exe_path, args) };
+        let contents = if cfg!(target_os = "macos") {
+            launch_agent_plist(exe_path, args)
+        } else {
+            let appdir = std::env::var_os("APPDIR").map(PathBuf::from);
+            let appimage = std::env::var_os("APPIMAGE").map(PathBuf::from);
+            desktop_entry(&appimage_of(exe_path, appdir.as_deref(), appimage.as_deref()), args)
+        };
         set_file(&file, enabled.then_some(contents.as_str()))
     }
 }
@@ -96,6 +100,17 @@ fn file_enables(file: &Path) -> bool {
         .lines()
         .map(str::trim)
         .any(|l| l.eq_ignore_ascii_case("Hidden=true") || l.eq_ignore_ascii_case("X-GNOME-Autostart-enabled=false"))
+}
+
+/// What to start: the AppImage file when running from one. Its runtime
+/// mounts the image at a temporary `$APPDIR` and sets `$APPIMAGE` to the
+/// file; the executable inside the mount is gone after it exits.
+#[cfg_attr(any(windows, target_os = "macos"), allow(dead_code))]
+fn appimage_of(exe_path: &Path, appdir: Option<&Path>, appimage: Option<&Path>) -> PathBuf {
+    match (appdir, appimage) {
+        (Some(dir), Some(image)) if !dir.as_os_str().is_empty() && exe_path.starts_with(dir) => image.to_path_buf(),
+        _ => exe_path.to_path_buf(),
+    }
 }
 
 /// The `.desktop` file for XDG autostart.
@@ -353,6 +368,18 @@ mod tests {
         assert!(text.contains("\nExec=/usr/bin/glossa --minimized\n"));
         assert!(text.contains("\nTerminal=false\n"));
         assert!(text.ends_with("X-GNOME-Autostart-enabled=true\n"));
+    }
+
+    #[test]
+    fn an_appimage_is_started_by_its_file_not_its_mount() {
+        let exe = Path::new("/tmp/.mount_GlossaAb12/usr/bin/glossa");
+        let mount = Path::new("/tmp/.mount_GlossaAb12");
+        let image = Path::new("/home/u/Apps/Glossa.AppImage");
+        assert_eq!(appimage_of(exe, Some(mount), Some(image)), image);
+        // Not from an AppImage, or a stale variable from a parent process.
+        assert_eq!(appimage_of(Path::new("/usr/bin/glossa"), None, None), Path::new("/usr/bin/glossa"));
+        assert_eq!(appimage_of(Path::new("/usr/bin/glossa"), Some(mount), Some(image)), Path::new("/usr/bin/glossa"));
+        assert_eq!(appimage_of(exe, Some(Path::new("")), Some(image)), exe);
     }
 
     #[test]
