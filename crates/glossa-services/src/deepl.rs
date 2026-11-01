@@ -78,9 +78,11 @@ impl DeepL {
     pub const ID: &'static str = "deepl";
 
     pub fn new() -> Self {
-        let mut info = ProviderInfo::new(Self::ID, "DeepL", Capabilities::TRANSLATE);
+        // "DeepL" alone is the keyless bundled module (deepl-web).
+        let mut info = ProviderInfo::new(Self::ID, "DeepL API (key)", Capabilities::TRANSLATE);
         info.description = "DeepL's neural translator through its official API. Needs a DeepL API key; the free \
-                            plan includes 500,000 characters a month."
+                            plan includes 500,000 characters a month. The bundled \"DeepL\" service needs none \
+                            but is rate-limited."
             .into();
         info.homepage = "https://www.deepl.com/pro-api".into();
         info.languages = langs_from_codes(LANGS);

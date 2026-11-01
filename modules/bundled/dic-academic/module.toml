@@ -1,0 +1,33 @@
+# Academic (dic.academic.ru): a search across hundreds of Russian and
+# multilingual dictionaries and encyclopedias. Bundled with Glossa; see
+# main.js for how the page is read.
+capabilities = ["dictionary"]
+
+[module]
+id = "dic-academic"
+name = "Academic"
+version = "1.0.0"
+runtime = "js"
+entry = "main.js"
+description = "dic.academic.ru: entries for a word from many Russian and multilingual dictionaries and encyclopedias, each with its source."
+homepage = "https://dic.academic.ru"
+author = "Glossa"
+license = "MIT OR Apache-2.0"
+max_input_chars = 200
+ready_to_use = true
+
+[language_map]
+"zh-Hans" = "zh"
+"zh-Hant" = "zh"
+"nb" = "no"
+
+[permissions]
+network = ["dic.academic.ru"]
+
+[[options]]
+key = "max_entries"
+type = "number"
+label = "Entries to show"
+default = 20
+min = 1
+max = 50

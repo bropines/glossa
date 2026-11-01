@@ -1,0 +1,31 @@
+# ModernMT without a key, through the form its public translate page posts.
+# Bundled with Glossa; see main.js for the protocol.
+capabilities = ["translate"]
+languages = [
+  "af", "az", "sq", "ar", "hy", "be", "bg", "ca", "zh-Hans", "zh-Hant", "hr", "cs", "da", "nl", "en", "et",
+  "fi", "fil", "fr", "gl", "de", "el", "ht", "he", "hi", "hu", "is", "id", "it", "ga", "ja", "ka", "ko",
+  "lv", "lt", "mk", "ms", "mt", "nb", "fa", "pl", "pt", "ro", "ru", "sr", "sk", "sl", "es", "sw", "sv",
+  "th", "tr", "uk", "ur", "vi", "cy", "eo", "la", "lo", "kk", "si", "tg", "te", "km", "mn", "kn", "ta",
+  "mr", "bn", "tt",
+]
+
+[module]
+id = "modernmt"
+name = "ModernMT"
+version = "1.0.0"
+runtime = "js"
+entry = "main.js"
+description = "ModernMT, Translated's adaptive machine translation, with no key or account, as on modernmt.com/translate."
+homepage = "https://www.modernmt.com/translate"
+author = "Glossa"
+license = "MIT OR Apache-2.0"
+max_input_chars = 5000
+ready_to_use = true
+
+[language_map]
+"zh-Hans" = "zh-CN"
+"zh-Hant" = "zh-TW"
+"fil" = "tl"
+
+[permissions]
+network = ["www.modernmt.com"]

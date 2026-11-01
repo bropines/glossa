@@ -98,6 +98,23 @@ dictionaries worked; the rest failed on the remote side (endpoints retired or
 moved, Cloudflare or bot checks, expired certificates), the same for the
 classic program.
 
+The working ones were rewritten as Glossa's bundled modules
+(`modules/bundled/`), from what the scripts showed of each endpoint. For
+three dead ones the service still answers by another way, and that became
+the module: ModernMT through its own web page's form (the script used a
+third-party proxy, mtdev.bytequests.com, now gone, as were its Amazon and
+"GPT" scripts), Wikipedia through the REST summary API, Urban Dictionary
+through its JSON API. Lingvo Live's HTML page carries no article for many
+words, but its word-card JSON does. Still dead on 2026-11-01, with no keyless
+way found: Papago (the site moved to a new client; the old API returns the
+app page), Reverso and Reverso Context (Cloudflare), WordReference (a
+JavaScript bot check, answered 418), Babylon (404), Translatero (the page no
+longer translates server-side), Youdao's web translator (`translate_o`
+retired; the new one encrypts its answers), the public LibreTranslate
+instances (down, blocked or keyed) and Lingva instances (errors, or the
+source text echoed back), ImTranslator (its dictionary host redirects to a
+page with no results) and Google Search.
+
 ## Process and security notes
 
 - The classic program is registered to start at logon through a scheduled

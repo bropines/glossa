@@ -1,0 +1,33 @@
+# Yandex Translate without a key, through the web endpoint Yandex's own
+# browser clients use. Bundled with Glossa; see main.js for the protocol.
+capabilities = ["translate", "detect_language", "dictionary"]
+languages = [
+  "af", "az", "sq", "ar", "hy", "eu", "be", "bg", "ca", "zh-Hans", "zh-Hant", "hr", "cs", "da", "nl", "en",
+  "et", "fi", "fil", "fr", "gl", "de", "el", "ht", "he", "hi", "hu", "is", "id", "it", "ga", "ja", "ka",
+  "ko", "lv", "lt", "mk", "ms", "mt", "nb", "fa", "pl", "pt", "ro", "ru", "sr", "sk", "sl", "es", "sw",
+  "sv", "th", "tr", "uk", "ur", "vi", "cy", "yi", "eo", "la", "lo", "kk", "uz", "si", "tg", "te", "km",
+  "mn", "kn", "ta", "mr", "bn", "tt",
+]
+
+[module]
+id = "yandex-web"
+name = "Yandex"
+version = "1.0.0"
+runtime = "js"
+entry = "main.js"
+description = "Yandex Translate with no key or account: translation, language detection, and Yandex's dictionary for single words."
+homepage = "https://translate.yandex.com"
+author = "Glossa"
+license = "MIT OR Apache-2.0"
+# The endpoint refuses texts much over 10 000 characters.
+max_input_chars = 10000
+ready_to_use = true
+
+[language_map]
+"zh-Hans" = "zh"
+"zh-Hant" = "zh"
+"fil" = "tl"
+"nb" = "no"
+
+[permissions]
+network = ["translate.yandex.net"]

@@ -1,0 +1,43 @@
+# ABBYY Lingvo Live, through the JSON its web dictionary uses for word cards.
+# Bundled with Glossa; see main.js for the protocol.
+capabilities = ["dictionary"]
+# German is in Lingvo's menus, but its server fails every German lookup
+# (November 2026), so it is left out; the others were checked.
+languages = ["en", "ru", "uk", "zh-Hans", "zh-Hant", "fr", "es", "it", "la", "el"]
+
+[module]
+id = "lingvo-live"
+name = "ABBYY Lingvo Live"
+version = "1.0.0"
+runtime = "js"
+entry = "main.js"
+description = "ABBYY Lingvo dictionaries (Universal, Law, Engineering, Biology…): senses and examples, mostly to and from Russian."
+homepage = "https://www.lingvolive.com"
+author = "Glossa"
+license = "MIT OR Apache-2.0"
+max_input_chars = 100
+ready_to_use = true
+
+# Lingvo identifies languages by Windows locale ids.
+[language_map]
+"en" = "1033"
+"ru" = "1049"
+"uk" = "1058"
+"zh-Hans" = "1028"
+"zh-Hant" = "1028"
+"fr" = "1036"
+"es" = "1034"
+"it" = "1040"
+"la" = "1142"
+"el" = "1032"
+
+[permissions]
+network = ["api.lingvolive.com"]
+
+[[options]]
+key = "max_examples"
+type = "number"
+label = "Examples to show"
+default = 10
+min = 0
+max = 100

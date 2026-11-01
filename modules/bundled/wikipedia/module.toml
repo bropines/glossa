@@ -1,0 +1,26 @@
+# Wikipedia's page summaries, through the Wikimedia REST API. Bundled with
+# Glossa; see main.js for the protocol.
+capabilities = ["dictionary"]
+
+[module]
+id = "wikipedia"
+name = "Wikipedia"
+version = "1.0.0"
+runtime = "js"
+entry = "main.js"
+description = "The opening of the Wikipedia article on a word or name, in the source language's Wikipedia (CC BY-SA)."
+homepage = "https://www.wikipedia.org"
+author = "Glossa"
+license = "MIT OR Apache-2.0"
+max_input_chars = 200
+ready_to_use = true
+
+# Wikipedia's subdomains where they differ from Glossa's codes.
+[language_map]
+"zh-Hans" = "zh"
+"zh-Hant" = "zh"
+"fil" = "tl"
+"nb" = "no"
+
+[permissions]
+network = ["*.wikipedia.org"]

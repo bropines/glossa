@@ -1,0 +1,28 @@
+# Urban Dictionary, through its public JSON API. Bundled with Glossa; see
+# main.js for the protocol.
+capabilities = ["dictionary"]
+languages = ["en"]
+
+[module]
+id = "urban-dictionary"
+name = "Urban Dictionary"
+version = "1.0.0"
+runtime = "js"
+entry = "main.js"
+description = "English slang and informal phrases, defined by Urban Dictionary's readers, most upvoted first."
+homepage = "https://www.urbandictionary.com"
+author = "Glossa"
+license = "MIT OR Apache-2.0"
+max_input_chars = 100
+ready_to_use = true
+
+[permissions]
+network = ["api.urbandictionary.com"]
+
+[[options]]
+key = "max_definitions"
+type = "number"
+label = "Definitions to show"
+default = 5
+min = 1
+max = 10

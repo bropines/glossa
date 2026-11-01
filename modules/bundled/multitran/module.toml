@@ -1,0 +1,87 @@
+# Multitran, the large Russian-centred multilingual dictionary, read from its
+# public pages. Bundled with Glossa; see main.js for how the page is read.
+capabilities = ["dictionary"]
+languages = [
+  "en", "ru", "de", "fr", "es", "he", "sr", "ar", "pt", "lt", "ro", "pl", "bg", "cs", "zh-Hans", "zh-Hant",
+  "hi", "da", "it", "nl", "az", "et", "lv", "ja", "sv", "nb", "af", "tr", "uk", "eo", "fi", "la", "el",
+  "ko", "hu", "uz", "cy", "ga", "sk", "sl", "eu", "mt", "th", "ur",
+]
+
+[module]
+id = "multitran"
+name = "Multitran"
+version = "1.0.0"
+runtime = "js"
+entry = "main.js"
+description = "Multitran: translations of words and phrases by subject area, strongest for Russian with English, German, French and others."
+homepage = "https://www.multitran.com"
+author = "Glossa"
+license = "MIT OR Apache-2.0"
+max_input_chars = 200
+ready_to_use = true
+
+# Multitran numbers its languages; these are the numbers its own language
+# menu uses.
+[language_map]
+"en" = "1"
+"ru" = "2"
+"de" = "3"
+"fr" = "4"
+"es" = "5"
+"he" = "6"
+"sr" = "7"
+"ar" = "10"
+"pt" = "11"
+"lt" = "12"
+"ro" = "13"
+"pl" = "14"
+"bg" = "15"
+"cs" = "16"
+"zh-Hans" = "97"
+"zh-Hant" = "98"
+"hi" = "18"
+"da" = "22"
+"it" = "23"
+"nl" = "24"
+"az" = "25"
+"et" = "26"
+"lv" = "27"
+"ja" = "28"
+"sv" = "29"
+"nb" = "30"
+"af" = "31"
+"tr" = "32"
+"uk" = "33"
+"eo" = "34"
+"fi" = "36"
+"la" = "37"
+"el" = "38"
+"ko" = "39"
+"hu" = "42"
+"uz" = "45"
+"cy" = "48"
+"ga" = "49"
+"sk" = "60"
+"sl" = "67"
+"eu" = "68"
+"mt" = "78"
+"th" = "93"
+"ur" = "117"
+
+[permissions]
+network = ["www.multitran.com"]
+
+[[options]]
+key = "labels"
+type = "select"
+label = "Subject labels in"
+default = "en"
+choices = [{ value = "en", label = "English" }, { value = "ru", label = "Russian" }]
+
+[[options]]
+key = "max_rows"
+type = "number"
+label = "Subject areas per part of speech"
+default = 30
+min = 1
+max = 200

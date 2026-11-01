@@ -1,0 +1,20 @@
+# Youdao's dictionary (English, French and Chinese), through the JSON its
+# own web dictionary loads. Bundled with Glossa; see main.js for the protocol.
+capabilities = ["dictionary"]
+languages = ["en", "zh-Hans", "zh-Hant", "fr"]
+
+[module]
+id = "youdao"
+name = "Youdao"
+version = "1.0.0"
+runtime = "js"
+entry = "main.js"
+description = "Youdao Dictionary: English and French words explained in Chinese, Chinese words in English, with bilingual examples."
+homepage = "https://dict.youdao.com"
+author = "Glossa"
+license = "MIT OR Apache-2.0"
+max_input_chars = 100
+ready_to_use = true
+
+[permissions]
+network = ["dict.youdao.com"]
