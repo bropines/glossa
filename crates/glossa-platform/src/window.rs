@@ -318,6 +318,10 @@ pub fn snap_layouts(title: &str, button: Option<(i32, i32, i32, i32)>) -> Option
     }
 }
 
+/// Whether [`round_corners`] does anything here (macOS): callers skip
+/// finding the window otherwise.
+pub const CAN_ROUND_CORNERS: bool = cfg!(target_os = "macos");
+
 /// Round a borderless window's corners by `radius` points, given the
 /// pointer [`own_window_by_title`] found: on macOS, where nothing rounds
 /// them (on Windows 11 `backdrop::style_frame` asks the system to). Returns

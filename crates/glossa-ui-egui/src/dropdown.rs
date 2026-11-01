@@ -531,7 +531,7 @@ fn keep_from_activating(_: &mut State, _: &str, _: (u8, u8, u8)) {}
 /// system does not (macOS; `window::round_corners` does nothing elsewhere,
 /// and Windows 11 rounds it in `keep_from_activating`).
 fn round_window(st: &mut State, title: &str, radius: f32) {
-    if st.rounded || radius <= 0.0 {
+    if !window::CAN_ROUND_CORNERS || st.rounded || radius <= 0.0 {
         return;
     }
     if st.hwnd.is_none() {

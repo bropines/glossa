@@ -478,7 +478,7 @@ impl GlossaApp {
     /// once per window. Returns whether its corners are rounded now, so the
     /// frame drawn in it can follow them.
     pub fn round_child(&mut self, title: &str, radius: f32) -> bool {
-        if radius <= 0.0 {
+        if !glossa_platform::window::CAN_ROUND_CORNERS || radius <= 0.0 {
             return false;
         }
         let Some(window) = glossa_platform::window::own_window_by_title(title) else { return false };
