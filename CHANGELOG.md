@@ -112,6 +112,14 @@ for Windows and Linux.
   graphics engine offers to restart.
 - **Options**: the Services page uses the whole window, the list in a
   resizable pane beside the settings.
+- **On-screen keyboard** drawn like a real one: staggered ANSI rows with wide
+  modifier keys, keycaps that sink when pressed, shifted characters printed
+  above, sticky Shift and Caps Lock that light up, key repeat; the English
+  and the Russian (ЙЦУКЕН, Latin letters in the corners) layouts. Ctrl+wheel
+  or dragging the window's edge scales it on its own
+  (`appearance.keyboard_scale`).
+- **About** shows what Glossa is, its co-authors and its licences, with the
+  license texts and third-party notices readable in the window.
 - Licenses (MIT or Apache-2.0), NOTICE, CI on Linux and Windows, release
   builds, issue templates, contributing and security guides.
 
@@ -128,6 +136,9 @@ for Windows and Linux.
   where it was dragged), *Auto size* off gives a fixed box; exception rules
   for controls (list views, hotkey fields, Explorer's file view) match, and
   *Smart detection* works.
+- History: the star and delete icons are toolbar-sized and light up on
+  hover (the row used to take the hover from them); emoji in entries' text
+  draw on Windows instead of boxes.
 
 ### Known gaps
 
