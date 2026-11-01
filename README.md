@@ -42,7 +42,11 @@
 ## Features
 
 - **Translate the selection** in any program: a popup by the cursor, or the
-  main window with the source and several services side by side.
+  main window with the source and several services side by side. The popup
+  can be dragged, resized (the size is remembered) and pinned.
+- **Mouse mode**, as in QTranslate: select text with the mouse and a button
+  by the pointer (or the translation itself) appears, no hotkey needed. A
+  click on the tray icon turns it on and off; the icon changes colour.
 - **Recognise text on screen** (OCR) and translate it: drag over a region,
   copy it, or watch it and re-translate when it changes. Google Lens through
   [chrome-lens-py](https://github.com/bropines/chrome-lens-py).
@@ -64,8 +68,11 @@
 - **Modules** in JavaScript, Python or as native libraries (Rust, C, anything
   with a C ABI), with one protocol for all three. Classic QTranslate services
   and pot-app plugins run unchanged.
-- **Themes** as plain files, classic QTranslate themes included; light and
-  dark; window and popup transparency; OpenGL, GPU or software rendering.
+- **Themes** as plain files, classic QTranslate themes included; Fluent
+  (WinUI 3) themes following the system accent colour; Mica, Acrylic or blur
+  backdrops on Windows 11 (vibrancy on macOS); window and popup
+  transparency; Ctrl+wheel scales the interface; OpenGL, GPU or software
+  rendering.
 - **History** with favourites and export (text, CSV, HTML, JSON).
 - **Command line and local API**: `glossa-cli` does everything without a
   window; other programs can drive a running Glossa over HTTP on localhost.
@@ -202,9 +209,9 @@ Ubuntu names). Windows binaries also cross-compile from Linux with the
 Working: everything listed under Features, on Windows (tested daily) and
 Linux X11; macOS builds but is untested.
 
-Not yet: mouse mode (translate on double-click or selection without a hotkey),
-speech input, the update check. On Wayland, global hotkeys and reading the
-selection depend on the compositor.
+Not yet: speech input, the update check; mouse mode on macOS. On Wayland,
+global hotkeys, mouse mode and reading the selection depend on the
+compositor. Backdrops need the OpenGL engine.
 
 Classic QTranslate service scripts and the keyless bundled services depend on
 the websites they talk to; when a site changes, a classic script breaks for
