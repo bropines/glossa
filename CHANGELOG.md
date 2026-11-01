@@ -7,8 +7,12 @@ the notes of its GitHub release.
 
 ## [Unreleased]
 
-The first version of Glossa, a clean-room successor to QTranslate in Rust,
-for Windows, macOS and Linux.
+## [0.1.0-beta.1] - 2026-11-01
+
+The first public beta of Glossa, a clean-room successor to QTranslate in
+Rust, for Windows, macOS and Linux. Windows is used daily; macOS is in early
+testing; the Linux builds have not been run on real hardware yet. The builds
+are not code-signed.
 
 ### Added
 
