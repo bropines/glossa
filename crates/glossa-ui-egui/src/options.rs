@@ -142,8 +142,12 @@ fn font_picker(app: &GlossaApp, ui: &mut egui::Ui, list: &mut FontList, value: &
     list.poll();
     dropdown::show(ui, id, button.rect, 240.0, 460.0, |ui, settling| {
         let mut search: String = ui.ctx().data(|d| d.get_temp(search_id)).unwrap_or_default();
-        let r = ui
-            .add(egui::TextEdit::singleline(&mut search).hint_text(app.t("lang.search")).desired_width(f32::INFINITY));
+        let r = ui.add(
+            egui::TextEdit::singleline(&mut search)
+                .hint_text(app.t("lang.search"))
+                .desired_width(f32::INFINITY)
+                .align(egui::Align2::LEFT_CENTER),
+        );
         if !r.has_focus() {
             r.request_focus();
         }

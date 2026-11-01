@@ -541,7 +541,9 @@ fn show_area<R>(
     };
     let shown = area.show(ctx, |ui| {
         let width = st.content.map_or(min_width, |c| c.x.max(min_width)) - 2.0 * EDGE;
-        ui.set_min_width(width.max(0.0));
+        // The frame goes inside this width: asking for the content's width
+        // here let the area settle that much narrower than the control.
+        ui.set_min_width((width + 2.0 * EDGE).max(0.0));
         out = Some(body(ui, false, width.max(1.0), max_height, settling, add));
     });
     st.area = Some(shown.response.rect);
