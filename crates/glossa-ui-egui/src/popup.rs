@@ -273,6 +273,12 @@ fn short_service(name: &str) -> String {
     name.trim_end_matches(" Translator").trim_end_matches(" Translate").to_owned()
 }
 
+/// How round the popup's corners are: as the theme rounds overlays (menus,
+/// flyouts), at least as its buttons.
+fn popup_radius(look: &crate::style::Look) -> f32 {
+    look.theme.metrics.overlay_radius.max(look.theme.metrics.button_radius).clamp(0.0, 12.0)
+}
+
 /// Auto-hide.
 pub fn tick(app: &mut GlossaApp) {
     let Some(p) = app.popup.as_ref() else { return };
@@ -347,6 +353,8 @@ pub fn show(app: &mut GlossaApp, ctx: &egui::Context) {
         }
     }
     app.child_backdrop(POPUP_TITLE, true);
+    let radius = popup_radius(&app.look);
+    app.round_child(POPUP_TITLE, radius);
     if close {
         return;
     }
@@ -391,9 +399,12 @@ fn body(app: &mut GlossaApp, ui: &mut egui::Ui, st: &mut PopupState) -> (bool, e
     // Rounded as the theme rounds overlays where the window's corners can
     // be see-through: a translucent window with no backdrop (a backdrop
     // fills the whole rectangle, and would show square behind them).
+    // Where the system rounds the window itself (macOS), the frame follows
+    // its corners whatever the window is drawn with.
     let see_through = !glossa_platform::shell::SHELL.transparency_needs_alpha_root || app.transparent_root();
-    let radius = if see_through && !look.popup_backdrop.is_some() {
-        look.theme.metrics.overlay_radius.max(look.theme.metrics.button_radius).clamp(0.0, 12.0)
+    let overlay_radius = popup_radius(&look);
+    let radius = if app.child_rounded(POPUP_TITLE) || (see_through && !look.popup_backdrop.is_some()) {
+        overlay_radius
     } else {
         0.0
     };
