@@ -504,11 +504,20 @@ fn body(app: &mut GlossaApp, ui: &mut egui::Ui, st: &mut PopupState) -> (bool, e
             let mut title_ui = ui.new_child(
                 egui::UiBuilder::new().max_rect(title_rect).layout(egui::Layout::left_to_right(egui::Align::Center)),
             );
+            // Where the button's plate goes, under the text: drawn once the
+            // text's size and the pointer are known.
+            let plate = ui.painter().add(egui::Shape::Noop);
+            let menu_button = !st.from_ocr;
+            if menu_button {
+                // Room on the left for the plate's padding.
+                title_ui.add_space(6.0);
+            }
             let title_resp = title_ui.add(
                 egui::Label::new(
                     RichText::new(st.title(app)).size(look.text_size * 1.15).color(text_color.gamma_multiply(0.85)),
                 )
                 .sense(Sense::click_and_drag())
+                .selectable(false)
                 .truncate(),
             );
             if title_resp.drag_started() {
@@ -523,14 +532,37 @@ fn body(app: &mut GlossaApp, ui: &mut egui::Ui, st: &mut PopupState) -> (bool, e
             if !st.from_ocr {
                 let menu_id = target_menu_id();
                 let r = title_resp.rect;
-                if r.right() + 12.0 <= title_rect.right() {
+                let arrow = r.right() + 16.0 <= title_rect.right();
+                if arrow {
                     // A small down arrow says it opens something.
-                    let (c, s) = (egui::pos2(r.right() + 7.0, r.center().y), 3.5);
+                    let (c, s) = (egui::pos2(r.right() + 8.0, r.center().y), 3.5);
                     ui.painter().add(egui::Shape::convex_polygon(
                         vec![c + vec2(-s, -s * 0.5), c + vec2(s, -s * 0.5), c + vec2(0.0, s * 0.6)],
-                        text_color.gamma_multiply(0.6),
+                        text_color.gamma_multiply(0.7),
                         egui::Stroke::NONE,
                     ));
+                }
+                // A button's plate: always faintly there, so it reads as
+                // something to press, stronger under the pointer and while
+                // the list is open.
+                let open = crate::dropdown::is_open(ui.ctx(), menu_id);
+                let strength = if open || title_resp.is_pointer_button_down_on() {
+                    0.2
+                } else if title_resp.hovered() {
+                    0.13
+                } else {
+                    0.06
+                };
+                let right = if arrow { r.right() + 16.0 } else { r.right() + 4.0 };
+                let plate_rect = egui::Rect::from_min_max(
+                    egui::pos2(r.left() - 6.0, r.top() - 2.0),
+                    egui::pos2(right, r.bottom() + 2.0),
+                );
+                let radius = egui::CornerRadius::same(look.theme.metrics.button_radius.round().clamp(2.0, 8.0) as u8);
+                ui.painter()
+                    .set(plate, egui::Shape::rect_filled(plate_rect, radius, text_color.gamma_multiply(strength)));
+                if title_resp.hovered() {
+                    ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
                 }
                 if title_resp.clicked() {
                     crate::dropdown::toggle_unfocused(ui.ctx(), menu_id);
