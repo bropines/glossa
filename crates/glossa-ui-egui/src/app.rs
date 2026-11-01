@@ -468,7 +468,8 @@ impl GlossaApp {
         }
         if let Some(t) = &self.tray {
             let c = self.look.theme.accent;
-            t.set_look([c.r as f32 / 255.0, c.g as f32 / 255.0, c.b as f32 / 255.0], self.cfg.mouse_mode.enabled);
+            let accent = [c.r as f32 / 255.0, c.g as f32 / 255.0, c.b as f32 / 255.0];
+            t.set_look(accent, self.look.theme.dark, self.cfg.mouse_mode.enabled);
         }
         if before_hotkeys != self.cfg.hotkeys {
             self.register_hotkeys();

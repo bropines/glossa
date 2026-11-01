@@ -247,11 +247,12 @@ fn launch_once_only(start_visible: &mut bool) {
 
 /// The parts that live as long as the process.
 /// The tray icon in the theme's accent colour, changed while mouse mode is
-/// on, with the menu's check marks.
+/// on, with the menu's check marks, and the menus dark or light as the theme.
 pub fn refresh_tray_look(shell: &Shell) {
     let Some(t) = &shell.tray else { return };
     let cfg = shell.engine.config();
-    t.set_look(tray::accent_of(&shell.engine), cfg.mouse_mode.enabled);
+    let (accent, dark) = tray::look_of(&shell.engine);
+    t.set_look(accent, dark, cfg.mouse_mode.enabled);
 }
 
 /// Mouse mode on or off from the tray, with no GUI needed.
