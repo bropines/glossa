@@ -335,6 +335,12 @@ for Windows, macOS and Linux.
 
 ### Fixed
 
+- AI endpoints: a model that does not take the reasoning level set for the
+  endpoint (Gemini 3.8 Flash refuses "minimal") failed every request; it
+  is now asked again without it, and the model is remembered. The Gemini
+  preset's model was retired; it is now gemini-flash-lite-latest, Google's
+  alias for the current Flash-Lite, on free and paid keys. Boxes written
+  inside another array (`[[ymin, xmin, ymax, xmax]]`) are read.
 - Pasting into text fields (the settings, the main window, search boxes)
   took nothing from the system clipboard on any system: eframe was built
   without its clipboard feature, so egui only saw what was copied inside
