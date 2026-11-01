@@ -184,10 +184,22 @@ glossa-cli action show_popup "text"  # ask the running app to show a popup
 ```
 
 `glossa-cli` with no arguments lists every command; `--json` gives
-machine-readable output.
+machine-readable output. Every command and flag is in
+[docs/cli.md](docs/cli.md); the HTTP API other programs use is in
+[docs/control-api.md](docs/control-api.md).
 
 ## Documentation
 
+All pages, by topic: [docs/README.md](docs/README.md)
+([по-русски](docs/README.ru.md)).
+
+- [Command line](docs/cli.md): every `glossa-cli` command, flag, exit code and
+  environment variable
+- [Control API](docs/control-api.md): driving a running Glossa over HTTP, and
+  binding hotkeys to it on Wayland, macOS or with AutoHotkey
+- [Configuration](docs/configuration.md): every `config.toml` key, and where
+  the data folder is
+- [Text recognition](docs/ocr.md)
 - [Modules](docs/modules/README.md): guides for
   [JavaScript](docs/modules/js-modules.md), [Python](sdk/python/README.md) and
   [native](docs/modules/native-modules.md) modules, the
