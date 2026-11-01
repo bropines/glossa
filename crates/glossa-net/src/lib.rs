@@ -225,6 +225,10 @@ pub const DEFAULT_USER_AGENT: &str =
 /// us allocate without bound.
 const MAX_BODY: u64 = 32 * 1024 * 1024;
 
+/// A request phase taking longer than this is logged (at debug level), so a
+/// "Glossa hangs" report can be read from the log.
+const SLOW: Duration = Duration::from_secs(2);
+
 impl HttpClient {
     pub fn new(settings: &Network) -> Result<HttpClient, Error> {
         let timeout = Duration::from_secs(settings.timeout_secs.max(1));
@@ -258,7 +262,21 @@ impl HttpClient {
 
     fn send_once(&self, request: &HttpRequest) -> Result<HttpResponse, Error> {
         let provider = if request.provider.is_empty() { "http" } else { &request.provider };
-        let mut response = self.open(request)?;
+        let started = Instant::now();
+        let opened = self.open(request);
+        let to_headers = started.elapsed();
+        if to_headers >= SLOW {
+            // Connecting, TLS, sending and waiting for the status line: the
+            // part that stalls on a dead pooled connection, a broken route
+            // or a slow proxy.
+            tracing::debug!(
+                url = %redact(&request.url),
+                ms = to_headers.as_millis() as u64,
+                ok = opened.is_ok(),
+                "slow request: waited this long for the response headers"
+            );
+        }
+        let mut response = opened?;
         let (status, headers) = status_and_headers(&response);
         let body = if request.method == Method::Head {
             Vec::new()
@@ -270,6 +288,15 @@ impl HttpClient {
                 .read_to_vec()
                 .map_err(|e| Error::Network(format!("{provider}: reading body: {e}")))?
         };
+        let reading = started.elapsed() - to_headers;
+        if reading >= SLOW {
+            tracing::debug!(
+                url = %redact(&request.url),
+                ms = reading.as_millis() as u64,
+                bytes = body.len(),
+                "slow request: reading the body took this long"
+            );
+        }
         Ok(HttpResponse { status, headers, body, codepage: request.codepage })
     }
 
@@ -382,7 +409,20 @@ impl Http for HttpClient {
             };
             if !retry || attempt >= self.max_retries {
                 if let Err(e) = &result {
-                    tracing::debug!(url = %redact(&request.url), error = %e, "request failed");
+                    tracing::debug!(
+                        url = %redact(&request.url),
+                        error = %e,
+                        attempts = attempt + 1,
+                        ms = started.elapsed().as_millis() as u64,
+                        "request failed"
+                    );
+                } else if started.elapsed() >= SLOW {
+                    tracing::debug!(
+                        url = %redact(&request.url),
+                        attempts = attempt + 1,
+                        ms = started.elapsed().as_millis() as u64,
+                        "slow request done"
+                    );
                 } else {
                     tracing::trace!(
                         url = %redact(&request.url),
@@ -394,7 +434,11 @@ impl Http for HttpClient {
             }
             attempt += 1;
             let backoff = Duration::from_millis(300 * (1 << attempt.min(4)));
-            tracing::debug!(url = %redact(&request.url), attempt, "retrying in {backoff:?}");
+            let why = match &result {
+                Err(e) => e.to_string(),
+                Ok(r) => format!("status {}", r.status),
+            };
+            tracing::debug!(url = %redact(&request.url), attempt, error = %why, "retrying in {backoff:?}");
             std::thread::sleep(backoff);
         }
     }
@@ -695,5 +739,87 @@ mod tests {
             };
             assert!(HttpClient::new(&settings).is_ok(), "{mode:?}");
         }
+    }
+
+    /// A local server that accepts connections and does whatever `serve`
+    /// says with each, on a thread of its own. Returns its address.
+    fn stalling_server(serve: fn(std::net::TcpStream)) -> String {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap();
+        std::thread::spawn(move || {
+            for stream in listener.incoming().flatten() {
+                std::thread::spawn(move || serve(stream));
+            }
+        });
+        format!("http://{addr}/")
+    }
+
+    fn client(timeout_secs: u64, max_retries: u32) -> HttpClient {
+        let settings = Network {
+            timeout_secs,
+            max_retries,
+            proxy: glossa_core::config::Proxy { mode: ProxyMode::None, ..Default::default() },
+            ..Default::default()
+        };
+        HttpClient::new(&settings).unwrap()
+    }
+
+    #[test]
+    fn a_server_that_never_answers_costs_the_timeout_not_more() {
+        // Accepts, reads the request, then says nothing: what a dead pooled
+        // connection or a black-holed proxy looks like from here.
+        let url = stalling_server(|mut s| {
+            use std::io::Read as _;
+            let mut buf = [0u8; 1024];
+            let _ = s.read(&mut buf);
+            std::thread::sleep(Duration::from_secs(30));
+        });
+        let started = Instant::now();
+        let err = client(1, 0).send(HttpRequest::get(&url)).unwrap_err();
+        assert!(matches!(err, Error::Timeout(_)), "{err:?}");
+        assert!(started.elapsed() < Duration::from_millis(2500), "took {:?}", started.elapsed());
+
+        // One retry: the timeout twice plus the back-off, and no more.
+        let started = Instant::now();
+        assert!(client(1, 1).send(HttpRequest::get(&url)).is_err());
+        let took = started.elapsed();
+        assert!(took >= Duration::from_millis(1900) && took < Duration::from_millis(4500), "took {took:?}");
+    }
+
+    #[test]
+    fn a_body_that_stops_halfway_times_out() {
+        let url = stalling_server(|mut s| {
+            use std::io::{Read as _, Write as _};
+            let mut buf = [0u8; 1024];
+            let _ = s.read(&mut buf);
+            let _ = s.write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 100\r\n\r\nhalf");
+            let _ = s.flush();
+            std::thread::sleep(Duration::from_secs(30));
+        });
+        let started = Instant::now();
+        let err = client(1, 0).send(HttpRequest::get(&url)).unwrap_err();
+        assert!(matches!(err, Error::Timeout(_) | Error::Network(_)), "{err:?}");
+        assert!(started.elapsed() < Duration::from_millis(2500), "took {:?}", started.elapsed());
+    }
+
+    #[test]
+    fn a_kept_alive_connection_the_server_closed_is_replaced() {
+        // The server answers one request per connection and closes it while
+        // the client keeps it in its pool; the next request must not stall
+        // on the dead connection.
+        let url = stalling_server(|mut s| {
+            use std::io::{Read as _, Write as _};
+            let mut buf = [0u8; 1024];
+            let _ = s.read(&mut buf);
+            let _ = s.write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: keep-alive\r\n\r\nok");
+            let _ = s.flush();
+            std::thread::sleep(Duration::from_millis(50));
+        });
+        let http = client(5, 0);
+        assert_eq!(http.send(HttpRequest::get(&url)).unwrap().body, b"ok");
+        std::thread::sleep(Duration::from_millis(300));
+        let started = Instant::now();
+        assert_eq!(http.send(HttpRequest::get(&url)).unwrap().body, b"ok");
+        assert!(started.elapsed() < Duration::from_secs(1), "took {:?}", started.elapsed());
     }
 }
