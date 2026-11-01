@@ -7,6 +7,7 @@ Everything about Glossa beyond the [README](../README.md), by topic.
 
 | page | what it covers |
 |---|---|
+| [Installing](install.md) | The Windows installer, macOS disk image, `.deb`, AppImage and archives; where files go, upgrading, removing; building the packages. |
 | [Command line](cli.md) | Every `glossa-cli` command and flag, output and exit codes, environment variables. |
 | [Control API](control-api.md) | The local HTTP API a running Glossa answers: endpoints, the token, binding hotkeys on Wayland, macOS and with AutoHotkey. |
 | [Configuration](configuration.md) | `config.toml` field by field, where it lives, and the other files in the data folder. |

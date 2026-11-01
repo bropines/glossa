@@ -1,9 +1,21 @@
 name: release
 
 # Tag v1.2.3 (matching the workspace version in Cargo.toml) -> a draft GitHub
-# release with one archive per platform and SHA256SUMS. Review the draft and
-# publish it by hand. To redo a failed run, delete the draft first.
+# release with archives and packages for every platform and SHA256SUMS.
+# Review the draft and publish it by hand. To redo a failed run, delete the
+# draft first. The packaging scripts live in packaging/ (see docs/install.md).
 #
+# Packages:
+#   glossa-1.2.3-x86_64-windows-setup.exe  per-user installer (Inno Setup,
+#                                         packaging/windows/glossa.iss)
+#   glossa_1.2.3_amd64.deb                 Debian, Ubuntu (build-deb.sh)
+#   glossa-1.2.3-x86_64.AppImage           any x86-64 Linux with GTK 3
+#   glossa-1.2.3-arm64-macos.dmg           Glossa.app and an Applications
+#   glossa-1.2.3-universal-macos.dmg       link to drag it to
+#   Bropines.Glossa*.yaml, glossa.json     winget and Scoop manifests for this
+#                                         release (packaging/fill-manifests.sh)
+#
+# Archives:
 #   glossa-1.2.3-x86_64-linux.tar.gz
 #   glossa-1.2.3-x86_64-windows.zip
 #     glossa(.exe), glossa-cli(.exe)
@@ -59,6 +71,7 @@ jobs:
     container: debian:bookworm
     env:
       TARGET: x86_64-unknown-linux-gnu
+      VERSION: ${{ needs.version.outputs.version }}
       NAME: glossa-${{ needs.version.outputs.version }}-x86_64-linux
     steps:
       # GTK 3 and ALSA are the only libraries linked at build time (see
@@ -92,10 +105,49 @@ jobs:
           cp -r sdk/python "dist/$NAME/sdk/"
           find "dist/$NAME" -name __pycache__ -prune -exec rm -rf {} +
           tar -C dist -czf "dist/$NAME.tar.gz" "$NAME"
+      # dpkg-shlibdeps (dpkg-dev, from build-essential) reads the library
+      # dependencies off the binaries built on this Debian 12.
+      - name: Debian package
+        run: |
+          packaging/linux/build-deb.sh "target/$TARGET/release" "$VERSION" dist
+          dpkg-deb --info "dist/glossa_${VERSION}_amd64.deb"
+          dpkg-deb --contents "dist/glossa_${VERSION}_amd64.deb"
+      # Install it the way a user would: apt resolves the dependencies, and
+      # the installed glossa-cli runs.
+      - name: Debian package smoke test
+        run: |
+          apt-get install -y "./dist/glossa_${VERSION}_amd64.deb"
+          glossa-cli --home "$RUNNER_TEMP/glossa-deb" services -c translate
+          test -f /usr/share/glossa/sdk/python/glossa_module.py
+      # Pinned releases, checked against the digests GitHub lists for them.
+      # The runtime is embedded as is, so appimagetool fetches nothing.
+      - name: AppImage tools
+        env:
+          APPIMAGETOOL_VERSION: '1.9.1'
+          APPIMAGETOOL_SHA256: ed4ce84f0d9caff66f50bcca6ff6f35aae54ce8135408b3fa33abfc3cb384eb0
+          RUNTIME_VERSION: '20251108'
+          RUNTIME_SHA256: 2fca8b443c92510f1483a883f60061ad09b46b978b2631c807cd873a47ec260d
+        run: |
+          mkdir -p "$RUNNER_TEMP/appimage"
+          cd "$RUNNER_TEMP/appimage"
+          curl -fsSL -o appimagetool "https://github.com/AppImage/appimagetool/releases/download/$APPIMAGETOOL_VERSION/appimagetool-x86_64.AppImage"
+          curl -fsSL -o runtime-x86_64 "https://github.com/AppImage/type2-runtime/releases/download/$RUNTIME_VERSION/runtime-x86_64"
+          printf '%s  %s\n' "$APPIMAGETOOL_SHA256" appimagetool "$RUNTIME_SHA256" runtime-x86_64 | sha256sum -c -
+          chmod +x appimagetool
+      - name: AppImage
+        run: |
+          APPIMAGETOOL="$RUNNER_TEMP/appimage/appimagetool" APPIMAGE_RUNTIME="$RUNNER_TEMP/appimage/runtime-x86_64" \
+            packaging/linux/build-appimage.sh "target/$TARGET/release" "$VERSION" dist
+          # No FUSE in a container: the runtime unpacks itself instead.
+          APPIMAGE_EXTRACT_AND_RUN=1 "dist/glossa-$VERSION-x86_64.AppImage" cli \
+            --home "$RUNNER_TEMP/glossa-appimage" services -c translate
       - uses: actions/upload-artifact@v4
         with:
           name: linux
-          path: dist/*.tar.gz
+          path: |
+            dist/*.tar.gz
+            dist/*.deb
+            dist/*.AppImage
           if-no-files-found: error
 
   windows:
@@ -107,6 +159,7 @@ jobs:
         shell: bash
     env:
       TARGET: x86_64-pc-windows-msvc
+      VERSION: ${{ needs.version.outputs.version }}
       NAME: glossa-${{ needs.version.outputs.version }}-x86_64-windows
       # Link the C runtime statically, so the executables start on a system
       # without the Visual C++ redistributable installed. With an explicit
@@ -126,10 +179,42 @@ jobs:
           cp -r sdk/python "dist/$NAME/sdk/"
           find "dist/$NAME" -name __pycache__ -prune -exec rm -rf {} +
           cd dist && 7z a -tzip "$NAME.zip" "$NAME" > /dev/null
+      # Inno Setup 6 comes with the runner image. The installer takes the
+      # folder the zip was made from, so both hold the same files.
+      - name: Installer
+        shell: pwsh
+        run: |
+          $iscc = (Get-Command iscc -ErrorAction SilentlyContinue).Source
+          if (-not $iscc) { $iscc = "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe" }
+          & $iscc "/DMyAppVersion=$env:VERSION" "/DStageDir=$PWD\dist\$env:NAME" "/O$PWD\dist" packaging\windows\glossa.iss
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+      # Install silently for this user, run the installed CLI, uninstall, and
+      # check that nothing is left in the folder.
+      - name: Installer smoke test
+        shell: pwsh
+        run: |
+          $dir = "$env:RUNNER_TEMP\glossa-installed"
+          $p = Start-Process "dist\$env:NAME-setup.exe" -Wait -PassThru `
+            -ArgumentList '/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART', '/CURRENTUSER', "/DIR=`"$dir`""
+          if ($p.ExitCode) { throw "setup exited with $($p.ExitCode)" }
+          foreach ($f in 'glossa.exe', 'glossa-cli.exe', 'sdk\python\glossa_module.py', 'examples\modules') {
+            if (-not (Test-Path "$dir\$f")) { throw "$f was not installed" }
+          }
+          if (Test-Path "$dir\data") { throw "the installer made a portable data folder" }
+          & "$dir\glossa-cli.exe" --home "$env:RUNNER_TEMP\glossa-home" services -c translate
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          $p = Start-Process "$dir\unins000.exe" -Wait -PassThru -ArgumentList '/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART'
+          if ($p.ExitCode) { throw "uninstall exited with $($p.ExitCode)" }
+          # unins000.exe hands over to a temporary copy of itself and returns
+          # at once; wait for the copy to finish.
+          for ($i = 0; $i -lt 60 -and (Test-Path "$dir\glossa.exe"); $i++) { Start-Sleep -Seconds 1 }
+          if (Test-Path "$dir\glossa.exe") { throw "glossa.exe is still there after uninstalling" }
       - uses: actions/upload-artifact@v4
         with:
           name: windows
-          path: dist/*.zip
+          path: |
+            dist/*.zip
+            dist/*-setup.exe
           if-no-files-found: error
 
   macos:
@@ -205,13 +290,33 @@ jobs:
             "$root/glossa-cli" --home "$RUNNER_TEMP/glossa-$1" services -c ocr | tee "$RUNNER_TEMP/ocr-$1.txt"
             grep -q macos-vision "$RUNNER_TEMP/ocr-$1.txt"
             ditto -c -k --sequesterRsrc --keepParent "$root" "dist/$name.zip"
+            # The disk image: Glossa.app and a link to /Applications to drag
+            # it onto. ditto keeps the signature intact.
+            local stage="$RUNNER_TEMP/dmg-$1"
+            rm -rf "$stage"
+            mkdir -p "$stage"
+            ditto "$app" "$stage/Glossa.app"
+            ln -s /Applications "$stage/Applications"
+            # hdiutil fails now and then on CI runners ("Resource busy").
+            local try
+            for try in 1 2 3; do
+              if hdiutil create -volname "Glossa $VERSION" -srcfolder "$stage" -fs HFS+ \
+                  -format UDZO -ov "dist/$name.dmg"; then
+                break
+              fi
+              [ "$try" = 3 ] && exit 1
+              sleep 10
+            done
+            hdiutil verify "dist/$name.dmg"
           }
           package arm64 target/aarch64-apple-darwin/release
           package universal build/universal
       - uses: actions/upload-artifact@v4
         with:
           name: macos
-          path: dist/*.zip
+          path: |
+            dist/*.zip
+            dist/*.dmg
           if-no-files-found: error
 
   release:
@@ -226,6 +331,12 @@ jobs:
         with:
           path: dist
           merge-multiple: true
+      # winget and Scoop manifests pointing at this release's Windows files.
+      # They work once the release is published in a public repository.
+      - name: Package manager manifests
+        env:
+          VERSION: ${{ needs.version.outputs.version }}
+        run: packaging/fill-manifests.sh "$VERSION" dist
       - name: Checksums
         working-directory: dist
         run: |
@@ -245,11 +356,11 @@ jobs:
 
           ### Downloads
 
-          - **Windows** (x86-64): `glossa-*-x86_64-windows.zip`
-          - **macOS** (Apple silicon, or universal with Intel): `glossa-*-macos.zip` with `Glossa.app`, a menu-bar app. It is not notarised: on macOS 15 and later open it once, then *System Settings → Privacy & Security → Open Anyway* (or run `xattr -dr com.apple.quarantine Glossa.app`). See the README's macOS section for the permissions it asks for.
-          - **Linux** (x86-64): `glossa-*-x86_64-linux.tar.gz`
+          - **Windows** (x86-64): `glossa-*-x86_64-windows-setup.exe` installs for your account without admin rights (Start menu, optional autostart, uninstaller). Not signed, so SmartScreen may ask: *More info → Run anyway*. Or the portable `glossa-*-x86_64-windows.zip`.
+          - **macOS** (Apple silicon, or universal with Intel): `glossa-*-macos.dmg`, drag `Glossa.app` to Applications; or the `glossa-*-macos.zip` with `glossa-cli` and the documents. It is a menu-bar app and not notarised: on macOS 15 and later open it once, then *System Settings → Privacy & Security → Open Anyway* (or run `xattr -dr com.apple.quarantine /Applications/Glossa.app`). See the README's macOS section for the permissions it asks for.
+          - **Linux** (x86-64): `glossa_*_amd64.deb` for Debian 12, Ubuntu 22.04 and newer (`sudo apt install ./glossa_*_amd64.deb`); `glossa-*-x86_64.AppImage` for other distributions; or `glossa-*-x86_64-linux.tar.gz`.
 
-          `SHA256SUMS` lists the archives' checksums.
+          See [docs/install.md](https://github.com/bropines/glossa/blob/main/docs/install.md) for details. `SHA256SUMS` lists every file's checksum.
           EOF
             notes=(--notes-file notes.md)
           else

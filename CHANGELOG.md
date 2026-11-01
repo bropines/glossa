@@ -104,6 +104,15 @@ for Windows, macOS and Linux.
 - **macOS builds** in CI and the release: `Glossa.app` (a menu-bar app) and
   `glossa-cli`, for Apple silicon and as a universal binary; not notarised
   (the README's macOS section says how to open it the first time).
+- **Installers and packages** in every release, beside the archives
+  ([docs/install.md](docs/install.md)): a Windows installer (per user
+  without admin rights, or for all users; Start menu, optional desktop icon
+  and autostart that agrees with Glossa's own option; upgrades in place and
+  keeps the settings when uninstalling unless asked), a `.deb` for Debian
+  and Ubuntu, an AppImage, macOS disk images, and winget and Scoop manifests
+  for when the repository is public. The scripts are in `packaging/`.
+  Autostart from an AppImage registers the image file, not its temporary
+  mount.
 - **Mouse mode on macOS**: a listen-only event tap reports drags and double
   clicks outside Glossa's own windows, and the selection is read through
   Accessibility. Options → Permissions has a row for Input Monitoring, which

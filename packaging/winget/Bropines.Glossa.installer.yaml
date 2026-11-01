@@ -1,0 +1,28 @@
+# yaml-language-server: $schema=https://aka.ms/winget-manifest.installer.1.9.0.schema.json
+# Template: fill-manifests.sh fills in the version, URL and checksum.
+# The installer is packaging/windows/glossa.iss.
+PackageIdentifier: Bropines.Glossa
+PackageVersion: '@VERSION@'
+InstallerType: inno
+MinimumOSVersion: 10.0.0.0
+UpgradeBehavior: install
+# The installer's AppId; Windows lists the program under this key.
+ProductCode: '{6101466B-422B-46CE-9B38-3DE5D1C61D58}_is1'
+Commands:
+  - glossa-cli
+Installers:
+  - Architecture: x64
+    Scope: user
+    InstallerUrl: '@SETUP_URL@'
+    InstallerSha256: '@SETUP_SHA256@'
+    InstallerSwitches:
+      Custom: /CURRENTUSER
+  - Architecture: x64
+    Scope: machine
+    InstallerUrl: '@SETUP_URL@'
+    InstallerSha256: '@SETUP_SHA256@'
+    ElevationRequirement: elevatesSelf
+    InstallerSwitches:
+      Custom: /ALLUSERS
+ManifestType: installer
+ManifestVersion: 1.9.0
