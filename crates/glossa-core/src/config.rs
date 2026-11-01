@@ -950,7 +950,8 @@ pub enum MouseBehaviour {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct OcrConfig {
-    /// Provider id. `lens` is chrome-lens.
+    /// Provider id: `lens` (chrome-lens), `windows-ocr`, `oneocr`,
+    /// `command-ocr` or a module's.
     pub provider: String,
     /// Language of the text in the picture; `AUTO` lets the provider decide.
     pub language: LangId,
@@ -963,6 +964,8 @@ pub struct OcrConfig {
     /// How often a watched region is checked for changes.
     pub watch_interval_ms: u64,
     pub lens: LensConfig,
+    /// The Windows 11 Snipping Tool's engine.
+    pub oneocr: OneOcrConfig,
 }
 
 impl Default for OcrConfig {
@@ -975,8 +978,19 @@ impl Default for OcrConfig {
             save_image_dir: None,
             watch_interval_ms: 800,
             lens: LensConfig::default(),
+            oneocr: OneOcrConfig::default(),
         }
     }
+}
+
+/// Where OneOCR's files are.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct OneOcrConfig {
+    /// A folder holding `oneocr.dll`, `onnxruntime.dll` and
+    /// `oneocr.onemodel`. Empty finds the Snipping Tool's and copies the
+    /// libraries into the cache folder.
+    pub folder: String,
 }
 
 /// How to reach chrome-lens-py.
