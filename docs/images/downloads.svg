@@ -1,0 +1,114 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 960 590" width="960" height="590" role="img" aria-labelledby="title desc">
+  <title id="title">Which Glossa download to choose</title>
+  <desc id="desc">A table of release files by system (Windows, macOS, Linux) and processor (x86_64 or arm64): installers, disk images, Debian packages, AppImages and portable archives. Linux builds are experimental and not tested on real hardware yet.</desc>
+  <style>
+    text { font-family: system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif; fill: #1f2328; }
+    .mono { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace; }
+    .h { font-size: 17px; font-weight: 600; }
+    .b { font-size: 14px; font-weight: 600; }
+    .s { font-size: 12px; }
+    .k { font-size: 12px; font-weight: 600; }
+    .f { font-size: 11.5px; }
+    .m { fill: #59636e; }
+    .warn { fill: #9a6700; }
+    .blue { fill: #ddf4ff; stroke: #54aeff; }
+    .purple { fill: #fbefff; stroke: #c297ff; }
+    .orange { fill: #fff1e5; stroke: #fb8f44; }
+    .cell { fill: #f6f8fa; stroke: #d1d9e0; }
+    .head { fill: #818b98; fill-opacity: 0.12; stroke: none; }
+    .dash { stroke-dasharray: 5 4; }
+    @media (prefers-color-scheme: dark) {
+      text { fill: #e6edf3; }
+      .m { fill: #9198a1; }
+      .warn { fill: #d29922; }
+      .blue { fill: #0c2d6b; stroke: #4493f8; }
+      .purple { fill: #2b1d4a; stroke: #ab7df8; }
+      .orange { fill: #3b2210; stroke: #f0883e; }
+      .cell { fill: #151b23; stroke: #3d444d; }
+      .head { fill: #9198a1; fill-opacity: 0.12; }
+    }
+  </style>
+
+  <text class="h" x="20" y="32">Which download?</text>
+  <text class="s m" x="20" y="56"><tspan class="mono">x86_64</tspan> is an Intel or AMD PC, or an Intel Mac. <tspan class="mono">arm64</tspan> is ARM: an Apple silicon Mac, a Snapdragon Windows laptop, an ARM Linux board.</text>
+  <text class="s m" x="20" y="74"><tspan class="mono">&lt;ver&gt;</tspan> is the version, such as <tspan class="mono">0.1.0-beta.1</tspan>. Every file is on the release page.</text>
+
+  <!-- Column headers -->
+  <rect class="head" x="140" y="92" width="395" height="36" rx="6"/>
+  <rect class="head" x="545" y="92" width="395" height="36" rx="6"/>
+  <text class="b" x="156" y="115">x86_64 <tspan class="s m" font-weight="400">Intel, AMD</tspan></text>
+  <text class="b" x="561" y="115">arm64 <tspan class="s m" font-weight="400">Apple silicon, Snapdragon, ARM boards</tspan></text>
+
+  <!-- Windows -->
+  <rect class="blue" x="20" y="136" width="110" height="80" rx="6" stroke-width="1.2"/>
+  <text class="b" x="32" y="162">Windows</text>
+  <text class="s m" x="32" y="182">10 and 11</text>
+  <rect class="cell" x="140" y="136" width="395" height="80" rx="6"/>
+  <rect class="cell" x="545" y="136" width="395" height="80" rx="6"/>
+  <text class="k m" x="152" y="166">Installer</text>
+  <text class="f mono" x="228" y="166">glossa-&lt;ver&gt;-x86_64-windows-setup.exe</text>
+  <text class="k m" x="152" y="194">Portable</text>
+  <text class="f mono" x="228" y="194">glossa-&lt;ver&gt;-x86_64-windows-portable.zip</text>
+  <text class="k m" x="557" y="166">Installer</text>
+  <text class="f mono" x="633" y="166">glossa-&lt;ver&gt;-arm64-windows-setup.exe</text>
+  <text class="k m" x="557" y="194">Portable</text>
+  <text class="f mono" x="633" y="194">glossa-&lt;ver&gt;-arm64-windows-portable.zip</text>
+
+  <!-- macOS -->
+  <rect class="purple" x="20" y="224" width="110" height="80" rx="6" stroke-width="1.2"/>
+  <text class="b" x="32" y="250">macOS</text>
+  <text class="s m" x="32" y="270">a menu-bar app</text>
+  <rect class="cell" x="140" y="224" width="395" height="80" rx="6"/>
+  <rect class="cell" x="545" y="224" width="395" height="80" rx="6"/>
+  <text class="k m" x="152" y="254">Disk image</text>
+  <text class="f mono" x="228" y="254">glossa-&lt;ver&gt;-x86_64-macos.dmg</text>
+  <text class="k m" x="152" y="282">Zip</text>
+  <text class="f mono" x="228" y="282">glossa-&lt;ver&gt;-x86_64-macos.zip</text>
+  <text class="k m" x="557" y="254">Disk image</text>
+  <text class="f mono" x="633" y="254">glossa-&lt;ver&gt;-arm64-macos.dmg</text>
+  <text class="k m" x="557" y="282">Zip</text>
+  <text class="f mono" x="633" y="282">glossa-&lt;ver&gt;-arm64-macos.zip</text>
+
+  <!-- Linux -->
+  <rect class="orange dash" x="20" y="312" width="110" height="108" rx="6" stroke-width="1.2"/>
+  <text class="b" x="32" y="338">Linux</text>
+  <text class="s warn" x="32" y="358">experimental:</text>
+  <text class="s warn" x="32" y="375">not tested on real</text>
+  <text class="s warn" x="32" y="392">hardware yet</text>
+  <rect class="cell dash" x="140" y="312" width="395" height="108" rx="6"/>
+  <rect class="cell dash" x="545" y="312" width="395" height="108" rx="6"/>
+  <text class="k m" x="152" y="342">Debian</text>
+  <text class="f mono" x="228" y="342">glossa_&lt;ver&gt;_amd64.deb</text>
+  <text class="k m" x="152" y="370">AppImage</text>
+  <text class="f mono" x="228" y="370">glossa-&lt;ver&gt;-x86_64.AppImage</text>
+  <text class="k m" x="152" y="398">Portable</text>
+  <text class="f mono" x="228" y="398">glossa-&lt;ver&gt;-x86_64-linux-portable.tar.gz</text>
+  <text class="k m" x="557" y="342">Debian</text>
+  <text class="f mono" x="633" y="342">glossa_&lt;ver&gt;_arm64.deb</text>
+  <text class="k m" x="557" y="370">AppImage</text>
+  <text class="f mono" x="633" y="370">glossa-&lt;ver&gt;-aarch64.AppImage</text>
+  <text class="k m" x="557" y="398">Portable</text>
+  <text class="f mono" x="633" y="398">glossa-&lt;ver&gt;-arm64-linux-portable.tar.gz</text>
+
+  <!-- What the kinds mean -->
+  <text class="h" x="20" y="460">Installed or portable?</text>
+
+  <rect class="cell" x="20" y="476" width="293" height="96" rx="8"/>
+  <rect class="cell" x="333" y="476" width="294" height="96" rx="8"/>
+  <rect class="cell" x="647" y="476" width="293" height="96" rx="8"/>
+
+  <text class="b" x="36" y="500">Installer, disk image, .deb</text>
+  <text class="s" x="36" y="522">A normal install, with a menu entry.</text>
+  <text class="s" x="36" y="539">Settings and history live in your</text>
+  <text class="s" x="36" y="556">user profile.</text>
+
+  <text class="b" x="349" y="500">Portable .zip and .tar.gz</text>
+  <text class="s" x="349" y="522">Unpack anywhere and run. The</text>
+  <text class="s" x="349" y="539"><tspan class="mono">portable.txt</tspan> inside keeps settings</text>
+  <text class="s" x="349" y="556">in a <tspan class="mono">data</tspan> folder beside the program.</text>
+
+  <text class="b" x="663" y="500">AppImage, macOS zip</text>
+  <text class="s" x="663" y="522">AppImage: one file for most</text>
+  <text class="s" x="663" y="539">distributions. The macOS zip holds</text>
+  <text class="s" x="663" y="556">Glossa.app and <tspan class="mono">glossa-cli</tspan>.</text>
+</svg>
