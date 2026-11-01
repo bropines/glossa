@@ -332,6 +332,9 @@ pub enum ProxyMode {
     System,
     None,
     Manual,
+    /// The classic "auto-detect" choice. Proxy auto-discovery (WPAD, PAC
+    /// scripts) is not implemented, so this is an alias of `System`; it is
+    /// kept so imported classic settings and existing files still load.
     Auto,
 }
 
@@ -601,13 +604,20 @@ impl std::str::FromStr for Backdrop {
 }
 
 /// The graphics back end.
+///
+/// `config.toml` has always been written with `open_gl`, while
+/// `GLOSSA_RENDERER` spoke of `glow`; both spellings (and `opengl`, `gl`,
+/// `wgpu`) are read in either place, and the file keeps being written the
+/// old way so older builds still load it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Renderer {
     /// OpenGL. The lightest in practice.
     #[default]
+    #[serde(alias = "glow", alias = "opengl", alias = "gl")]
     OpenGl,
     /// The GPU through Direct3D 12, Vulkan or Metal.
+    #[serde(alias = "wgpu")]
     Gpu,
     /// A software rasteriser (WARP on Windows): no GPU, more CPU and memory.
     Software,
@@ -619,6 +629,18 @@ impl Renderer {
             Renderer::OpenGl => "glow",
             Renderer::Gpu => "gpu",
             Renderer::Software => "software",
+        }
+    }
+
+    /// A renderer by any of its names, as `GLOSSA_RENDERER` or the file may
+    /// give it (case-insensitive): `glow`, `open_gl`, `opengl`, `gl`; `gpu`,
+    /// `wgpu`; `software`.
+    pub fn from_name(name: &str) -> Option<Renderer> {
+        match name.trim().to_ascii_lowercase().as_str() {
+            "glow" | "open_gl" | "opengl" | "open-gl" | "gl" => Some(Renderer::OpenGl),
+            "gpu" | "wgpu" => Some(Renderer::Gpu),
+            "software" | "cpu" | "warp" => Some(Renderer::Software),
+            _ => None,
         }
     }
 }
@@ -1174,13 +1196,19 @@ pub struct Server {
     pub enabled: bool,
     /// Loopback only by default; binding elsewhere needs a token.
     pub bind: String,
-    /// Required on every request when set. Generated on first run.
+    /// Required on every request but `/health`. Never empty while the engine
+    /// runs: an empty one is replaced with a new random token and saved at
+    /// once (`Engine::with_config`, `Engine::update_config`).
     pub token: String,
+    /// Let pot-app's routes (`/selection_translate`, `/translate`…) through
+    /// without the token, but only from a loopback address and without an
+    /// `Origin` header, so key bindings made for pot-app work unchanged.
+    pub pot_compat_without_token: bool,
 }
 
 impl Default for Server {
     fn default() -> Self {
-        Self { enabled: true, bind: "127.0.0.1:60828".into(), token: String::new() }
+        Self { enabled: true, bind: "127.0.0.1:60828".into(), token: String::new(), pot_compat_without_token: true }
     }
 }
 
@@ -1294,17 +1322,25 @@ impl Config {
         self.appearance.window_transparency = self.appearance.window_transparency.min(90);
         self.dictionary.zoom = self.dictionary.zoom.clamp(50, 400);
         self.general.instant_delay_ms = self.general.instant_delay_ms.clamp(150, 5000);
-        self.general.recent_pairs.dedup();
+        // Keep the first (newest) of each pair, wherever the repeats are.
+        let mut seen = Vec::with_capacity(self.general.recent_pairs.len());
+        self.general.recent_pairs.retain(|p| {
+            let new = !seen.contains(p);
+            seen.push(*p);
+            new
+        });
         self.general.recent_pairs.truncate(12);
         self.history.max_entries = self.history.max_entries.clamp(10, 1_000_000);
         self.modules.call_timeout_ms = self.modules.call_timeout_ms.clamp(1000, 600_000);
         self.ocr.watch_interval_ms = self.ocr.watch_interval_ms.clamp(200, 60_000);
         self.advanced.copy_wait_ms = self.advanced.copy_wait_ms.clamp(20, 3000);
+        // Not a real language (auto, a hand-edited number): the defaults.
+        let defaults = General::default();
         if !self.general.second_language.is_language() {
-            self.general.second_language = LangId::ENGLISH;
+            self.general.second_language = defaults.second_language;
         }
         if !self.general.first_language.is_language() {
-            self.general.first_language = LangId::ENGLISH;
+            self.general.first_language = defaults.first_language;
         }
         if self.general.pair.to == LangId::UNKNOWN {
             self.general.pair.to = LangId::AUTO;
@@ -1538,6 +1574,55 @@ copy_joined_lines = true",
         let before = c.general.recent_pairs.clone();
         c.remember_pair(LangPair::new(LangId::AUTO, LangId::ENGLISH));
         assert_eq!(c.general.recent_pairs, before);
+    }
+
+    #[test]
+    fn invalid_languages_fall_back_to_the_defaults_and_recent_pairs_are_unique() {
+        let c = Config::from_toml("[general]\nfirst_language = 1\nsecond_language = 1\n").unwrap();
+        assert_eq!(c.general.first_language, LangId::RUSSIAN, "the default, not English");
+        assert_eq!(c.general.second_language, LangId::ENGLISH);
+
+        let c = Config::from_toml(
+            "[[general.recent_pairs]]\nfrom = 46\nto = 17\n[[general.recent_pairs]]\nfrom = 17\nto = 46\n\
+             [[general.recent_pairs]]\nfrom = 46\nto = 17\n",
+        )
+        .unwrap();
+        assert_eq!(
+            c.general.recent_pairs,
+            vec![LangPair::new(LangId::RUSSIAN, LangId::ENGLISH), LangPair::new(LangId::ENGLISH, LangId::RUSSIAN)],
+            "repeats anywhere go, the first stays"
+        );
+        let mut c = Config::default();
+        c.general.recent_pairs = (0..40).map(|i| LangPair::new(LangId(10 + i), LangId::ENGLISH)).collect();
+        c.sanitise();
+        assert_eq!(c.general.recent_pairs.len(), 12);
+    }
+
+    #[test]
+    fn renderer_reads_every_spelling_and_writes_the_old_one() {
+        for (text, want) in [
+            ("open_gl", Renderer::OpenGl),
+            ("glow", Renderer::OpenGl),
+            ("opengl", Renderer::OpenGl),
+            ("gpu", Renderer::Gpu),
+            ("wgpu", Renderer::Gpu),
+            ("software", Renderer::Software),
+        ] {
+            let c = Config::from_toml(&format!("[appearance]\nrenderer = \"{text}\"")).unwrap();
+            assert_eq!(c.appearance.renderer, want, "{text}");
+            assert_eq!(Renderer::from_name(text), Some(want), "{text}");
+        }
+        assert!(Config::default().to_toml().contains("renderer = \"open_gl\""));
+        assert_eq!(Renderer::from_name("GLOW"), Some(Renderer::OpenGl));
+        assert_eq!(Renderer::from_name("vulkan"), None);
+    }
+
+    #[test]
+    fn pot_compat_defaults_on() {
+        assert!(Config::from_toml("").unwrap().server.pot_compat_without_token);
+        assert!(
+            !Config::from_toml("[server]\npot_compat_without_token = false").unwrap().server.pot_compat_without_token
+        );
     }
 
     #[test]

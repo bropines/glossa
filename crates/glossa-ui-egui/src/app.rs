@@ -127,6 +127,8 @@ pub struct GlossaApp {
     pub toast: Option<Toast>,
     /// The main window's visibility as we last set it.
     pub main_visible: bool,
+    /// macOS: shown in the Dock and Cmd+Tab (a full window is open).
+    in_app_switcher: bool,
     started: bool,
     quitting: bool,
     /// Quitting to start again (see [`GlossaApp::restart`]).
@@ -222,6 +224,7 @@ impl GlossaApp {
             tasks,
             toast: None,
             main_visible: start_visible,
+            in_app_switcher: false,
             started: false,
             quitting: false,
             restarting: false,
@@ -868,6 +871,18 @@ impl eframe::App for GlossaApp {
             ctx.send_viewport_cmd_to(egui::ViewportId::ROOT, egui::ViewportCommand::RequestPaintWhileHidden);
         }
         self.maybe_unload(needs_ui);
+        // Full windows make Glossa an ordinary app in the switcher; the popup
+        // and the menu-bar icon alone do not.
+        let windowed = self.main_visible
+            || self.options.is_some()
+            || self.dictionary.is_some()
+            || self.history.is_some()
+            || self.about_open
+            || self.keyboard_open;
+        if cfg!(target_os = "macos") && windowed != self.in_app_switcher {
+            self.in_app_switcher = windowed;
+            glossa_platform::window::set_in_app_switcher(windowed);
+        }
         if let Some(t) = &self.toast {
             if t.at.elapsed() > Duration::from_secs(4) {
                 self.toast = None;

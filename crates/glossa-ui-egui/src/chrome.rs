@@ -34,7 +34,6 @@ use egui::{pos2, vec2, Color32, CursorIcon, Id, LayerId, Order, Rect, Sense, Str
 use glossa_core::theme::WidgetState;
 
 use crate::app::GlossaApp;
-use crate::icons::{self, Icon};
 use crate::style::{c, Look};
 
 /// Viewport names of the tool windows, for [`viewport`] and [`raise`].
@@ -162,11 +161,16 @@ fn title_bar(ui: &mut Ui, look: &Look, caption: &Caption, maximized: bool) {
                 ui.ctx().send_viewport_cmd(ViewportCommand::Maximized(!maximized));
             }
 
-            let icon = Rect::from_min_size(pos2(rect.left() + 16.0, rect.center().y - 8.0), vec2(16.0, 16.0));
-            // The accent, unless the caption is itself accent-coloured (Metro).
-            let accent_reads = t.accent.contrast(caption_back) >= glossa_core::theme::MIN_GLYPH_CONTRAST;
-            let icon_colour = if active && accent_reads { look.accent() } else { text };
-            icons::paint(ui.painter(), icon, Icon::Translate, icon_colour);
+            // The app's own icon, 16 points square like WinUI's, drawn from
+            // an image made at the screen's pixel size so it stays sharp.
+            let ppp = ui.ctx().pixels_per_point();
+            let snap = |v: f32| (v * ppp).round() / ppp;
+            let icon = Rect::from_min_size(
+                pos2(snap(rect.left() + 16.0), snap(rect.center().y - 8.0)),
+                vec2(snap(16.0), snap(16.0)),
+            );
+            let texture = app_icon_texture(ui.ctx(), (16.0 * ppp).round() as u32);
+            ui.painter().image(texture.id(), icon, Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0)), Color32::WHITE);
 
             // Caption buttons, right to left.
             let mut buttons = vec![Button::Close];
@@ -197,6 +201,20 @@ fn title_bar(ui: &mut Ui, look: &Look, caption: &Caption, maximized: bool) {
             let clip = Rect::from_min_max(pos2(left, rect.top()), pos2(x - 8.0, rect.bottom()));
             ui.painter().with_clip_rect(clip).galley(pos2(left, rect.center().y - galley.size().y / 2.0), galley, text);
         });
+}
+
+/// The app icon as a texture `px` pixels square, made once per size.
+fn app_icon_texture(ctx: &egui::Context, px: u32) -> egui::TextureHandle {
+    let px = px.clamp(8, 256);
+    let id = Id::unique(("chrome-app-icon", px));
+    if let Some(t) = ctx.data(|d| d.get_temp::<egui::TextureHandle>(id)) {
+        return t;
+    }
+    let icon = crate::app_icon(px);
+    let image = egui::ColorImage::from_rgba_unmultiplied([px as usize, px as usize], &icon.rgba);
+    let t = ctx.load_texture(format!("app-icon-{px}"), image, egui::TextureOptions::LINEAR);
+    ctx.data_mut(|d| d.insert_temp(id, t.clone()));
+    t
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]

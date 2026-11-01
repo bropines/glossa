@@ -24,6 +24,11 @@ interchangeable, and a module can move from one runtime to another without
 reshaping its data. Python, Java and process modules share one transport (JSON
 lines over stdio), so they behave identically.
 
+Writing a text recognition module (a network OCR service, a local engine)?
+[ocr-modules.md](ocr-modules.md) covers the result format (JSON layout, hOCR
+or ALTO), the coordinate rules and the image API every runtime gets for
+preprocessing.
+
 ## Where modules live
 
 Glossa scans these directories, in order (later ones win on a duplicate id):
@@ -153,7 +158,7 @@ choices = [{ value = "default", label = "Default" }, { value = "more", label = "
 | `detect_language` | `detect` | a language detector |
 | `dictionary` | `dictionary` | a dictionary (dictionary window, single words) |
 | `listen` | `speak` | text to speech |
-| `ocr` | `recognize` | text recognition for screen regions |
+| `ocr` | `recognize` | text recognition for screen regions ([guide](ocr-modules.md)) |
 
 **Languages** are BCP 47 codes: `en`, `ru`, `zh-Hans`, `zh-Hant`, `pt-BR`…
 `glossa-cli services` and the languages list in the main window show the full

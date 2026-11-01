@@ -371,7 +371,11 @@ impl TessLine {
             words: self
                 .words
                 .iter()
-                .map(|w| RawWord { text: w.text.clone(), shape: Some(Shape::Rect(w.bounds)) })
+                .map(|w| RawWord {
+                    text: w.text.clone(),
+                    shape: Some(Shape::Rect(w.bounds)),
+                    confidence: (w.confidence >= 0.0).then(|| (w.confidence / 100.0).clamp(0.0, 1.0)),
+                })
                 .collect(),
         }
     }

@@ -81,6 +81,9 @@ pub struct ResultWindow {
     tr_error: Option<String>,
     large: bool,
     boxes: bool,
+    /// Where the engine found text, in the picture's pixels: worked out once
+    /// per result.
+    found: Vec<GRect>,
     /// What the viewport was created with. Kept as they were: the window's
     /// actual size and place are the user's from then on.
     pos: Option<Pos2>,
@@ -172,6 +175,7 @@ pub fn open(app: &mut GlossaApp, image: image::RgbaImage, region: GRect, lang: L
         tr_error: None,
         large: false,
         boxes: false,
+        found: Vec::new(),
         pos,
         size,
         raise,
@@ -265,6 +269,7 @@ pub fn on_recognized(app: &mut GlossaApp, result: Result<Arc<OcrOutcome>, Arc<Er
                     st.translated_text = st.text.clone();
                     st.to = t.pair.to;
                     st.translation = Some(Arc::new(t));
+                    st.found = found_boxes(&o.ocr);
                     st.outcome = Some(o);
                 }
                 None => st.tr_error = Some(no_lens),
@@ -285,6 +290,7 @@ pub fn on_recognized(app: &mut GlossaApp, result: Result<Arc<OcrOutcome>, Arc<Er
                 st.to = t.pair.to;
                 st.translator = Some(t.translation.provider_id.clone());
             }
+            st.found = found_boxes(&o.ocr);
             st.outcome = Some(o);
         }
         Err(_) => st.error = Some(message.unwrap_or_default()),
@@ -488,12 +494,10 @@ fn picture(app: &mut GlossaApp, ui: &mut egui::Ui, st: &mut ResultWindow) {
         p.image(texture.id(), rect, Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0)), egui::Color32::WHITE);
         p.rect_stroke(rect, 2.0, egui::Stroke::new(1.0, look.border()), egui::StrokeKind::Outside);
         if st.boxes {
-            if let Some(o) = &st.outcome {
-                let scale = rect.width() / st.image.width().max(1) as f32;
-                for r in found_boxes(&o.ocr) {
-                    let b = Rect::from_min_size(rect.min + vec2(r.x, r.y) * scale, vec2(r.width, r.height) * scale);
-                    p.rect_stroke(b, 1.0, egui::Stroke::new(1.0, look.accent()), egui::StrokeKind::Outside);
-                }
+            let scale = rect.width() / st.image.width().max(1) as f32;
+            for r in &st.found {
+                let b = Rect::from_min_size(rect.min + vec2(r.x, r.y) * scale, vec2(r.width, r.height) * scale);
+                p.rect_stroke(b, 1.0, egui::Stroke::new(1.0, look.accent()), egui::StrokeKind::Outside);
             }
         }
         let hint = if st.large { &smaller } else { &larger };
@@ -515,19 +519,17 @@ fn picture(app: &mut GlossaApp, ui: &mut egui::Ui, st: &mut ResultWindow) {
     }
 }
 
-/// The boxes worth drawing over the picture: lines where the engine gave
-/// them, else its blocks.
+/// The boxes worth drawing over the picture: its lines where the engine
+/// found lines (whatever sits above them), else its blocks; the axis-aligned
+/// box around each, so rotated text is covered too.
 fn found_boxes(ocr: &glossa_core::OcrResult) -> Vec<GRect> {
-    let mut out = Vec::new();
-    for b in &ocr.blocks {
-        let lines: Vec<GRect> = b.children.iter().filter_map(|l| l.bounds).collect();
-        if lines.is_empty() {
-            out.extend(b.bounds);
-        } else {
-            out.extend(lines);
-        }
+    let ocr = ocr.clone().with_levels();
+    let lines: Vec<GRect> =
+        ocr.nodes().filter(|n| n.level == Some(glossa_core::ocr::OcrLevel::Line)).filter_map(|n| n.bbox()).collect();
+    if !lines.is_empty() {
+        return lines;
     }
-    out
+    ocr.blocks.iter().filter_map(|b| b.bbox()).collect()
 }
 
 /// What read the picture, how long it took, what it found, and the
@@ -567,7 +569,7 @@ fn picture_info(app: &mut GlossaApp, ui: &mut egui::Ui, st: &mut ResultWindow, r
         if icons::sized_button(ui, &look, icon, &app.t(key), 24.0, true).clicked() {
             st.large = !st.large;
         }
-        let has_boxes = st.outcome.as_ref().is_some_and(|o| !found_boxes(&o.ocr).is_empty());
+        let has_boxes = !st.found.is_empty();
         crate::widgets::icon_toggle(ui, &look, Icon::Boxes, &mut st.boxes, &app.t("ocr.result.boxes"));
         if !has_boxes {
             st.boxes = false;
@@ -1037,6 +1039,7 @@ mod tests {
         let para = OcrBlock {
             bounds: Some(GRect::new(0.0, 0.0, 10.0, 20.0)),
             children: vec![line(0.0), line(8.0)],
+            level: Some(glossa_core::ocr::OcrLevel::Block),
             ..Default::default()
         };
         let lone = OcrBlock { bounds: Some(GRect::new(0.0, 40.0, 10.0, 5.0)), ..Default::default() };

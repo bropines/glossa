@@ -1,0 +1,18 @@
+[package]
+name = "glossa-example-lines"
+description = "Example native Glossa OCR module: finds text lines with the host's image API (layout only)."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+publish = false
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+# Like any module outside this repository: the SDK and nothing else from
+# Glossa. The image work is done by the host through `image.*` calls.
+[dependencies]
+glossa-module-sdk = { path = "../../../crates/glossa-module-sdk" }
+serde_json = { workspace = true }

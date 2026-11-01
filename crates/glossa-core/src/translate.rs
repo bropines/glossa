@@ -61,10 +61,15 @@ pub struct Translation {
     /// it differs from what we asked for.
     #[serde(default)]
     pub actual_to: Option<LangId>,
-    /// A romanisation of the source, where the provider offers one — the
-    /// "Romanization:" line under a Japanese or Russian result.
+    /// A romanisation of the translation, where the provider offers one —
+    /// the "Romanization:" line under a Japanese or Russian result.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub romanisation: Option<String>,
+    /// The source text's own transliteration or pronunciation (Japanese
+    /// input in Latin letters, an English word in phonetic spelling), kept
+    /// apart so it is never shown as the translation's romanisation.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source_romanisation: Option<String>,
     /// Alternative renderings, best first.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub alternatives: Vec<String>,

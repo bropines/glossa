@@ -209,6 +209,31 @@ pub fn place_dropdown(anchor: Rect, size: (f32, f32), monitors: &[Monitor]) -> D
 /// A top-level window of this process with exactly this title, visible or
 /// not, as a Win32 `HWND`: for windows egui creates (immediate viewports),
 /// whose handles it does not hand out. Always `None` off Windows.
+/// macOS: whether Glossa shows in the Dock and the Cmd+Tab switcher. A
+/// menu-bar app (`LSUIElement`) is hidden there, which suits it while only
+/// the menu-bar icon and the popup are up, but a settings or main window
+/// should be reachable with Cmd+Tab like any other. Must be called on the
+/// main thread (the GUI's); elsewhere and on other systems it does nothing.
+pub fn set_in_app_switcher(shown: bool) {
+    #[cfg(target_os = "macos")]
+    {
+        use objc2::MainThreadMarker;
+        use objc2_app_kit::{NSApplication, NSApplicationActivationPolicy};
+        let Some(mtm) = MainThreadMarker::new() else { return };
+        let app = NSApplication::sharedApplication(mtm);
+        let policy =
+            if shown { NSApplicationActivationPolicy::Regular } else { NSApplicationActivationPolicy::Accessory };
+        app.setActivationPolicy(policy);
+        if shown {
+            // Becoming a regular app does not bring it forward by itself.
+            #[allow(deprecated)]
+            app.activateIgnoringOtherApps(true);
+        }
+    }
+    #[cfg(not(target_os = "macos"))]
+    let _ = shown;
+}
+
 pub fn own_window_by_title(title: &str) -> Option<isize> {
     #[cfg(windows)]
     {

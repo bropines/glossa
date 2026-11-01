@@ -6,7 +6,8 @@
 //   detect(req, host)      req: { text, options }
 //   dictionary(req, host)  req: { text, from, to, exact, options }
 //   speak(req, host)       req: { text, lang, slow, options }
-//   recognize(req, host)   req: { image_base64, lang, translate_to?, options }
+//   recognize(req, host)   req: { image_base64, image_handle?, lang, translate_to?,
+//                                 granularity?, preserve_line_breaks, options }
 //
 // Each may be `async`. Return what the Glossa Module Protocol specifies for
 // the method (a plain string is accepted for translate). Throw
@@ -76,7 +77,74 @@ var host = {
   },
 
   /** The module's settings, also passed as req.options. */
-  options: {}
+  options: {},
+
+  /**
+   * The image API (see docs/modules/ocr-modules.md). Each operation takes
+   * the image (a handle number, an info object returned by another
+   * operation, or nothing when the parameters carry `handle` or
+   * `data_base64`) and its parameters, and returns an info object:
+   *
+   *   var g = host.image.grayscale(req.image_handle);
+   *   var big = host.image.scaleToMinHeight(g, { min_height: 32 });
+   *   var jpeg = host.image.encode(big, { format: "jpeg", quality: 85 }).data_base64;
+   *   // boxes found in `big` -> the input image:
+   *   var box = host.image.mapBoxBack({ x: 10, y: 4, width: 50, height: 12 }, big.transform);
+   */
+  image: (function () {
+    function args(src, params) {
+      var p = {}, k;
+      if (typeof src === "number") {
+        p.handle = src;
+      } else if (src && typeof src === "object" && "handle" in src && "transform" in src) {
+        p.handle = src.handle;
+      } else if (src && typeof src === "object") {
+        for (k in src) p[k] = src[k];
+      }
+      if (params) for (k in params) p[k] = params[k];
+      return p;
+    }
+    var api = {
+      /** Any operation by name: host.image.call("crop", { handle: 1, x: 0, … }). */
+      call: function (op, params) {
+        return __call("image." + op, params || {});
+      },
+      /** Register encoded bytes (base64) and get a handle. */
+      fromBase64: function (b64) {
+        return __call("image.decode", { data_base64: String(b64) });
+      },
+      /**
+       * A box of a derived image as the axis-aligned box in the original.
+       * `box` is {x, y, width, height} or [x0, y0, x1, y1] (returned in the
+       * same shape); `transform` is an info object's `transform`.
+       */
+      mapBoxBack: function (box, transform) {
+        var t = transform && transform.transform ? transform.transform : transform;
+        if (!t) return box;
+        var arr = Array.isArray(box);
+        var x0 = arr ? box[0] : box.x, y0 = arr ? box[1] : box.y;
+        var x1 = arr ? box[2] : box.x + box.width, y1 = arr ? box[3] : box.y + box.height;
+        var pts = [[x0, y0], [x1, y0], [x1, y1], [x0, y1]].map(function (p) {
+          return [t[0] * p[0] + t[1] * p[1] + t[2], t[3] * p[0] + t[4] * p[1] + t[5]];
+        });
+        var xs = pts.map(function (p) { return p[0]; }), ys = pts.map(function (p) { return p[1]; });
+        var a = Math.min.apply(null, xs), b = Math.min.apply(null, ys);
+        var c = Math.max.apply(null, xs), d = Math.max.apply(null, ys);
+        return arr ? [a, b, c, d] : { x: a, y: b, width: c - a, height: d - b };
+      }
+    };
+    var ops = ["decode", "info", "encode", "to_base64", "pixels", "free", "new", "crop", "resize",
+      "scale_to_min_height", "rotate", "flip", "grayscale", "invert", "threshold", "adaptive_threshold",
+      "adjust", "normalize", "auto_levels", "blur", "sharpen", "pad", "deskew", "split_tiles", "paste",
+      "composite", "draw_rect"];
+    ops.forEach(function (op) {
+      var f = function (src, params) { return __call("image." + op, args(src, params)); };
+      api[op] = f;
+      var camel = op.replace(/_([a-z])/g, function (_, c) { return c.toUpperCase(); });
+      if (camel !== op) api[camel] = f;
+    });
+    return api;
+  })()
 };
 
 function __glossaEntry(name) {

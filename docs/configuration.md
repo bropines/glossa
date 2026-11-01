@@ -94,13 +94,13 @@ installation) but nothing reads it yet.
 |---|---|---|---|---|
 | `ui_language` | string | `""` | Options → Basics | Interface language: a code (`ru`), a language name, or a classic locale folder name. Empty follows `GLOSSA_LANG`, then the system language. |
 | `start_with_system` | bool | `false` | not used | *Options → Basics → Start with Windows* adds or removes the system's autostart entry (`glossa --hidden`) directly and does not use this key; the classic import fills it in. |
-| `first_language` | language | `46` (Russian) | Options → Basics | Your own language. With smart direction, text in this language is translated into the second; anything else into this one. Not a real language (such as `auto`) becomes English. |
+| `first_language` | language | `46` (Russian) | Options → Basics | Your own language. With smart direction, text in this language is translated into the second; anything else into this one. Not a real language (such as `auto`) becomes the default, Russian. |
 | `second_language` | language | `17` (English) | Options → Basics | The language your own is usually translated into. Not a real language becomes English. |
 | `speech_language` | language | `46` (Russian) | Options → Basics | Language for speech input. |
 | `smart_direction` | bool | `true` | Options → Basics | Choose the target from the first and second language when the target is `auto`. |
 | `always_detect_language` | bool | `false` | main window, ⋮ menu by the languages | Detect the source language even when one is chosen. |
 | `pair` | language pair | `{ from = 1, to = 1 }` | main window, language selectors | The main window's direction. A `to` of `0` becomes `auto`. |
-| `recent_pairs` | array of language pairs | ru→en, en→ru | kept by the program | Recently used directions, newest first, offered in the ⋮ menu. At most 12; pairs with `auto` are not added. |
+| `recent_pairs` | array of language pairs | ru→en, en→ru | kept by the program | Recently used directions, newest first, offered in the ⋮ menu. At most 12; pairs with `auto` are not added. A pair listed more than once keeps only its first (newest) place. |
 | `instant_translation` | bool | `false` | main window menu | Translate as you type, after a pause. |
 | `instant_delay_ms` | integer | `700` | file only | The pause before an instant translation, 150–5000 ms. |
 | `spell_checking` | bool | `true` | not used yet | |
@@ -174,7 +174,7 @@ programs cannot register global hotkeys, bind keys to the
 
 | key | type | default | set in | what it does |
 |---|---|---|---|---|
-| `mode` | `"system"`, `"none"`, `"manual"`, `"auto"` | `"system"` | Options → Internet | `system`: the `HTTPS_PROXY`/`ALL_PROXY`/`HTTP_PROXY` environment variables (with `NO_PROXY`), else on Windows the system proxy. `none`: connect directly. `manual`: the fields below. `auto` currently does the same as `system`. |
+| `mode` | `"system"`, `"none"`, `"manual"`, `"auto"` | `"system"` | Options → Internet | `system`: the `HTTPS_PROXY`/`ALL_PROXY`/`HTTP_PROXY` environment variables (with `NO_PROXY`), else on Windows the system proxy. `none`: connect directly. `manual`: the fields below. `auto` is an alias of `system`: proxy auto-discovery (WPAD, PAC scripts) is not implemented; the value is kept so classic settings and older files load. |
 | `scheme` | `"http"`, `"https"`, `"socks4"`, `"socks5"` | `"http"` | Options → Internet | The proxy's protocol, with `manual`. |
 | `host` | string | `"127.0.0.1"` | Options → Internet | The proxy's address, with `manual`. Empty means no proxy. |
 | `port` | integer | `8080` | Options → Internet | 1–65535. |
@@ -249,7 +249,7 @@ One table per endpoint. Each becomes a translator of its own; its settings
 | `icon_scale` | number | `1.2` | Options → Appearance | Size of toolbar and popup icons, 0.75–3.0. |
 | `keyboard_scale` | number | `1.0` | the on-screen keyboard (Ctrl+wheel, or resizing it) | Size of the on-screen keyboard, 0.5–3.0. |
 | `window_transparency` | integer | `0` | Options → Appearance | Main window transparency, 0 (opaque) to 90 percent. |
-| `renderer` | `"open_gl"`, `"gpu"`, `"software"` | `"open_gl"` | Options → Appearance | How windows are drawn: OpenGL (the lightest), the GPU through Direct3D 12, Vulkan or Metal, or a software rasteriser. Takes effect at the next start. `GLOSSA_RENDERER` overrides it for one run. |
+| `renderer` | `"open_gl"`, `"gpu"`, `"software"` | `"open_gl"` | Options → Appearance | How windows are drawn: OpenGL (the lightest), the GPU through Direct3D 12, Vulkan or Metal, or a software rasteriser. Takes effect at the next start. `GLOSSA_RENDERER` overrides it for one run. The file is written with `open_gl`; `glow`, `opengl` and `gl` (the names `GLOSSA_RENDERER` uses) are read as `open_gl`, and `wgpu` as `gpu`. |
 | `unload_graphics_after_secs` | integer | `45` | Options → Appearance | After this long with every window hidden, the window system is unloaded and only the tray, hotkeys and engine stay in memory. `0` keeps it loaded. |
 | `backdrop` | `"none"`, `"mica"`, `"micaalt"`, `"acrylic"`, `"blur"` | `"none"` | Options → Appearance | The system material behind the main window and the other windows (Windows 11; vibrancy on macOS). `mica_alt` and `mica-alt` are read as `micaalt`. See [theming.md](theming.md#backdrops). |
 | `popup` | table | | | See [`[appearance.popup]`](#appearancepopup). |
@@ -424,9 +424,10 @@ The local [control API](control-api.md). Set in *Options → Control API*.
 
 | key | type | default | what it does |
 |---|---|---|---|
-| `enabled` | bool | `true` | Start the API with the desktop program. Takes effect at the next start. |
-| `bind` | string | `"127.0.0.1:60828"` | Address and port to listen on. An address beyond loopback requires a token. Takes effect at the next start. |
-| `token` | string | generated | Required on every request. Generated on first start when empty, so it is never empty for long. Applies at once. |
+| `enabled` | bool | `true` | Start the API with the desktop program. Takes effect at the next start. [`glossa-cli serve`](cli.md#serve) ignores it (with a note on stderr): running that command is the request to start the API. |
+| `bind` | string | `"127.0.0.1:60828"` | Address and port to listen on. An address beyond loopback requires a token. Takes effect at the next start. With `0.0.0.0` or `[::]`, `glossa-cli action` connects to `127.0.0.1` or `[::1]` on that port. |
+| `token` | string | generated | Required on every request (but see the next key). Never empty: an empty or missing token is replaced with a new random one, and saved, at the next start or as soon as the settings are applied with the field cleared. Applies at once. |
+| `pot_compat_without_token` | bool | `true` | Let [pot-app's routes](control-api.md#pot-app-compatibility) through without the token, so pot-app key bindings work unchanged. Only for requests from this machine (a loopback address) without an `Origin` header; those routes can open windows but never return data. Set to `false` to require the token there too. |
 
 ### `[modules]`
 
@@ -498,9 +499,10 @@ The classic files are only read. See
 ## history.json
 
 The translation history, newest first, in the data folder. The desktop
-program adds an entry for each translation it shows; `glossa-cli` and the
-control API do not. An entry is one source text, with one result per service
-that translated it:
+program adds an entry for each translation it shows; `glossa-cli translate`
+and the control API add one only when asked (`--save-history`,
+`"history": true`). An entry is one source text, with one result per
+service that translated it:
 
 ```json
 {
@@ -524,9 +526,14 @@ that translated it:
 The history window exports it as text, CSV, HTML or JSON, as does
 [`glossa-cli history --export`](cli.md#history).
 
-If `history.json` cannot be read, the program logs a warning and starts an
-empty history, which replaces the file at the next save: keep a copy of a
-hand-edited file.
+If `history.json` exists but cannot be parsed (a bad hand edit, a damaged
+disk), it is copied first to `history.json.corrupt-<unix seconds>` beside
+it, a warning is logged, and a new, empty history starts; the copy is never
+touched again, so fix it and rename it back while Glossa is not running.
+If the file cannot even be read or copied, the history is not saved at all
+that session, so data that was never parsed is never overwritten. Turning
+`[history] enabled` on while the program runs reads the file first, for
+the same reason.
 
 ## Interface languages
 

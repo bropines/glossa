@@ -8,7 +8,7 @@
 //! it read into paragraphs and has the current translator translate them,
 //! all in one request when the translator keeps the paragraphs apart.
 
-use glossa_core::ocr::{OcrBlock, OcrResult, Rect};
+use glossa_core::ocr::{OcrBlock, OcrLevel, OcrResult, Rect};
 use serde::Serialize;
 
 /// The text to put on the clipboard: as recognised, or with the lines of
@@ -116,49 +116,64 @@ pub struct Paragraph {
     pub angle: f32,
 }
 
-/// The paragraphs in what was read. A provider that gives paragraphs (with
-/// lines inside) is taken at its word; one that gives only lines (Windows
-/// OCR, OneOCR) has them grouped: a line joins the paragraph above when it
-/// is about as tall, starts close below it, and overlaps it sideways.
+/// The paragraphs in what was read. Blocks and paragraphs a provider found
+/// are taken at its word; lines (Windows OCR, OneOCR, Tesseract give lines
+/// of words) are grouped: a line joins the paragraph above when it is about
+/// as tall, starts close below it, and overlaps it sideways.
 pub fn paragraphs(ocr: &OcrResult) -> Vec<Paragraph> {
-    let placed: Vec<&OcrBlock> = ocr
-        .blocks
-        .iter()
-        .filter(|b| b.bounds.is_some_and(|r| !r.is_empty()) && !block_text(b).trim().is_empty())
-        .collect();
-    if placed.iter().any(|b| !b.children.is_empty()) {
-        return placed
+    let ocr = ocr.clone().with_levels();
+    // Each paragraph, and its last line while lines are still joining it.
+    let mut out: Vec<(Paragraph, Option<Rect>)> = Vec::new();
+    for b in &ocr.blocks {
+        let Some(r) = b.bounds.filter(|r| !r.is_empty()) else { continue };
+        let text = block_text(b);
+        if text.trim().is_empty() {
+            continue;
+        }
+        if matches!(b.level, Some(OcrLevel::Line | OcrLevel::Word)) {
+            if let Some((p, Some(last))) = out.last_mut() {
+                let similar_height = (r.height - last.height).abs() <= 0.35 * last.height.max(r.height);
+                let gap = r.y - (last.y + last.height);
+                let close_below = gap >= -0.3 * last.height && gap <= 0.8 * last.height.max(r.height);
+                let overlaps = r.x < last.x + last.width && last.x < r.x + r.width;
+                if similar_height && close_below && overlaps && (p.angle - b.angle).abs() < 0.05 {
+                    p.text = text_for_copy(&format!("{}\n{}", p.text, text.trim()), true);
+                    p.bounds = union([p.bounds, r]).unwrap_or(p.bounds);
+                    *last = r;
+                    continue;
+                }
+            }
+            out.push((Paragraph { text: text.trim().to_owned(), bounds: r, angle: b.angle }, Some(r)));
+            continue;
+        }
+        let paras: Vec<&OcrBlock> = b
+            .children
             .iter()
-            .map(|b| Paragraph { text: block_text(b), bounds: b.bounds.unwrap_or_default(), angle: b.angle })
+            .filter(|c| c.level == Some(OcrLevel::Paragraph) && c.bounds.is_some_and(|r| !r.is_empty()))
             .collect();
-    }
-    let mut out: Vec<(Paragraph, Rect)> = Vec::new(); // the paragraph, and its last line
-    for b in placed {
-        let r = b.bounds.unwrap_or_default();
-        let text = b.text.trim();
-        if let Some((p, last)) = out.last_mut() {
-            let similar_height = (r.height - last.height).abs() <= 0.35 * last.height.max(r.height);
-            let gap = r.y - (last.y + last.height);
-            let close_below = gap >= -0.3 * last.height && gap <= 0.8 * last.height.max(r.height);
-            let overlaps = r.x < last.x + last.width && last.x < r.x + r.width;
-            if similar_height && close_below && overlaps && (p.angle - b.angle).abs() < 0.05 {
-                p.text = text_for_copy(&format!("{}\n{text}", p.text), true);
-                p.bounds = union([p.bounds, r]).unwrap_or(p.bounds);
-                *last = r;
-                continue;
+        if paras.is_empty() {
+            out.push((Paragraph { text, bounds: r, angle: b.angle }, None));
+        } else {
+            for p in paras {
+                out.push((Paragraph { text: block_text(p), bounds: p.bounds.unwrap_or(r), angle: p.angle }, None));
             }
         }
-        out.push((Paragraph { text: text.to_owned(), bounds: r, angle: b.angle }, r));
     }
     out.into_iter().map(|(p, _)| p).collect()
 }
 
-/// A block's text: its own, else its lines'.
+/// A node's text: its own, else its children's, a line each.
 fn block_text(b: &OcrBlock) -> String {
     if !b.text.trim().is_empty() {
         return b.text.clone();
     }
-    b.children.iter().map(|c| c.text.trim()).filter(|t| !t.is_empty()).collect::<Vec<_>>().join("\n")
+    b.children
+        .iter()
+        .map(block_text)
+        .map(|t| t.trim().to_owned())
+        .filter(|t| !t.is_empty())
+        .collect::<Vec<_>>()
+        .join("\n")
 }
 
 fn union(rects: impl IntoIterator<Item = Rect>) -> Option<Rect> {
@@ -261,6 +276,7 @@ mod tests {
     #[test]
     fn provider_paragraphs_are_taken_as_they_are() {
         let mut para = line("", 0.0, 0.0, 100.0, 50.0);
+        para.level = Some(OcrLevel::Block);
         para.children = vec![line("one", 0.0, 0.0, 100.0, 20.0), line("two", 0.0, 25.0, 100.0, 20.0)];
         let ocr = OcrResult { blocks: vec![para, line("lone", 0.0, 60.0, 50.0, 20.0)], ..Default::default() };
         let p = paragraphs(&ocr);

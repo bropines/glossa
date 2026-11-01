@@ -224,8 +224,17 @@ fn main() -> eframe::Result<()> {
                 viewport = viewport.with_maximized(true);
             }
         }
-        let mut options =
-            eframe::NativeOptions { viewport, run_and_return: can_unload, persist_window: false, ..Default::default() };
+        // Fonts for other scripts and emoji are Glossa's own business
+        // (`fonts::Fonts` loads them when such text first shows, used from
+        // the next frame). eframe's system-font lookup is not built in; its
+        // stand-in only logs "No font has …" for that first frame.
+        let mut options = eframe::NativeOptions {
+            viewport,
+            run_and_return: can_unload,
+            persist_window: false,
+            system_font_fallback: false,
+            ..Default::default()
+        };
         choose_renderer(&mut options, cfg.appearance.renderer, style::needs_transparent_root(&cfg));
         let mut this_launch = launch.clone();
         this_launch.hidden = !start_visible;
@@ -466,10 +475,13 @@ fn choose_renderer(options: &mut eframe::NativeOptions, configured: glossa_core:
                 wgpu::Dx12SwapchainKind::DxgiFromVisual;
         }
     };
-    let choice = std::env::var("GLOSSA_RENDERER").unwrap_or_else(|_| configured.as_str().into());
-    match choice.as_str() {
-        "glow" | "opengl" | "gl" => options.renderer = eframe::Renderer::Glow,
-        "gpu" | "wgpu" => {
+    use glossa_core::config::Renderer;
+    // The variable takes every spelling the config file does (`open_gl`,
+    // `glow`, `gpu`, `wgpu`, `software`…); an unknown one is ignored.
+    let choice = std::env::var("GLOSSA_RENDERER").ok().and_then(|v| Renderer::from_name(&v)).unwrap_or(configured);
+    match choice {
+        Renderer::OpenGl => options.renderer = eframe::Renderer::Glow,
+        Renderer::Gpu => {
             options.renderer = eframe::Renderer::Wgpu;
             if let egui_wgpu::WgpuSetup::CreateNew(setup) = &mut options.wgpu_options.wgpu_setup {
                 composited(setup);

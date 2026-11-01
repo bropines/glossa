@@ -197,6 +197,7 @@ impl VisionLine {
                 .map(|w| RawWord {
                     text: w.text.clone(),
                     shape: size.zip(w.corners.as_ref()).map(|(s, c)| Shape::Quad(corners_to_quad(c, s))),
+                    confidence: Some(self.confidence.clamp(0.0, 1.0)),
                 })
                 .collect(),
         }
