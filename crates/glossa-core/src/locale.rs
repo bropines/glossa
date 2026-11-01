@@ -14,11 +14,12 @@
 //!   carries the classic address in [`STRINGS`], so those files translate this
 //!   interface without being converted.
 //!
-//! Some languages also ship compiled in ([`BUILTIN_LOCALES`], native files
-//! under `assets/locales/`) and cover every key. Loading a language layers
-//! English, then the built-in pack, then a classic file, then the user's own
-//! file (see `glossa_engine::LocaleCatalog::load`), so a classic file written
-//! for the old program no longer leaves Glossa's newer strings in English.
+//! Some languages also ship compiled in ([`BUILTIN_LOCALES`], native files in
+//! `crates/glossa-core/locales/`) and cover every key. Loading a language
+//! layers English, then the built-in pack, then a classic file, then the
+//! user's own file (see `glossa_engine::LocaleCatalog::load`), so a classic
+//! file written for the old program no longer leaves Glossa's newer strings
+//! in English.
 
 use std::collections::HashMap;
 
@@ -49,12 +50,14 @@ pub struct BuiltinLocale {
 }
 
 /// The languages that ship inside the executable. English needs no pack: it
-/// is the second column of [`STRINGS`].
+/// is the second column of [`STRINGS`]. The packs live with this crate, not
+/// under `assets/locales`, which a development build searches for user locale
+/// files: there a pack would be laid over a classic file as if the user wrote it.
 pub static BUILTIN_LOCALES: &[BuiltinLocale] = &[BuiltinLocale {
     code: "ru",
     name: "Russian",
     native_name: "Русский",
-    source: include_str!("../../../assets/locales/ru.json"),
+    source: include_str!("../locales/ru.json"),
 }];
 
 impl Locale {

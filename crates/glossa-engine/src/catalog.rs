@@ -246,6 +246,7 @@ impl LocaleCatalog {
         out.code = entry.code.clone();
         out.name = entry.name.clone();
         out.native_name = entry.native_name.clone();
+        tracing::debug!(wanted, code = %out.code, builtin = entry.builtin, files = ?entry.files, "interface language");
         out
     }
 }
