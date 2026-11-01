@@ -265,6 +265,7 @@ pub fn system_language() -> String {
     from_env("GLOSSA_LANG")
         .or_else(windows_language)
         .or_else(|| ["LC_ALL", "LC_MESSAGES", "LANG"].into_iter().find_map(from_env))
+        .or_else(macos_language)
         .unwrap_or_else(|| "en".into())
 }
 
@@ -294,9 +295,59 @@ fn windows_language() -> Option<String> {
     None
 }
 
+/// macOS: the first of the user's preferred languages. A program started
+/// from Finder or at login gets no `LANG`, so the environment says nothing
+/// there; `defaults` reads the same list System Settings shows.
+#[cfg(target_os = "macos")]
+fn macos_language() -> Option<String> {
+    let out = std::process::Command::new("/usr/bin/defaults").args(["read", "-g", "AppleLanguages"]).output().ok()?;
+    first_plist_string(&String::from_utf8_lossy(&out.stdout))
+}
+
+#[cfg(not(target_os = "macos"))]
+fn macos_language() -> Option<String> {
+    None
+}
+
+/// The first entry of the old-style plist array `defaults` prints, one
+/// quoted or bare entry per line between parentheses.
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+fn first_plist_string(text: &str) -> Option<String> {
+    text.lines()
+        .map(|l| l.trim().trim_end_matches(',').trim_matches('"').trim())
+        .find(|l| !l.is_empty() && *l != "(" && *l != ")")
+        .map(str::to_owned)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn reads_the_first_preferred_language_from_defaults() {
+        assert_eq!(
+            first_plist_string(
+                "(
+    \"ru-RU\",
+    \"en-US\"
+)
+"
+            )
+            .as_deref(),
+            Some("ru-RU")
+        );
+        assert_eq!(
+            first_plist_string(
+                "(
+    en
+)
+"
+            )
+            .as_deref(),
+            Some("en")
+        );
+        assert_eq!(first_plist_string("").as_deref(), None);
+    }
 
     fn temp(name: &str) -> PathBuf {
         let p = std::env::temp_dir().join(format!("glossa-cat-{}-{name}", std::process::id()));
