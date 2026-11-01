@@ -646,6 +646,23 @@ pub static STRINGS: &[(&str, &str, Option<&str>)] = &[
         "Install: pip install \"chrome-lens-py[clipboard]\" — the warm daemon makes a scan take ~0.4 s.",
         None,
     ),
+    ("options.ocr.windows_title", "Windows OCR", None),
+    (
+        "options.ocr.windows_note",
+        "Built into Windows, offline. Reads the languages whose OCR pack is installed (Settings → Time & language → \
+         Language & region → a language's options). With the language on auto it uses your Windows display languages.",
+        None,
+    ),
+    ("options.ocr.oneocr_title", "OneOCR (Snipping Tool)", None),
+    ("options.ocr.oneocr_folder", "Engine folder:", None),
+    ("options.ocr.oneocr_folder_hint", "found in the Snipping Tool automatically", None),
+    (
+        "options.ocr.oneocr_note",
+        "The Windows 11 Snipping Tool's engine: offline, many scripts at once, no language to choose. Glossa copies \
+         its two libraries (about 55 MB) into its cache folder once; nothing is downloaded. A folder set here must \
+         hold oneocr.dll, onnxruntime.dll and oneocr.onemodel.",
+        None,
+    ),
     // -- options: modules ----------------------------------------------------------------------
     ("options.modules.runtimes", "Runtimes", None),
     ("options.modules.legacy_scripts", "Load classic QTranslate service scripts", None),
