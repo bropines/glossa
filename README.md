@@ -89,16 +89,18 @@ Download the archive for your system from the
 [releases](https://github.com/bropines/glossa/releases), unpack it anywhere
 and run `glossa`. It starts in the tray. Select text in any program and press:
 
-| hotkey | does |
-|---|---|
-| **Ctrl+Shift+Q** | translate the selection in a popup |
-| **Ctrl+Alt+Q** | open the main window with the selection |
-| **Ctrl+Shift+O** | recognise text in a screen region |
-| **Ctrl+Alt+O** | recognise and translate a screen region |
-| **Ctrl+E** | read the selection aloud |
+| hotkey | Windows | does |
+|---|---|---|
+| **Ctrl+Shift+Q** | same | translate the selection in a popup |
+| **Ctrl+Alt+Q** | **Win+Alt+Q** | open the main window with the selection |
+| **Ctrl+Shift+O** | same | recognise text in a screen region |
+| **Ctrl+Alt+O** | **Win+Alt+O** | recognise and translate a screen region |
+| **Ctrl+Alt+C** | **Win+Alt+C** | copy the text in a screen region |
 
-All of them, and the actions without a default key, are in *Options →
-Hotkeys*. A `portable` file next to the executable keeps the settings beside
+On Windows, Ctrl+Alt is what AltGr sends, so those hotkeys would eat
+characters typed with AltGr. On macOS, Ctrl+Alt is Control+Option. All of
+them, and the actions without a default key (reading the selection aloud
+among them), are in *Options → Hotkeys*. A `portable` file next to the executable keeps the settings beside
 it.
 
 For OCR, install chrome-lens-py (`pip install "chrome-lens-py[clipboard]"`);

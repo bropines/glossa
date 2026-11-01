@@ -94,8 +94,8 @@ and in *Options → Hotkeys*, where any of them can be given a hotkey.
 | action | default hotkey | what it does |
 |---|---|---|
 | Text recognition | Ctrl+Shift+O | select a region; then what *After selecting a region* says (below) |
-| Recognise and translate | Ctrl+Alt+O | select a region; the result window opens with its text and translation |
-| **Copy text from the screen** | **Ctrl+Alt+C** | select a region; its text goes to the clipboard, nothing opens |
+| Recognise and translate | Ctrl+Alt+O (Windows: Win+Alt+O) | select a region; the result window opens with its text and translation |
+| **Copy text from the screen** | **Ctrl+Alt+C** (Windows: Win+Alt+C) | select a region; its text goes to the clipboard, nothing opens |
 | **Translate the screen in place** | none | select a region; the translation is painted over it |
 | Watch a region | none | select a region; whenever it changes, its translation pops up (subtitles); the hotkey again stops |
 | Repeat the last region | none | read the last region again, without selecting it, into the result window |

@@ -223,19 +223,73 @@ pub struct HotkeysConfig {
 
 impl Default for HotkeysConfig {
     fn default() -> Self {
-        let mut bindings = BTreeMap::new();
-        let mut bind = |a: Action, s: &str| {
-            bindings.insert(a, s.parse().expect("built-in hotkey must parse"));
-        };
-        bind(Action::ShowPopup, "Ctrl+Shift+Q");
-        bind(Action::ListenSelection, "Ctrl+E");
-        bind(Action::TextRecognition, "Ctrl+Shift+O");
-        bind(Action::RecognizeAndTranslate, "Ctrl+Alt+O");
-        // Ctrl+Shift+C would be the obvious chord, but it is Copy in Windows
-        // Terminal and most Linux terminals; a global hotkey would take it.
-        bind(Action::RecognizeToClipboard, "Ctrl+Alt+C");
-        bind(Action::ShowMainWindow, "Ctrl+Alt+Q");
+        let bindings = default_hotkeys(Os::current())
+            .iter()
+            .map(|(a, s)| (*a, s.parse().expect("built-in hotkey must parse")))
+            .collect();
         Self { enabled: true, bindings }
+    }
+}
+
+/// The operating system, for defaults that differ between them.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Os {
+    Windows,
+    MacOs,
+    /// Linux and the other Unix desktops.
+    Unix,
+}
+
+impl Os {
+    pub const fn current() -> Os {
+        if cfg!(windows) {
+            Os::Windows
+        } else if cfg!(target_os = "macos") {
+            Os::MacOs
+        } else {
+            Os::Unix
+        }
+    }
+}
+
+/// The hotkeys a new config starts with on `os`. Only new configs: a saved
+/// file keeps its own bindings, and the classic import brings the classic
+/// ones.
+///
+/// - Ctrl+Shift+Q (popup) and Ctrl+Shift+O (recognise) everywhere, as users
+///   know them.
+/// - No default for "listen": Ctrl+E, the obvious one, is a browser's
+///   search box, the end of the line in a shell or a macOS text field, and
+///   the search in Explorer; a global hotkey would steal it everywhere.
+/// - Windows: no Ctrl+Alt+letter, because Windows reports AltGr as Ctrl+Alt
+///   and such a hotkey would swallow AltGr+letter (`@` is AltGr+Q on German
+///   keyboards; ó and ć are AltGr+O and AltGr+C on Polish ones). Win+Alt is
+///   free of both AltGr and the system's own Win shortcuts for these
+///   letters.
+/// - Linux: AltGr is a modifier of its own there (ISO Level 3), so
+///   Ctrl+Alt+letter is safe and free on the common desktops.
+/// - macOS: Control+Option (⌃⌥), which no system shortcut uses and which
+///   types no characters (Option alone does); it is VoiceOver's modifier
+///   only while VoiceOver runs. Command+Shift combinations clash with the
+///   system (⌘⇧Q logs out) and with most apps.
+/// - Ctrl+Shift+C would be the obvious chord for copying from the screen,
+///   but it is Copy in Windows Terminal and most Linux terminals.
+pub fn default_hotkeys(os: Os) -> &'static [(Action, &'static str)] {
+    match os {
+        Os::Windows => &[
+            (Action::ShowPopup, "Ctrl+Shift+Q"),
+            (Action::TextRecognition, "Ctrl+Shift+O"),
+            (Action::RecognizeAndTranslate, "Win+Alt+O"),
+            (Action::RecognizeToClipboard, "Win+Alt+C"),
+            (Action::ShowMainWindow, "Win+Alt+Q"),
+        ],
+        Os::MacOs | Os::Unix => &[
+            (Action::ShowPopup, "Ctrl+Shift+Q"),
+            (Action::TextRecognition, "Ctrl+Shift+O"),
+            (Action::RecognizeAndTranslate, "Ctrl+Alt+O"),
+            (Action::RecognizeToClipboard, "Ctrl+Alt+C"),
+            (Action::ShowMainWindow, "Ctrl+Alt+Q"),
+        ],
     }
 }
 
@@ -1591,11 +1645,11 @@ copy_joined_lines = true",
     fn default_hotkeys_do_not_conflict_and_conflicts_are_found() {
         let mut h = HotkeysConfig::default();
         assert!(h.conflicts().is_empty());
-        h.bindings.insert(Action::ShowHistory, "Ctrl+E".parse().unwrap());
+        h.bindings.insert(Action::ShowHistory, "Ctrl+Shift+Q".parse().unwrap());
         let conflicts = h.conflicts();
         assert_eq!(conflicts.len(), 1);
-        assert_eq!(conflicts[0].0.to_string(), "Ctrl+E");
-        assert!(conflicts[0].1.contains(&Action::ListenSelection));
+        assert_eq!(conflicts[0].0.to_string(), "Ctrl+Shift+Q");
+        assert!(conflicts[0].1.contains(&Action::ShowPopup));
         assert!(conflicts[0].1.contains(&Action::ShowHistory));
     }
 
@@ -1618,6 +1672,39 @@ copy_joined_lines = true",
         assert_eq!(s.new_ai_endpoint_id("Модель"), "ai-endpoint");
         s.ai_endpoints.push(AiEndpoint { id: "ai-ollama".into(), name: "Ollama".into(), preset: "ollama".into() });
         assert_eq!(s.new_ai_endpoint_id("Ollama"), "ai-ollama-2");
+    }
+
+    #[test]
+    fn default_hotkeys_avoid_altgr_and_common_shortcuts() {
+        for os in [Os::Windows, Os::MacOs, Os::Unix] {
+            let keys: Vec<(Action, Hotkey)> =
+                default_hotkeys(os).iter().map(|(a, s)| (*a, s.parse::<Hotkey>().unwrap())).collect();
+            assert!(!keys.iter().any(|(a, _)| *a == Action::ListenSelection), "{os:?}: no default for listen");
+            assert!(!keys.iter().any(|(_, k)| k.to_string() == "Ctrl+E"), "{os:?}");
+            let popup = keys.iter().find(|(a, _)| *a == Action::ShowPopup).unwrap();
+            assert_eq!(popup.1.to_string(), "Ctrl+Shift+Q", "{os:?}: users rely on it");
+            let mut seen = std::collections::HashSet::new();
+            assert!(keys.iter().all(|(_, k)| seen.insert(k.to_string())), "{os:?}: no chord twice");
+            if os == Os::Windows {
+                // AltGr is Ctrl+Alt on Windows: Ctrl+Alt+<letter> would eat
+                // AltGr+<letter> characters.
+                for (a, k) in &keys {
+                    assert!(!(k.mods.ctrl && k.mods.alt && !k.mods.meta), "{a:?}: {k} collides with AltGr");
+                }
+            }
+        }
+        let c = HotkeysConfig::default();
+        assert_eq!(c.bindings.len(), default_hotkeys(Os::current()).len());
+        assert!(c.conflicts().is_empty());
+    }
+
+    #[test]
+    fn saved_hotkeys_are_kept_when_the_defaults_change() {
+        let c = Config::from_toml("[hotkeys.bindings]\nlisten_selection = \"Ctrl+E\"\nshow_popup = \"Ctrl+Alt+Q\"\n")
+            .unwrap();
+        assert_eq!(c.hotkeys.bindings.len(), 2);
+        assert_eq!(c.hotkeys.bindings[&Action::ListenSelection].to_string(), "Ctrl+E");
+        assert_eq!(c.hotkeys.bindings[&Action::ShowPopup].to_string(), "Ctrl+Alt+Q");
     }
 
     #[test]

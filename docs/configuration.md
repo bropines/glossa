@@ -148,14 +148,21 @@ to = 17
 
 ```toml
 [hotkeys.bindings]
-show_main_window = "Ctrl+Alt+Q"
 show_popup = "Ctrl+Shift+Q"
-listen_selection = "Ctrl+E"
 text_recognition = "Ctrl+Shift+O"
-recognize_and_translate = "Ctrl+Alt+O"
+recognize_and_translate = "Ctrl+Alt+O"   # Windows: Win+Alt+O
+recognize_to_clipboard = "Ctrl+Alt+C"    # Windows: Win+Alt+C
+show_main_window = "Ctrl+Alt+Q"          # Windows: Win+Alt+Q
 ```
 
-These five are the defaults. The action ids are listed in
+These five are the defaults of a new config (on macOS, Ctrl+Alt is
+Control+Option). They differ by system because Windows reports AltGr as
+Ctrl+Alt: a Ctrl+Alt+letter hotkey there would swallow AltGr+letter, which
+types `@` on German keyboards and ó or ć on Polish ones. "Listen" has no
+default, since Ctrl+E is a browser's search box, Explorer's search and the
+end of the line in a shell and in macOS text fields. A config that already
+has bindings keeps them, and importing a classic installation brings its
+own. The action ids are listed in
 [cli.md](cli.md#action). Two actions bound to the same chord cannot both be
 registered; the Hotkeys page marks such conflicts. On Wayland, where
 programs cannot register global hotkeys, bind keys to the
