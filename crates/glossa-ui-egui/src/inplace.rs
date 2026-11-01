@@ -48,6 +48,11 @@ pub struct InPlace {
     bar_on_top: bool,
     /// The region is a whole monitor: no room around it for the strip.
     full_screen: bool,
+    /// Lifted above the menu bar (macOS; see `lift_above_menu_bar`).
+    lifted: bool,
+    /// Times the window was put back where it belongs after the system
+    /// moved it.
+    replaced: u8,
 }
 
 /// One thing to paint: a line (Lens) or a paragraph (anything else).
@@ -91,6 +96,8 @@ pub fn open(app: &mut GlossaApp, image: image::RgbaImage, region: GRect, outcome
         focused: false,
         bar_on_top,
         full_screen,
+        lifted: false,
+        replaced: 0,
     });
     app.ctx.request_repaint();
 }
@@ -147,22 +154,41 @@ pub fn show(app: &mut GlossaApp, ctx: &egui::Context) {
         .with_decorations(false)
         .with_resizable(false)
         .with_taskbar(false)
-        .with_transparent(true)
+        // Where a translucent window needs a translucent main window, ask
+        // only when there is one: the picture covers the window anyway.
+        .with_transparent(!glossa_platform::shell::SHELL.transparency_needs_alpha_root || app.transparent_root())
         .with_window_level(egui::WindowLevel::AlwaysOnTop)
         .with_position(pos2(x, y))
         .with_inner_size(inner)
         .with_active(true);
     let mut keep = true;
+    let wanted = pos2(x, y);
     ctx.show_viewport_immediate(egui::ViewportId::from_hash_of(TITLE), builder, |ui, _| {
-        keep = body(app, ui, &mut st, vec2(w, h));
+        keep = body(app, ui, &mut st, vec2(w, h), wanted, inner);
     });
+    if st.full_screen && !st.lifted {
+        st.lifted = glossa_platform::window::lift_above_menu_bar(TITLE);
+    }
     if keep {
         app.in_place = Some(st);
     }
 }
 
-fn body(app: &mut GlossaApp, ui: &mut egui::Ui, st: &mut InPlace, size: Vec2) -> bool {
+fn body(app: &mut GlossaApp, ui: &mut egui::Ui, st: &mut InPlace, size: Vec2, wanted: Pos2, inner: Vec2) -> bool {
     let ctx = ui.ctx().clone();
+    // Where the window is against where it was asked to be: macOS keeps a
+    // window below its menu bar until it is lifted above it. Put it back a
+    // few times, and meanwhile draw the picture that much the other way, so
+    // it lies exactly over the screen it was taken from either way.
+    let actual = ui.input(|i| i.viewport().outer_rect);
+    let shift = actual.map_or(Vec2::ZERO, |r| wanted - r.min);
+    let shift = if shift.length() > 0.5 { shift } else { Vec2::ZERO };
+    if shift != Vec2::ZERO && st.replaced < 10 {
+        st.replaced += 1;
+        ctx.send_viewport_cmd(egui::ViewportCommand::OuterPosition(wanted));
+        ctx.send_viewport_cmd(egui::ViewportCommand::InnerSize(inner));
+        ctx.request_repaint();
+    }
     let (escape, close, focused, space, copy) = ui.input(|i| {
         (
             i.key_pressed(egui::Key::Escape),
@@ -199,7 +225,7 @@ fn body(app: &mut GlossaApp, ui: &mut egui::Ui, st: &mut InPlace, size: Vec2) ->
     egui::CentralPanel::no_frame().show(ui, |ui| {
         let full = ui.max_rect();
         let top = if st.bar_on_top { full.min.y + BAR } else { full.min.y };
-        let picture = Rect::from_min_size(pos2(full.min.x, top), size);
+        let picture = Rect::from_min_size(pos2(full.min.x, top) + shift, size);
         let bar = if st.full_screen {
             let width = (full.width() - 32.0).min(620.0);
             Rect::from_center_size(pos2(full.center().x, full.max.y - 32.0 - BAR / 2.0), vec2(width, BAR))

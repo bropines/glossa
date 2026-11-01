@@ -273,6 +273,23 @@ pub fn own_window_by_title(title: &str) -> Option<isize> {
     }
 }
 
+/// Lift one of this program's windows, by its exact title, above the menu
+/// bar and the Dock: on macOS a window meant to cover a whole screen is
+/// otherwise kept below the menu bar. Elsewhere an always-on-top window
+/// already covers the taskbar, and this does nothing. Returns whether the
+/// window was found and lifted. Call it on the GUI's thread.
+pub fn lift_above_menu_bar(title: &str) -> bool {
+    #[cfg(target_os = "macos")]
+    {
+        mac::lift_above_menu_bar(title)
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        let _ = title;
+        false
+    }
+}
+
 /// Make a window one that clicks do not activate (`WS_EX_NOACTIVATE`), like
 /// a combo box's list or a menu: the window it belongs to keeps the focus
 /// and an active title bar, and closing the list hands the focus to no one
