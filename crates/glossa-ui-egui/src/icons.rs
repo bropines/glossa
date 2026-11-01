@@ -52,6 +52,10 @@ pub enum Icon {
     Expand,
     /// Arrows to the centre: make smaller.
     Shrink,
+    /// A padlock: kept safe (the system keychain).
+    Lock,
+    /// A check mark: done.
+    Check,
 }
 
 /// Draw `icon` into `rect`.
@@ -258,6 +262,14 @@ pub fn paint(painter: &egui::Painter, rect: Rect, icon: Icon, color: Color32) {
             line(p(6.5, 9.5), p(2.5, 13.5));
             poly(vec![p(2.5, 9.5), p(6.5, 9.5), p(6.5, 13.5)], false);
         }
+        Icon::Lock => {
+            painter.rect_stroke(Rect::from_min_max(p(3.5, 7.5), p(12.5, 14.0)), 1.5 * u, st, egui::StrokeKind::Middle);
+            poly(vec![p(5.5, 7.5), p(5.5, 5.0), p(6.5, 3.0), p(9.5, 3.0), p(10.5, 5.0), p(10.5, 7.5)], false);
+            line(p(8.0, 10.0), p(8.0, 11.5));
+        }
+        Icon::Check => {
+            poly(vec![p(3.0, 8.5), p(6.5, 12.0), p(13.0, 4.5)], false);
+        }
     }
 }
 
@@ -389,6 +401,8 @@ mod tests {
                 Icon::Boxes,
                 Icon::Expand,
                 Icon::Shrink,
+                Icon::Lock,
+                Icon::Check,
             ] {
                 for s in [8.0, 16.0, 48.0] {
                     paint(painter, Rect::from_min_size(pos2(0.0, 0.0), vec2(s, s)), icon, Color32::WHITE);

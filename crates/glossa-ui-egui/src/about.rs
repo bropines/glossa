@@ -180,7 +180,7 @@ fn centered_row(ui: &mut egui::Ui, salt: &str, add: impl FnOnce(&mut egui::Ui)) 
 }
 
 /// The application icon as a texture, made once per graphics context.
-fn app_icon_texture(ctx: &egui::Context) -> egui::TextureHandle {
+pub(crate) fn app_icon_texture(ctx: &egui::Context) -> egui::TextureHandle {
     let id = egui::Id::unique("glossa-about-icon");
     if let Some(t) = ctx.data(|d| d.get_temp::<egui::TextureHandle>(id)) {
         return t;

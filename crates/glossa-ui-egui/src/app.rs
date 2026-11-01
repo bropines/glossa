@@ -785,6 +785,12 @@ impl GlossaApp {
         self.server.is_some()
     }
 
+    /// The program is on its way out (Quit, the system ending it): windows
+    /// closing now are not the user closing them.
+    pub fn is_quitting(&self) -> bool {
+        self.quitting
+    }
+
     pub fn quit(&mut self) {
         self.quitting = true;
         self.ctx.send_viewport_cmd_to(egui::ViewportId::ROOT, egui::ViewportCommand::Close);

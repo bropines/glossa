@@ -23,7 +23,10 @@ for Windows, macOS and Linux.
 - **Welcome guide** on the first start (and from *Options → Basics*): what
   Glossa is, its main hotkeys (changeable there), how to use it, where to
   keep API keys and data (a portable copy beside the program on request),
-  and on macOS the permissions it needs.
+  and on macOS the permissions it needs. Drawn as an onboarding flow: a
+  progress bar over the steps, live previews of the themes to pick from,
+  hotkeys as key caps, the two places for keys as cards, and an accent
+  Next button, in the colours of whichever theme is chosen.
 - **API keys in the system keychain**, if chosen
   (`general.secret_storage = "system"`): Windows Credential Manager, the
   macOS Keychain or the Secret Service on Linux keep the services' keys, the
@@ -306,6 +309,9 @@ for Windows, macOS and Linux.
 
 ### Fixed
 
+- The welcome guide opened behind the main window on the first start, a
+  tip began with a bare dash where its action had no hotkey, and quitting
+  Glossa while the guide was open counted as skipping it.
 - macOS: a light theme (macOS Light, Glossa Light…) with a backdrop drew the
   window title over the traffic lights: macOS 27 falls back to its old title
   bar layout once the frame view gets a subview while the window is light.
