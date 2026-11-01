@@ -1523,20 +1523,32 @@ fn exceptions(app: &mut GlossaApp, ui: &mut egui::Ui, st: &mut OptionsState) {
         },
     );
     let mut selected: Option<usize> = ui.data(|dd| dd.get_temp(egui::Id::unique("exc-sel")));
-    egui::Grid::new("exc").num_columns(2).striped(true).min_col_width(260.0).show(ui, |ui| {
-        ui.label(RichText::new(app.t("options.exceptions.program")).strong());
-        ui.label(RichText::new(app.t("options.exceptions.window_class")).strong());
-        ui.end_row();
-        for (i, r) in e.rules.iter().enumerate() {
-            let p = if r.program.is_empty() { any_prog.clone() } else { r.program.clone() };
-            let w = if r.window_class.is_empty() { any_win.clone() } else { r.window_class.clone() };
-            if ui.selectable_label(selected == Some(i), p).clicked() {
-                selected = Some(i);
+    // Where the system names no window classes (macOS) a rule is just a
+    // program, so the class column, its field and smart detection (which
+    // looks at classes) are left out.
+    let classes = glossa_platform::shell::SHELL.window_classes;
+    let columns = if classes { 2 } else { 1 };
+    if e.rules.is_empty() {
+        ui.label(RichText::new(app.t("options.exceptions.empty")).weak());
+    } else {
+        egui::Grid::new("exc").num_columns(columns).striped(true).min_col_width(260.0).show(ui, |ui| {
+            ui.label(RichText::new(app.t("options.exceptions.program")).strong());
+            if classes {
+                ui.label(RichText::new(app.t("options.exceptions.window_class")).strong());
             }
-            ui.label(w);
             ui.end_row();
-        }
-    });
+            for (i, r) in e.rules.iter().enumerate() {
+                let p = if r.program.is_empty() { any_prog.clone() } else { r.program.clone() };
+                if ui.selectable_label(selected == Some(i), p).clicked() {
+                    selected = Some(i);
+                }
+                if classes {
+                    ui.label(if r.window_class.is_empty() { any_win.clone() } else { r.window_class.clone() });
+                }
+                ui.end_row();
+            }
+        });
+    }
     ui.data_mut(|dd| dd.insert_temp(egui::Id::unique("exc-sel"), selected));
     ui.horizontal(|ui| {
         if ui.button(app.t("options.exceptions.add")).clicked() {
@@ -1557,8 +1569,16 @@ fn exceptions(app: &mut GlossaApp, ui: &mut egui::Ui, st: &mut OptionsState) {
         let mut done = false;
         let mut cancel = false;
         ui.horizontal(|ui| {
-            ui.add(egui::TextEdit::singleline(&mut rule.program).hint_text("program.exe").desired_width(200.0));
-            ui.add(egui::TextEdit::singleline(&mut rule.window_class).hint_text("WindowClass").desired_width(200.0));
+            ui.add(
+                egui::TextEdit::singleline(&mut rule.program)
+                    .hint_text(glossa_platform::shell::SHELL.program_example)
+                    .desired_width(200.0),
+            );
+            if classes {
+                ui.add(
+                    egui::TextEdit::singleline(&mut rule.window_class).hint_text("WindowClass").desired_width(200.0),
+                );
+            }
             if ui.button(app.t("options.ok")).clicked() {
                 done = true;
             }
@@ -1585,7 +1605,9 @@ fn exceptions(app: &mut GlossaApp, ui: &mut egui::Ui, st: &mut OptionsState) {
             st.exception_edit = Some((index, rule));
         }
     }
-    ui.checkbox(&mut e.smart_detection, app.t("options.exceptions.smart"));
+    if classes {
+        ui.checkbox(&mut e.smart_detection, app.t("options.exceptions.smart"));
+    }
 }
 
 fn advanced(app: &mut GlossaApp, ui: &mut egui::Ui, st: &mut OptionsState) {

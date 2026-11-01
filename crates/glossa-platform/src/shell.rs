@@ -64,6 +64,13 @@ pub struct Shell {
     /// showing a hotkey (the settings file keeps `Ctrl`, `Alt`, `Shift`,
     /// `Meta` everywhere).
     pub modifier_names: ModifierNames,
+    /// The system tells which class a window and its focused control are
+    /// (Windows, X11), so exception rules can name one. macOS tells only
+    /// the app.
+    pub window_classes: bool,
+    /// A program name as the exceptions list wants it, for the hint in the
+    /// empty field: an executable's file name, or an app's name on macOS.
+    pub program_example: &'static str,
 }
 
 /// Names of the modifier keys, in the order a hotkey shows them (the order

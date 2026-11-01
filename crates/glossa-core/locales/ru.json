@@ -316,6 +316,7 @@
     "options.exceptions.any_window": "* Все окна *",
     "options.exceptions.from_active": "Из активного окна",
     "options.exceptions.from_active_tip": "Заполнить по окну, которое было активно до этого",
+    "options.exceptions.empty": "Программ пока нет. Добавьте по имени или возьмите из активного окна.",
     "options.hotkeys": "Горячие клавиши",
     "options.hotkeys.enable": "Включить горячие клавиши",
     "options.hotkeys.action": "Действие",

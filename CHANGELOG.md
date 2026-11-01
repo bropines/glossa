@@ -7,6 +7,14 @@ the notes of its GitHub release.
 
 ## [Unreleased]
 
+### Fixed
+
+- macOS: *Options → Exceptions* listed Windows controls (`SysListView32`…)
+  and Remote Desktop, with a window-class column and a `program.exe` hint,
+  none of which can match on a Mac, where only the app is known. The list
+  starts empty there (an untouched Windows list from an earlier build is
+  cleared), and the class column, its field and smart detection are hidden.
+
 ## [0.1.0-beta.1] - 2026-11-01
 
 The first public beta of Glossa, a clean-room successor to QTranslate in
