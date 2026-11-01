@@ -182,6 +182,7 @@
     "welcome.storage.title": "Ключи и данные",
     "welcome.storage.data": "Настройки и история",
     "welcome.storage.profile_now": "Они хранятся в профиле пользователя: %s",
+    "welcome.storage.home_now": "Они хранятся в папке, заданной через --home или GLOSSA_HOME: %s",
     "welcome.storage.portable_now": "Это портативная копия: они хранятся рядом с программой, в %s",
     "welcome.storage.make_portable": "Хранить их рядом с программой (портативная копия, например на флешке)",
     "welcome.storage.portable_note": "Они будут скопированы в папку data в %s, и после «Готово» Glossa перезапустится. Копия в профиле останется как есть.",

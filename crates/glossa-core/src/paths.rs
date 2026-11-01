@@ -17,7 +17,12 @@ use std::path::{Path, PathBuf};
 
 #[derive(Debug, Clone)]
 pub struct Paths {
+    /// The data is not in the user's profile: beside the program, or in a
+    /// folder given with `--home` / `GLOSSA_HOME` (see `home_override`).
     pub portable: bool,
+    /// The data folder was given with `--home` or `GLOSSA_HOME`, rather than
+    /// found beside the program or in the profile.
+    pub home_override: bool,
     /// Where the executable is.
     pub exe_dir: PathBuf,
     /// User data: config, history, user themes and modules.
@@ -39,7 +44,13 @@ impl Paths {
     /// The same decision, with the inputs made explicit for testing.
     pub fn for_exe_dir(exe_dir: PathBuf, home_override: Option<PathBuf>) -> Paths {
         if let Some(home) = home_override.filter(|p| !p.as_os_str().is_empty()) {
-            return Paths { portable: true, cache_dir: home.join("cache"), data_dir: home, exe_dir };
+            return Paths {
+                portable: true,
+                home_override: true,
+                cache_dir: home.join("cache"),
+                data_dir: home,
+                exe_dir,
+            };
         }
         let marker = std::fs::read_dir(&exe_dir)
             .map(|rd| {
@@ -51,11 +62,17 @@ impl Paths {
             .unwrap_or(false);
         if marker || exe_dir.join("data").is_dir() {
             let data = exe_dir.join("data");
-            return Paths { portable: true, cache_dir: data.join("cache"), data_dir: data, exe_dir };
+            return Paths {
+                portable: true,
+                home_override: false,
+                cache_dir: data.join("cache"),
+                data_dir: data,
+                exe_dir,
+            };
         }
         let data_dir = dirs::config_dir().map(|d| d.join(app_dir_name())).unwrap_or_else(|| exe_dir.join("data"));
         let cache_dir = dirs::cache_dir().map(|d| d.join(app_dir_name())).unwrap_or_else(|| data_dir.join("cache"));
-        Paths { portable: false, exe_dir, data_dir, cache_dir }
+        Paths { portable: false, home_override: false, exe_dir, data_dir, cache_dir }
     }
 
     pub fn config_file(&self) -> PathBuf {
@@ -194,6 +211,7 @@ mod tests {
         std::fs::create_dir_all(&exe).unwrap();
         let profile = Paths {
             portable: false,
+            home_override: false,
             exe_dir: exe.clone(),
             data_dir: dir.join("profile"),
             cache_dir: dir.join("cache"),
@@ -243,7 +261,7 @@ mod tests {
         let dir = temp("home");
         let home = dir.join("elsewhere");
         let p = Paths::for_exe_dir(dir.clone(), Some(home.clone()));
-        assert!(p.portable);
+        assert!(p.portable && p.home_override);
         assert_eq!(p.data_dir, home);
         std::fs::remove_dir_all(&dir).ok();
     }

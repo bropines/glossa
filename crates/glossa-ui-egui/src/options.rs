@@ -379,6 +379,25 @@ fn lang_row(app: &GlossaApp, ui: &mut egui::Ui, label: &str, salt: &str, value: 
     });
 }
 
+/// The interface language `setting` names (a code, a classic folder name or
+/// an English name), or `None` for an empty one: follow the system.
+/// Built-in packs have no folder name, so an empty setting must not be
+/// compared with it.
+fn chosen_locale<'a>(
+    locales: &'a [glossa_engine::catalog::LocaleEntry],
+    setting: &str,
+) -> Option<&'a glossa_engine::catalog::LocaleEntry> {
+    let setting = setting.trim();
+    if setting.is_empty() {
+        return None;
+    }
+    locales.iter().find(|l| {
+        l.code.eq_ignore_ascii_case(setting)
+            || (!l.folder.is_empty() && l.folder.eq_ignore_ascii_case(setting))
+            || l.name.eq_ignore_ascii_case(setting)
+    })
+}
+
 fn basics(app: &mut GlossaApp, ui: &mut egui::Ui, st: &mut OptionsState) {
     let look = app.look.clone();
     let d = &mut st.draft;
@@ -386,13 +405,7 @@ fn basics(app: &mut GlossaApp, ui: &mut egui::Ui, st: &mut OptionsState) {
         ui.checkbox(&mut st.autostart, app.t(glossa_platform::shell::SHELL.autostart_label));
         row(ui, &app.t("options.basics.ui_language"), |ui| {
             let locales = app.engine.locales();
-            let current = locales
-                .iter()
-                .find(|l| {
-                    l.code.eq_ignore_ascii_case(&d.general.ui_language)
-                        || l.folder.eq_ignore_ascii_case(&d.general.ui_language)
-                        || l.name.eq_ignore_ascii_case(&d.general.ui_language)
-                })
+            let current = chosen_locale(&locales, &d.general.ui_language)
                 .map(|l| format!("{} - {}", l.name, l.native_name))
                 .unwrap_or_else(|| app.t("options.basics.ui_language_system"));
             crate::dropdown::ComboBox::from_id_salt("ui-lang").width(240.0).selected_text(current).show_ui(ui, |ui| {
@@ -1916,4 +1929,28 @@ fn updates(app: &mut GlossaApp, ui: &mut egui::Ui, _st: &mut OptionsState) {
     // `updates.check_automatically` is kept in the settings, unused.
     ui.label(format!("{}{}", app.t("msg.version"), glossa_core::VERSION));
     ui.label(RichText::new(app.t("options.updates.no_server")).color(app.look.weak_text()));
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn entry(code: &str, folder: &str) -> glossa_engine::catalog::LocaleEntry {
+        glossa_engine::catalog::LocaleEntry {
+            code: code.into(),
+            name: code.into(),
+            native_name: code.into(),
+            folder: folder.into(),
+            builtin: folder.is_empty(),
+            files: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn an_empty_interface_language_is_the_system_one() {
+        let locales = [entry("en", "English"), entry("ru", "")];
+        assert!(chosen_locale(&locales, "").is_none(), "not the built-in pack with no folder");
+        assert_eq!(chosen_locale(&locales, "ru").map(|l| l.code.as_str()), Some("ru"));
+        assert_eq!(chosen_locale(&locales, "english").map(|l| l.code.as_str()), Some("en"));
+    }
 }

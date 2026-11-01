@@ -542,6 +542,7 @@ pub static STRINGS: &[(&str, &str, Option<&str>)] = &[
     ("welcome.storage.title", "Keys and data", None),
     ("welcome.storage.data", "Settings and history", None),
     ("welcome.storage.profile_now", "They are kept in your user profile: %s", None),
+    ("welcome.storage.home_now", "They are kept in the folder given with --home or GLOSSA_HOME: %s", None),
     ("welcome.storage.portable_now", "This is a portable copy: they are kept beside the program, in %s", None),
     ("welcome.storage.make_portable", "Keep them beside the program instead (a portable copy, for a USB stick)", None),
     ("welcome.storage.portable_note", "They are copied to a data folder in %s and Glossa restarts when you finish. The copy in your profile is left as it is.", None),
