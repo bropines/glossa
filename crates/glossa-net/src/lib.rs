@@ -713,7 +713,8 @@ pub mod mock {
     use super::*;
     use std::sync::Mutex;
 
-    type Route = (Method, String, HttpResponse);
+    /// Method, URL prefix, the answer, and whether it is used only once.
+    type Route = (Method, String, HttpResponse, bool);
 
     #[derive(Default)]
     pub struct MockHttp {
@@ -728,6 +729,16 @@ pub mod mock {
 
         /// Answer `method url_prefix…` with `status` and `body`.
         pub fn on(self, method: Method, url_prefix: &str, status: u16, body: &str) -> Self {
+            self.route(method, url_prefix, status, body, false)
+        }
+
+        /// The same, for the first matching request only: the routes after
+        /// it answer the next ones (a refusal, then a success).
+        pub fn on_once(self, method: Method, url_prefix: &str, status: u16, body: &str) -> Self {
+            self.route(method, url_prefix, status, body, true)
+        }
+
+        fn route(self, method: Method, url_prefix: &str, status: u16, body: &str, once: bool) -> Self {
             self.routes.lock().unwrap().push((
                 method,
                 url_prefix.to_owned(),
@@ -737,6 +748,7 @@ pub mod mock {
                     body: body.as_bytes().to_vec(),
                     codepage: None,
                 },
+                once,
             ));
             self
         }
@@ -749,12 +761,18 @@ pub mod mock {
     impl Http for MockHttp {
         fn send(&self, request: HttpRequest) -> Result<HttpResponse, Error> {
             self.seen.lock().unwrap().push(request.clone());
-            let routes = self.routes.lock().unwrap();
-            routes
+            let mut routes = self.routes.lock().unwrap();
+            let i = routes
                 .iter()
-                .find(|(m, prefix, _)| *m == request.method && request.url.starts_with(prefix.as_str()))
-                .map(|(_, _, r)| HttpResponse { codepage: request.codepage, ..r.clone() })
-                .ok_or_else(|| Error::Network(format!("no mock route for {} {}", request.method.as_str(), request.url)))
+                .position(|(m, prefix, _, _)| *m == request.method && request.url.starts_with(prefix.as_str()))
+                .ok_or_else(|| {
+                    Error::Network(format!("no mock route for {} {}", request.method.as_str(), request.url))
+                })?;
+            let response = HttpResponse { codepage: request.codepage, ..routes[i].2.clone() };
+            if routes[i].3 {
+                routes.remove(i);
+            }
+            Ok(response)
         }
     }
 }
