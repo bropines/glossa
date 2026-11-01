@@ -325,6 +325,11 @@ pub enum ControlStyle {
     /// slider track filled with the accent, flyout shadows, the type ramp
     /// (caption 12, body 14, subtitle 20 at a 14 px body).
     Fluent,
+    /// macOS (AppKit, Apple's Human Interface Guidelines): controls keep
+    /// their size, overlay scroll bars, 14 pt check boxes, an accent-filled
+    /// slider track, soft menu shadows, the system accent as it is (not a
+    /// lighter shade), a 13 pt body.
+    Mac,
 }
 
 impl Default for Metrics {
@@ -889,7 +894,14 @@ impl Theme {
     pub fn resolve_system_accent(&mut self, system: Option<&SystemAccent>) {
         let Some(sys) = system.filter(|_| self.accent_system) else { return };
         let (old_accent, old_link) = (self.accent.with_alpha(255), self.link.with_alpha(255));
-        let (new_accent, new_link) = (sys.fill(self.dark), sys.text(self.dark));
+        // WinUI fills with a lighter or darker shade of the accent; AppKit
+        // uses the colour the user picked as it is.
+        let (new_accent, new_link) = if self.metrics.controls == ControlStyle::Mac {
+            let link = if self.dark { sys.base.lerp(Color::WHITE, 0.25) } else { sys.base.lerp(Color::BLACK, 0.1) };
+            (sys.base, link)
+        } else {
+            (sys.fill(self.dark), sys.text(self.dark))
+        };
         let selection_alpha = self.selection.a;
         let Ok(mut value) = serde_json::to_value(&*self) else { return };
         recolour(&mut value, &|c| {
@@ -1018,7 +1030,8 @@ fn stem(path: &str) -> String {
 pub mod builtin {
     use super::*;
 
-    pub const NAMES: &[&str] = &["Glossa Dark", "Glossa Light", "Glossa Midnight", "Fluent Dark", "Fluent Light"];
+    pub const NAMES: &[&str] =
+        &["Glossa Dark", "Glossa Light", "Glossa Midnight", "Fluent Dark", "Fluent Light", "macOS Dark", "macOS Light"];
 
     pub fn by_name(name: &str) -> Option<Theme> {
         match name.to_ascii_lowercase().replace(['-', '_'], " ").as_str() {
@@ -1027,12 +1040,14 @@ pub mod builtin {
             "glossa midnight" | "midnight" => Some(glossa_midnight()),
             "fluent dark" | "winui dark" => Some(fluent_dark()),
             "fluent light" | "winui light" => Some(fluent_light()),
+            "macos dark" | "mac dark" | "aqua dark" => Some(mac_dark()),
+            "macos light" | "mac light" | "aqua light" => Some(mac_light()),
             _ => None,
         }
     }
 
     pub fn all() -> Vec<Theme> {
-        vec![glossa_dark(), glossa_light(), glossa_midnight(), fluent_dark(), fluent_light()]
+        vec![glossa_dark(), glossa_light(), glossa_midnight(), fluent_dark(), fluent_light(), mac_dark(), mac_light()]
     }
 
     /// Close to the classic "Flat Dark" — the look most people had.
@@ -1463,6 +1478,211 @@ pub mod builtin {
         };
         t
     }
+
+    /// AppKit's metrics shared by both macOS themes: 6 pt push buttons,
+    /// 10 pt windows, 8 pt menus, 24 pt controls, SF at the 13 pt body.
+    fn mac_common(t: &mut Theme) {
+        t.accent_system = true;
+        t.metrics = Metrics {
+            button_radius: 6.0,
+            window_radius: 10.0,
+            window_radius_corners: RadiusCorners::All,
+            spacing: 8.0,
+            padding: 6.0,
+            border_width: 1.0,
+            service_tab_height: 28.0,
+            icon_size: 16.0,
+            control_height: 24.0,
+            overlay_radius: 8.0,
+            controls: ControlStyle::Mac,
+        };
+        t.fonts = Fonts {
+            // macOS finds its own interface face (SF) without fontconfig;
+            // elsewhere the first of these that is installed.
+            family: "SF Pro".into(),
+            fallbacks: vec!["SF Pro Text".into(), "Helvetica Neue".into(), "Inter".into()],
+            // A 13 pt body; the UI draws `size * 1.33`.
+            size: 9.75,
+            text_family: String::new(),
+            text_size: 11.0,
+        };
+    }
+
+    /// The macOS accent when the system gives none: `controlAccentColor`'s
+    /// default blue, light and dark.
+    const MAC_BLUE_LIGHT: Color = Color::rgb(0x00, 0x7a, 0xff);
+    const MAC_BLUE_DARK: Color = Color::rgb(0x0a, 0x84, 0xff);
+
+    /// macOS dark (Dark Aqua): AppKit's semantic colours composited over
+    /// `windowBackgroundColor` (#323232): `labelColor` 85 % white,
+    /// `secondaryLabelColor` 55 %, `tertiaryLabelColor` 25 %,
+    /// `separatorColor` 10 %, `controlBackgroundColor` #1E1E1E.
+    pub fn mac_dark() -> Theme {
+        let base = Color::grey(0x32);
+        let text = Color::grey(0xdf);
+        let secondary = Color::grey(0x9b);
+        let disabled = Color::grey(0x70);
+        let separator = Color::grey(0x47);
+        let content = Color::grey(0x1e);
+        let control = Color::grey(0x56); // a push button's bezel
+        let button = |back: Color, text: Color| ButtonStyle {
+            back_top: back,
+            back_bottom: back,
+            border: Color::grey(0x5e),
+            text,
+            ..ButtonStyle::default()
+        };
+        let mut t = fluent_dark();
+        t.name = "macOS Dark".into();
+        t.dark = true;
+        t.window = WindowStyle {
+            back: base,
+            text,
+            text_disabled: disabled,
+            border: Color::grey(0x4a),
+            border_inner: None,
+            caption: None,
+            caption_text: None,
+            client_back: Color::grey(0x2a),
+            group_box: separator,
+            classic_focus: false,
+        };
+        t.button = States {
+            normal: button(control, text),
+            // Dark Aqua lightens a bezel when it is pressed.
+            hover: Some(button(Color::grey(0x5c), text)),
+            pressed: Some(button(Color::grey(0x6a), Color::WHITE)),
+            disabled: Some(button(Color::grey(0x40), disabled)),
+            focused: None,
+        };
+        let edit = |back: Color, border: Color| EditStyle { back, border, text, shadow_top: None, shadow_bottom: None };
+        t.edit = States {
+            normal: edit(content, Color::grey(0x3d)),
+            hover: None,
+            pressed: None,
+            focused: Some(edit(content, MAC_BLUE_DARK)),
+            disabled: Some(EditStyle { text: disabled, ..edit(Color::grey(0x28), Color::grey(0x3d)) }),
+        };
+        t.window_button = States {
+            normal: GlyphStyle { main: secondary, ..GlyphStyle::default() },
+            hover: Some(GlyphStyle { main: text, back: Some(Color::grey(0x45)), ..GlyphStyle::default() }),
+            pressed: Some(GlyphStyle { main: text, back: Some(Color::grey(0x50)), ..GlyphStyle::default() }),
+            disabled: Some(GlyphStyle { main: disabled, ..GlyphStyle::default() }),
+            focused: None,
+        };
+        t.icon = States {
+            normal: GlyphStyle { main: secondary, ..GlyphStyle::default() },
+            hover: Some(GlyphStyle { main: text, ..GlyphStyle::default() }),
+            pressed: None,
+            disabled: Some(GlyphStyle { main: disabled, ..GlyphStyle::default() }),
+            focused: None,
+        };
+        t.accent = MAC_BLUE_DARK;
+        t.accent_text = Color::WHITE;
+        t.link = Color::rgb(0x41, 0x9c, 0xff); // linkColor
+        t.selection = MAC_BLUE_DARK.with_alpha(0x80);
+        t.error = Color::rgb(0xff, 0x45, 0x3a); // systemRed
+        t.warning = Color::rgb(0xff, 0x9f, 0x0a); // systemOrange
+        t.popup = PopupStyle {
+            back: Color::grey(0x2c), // the menu material's tint
+            text,
+            frame: Color::grey(0x55),
+            frame_thickness: 1.0,
+            opacity: 1.0,
+        };
+        mac_common(&mut t);
+        // Vibrancy: the material is the window's background; content areas
+        // stay dark enough to read on, as in Notes or Finder.
+        t.backdrop = BackdropStyle {
+            window: Some(Color::TRANSPARENT),
+            client: Some(Color::rgba(0xff, 0xff, 0xff, 0x0a)),
+            edit: Some(Color::rgba(0x00, 0x00, 0x00, 0x40)),
+            popup: Some(Color::rgba(0x28, 0x28, 0x28, 0x80)),
+            ..BackdropStyle::default()
+        };
+        t
+    }
+
+    /// macOS light (Aqua), from the same semantic colours over
+    /// `windowBackgroundColor` (#ECECEC): `labelColor` 85 % black,
+    /// `secondaryLabelColor` 50 %, `separatorColor` 10 %, white content.
+    pub fn mac_light() -> Theme {
+        let base = Color::grey(0xec);
+        let text = Color::grey(0x26);
+        let secondary = Color::grey(0x6e);
+        let disabled = Color::grey(0x9a);
+        let separator = Color::grey(0xd4);
+        let button = |back: Color, text: Color| ButtonStyle {
+            back_top: back,
+            back_bottom: back,
+            border: Color::grey(0xc8),
+            text,
+            ..ButtonStyle::default()
+        };
+        let mut t = mac_dark();
+        t.name = "macOS Light".into();
+        t.dark = false;
+        t.window = WindowStyle {
+            back: base,
+            text,
+            text_disabled: disabled,
+            border: Color::grey(0xc0),
+            border_inner: None,
+            caption: None,
+            caption_text: None,
+            client_back: Color::grey(0xf5),
+            group_box: separator,
+            classic_focus: false,
+        };
+        t.button = States {
+            normal: button(Color::WHITE, text),
+            hover: Some(button(Color::grey(0xfa), text)),
+            // Aqua darkens a bezel when it is pressed.
+            pressed: Some(button(Color::grey(0xdc), text)),
+            disabled: Some(button(Color::grey(0xf4), disabled)),
+            focused: None,
+        };
+        let edit = |back: Color, border: Color| EditStyle { back, border, text, shadow_top: None, shadow_bottom: None };
+        t.edit = States {
+            normal: edit(Color::WHITE, Color::grey(0xc8)),
+            hover: None,
+            pressed: None,
+            focused: Some(edit(Color::WHITE, MAC_BLUE_LIGHT)),
+            disabled: Some(EditStyle { text: disabled, ..edit(Color::grey(0xf4), Color::grey(0xd8)) }),
+        };
+        t.window_button = States {
+            normal: GlyphStyle { main: secondary, ..GlyphStyle::default() },
+            hover: Some(GlyphStyle { main: text, back: Some(Color::grey(0xdd)), ..GlyphStyle::default() }),
+            pressed: Some(GlyphStyle { main: text, back: Some(Color::grey(0xd2)), ..GlyphStyle::default() }),
+            disabled: Some(GlyphStyle { main: disabled, ..GlyphStyle::default() }),
+            focused: None,
+        };
+        t.icon = States {
+            normal: GlyphStyle { main: secondary, ..GlyphStyle::default() },
+            hover: Some(GlyphStyle { main: text, ..GlyphStyle::default() }),
+            pressed: None,
+            disabled: Some(GlyphStyle { main: disabled, ..GlyphStyle::default() }),
+            focused: None,
+        };
+        t.accent = MAC_BLUE_LIGHT;
+        t.accent_text = Color::WHITE;
+        t.link = Color::rgb(0x00, 0x68, 0xda); // linkColor
+        t.selection = MAC_BLUE_LIGHT.with_alpha(0x50);
+        // The accessible variants: plain systemRed and systemOrange are too
+        // pale for text on a light window.
+        t.error = Color::rgb(0xd7, 0x00, 0x15);
+        t.warning = Color::rgb(0xa0, 0x4f, 0x00);
+        t.popup =
+            PopupStyle { back: Color::grey(0xf6), text, frame: Color::grey(0xc6), frame_thickness: 1.0, opacity: 1.0 };
+        t.backdrop = BackdropStyle {
+            window: Some(Color::TRANSPARENT),
+            client: Some(Color::rgba(0xff, 0xff, 0xff, 0x50)),
+            edit: Some(Color::rgba(0xff, 0xff, 0xff, 0xb0)),
+            popup: Some(Color::rgba(0xf6, 0xf6, 0xf6, 0x90)),
+            ..BackdropStyle::default()
+        };
+        t
+    }
 }
 
 /// The `Map` alias is re-exported for callers building theme values in code.
@@ -1703,6 +1923,17 @@ mod tests {
         .unwrap();
         assert_eq!(mine.backdrop_fill(Surface::Window, Backdrop::MicaAlt), mine.window.back.with_alpha(128));
         assert_eq!(mine.backdrop_fill(Surface::Popup, Backdrop::Acrylic), Color::rgba(255, 255, 255, 0x40));
+    }
+
+    #[test]
+    fn macos_themes_take_the_system_accent_as_it_is() {
+        let sys = SystemAccent::from_base(Color::rgb(0xa5, 0x50, 0xa7)); // purple
+        for mut t in [builtin::mac_dark(), builtin::mac_light()] {
+            assert_eq!(t.metrics.controls, ControlStyle::Mac);
+            assert_eq!(builtin::by_name(&t.name).map(|b| b.name), Some(t.name.clone()));
+            t.resolve_system_accent(Some(&sys));
+            assert_eq!(t.accent, sys.base);
+        }
     }
 
     #[test]

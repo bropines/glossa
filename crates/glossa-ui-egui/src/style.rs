@@ -214,8 +214,12 @@ impl Look {
             v.faint_bg_color = v.faint_bg_color.gamma_multiply(a);
         }
         let fluent = t.metrics.controls == ControlStyle::Fluent;
+        let mac = t.metrics.controls == ControlStyle::Mac;
         if fluent {
             fluent_visuals(&mut v, t);
+        }
+        if mac {
+            mac_visuals(&mut v, t);
         }
         // egui keeps a dark and a light style and picks one per window by the
         // system theme that window reports; `set_visuals` fills only the one
@@ -244,6 +248,9 @@ impl Look {
             }
             if fluent {
                 fluent_spacing(s, t);
+            }
+            if mac {
+                mac_spacing(s, t);
             }
         });
         ctx.set_zoom_factor(ui_scale.clamp(0.5, 3.0));
@@ -323,6 +330,60 @@ fn fluent_spacing(s: &mut egui::Style, t: &Theme) {
     // The type ramp: caption 12, body 14, subtitle 20 (for a 14 px body).
     s.text_styles.insert(egui::TextStyle::Small, egui::FontId::proportional(body * 12.0 / 14.0));
     s.text_styles.insert(egui::TextStyle::Heading, egui::FontId::proportional(body * 20.0 / 14.0));
+}
+
+/// AppKit's conventions (Apple's Human Interface Guidelines) on top of the
+/// colours [`Look::apply`] mapped.
+fn mac_visuals(v: &mut Visuals, t: &Theme) {
+    let w = &mut v.widgets;
+    for state in [&mut w.noninteractive, &mut w.inactive, &mut w.hovered, &mut w.active, &mut w.open] {
+        // AppKit controls never grow under the pointer.
+        state.expansion = 0.0;
+    }
+    // secondaryLabelColor: hints and captions.
+    v.weak_text_color = Some(c(t.window.back.lerp(t.window.text, 0.6)));
+    // Since macOS 14 the insertion point takes the accent colour.
+    v.text_cursor.stroke = Stroke::new(1.5, c(t.accent));
+    // A slider's track is accent-filled up to the knob.
+    v.slider_trailing_fill = true;
+    // Menus and popovers float on a wide, soft shadow; windows on a deeper one.
+    let alpha = if t.dark { 120 } else { 50 };
+    v.popup_shadow = Shadow { offset: [0, 6], blur: 20, spread: 0, color: Color32::from_black_alpha(alpha) };
+    v.window_shadow = Shadow { offset: [0, 12], blur: 32, spread: 0, color: Color32::from_black_alpha(alpha) };
+}
+
+/// AppKit's sizes at the regular control size; the 24 pt control height
+/// comes from `metrics.control_height`.
+fn mac_spacing(s: &mut egui::Style, t: &Theme) {
+    let body = t.fonts.size * 1.33;
+    let sp = &mut s.spacing;
+    sp.button_padding = egui::vec2(10.0, 3.0);
+    // 8 pt between controls side by side, 6 pt between rows.
+    sp.item_spacing = egui::vec2(8.0, 6.0);
+    // Menu items are inset 5 pt from the menu's edge.
+    sp.menu_margin = Margin::same(5);
+    // A 14 pt check box with its mark, 6 pt from its label.
+    sp.icon_width = 14.0;
+    sp.icon_width_inner = 8.0;
+    sp.icon_spacing = 6.0;
+    sp.slider_rail_height = 4.0;
+    // Overlay scroll bars: a thin rounded thumb over the content that
+    // widens under the pointer.
+    sp.scroll = egui::style::ScrollStyle {
+        bar_width: 8.0,
+        floating_width: 4.0,
+        bar_inner_margin: 2.0,
+        bar_outer_margin: 2.0,
+        handle_min_length: 24.0,
+        dormant_handle_opacity: 0.25,
+        active_handle_opacity: 0.5,
+        interact_handle_opacity: 0.7,
+        interact_background_opacity: 0.0,
+        ..egui::style::ScrollStyle::floating()
+    };
+    // The type ramp at a 13 pt body: small 11, title 17.
+    s.text_styles.insert(egui::TextStyle::Small, egui::FontId::proportional(body * 11.0 / 13.0));
+    s.text_styles.insert(egui::TextStyle::Heading, egui::FontId::proportional(body * 17.0 / 13.0));
 }
 
 #[cfg(test)]
