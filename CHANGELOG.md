@@ -20,8 +20,9 @@ for Windows, macOS and Linux.
   dictionary and history windows; every classic options page plus OCR,
   Modules and Control API; a tray icon with the classic menu. Hotkeys wake a
   hidden app, and a second launch hands over to the running one.
-- **Google Lens built in**: Glossa talks to Lens itself (the new
-  `glossa-lens` crate, on Chromium's own protocol definitions), so Lens
+- **Google Lens built in**: Glossa talks to Lens itself (through
+  [chrome-lens-rs](https://github.com/bropines/chrome-lens-rs), on Chromium's
+  own protocol definitions), so Lens
   recognition and translation need no Python or chrome-lens-py any more. A
   running chrome-lens-py daemon is still used when there is one
   (`ocr.lens.mode = "auto"`); `"native"` uses the built-in client only.

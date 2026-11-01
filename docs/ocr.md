@@ -41,9 +41,11 @@ Every way translates. The line-by-line placement used for in-place
 translation comes with the built-in client and the daemon (with the CLI
 alone, the translator translates paragraph by paragraph instead).
 
-The built-in client's protocol definitions are Chromium's own
-`lens_server_proto`, pinned to one Chromium commit; see
-`crates/glossa-lens/proto/README.md` for moving to newer ones.
+The built-in client is [chrome-lens-rs](https://github.com/bropines/chrome-lens-rs),
+pinned by commit in `crates/glossa-lens/Cargo.toml`: its protocol definitions
+are Chromium's own `lens_server_proto`, pinned to one Chromium commit there and
+re-pinned with its `update-protos`. Glossa sends its requests through its own
+HTTP client, so the proxy settings apply.
 
 ### Windows OCR
 

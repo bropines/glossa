@@ -553,7 +553,7 @@ mod native {
 
     use glossa_core::ocr::{OcrBlock, OcrGranularity, OcrLevel, Rect};
     use glossa_core::{Error, OcrRequest, OcrResult, Result};
-    use glossa_lens::{Bounds, Page};
+    use glossa_lens::{GeometryData, Page};
     use glossa_modules::Host;
     use glossa_net::HttpRequest;
 
@@ -568,7 +568,8 @@ mod native {
             translate_to: req.translate_to.filter(|l| l.is_language()).map(|l| translate_code(l).to_owned()),
             ..glossa_lens::Query::default()
         };
-        let body = glossa_lens::objects_request(&upload, &query, glossa_lens::random_uuid());
+        let body =
+            glossa_lens::objects_request(&upload, &query).map_err(|e| Error::Internal(format!("{NAME}: {e}")))?;
         let mut request =
             HttpRequest::post(glossa_lens::ENDPOINT).body(body).timeout(OCR_TIMEOUT).provider(NAME.to_owned());
         for (name, value) in glossa_lens::headers(glossa_lens::PUBLIC_API_KEY) {
@@ -580,37 +581,36 @@ mod native {
             let body = String::from_utf8_lossy(&response.body).chars().take(300).collect();
             return Err(Error::HttpStatus { provider: NAME.into(), status: response.status, body });
         }
-        let page = glossa_lens::parse_response(&response.body)
+        let page = glossa_lens::parse_response(&response.body, &upload)
             .map_err(|detail| Error::BadResponse { provider: NAME.into(), detail })?;
-        Ok(result(&page, size, (upload.width, upload.height), req))
+        Ok(result(&page, size, req))
     }
 
     /// The page as our result, its boxes in pixels of the picture as given
-    /// (`size`). Lens measures the copy it was sent (`sent`, smaller when
-    /// Chromium's rule shrank it): a normalised box only needs the picture's
-    /// size, a box in pixels is scaled from the copy's.
-    pub(super) fn result(page: &Page, size: (u32, u32), sent: (u32, u32), req: &OcrRequest) -> OcrResult {
-        let rect = |b: &Option<Bounds>| -> (Option<Rect>, f32) {
-            let Some(b) = b else { return (None, 0.0) };
-            let (sx, sy) = if b.normalized {
-                (size.0 as f32, size.1 as f32)
-            } else {
-                (size.0 as f32 / sent.0.max(1) as f32, size.1 as f32 / sent.1.max(1) as f32)
-            };
-            let (w, h) = (b.width * sx, b.height * sy);
-            (Some(Rect::new(b.center_x * sx - w / 2.0, b.center_y * sy - h / 2.0, w, h)), b.rotation)
+    /// (`size`). chrome-lens-rs hands every box over normalised, whatever
+    /// coordinates Lens used, and the copy Lens saw has the picture's
+    /// proportions, so the picture's size is all a box needs. (Scaling a box
+    /// by the uploaded copy as well would count the resize twice.)
+    pub(super) fn result(page: &Page, size: (u32, u32), req: &OcrRequest) -> OcrResult {
+        let rect = |g: &Option<GeometryData>| -> (Option<Rect>, f32) {
+            let Some(g) = g else { return (None, 0.0) };
+            let (w, h) = (g.width * size.0 as f32, g.height * size.1 as f32);
+            (
+                Some(Rect::new(g.center_x * size.0 as f32 - w / 2.0, g.center_y * size.1 as f32 - h / 2.0, w, h)),
+                g.rotation_z,
+            )
         };
-        let node = |level: OcrLevel, text: String, b: &Option<Bounds>, children: Vec<OcrBlock>| {
+        let node = |level: OcrLevel, text: String, b: &Option<GeometryData>, children: Vec<OcrBlock>| {
             let (bounds, angle) = rect(b);
             OcrBlock { bounds, angle, children, ..OcrBlock::new(level, &text) }
         };
         let words = req.granularity == OcrGranularity::Words;
-        let mut blocks: Vec<OcrBlock> = match req.granularity {
+        let blocks: Vec<OcrBlock> = match req.granularity {
             OcrGranularity::FullText => Vec::new(),
             OcrGranularity::Lines => page
                 .paragraphs
                 .iter()
-                .flat_map(|p| p.lines.iter().map(|l| node(OcrLevel::Line, l.text(), &l.bounds, Vec::new())))
+                .flat_map(|p| p.lines.iter().map(|l| node(OcrLevel::Line, l.text.clone(), &l.geometry, Vec::new())))
                 .collect(),
             OcrGranularity::Blocks | OcrGranularity::Words => page
                 .paragraphs
@@ -623,32 +623,25 @@ mod native {
                             let kids = if words {
                                 l.words
                                     .iter()
-                                    .map(|w| node(OcrLevel::Word, w.text.clone(), &w.bounds, Vec::new()))
+                                    .map(|w| node(OcrLevel::Word, w.text.clone(), &w.geometry, Vec::new()))
                                     .collect()
                             } else {
                                 Vec::new()
                             };
-                            node(OcrLevel::Line, l.text(), &l.bounds, kids)
+                            let mut line = node(OcrLevel::Line, l.text.clone(), &l.geometry, kids);
+                            line.translation =
+                                l.translation.as_deref().map(str::trim).filter(|s| !s.is_empty()).map(str::to_owned);
+                            line
                         })
                         .collect();
-                    node(OcrLevel::Block, p.text(), &p.bounds, lines)
+                    let mut block = node(OcrLevel::Block, p.text.clone(), &p.geometry, lines);
+                    block.translation =
+                        p.translation.as_ref().map(|t| t.text.trim().to_owned()).filter(|s| !s.is_empty());
+                    block
                 })
                 .collect(),
         };
-        // Each paragraph's translation on its block, and each translated line
-        // on its line when they pair up.
-        for t in &page.translations {
-            let Some(block) = blocks.get_mut(t.paragraph).filter(|b| b.level == Some(OcrLevel::Block)) else {
-                continue;
-            };
-            if t.lines.len() == block.children.len() {
-                for (i, line) in block.children.iter_mut().enumerate() {
-                    line.translation = t.line(i).filter(|s| !s.is_empty());
-                }
-            }
-            block.translation = Some(t.text.trim().to_owned());
-        }
-        let text = page.text();
+        let text = page.full_text.clone();
         OcrResult {
             text: if req.preserve_line_breaks { text } else { text.split_whitespace().collect::<Vec<_>>().join(" ") },
             blocks,
@@ -657,7 +650,7 @@ mod native {
                 .as_deref()
                 .and_then(glossa_core::LangId::from_code)
                 .filter(|l| l.is_language()),
-            translation: page.translation(),
+            translation: page.translation.clone().filter(|s| !s.trim().is_empty()),
             image_size: Some(size),
             ..Default::default()
         }
@@ -1550,46 +1543,6 @@ mod tests {
     }
 
     #[test]
-    fn boxes_in_pixels_of_a_shrunk_copy_are_scaled_back_to_the_picture() {
-        // Lens saw a 1600×900 copy of a 3200×1800 picture.
-        let bounds = |normalized: bool, cx: f32, cy: f32, w: f32, h: f32| glossa_lens::Bounds {
-            center_x: cx,
-            center_y: cy,
-            width: w,
-            height: h,
-            rotation: 0.0,
-            normalized,
-        };
-        let line = |b| glossa_lens::Line {
-            words: vec![glossa_lens::Word { text: "hi".into(), separator: String::new(), bounds: None }],
-            bounds: Some(b),
-        };
-        let page = glossa_lens::Page {
-            language: None,
-            paragraphs: vec![
-                glossa_lens::Paragraph {
-                    lines: vec![line(bounds(false, 800.0, 450.0, 160.0, 90.0))],
-                    bounds: None,
-                    language: None,
-                },
-                glossa_lens::Paragraph {
-                    lines: vec![line(bounds(true, 0.5, 0.5, 0.1, 0.1))],
-                    bounds: None,
-                    language: None,
-                },
-            ],
-            translations: Vec::new(),
-        };
-        let mut request = req();
-        request.granularity = OcrGranularity::Lines;
-        let r = native::result(&page, (3200, 1800), (1600, 900), &request);
-        for b in &r.blocks {
-            let rect = b.bounds.unwrap();
-            assert_eq!((rect.x, rect.y, rect.width, rect.height), (1440.0, 810.0, 320.0, 180.0));
-        }
-    }
-
-    #[test]
     fn auto_mode_without_a_daemon_uses_the_built_in_client() {
         let fx = Fixture::new("native");
         // No daemon answers, and no chrome-lens-py is installed either.
@@ -1610,8 +1563,10 @@ mod tests {
         let b = r.blocks[0].bounds.unwrap();
         assert_eq!((b.x, b.y, b.width, b.height), (50.0, 37.5, 100.0, 25.0));
         let sent = lens.seen.lock().unwrap();
-        assert!(sent[0].headers.iter().any(|(k, v)| k == "X-Goog-Api-Key" && !v.is_empty()));
-        assert!(sent[0].headers.iter().any(|(k, v)| k == "Content-Type" && v == "application/x-protobuf"));
+        let has =
+            |name: &str| sent[0].headers.iter().find(|(k, _)| k.eq_ignore_ascii_case(name)).map(|(_, v)| v.clone());
+        assert!(has("x-goog-api-key").is_some_and(|v| !v.is_empty()));
+        assert_eq!(has("content-type").as_deref(), Some("application/x-protobuf"));
     }
 
     #[cfg(unix)]
