@@ -216,6 +216,14 @@ for Windows and Linux.
   brings it to the front and focuses it.
 - Licenses (MIT or Apache-2.0), NOTICE, CI on Linux and Windows, release
   builds, issue templates, contributing and security guides.
+- `glossa-cli doctor` (and `--json`): the session, which desktop features
+  work there and its limitations, macOS permissions, installed OCR engines,
+  modules that loaded or failed, the files in use, the proxy and
+  certificate store, the control API and whether the desktop program runs.
+  The limitations are locale keys with English and Russian text, for the
+  interface to show later.
+- `[advanced] terminals` and `terminal_copy_action`: terminal windows where
+  selection capture never sends Ctrl+C.
 
 ### Fixed
 
@@ -302,6 +310,33 @@ for Windows and Linux.
   `needs_credentials`; `/v1/ocr` takes `engine` and returns `elapsed_ms`; a
   wrong method is 405 with `Allow`; an OCR engine that is not set up is 503.
 - Proxy mode `auto` is documented as what it is: an alias of `system`.
+- Selection capture no longer sends Ctrl+C into terminals (Windows
+  Terminal, the console, mintty, WezTerm, Alacritty, PuTTY, VS Code's
+  terminal and other xterm.js terminals…), where it interrupted the running
+  command when UI Automation found no selection; built-in terminal rules
+  reach existing configs once, through a versioned marker.
+- A panic in a module, a built-in service, the image code or an engine job
+  fails that one request (`Error::Module` / `Error::Internal`, HTTP 500 on
+  the control API) instead of ending the program: release builds unwind
+  (about +2.2 MB on `glossa.exe`) and the panic hook still logs the panic
+  with its frames.
+- Web pages can no longer reach the tokenless pot-app routes with an image
+  or a link: requests with `Sec-Fetch-*` or `Referer` headers are refused
+  like those with `Origin`, and the `Host` must be a loopback address or
+  `localhost` on every route (DNS rebinding).
+- Only one copy runs per user, session and data folder even with the
+  control API off or its port taken, and a second launch no longer hands
+  over to another user's copy: a session-local lock and pipe (Windows) or
+  socket (Linux, macOS) carry the hand-over, with the API as a fallback.
+- A `config.toml` that does not parse no longer stops the program: it is
+  moved to `config.toml.broken-<time>`, the defaults are used, and the
+  engine reports it once (`Engine::startup_warnings`).
+- Default hotkeys: no default for "listen" (Ctrl+E is the browser's search
+  box and end-of-line in shells and macOS text fields), and on Windows
+  Win+Alt instead of Ctrl+Alt, which AltGr sends (Ctrl+Alt+Q swallowed `@`
+  on German keyboards). Existing configs keep their bindings.
+- Linux checks TLS certificates against the system's store (corporate CAs
+  work), falling back to the bundled roots when the store is empty.
 
 ### Known gaps
 
