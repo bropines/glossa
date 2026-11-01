@@ -184,6 +184,21 @@ for Windows and Linux.
   decorations.
 - Opening a window that is already open (toolbar, menu, tray, hotkey)
   brings it to the front and focuses it.
+- **Popup target language**: a click on the popup's title ("English →
+  Russian") opens a list with the automatic direction, a swap (the
+  translation translated back), recent targets and every language; a
+  picked target re-translates and stays for later popups in this run.
+- **Popup header icon size** (`appearance.popup.icon_scale`); the header
+  grows with the icons.
+- **Backdrop opacity** for the windows and the popup
+  (`appearance.backdrop_opacity`, `appearance.popup.backdrop_opacity`):
+  how much of the theme's fills, and of the acrylic tint, covers the
+  material, as in Windhawk's Translucent Windows mod.
+- **Font picker**: the interface font is chosen from a searchable list of
+  the installed families (font folders and `name` tables on Windows and
+  macOS, fontconfig on Linux), listed once on a worker.
+- A one-line explanation under the Advanced options, the renderer, the
+  popup shade and the mouse mode switches.
 - Licenses (MIT or Apache-2.0), NOTICE, CI on Linux and Windows, release
   builds, issue templates, contributing and security guides.
 
@@ -225,6 +240,22 @@ for Windows and Linux.
   opens, and every script in the language table has a font on Windows and
   through fontconfig. Right-to-left names read the right way round.
 - The source and translation panes have the same inner margins.
+- While a popup or another window was open with the main window hidden,
+  the program redrew about ten times a second, so idle CPU never reached
+  zero and a layout settling a frame late kept moving; it now draws only
+  when something changes.
+- The popup's frame was a couple of pixels larger than its window, cutting
+  off its right and bottom edges.
+- The action "Show popup window" is called "Translate selection", which is
+  what it does.
+- *Start with Windows* (*Open at login*, *Start at login*) is kept in
+  `general.start_with_system`, the entry follows the program when it moves,
+  and the classic import's setting is offered. Settings that did nothing
+  (*Read phonetically*, *Check for updates automatically*) are no longer
+  shown; proxy mode *Automatic* shows as *System*, which it is.
+- Options → Control API said "Running." while the API was turned off.
+- On macOS the interface uses the system font (SF), so arrows and symbols
+  no longer log "No font has".
 - Arabic, Persian, Urdu and Hebrew text came out backwards with letters
   joined wrongly: a hand-made reversal fought egui's own shaping. The text
   now goes through the Unicode bidi algorithm (`bidi` module): each run is
