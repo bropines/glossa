@@ -808,8 +808,12 @@ fn target_menu(app: &GlossaApp, st: &PopupState, ui: &mut egui::Ui) -> Option<La
     ui.separator();
     let search_id = egui::Id::unique("popup-target-search");
     let mut search: String = ui.ctx().data(|d| d.get_temp(search_id)).unwrap_or_default();
-    let r =
-        ui.add(egui::TextEdit::singleline(&mut search).hint_text(app.t("lang.search")).desired_width(f32::INFINITY));
+    let r = ui.add(
+        egui::TextEdit::singleline(&mut search)
+            .hint_text(app.t("lang.search"))
+            .desired_width(f32::INFINITY)
+            .align(egui::Align2::LEFT_CENTER),
+    );
     if !r.has_focus() {
         r.request_focus();
     }

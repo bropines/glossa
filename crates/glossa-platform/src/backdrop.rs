@@ -358,10 +358,14 @@ mod tests {
 
     #[test]
     fn nothing_to_clear_is_never_an_error() {
-        // Off Windows there is no HWND; clearing still succeeds, so callers
-        // can apply the setting unconditionally.
-        if !cfg!(windows) {
+        // On Linux there is no HWND; clearing still succeeds, so callers can
+        // apply the setting unconditionally. (On macOS the "HWND" is an
+        // NSWindow, touched on the main thread only: a test thread is
+        // refused either way.)
+        if !cfg!(any(windows, target_os = "macos")) {
             assert_eq!(apply_hwnd(1, Backdrop::None, true), Ok(Applied::Cleared));
+        }
+        if !cfg!(windows) {
             assert!(apply_hwnd(1, Backdrop::Mica, true).is_err());
             assert_eq!(find_own_window("Glossa"), None);
             assert_eq!(windows_build(), None);

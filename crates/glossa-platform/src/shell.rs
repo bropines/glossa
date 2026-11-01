@@ -56,7 +56,41 @@ pub struct Shell {
     pub portable_beside_exe: bool,
     /// The interface text for "start with the system", by its locale key.
     pub autostart_label: &'static str,
+    /// What the backdrops are called here, by their locale keys: Windows'
+    /// own names (Mica, Acrylic…) there and on Linux, the vibrancy
+    /// materials they become on macOS.
+    pub backdrop_names: BackdropNames,
 }
+
+/// Locale keys for the backdrop choices and the hint under the backdrop
+/// opacity slider, which talks about them. See [`Shell::backdrop_names`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct BackdropNames {
+    pub mica: &'static str,
+    pub mica_alt: &'static str,
+    pub acrylic: &'static str,
+    pub blur: &'static str,
+    pub opacity_hint: &'static str,
+}
+
+/// Windows' names, which Linux (KWin's blur) uses too.
+pub const WINDOWS_BACKDROP_NAMES: BackdropNames = BackdropNames {
+    mica: "options.backdrop.mica",
+    mica_alt: "options.backdrop.mica_alt",
+    acrylic: "options.backdrop.acrylic",
+    blur: "options.backdrop.blur",
+    opacity_hint: "options.appearance.backdrop_opacity_hint",
+};
+
+/// The NSVisualEffectView materials the choices become on macOS (window
+/// background, under-window background, popover, full-screen UI).
+pub const MAC_BACKDROP_NAMES: BackdropNames = BackdropNames {
+    mica: "options.backdrop.mac.window",
+    mica_alt: "options.backdrop.mac.under_window",
+    acrylic: "options.backdrop.mac.popover",
+    blur: "options.backdrop.mac.full_screen",
+    opacity_hint: "options.appearance.backdrop_opacity_hint_mac",
+};
 
 #[cfg(windows)]
 #[path = "shell/win.rs"]
@@ -88,5 +122,15 @@ mod tests {
         assert_eq!(SHELL.own_frame, !mac);
         assert_eq!(SHELL.command_is_ctrl, !mac);
         assert_eq!(SHELL.command_key, if mac { "Cmd" } else { "Ctrl" });
+        assert_eq!(SHELL.backdrop_names, if mac { MAC_BACKDROP_NAMES } else { WINDOWS_BACKDROP_NAMES });
+    }
+
+    #[test]
+    fn backdrop_names_are_interface_strings() {
+        for names in [WINDOWS_BACKDROP_NAMES, MAC_BACKDROP_NAMES] {
+            for key in [names.mica, names.mica_alt, names.acrylic, names.blur, names.opacity_hint] {
+                assert!(glossa_core::locale::STRINGS.iter().any(|(k, _, _)| *k == key), "{key} is not in the locale");
+            }
+        }
     }
 }

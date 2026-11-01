@@ -20,6 +20,7 @@ pub const SHELL: Shell = Shell {
     switcher_follows_windows: false,
     portable_beside_exe: true,
     autostart_label: "options.basics.start_with_system",
+    backdrop_names: super::WINDOWS_BACKDROP_NAMES,
 };
 
 pub fn open(target: &str) -> std::io::Result<()> {

@@ -147,7 +147,12 @@ pub fn lang_combo(
     let mut picked = None;
     dropdown::show(ui, id, button.rect, button.rect.width(), LIST_HEIGHT + 60.0, |ui, settling| {
         let mut search: String = ui.ctx().data(|d| d.get_temp(search_id)).unwrap_or_default();
-        let r = ui.add(egui::TextEdit::singleline(&mut search).hint_text(search_hint).desired_width(f32::INFINITY));
+        let r = ui.add(
+            egui::TextEdit::singleline(&mut search)
+                .hint_text(search_hint)
+                .desired_width(f32::INFINITY)
+                .align(egui::Align2::LEFT_CENTER),
+        );
         if !r.has_focus() {
             r.request_focus();
         }

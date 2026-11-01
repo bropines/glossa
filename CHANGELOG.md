@@ -306,6 +306,24 @@ for Windows, macOS and Linux.
 
 ### Fixed
 
+- macOS: a light theme (macOS Light, Glossa Light…) with a backdrop drew the
+  window title over the traffic lights: macOS 27 falls back to its old title
+  bar layout once the frame view gets a subview while the window is light.
+  The window is kept dark for that layout pass. The vibrancy now also covers
+  the title bar, which showed what was behind the window sharp, and is
+  changed in place on a theme change instead of being made anew.
+- macOS: the interface used Helvetica Neue instead of SF where Homebrew's
+  fontconfig is installed (it knows SF only by a hidden name), and the
+  symbol fallback it picked (Verdana) has no arrows, so the popup title's
+  "→" was a box. SF and Apple Symbols are now taken directly.
+- macOS: the backdrop choices are named after the vibrancy materials they
+  become (Window, Under window, Popover, Full-screen UI) instead of Mica and
+  Acrylic, with a hint that fits.
+- macOS themes: hints and captions were hard to read over a light material;
+  secondary text is darker in macOS Light and lighter in macOS Dark, and no
+  longer turns half transparent under a backdrop.
+- A dropdown drawn inside its window settled a few points narrower than its
+  control; the search box in language lists has its text centred.
 - Messages were invisible while the app sat in the tray: a hotkey's "nothing
   to translate", OCR unavailable, a failed copy, replace or layout
   conversion and the speech input stub drew a toast in the hidden main
