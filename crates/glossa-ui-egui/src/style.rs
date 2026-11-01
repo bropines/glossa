@@ -178,6 +178,13 @@ impl Look {
         set(&mut v.widgets.hovered, WidgetState::Hover);
         set(&mut v.widgets.active, WidgetState::Pressed);
         set(&mut v.widgets.open, WidgetState::Pressed);
+        // egui draws `strong` text (dictionary headwords) in the pressed
+        // widget's text colour, on the window body; a classic theme's white
+        // pressed text vanished there. The body text reads on both.
+        let pressed = t.button.get(WidgetState::Pressed).text;
+        if pressed.contrast(t.window.back) < glossa_core::theme::MIN_GLYPH_CONTRAST {
+            v.widgets.active.fg_stroke.color = c(t.window.text);
+        }
         // Labels, separators and frames.
         v.widgets.noninteractive.bg_fill = c(t.window.back);
         v.widgets.noninteractive.weak_bg_fill = c(t.window.client_back);
@@ -193,7 +200,14 @@ impl Look {
             v.text_edit_bg_color = v.text_edit_bg_color.map(|c| c.gamma_multiply(a.max(0.3)));
             v.faint_bg_color = v.faint_bg_color.gamma_multiply(a);
         }
-        ctx.set_visuals(v);
+        // egui keeps a dark and a light style and picks one per window by the
+        // system theme that window reports; `set_visuals` fills only the one
+        // in use at the moment. A window reporting the other theme (a light
+        // system under a dark Glossa theme, or the system theme changing)
+        // then drew with egui's defaults. Both get the theme, and the choice
+        // is pinned to the theme's own darkness.
+        ctx.set_theme(if t.dark { egui::Theme::Dark } else { egui::Theme::Light });
+        ctx.all_styles_mut(|s| s.visuals = v.clone());
         ctx.all_styles_mut(|s| {
             let sp = t.metrics.spacing.clamp(0.0, 24.0);
             let pad = t.metrics.padding.clamp(0.0, 24.0);
