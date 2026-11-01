@@ -61,6 +61,7 @@ pub fn show(app: &mut GlossaApp, ui: &mut egui::Ui) {
             if app.cfg.general.show_top_pane {
                 top_pane(app, ui);
             }
+            banners(app, ui);
             // The service strip is a bottom panel: it always gets its room,
             // whatever the theme's sizes, and the panes share the rest.
             if app.cfg.general.show_services_pane && app.cfg.general.results_layout == ResultsLayout::Tabs {
@@ -104,19 +105,89 @@ pub fn show(app: &mut GlossaApp, ui: &mut egui::Ui) {
     toast(app, &ctx);
 }
 
+/// Notes across the top of the window, each with a button to put it away:
+/// the first-run hint that Glossa lives in the tray, and problems the
+/// program met while starting.
+fn banners(app: &mut GlossaApp, ui: &mut egui::Ui) {
+    let look = app.look.clone();
+    let radius = look.theme.metrics.button_radius.max(4.0);
+    let banner = |ui: &mut egui::Ui, text: &str, error: bool, dismiss: &str| -> bool {
+        let edge = if error { look.error() } else { look.accent() };
+        let mut dismissed = false;
+        egui::Frame::new()
+            .fill(edge.gamma_multiply(0.12))
+            .stroke(egui::Stroke::new(1.0, edge.gamma_multiply(0.6)))
+            .corner_radius(radius)
+            .inner_margin(egui::Margin::symmetric(8, 6))
+            .show(ui, |ui| {
+                ui.set_width(ui.available_width());
+                ui.horizontal(|ui| {
+                    let room = (ui.available_width() - 100.0).max(120.0);
+                    ui.add_sized(
+                        vec2(room, 0.0),
+                        egui::Label::new(RichText::new(text).color(if error { look.error() } else { look.text() }))
+                            .wrap(),
+                    );
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        dismissed = ui.button(dismiss).clicked();
+                    });
+                });
+            });
+        ui.add_space(6.0);
+        dismissed
+    };
+    if !app.startup_warnings.is_empty() {
+        let text = format!(
+            "{}\n{}",
+            app.t("main.startup_warnings"),
+            app.startup_warnings.iter().map(|w| format!("- {w}")).collect::<Vec<_>>().join("\n")
+        );
+        if banner(ui, &text, true, &app.t("main.hint_dismiss")) {
+            app.startup_warnings.clear();
+        }
+    }
+    if app.cfg.general.show_tray_hint && banner(ui, &tray_hint(app), false, &app.t("main.hint_dismiss")) {
+        app.cfg.general.show_tray_hint = false;
+        let _ = app.engine.update_config(|c| c.general.show_tray_hint = false);
+    }
+}
+
+/// The first-run hint, with the hotkey that translates a selection as it
+/// is set.
+fn tray_hint(app: &GlossaApp) -> String {
+    let hotkey = app.cfg.hotkeys.bindings.get(&Action::ShowPopup).filter(|_| app.cfg.hotkeys.enabled);
+    match hotkey {
+        Some(h) => app.locale.fmt("main.tray_hint", &h.to_string()),
+        None => app.t("main.tray_hint_no_hotkey"),
+    }
+}
+
 fn top_pane(app: &mut GlossaApp, ui: &mut egui::Ui) {
     let look = app.look.clone();
     ui.horizontal(|ui| {
         ui.spacing_mut().item_spacing.x = 2.0;
-        if icons::sized_button(ui, &look, Icon::Back, &app.t("msg.back_tip"), 24.0, !app.main.back.is_empty()).clicked()
-        {
+        let back = icons::sized_button(ui, &look, Icon::Back, &app.t("msg.back_tip"), 24.0, !app.main.back.is_empty());
+        if back.clicked() {
             navigate(app, true);
         }
-        if icons::sized_button(ui, &look, Icon::Forward, &app.t("msg.forward_tip"), 24.0, !app.main.forward.is_empty())
-            .clicked()
-        {
+        let forward = icons::sized_button(
+            ui,
+            &look,
+            Icon::Forward,
+            &app.t("msg.forward_tip"),
+            24.0,
+            !app.main.forward.is_empty(),
+        );
+        if forward.clicked() {
             navigate(app, false);
         }
+        // A right click on either, greyed out or not (a disabled button
+        // takes no clicks itself), lists the recent texts.
+        let arrows = back.rect.union(forward.rect);
+        let right_click =
+            ui.input(|i| i.pointer.secondary_clicked() && i.pointer.interact_pos().is_some_and(|p| arrows.contains(p)));
+        let menu_id = back.id.with("recent-menu");
+        crate::dropdown::context_menu_in(ui, menu_id, right_click, arrows.left_bottom(), |ui| recent_menu(app, ui));
         ui.add_space(6.0);
         let (globe, _) = ui.allocate_exact_size(vec2(16.0, 16.0), Sense::hover());
         icons::paint(ui.painter(), globe, Icon::Globe, look.weak_text());
@@ -157,6 +228,40 @@ fn top_pane(app: &mut GlossaApp, ui: &mut egui::Ui) {
     ui.add_space(2.0);
 }
 
+/// The back and forward buttons' right-click menu: the texts translated
+/// recently (this session's, then history's), and the whole history.
+fn recent_menu(app: &mut GlossaApp, ui: &mut egui::Ui) {
+    let mut recent: Vec<String> = Vec::new();
+    let session = app.main.back.iter().rev().chain(app.main.forward.iter().rev()).cloned();
+    let history = app.engine.recent_history(20).into_iter().map(|e| e.source);
+    for s in session.chain(history) {
+        if !s.trim().is_empty() && !recent.contains(&s) {
+            recent.push(s);
+        }
+        if recent.len() >= 10 {
+            break;
+        }
+    }
+    if !recent.is_empty() {
+        ui.label(RichText::new(app.t("main.recent")).small().color(app.look.weak_text()));
+    }
+    for s in recent {
+        let flat: String = s.split_whitespace().collect::<Vec<_>>().join(" ");
+        let short: String =
+            if flat.chars().count() > 60 { flat.chars().take(59).chain(['…']).collect() } else { flat };
+        if ui.button(short).clicked() {
+            app.main.source = s;
+            retranslate(app);
+            ui.close();
+        }
+    }
+    ui.separator();
+    if ui.button(app.t("history.show_full")).clicked() {
+        app.perform(Action::ShowHistory, None);
+        ui.close();
+    }
+}
+
 /// The camera button's menu: every way to recognise a screen region, with
 /// its hotkey where one is set.
 fn ocr_menu(app: &mut GlossaApp, ui: &mut egui::Ui) {
@@ -194,6 +299,14 @@ fn main_menu(app: &mut GlossaApp, ui: &mut egui::Ui) {
     ui.checkbox(&mut g.show_middle_pane, app.t("menu.show_middle_pane"));
     ui.checkbox(&mut g.show_services_pane, app.t("menu.show_services_pane"));
     ui.separator();
+    let mut on_top = app.cfg.appearance.main_always_on_top;
+    if ui.checkbox(&mut on_top, app.t("msg.always_on_top")).changed() {
+        app.cfg.appearance.main_always_on_top = on_top;
+        let _ = app.engine.update_config(move |c| c.appearance.main_always_on_top = on_top);
+        app.apply_main_window_level();
+        // The window raised over everything would now cover this menu.
+        ui.close();
+    }
     ui.checkbox(&mut g.minimize_to_tray_on_minimize, app.t("menu.tray_on_minimize"));
     ui.checkbox(&mut g.minimize_to_tray_on_close, app.t("menu.tray_on_close"));
     // In line rather than a submenu: the menu is a window of its own, and a
@@ -222,6 +335,10 @@ fn main_menu(app: &mut GlossaApp, ui: &mut egui::Ui) {
         ui.close();
     }
     ui.separator();
+    if ui.button(app.t("menu.help")).clicked() {
+        app.open_url(HELP_URL);
+        ui.close();
+    }
     if ui.button(app.t("menu.about")).clicked() {
         app.open_about();
         ui.close();
@@ -234,6 +351,9 @@ fn main_menu(app: &mut GlossaApp, ui: &mut egui::Ui) {
         let _ = app.engine.update_config(move |c| c.general = g);
     }
 }
+
+/// Where the Help item leads: the documentation.
+const HELP_URL: &str = "https://github.com/bropines/glossa/tree/main/docs";
 
 fn source_pane(app: &mut GlossaApp, ui: &mut egui::Ui, height: f32) {
     let look = app.look.clone();
@@ -271,16 +391,14 @@ fn source_pane(app: &mut GlossaApp, ui: &mut egui::Ui, height: f32) {
                 .lock_focus(false);
             let r = ui.add_sized(vec2(ui.available_width(), inner_h), edit);
             if r.changed() {
-                app.main.edited_at = Some(std::time::Instant::now());
-                if app.cfg.general.auto_cleanup_translation {
-                    app.main.outcome = None;
-                }
+                source_edited(app);
             }
-            crate::dropdown::context_menu(ui, &r, |ui| edit_menu(app, ui, true));
+            crate::text_menu::keep_selection(ui.ctx(), &r);
+            crate::dropdown::context_menu(ui, &r, |ui| source_menu(app, ui, r.id));
         });
-        // Listen and microphone in the bottom-right corner, as in the classic
-        // window.
-        let corner = egui::Rect::from_min_size(rect.right_bottom() - vec2(54.0, 24.0), vec2(52.0, 24.0));
+        // Listen in the bottom-right corner, as in the classic window. (Its
+        // microphone joins it once there is speech input.)
+        let corner = egui::Rect::from_min_size(rect.right_bottom() - vec2(28.0, 24.0), vec2(26.0, 24.0));
         let mut child = ui.new_child(
             egui::UiBuilder::new().max_rect(corner).layout(egui::Layout::right_to_left(egui::Align::Center)),
         );
@@ -298,12 +416,16 @@ fn source_pane(app: &mut GlossaApp, ui: &mut egui::Ui, height: f32) {
             let text = app.main.source.clone();
             app.speak(&text, lang);
         }
-        let mic_tip = app.locale.fmt("msg.speech_on", app.cfg.general.speech_language.english_name());
-        if icons::sized_button(&mut child, &look, Icon::Mic, &mic_tip, 22.0, true).clicked() {
-            app.perform(Action::SpeechInput, None);
-        }
     });
     app.text_zoom_wheel(ui, shown.response.rect);
+}
+
+/// The source text changed (typed, pasted, cut, undone).
+fn source_edited(app: &mut GlossaApp) {
+    app.main.edited_at = Some(std::time::Instant::now());
+    if app.cfg.general.auto_cleanup_translation {
+        app.main.outcome = None;
+    }
 }
 
 /// The inner margin of the source and translation panes, the same for both
@@ -315,8 +437,14 @@ pub(crate) fn pane_frame(look: &crate::style::Look) -> egui::Frame {
     egui::Frame::new()
         .fill(look.edit_back())
         .stroke(egui::Stroke::new(1.0, c(look.theme.edit.normal.border)))
-        .corner_radius(2)
+        .corner_radius(control_radius(look))
         .inner_margin(egui::Margin::same(PANE_MARGIN))
+}
+
+/// The theme's corner radius for controls (4 for the Fluent themes), which
+/// the text panes and cards share.
+pub(crate) fn control_radius(look: &crate::style::Look) -> f32 {
+    look.theme.metrics.button_radius.clamp(2.0, 12.0)
 }
 
 fn middle_bar(app: &mut GlossaApp, ui: &mut egui::Ui) {
@@ -330,7 +458,7 @@ fn middle_bar(app: &mut GlossaApp, ui: &mut egui::Ui) {
         let pairs_btn = icons::sized_button(ui, &look, Icon::Menu, "", 26.0, true);
         crate::dropdown::menu(ui, &pairs_btn, |ui| {
             for p in app.cfg.general.recent_pairs.clone() {
-                if ui.button(format!("{} → {}", p.from.english_name(), p.to.english_name())).clicked() {
+                if ui.button(format!("{} → {}", crate::langs::name(p.from), crate::langs::name(p.to))).clicked() {
                     app.set_pair(p);
                     ui.close();
                 }
@@ -366,7 +494,7 @@ fn middle_bar(app: &mut GlossaApp, ui: &mut egui::Ui) {
         let auto = app.t("main.auto_detect");
         let detected = app.main.outcome.as_ref().map(|o| o.pair.from).filter(|l| l.is_language());
         let from_label = match (pair.from, detected) {
-            (LangId::AUTO, Some(d)) => app.locale.fmt("main.auto_detect_as", d.english_name()),
+            (LangId::AUTO, Some(d)) => app.locale.fmt("main.auto_detect_as", &crate::langs::name(d)),
             _ => auto.clone(),
         };
         if let Some(l) = crate::widgets::lang_combo(
@@ -394,7 +522,7 @@ fn middle_bar(app: &mut GlossaApp, ui: &mut egui::Ui) {
         }
         let target = app.main.outcome.as_ref().map(|o| o.pair.to).filter(|l| l.is_language());
         let to_label = match (pair.to, target) {
-            (LangId::AUTO, Some(t)) => app.locale.fmt("main.auto_detect_as", t.english_name()),
+            (LangId::AUTO, Some(t)) => app.locale.fmt("main.auto_detect_as", &crate::langs::name(t)),
             _ => auto.clone(),
         };
         if let Some(l) =
@@ -443,23 +571,31 @@ fn result_pane(app: &mut GlossaApp, ui: &mut egui::Ui, height: f32) {
                 app.fonts.ensure(&app.ctx, &text);
                 let rtl = o.pair.to.is_rtl() || glossa_core::text::guessed_direction(&text).is_rtl();
                 {
-                    let shown =
-                        RichText::new(text.clone()).font(look.text_font()).color(c(look.theme.edit.normal.text));
-                    let r = crate::bidi::label(ui, shown, rtl);
-                    crate::dropdown::context_menu(ui, &r, |ui| {
-                        if ui.button(app.t("edit.copy_all")).clicked() {
-                            app.copy_text(&text);
-                            ui.close();
-                        }
-                        if ui.button(app.t("edit.listen")).clicked() {
-                            app.speak(&text, o.pair.to);
-                            ui.close();
-                        }
-                        if ui.button(app.t("edit.dictionary")).clicked() {
-                            crate::dictionary::open(app, Some(text.clone()));
-                            ui.close();
-                        }
-                    });
+                    // Read-only, but selectable with a cursor of its own, so
+                    // part of it can be copied from the menu as well as
+                    // with the keys.
+                    let color = c(look.theme.edit.normal.text);
+                    let font = look.text_font();
+                    let halign = if rtl { egui::Align::RIGHT } else { egui::Align::LEFT };
+                    let layout_font = font.clone();
+                    let mut layouter = |ui: &egui::Ui, buf: &dyn egui::TextBuffer, wrap_width: f32| {
+                        crate::bidi::editor_layout(ui, buf.as_str(), &layout_font, color, wrap_width, halign)
+                    };
+                    let mut shown = text.as_str();
+                    let r = ui.add(
+                        egui::TextEdit::multiline(&mut shown)
+                            .id_salt("translation")
+                            .font(font)
+                            .text_color(color)
+                            .align(egui::Align2([halign, egui::Align::TOP]))
+                            .layouter(&mut layouter)
+                            .frame(egui::Frame::NONE)
+                            .margin(egui::Margin::ZERO)
+                            .desired_width(f32::INFINITY)
+                            .desired_rows(1),
+                    );
+                    crate::text_menu::keep_selection(ui.ctx(), &r);
+                    crate::dropdown::context_menu(ui, &r, |ui| translation_menu(app, ui, r.id, &text, o.pair.to));
                 }
                 // The rest of the result follows the text zoom too.
                 let body = ui.style().text_styles.get(&egui::TextStyle::Body).map_or(14.0, |f| f.size);
@@ -523,7 +659,7 @@ fn back_translation_pane(app: &mut GlossaApp, ui: &mut egui::Ui, height: f32) {
     let frame = egui::Frame::new()
         .fill(c(look.theme.window.client_back))
         .stroke(egui::Stroke::new(1.0, look.border()))
-        .corner_radius(2)
+        .corner_radius(control_radius(&look))
         .inner_margin(egui::Margin::same(PANE_MARGIN));
     let shown = frame.show(ui, |ui| {
         ui.set_min_size(vec2(ui.available_width(), height - 2.0 * PANE_MARGIN as f32));
@@ -548,7 +684,7 @@ fn stacked_results(app: &mut GlossaApp, ui: &mut egui::Ui, height: f32) {
             let frame = egui::Frame::new()
                 .fill(look.edit_back())
                 .stroke(egui::Stroke::new(1.0, look.border()))
-                .corner_radius(3)
+                .corner_radius(control_radius(&look))
                 .inner_margin(egui::Margin::same(6));
             frame.show(ui, |ui| {
                 ui.set_width(ui.available_width());
@@ -623,37 +759,124 @@ fn service_strip(app: &mut GlossaApp, ui: &mut egui::Ui) {
     }
 }
 
-pub fn edit_menu(app: &mut GlossaApp, ui: &mut egui::Ui, source: bool) {
-    if ui.button(app.t("edit.copy_all")).clicked() {
-        let t = app.main.source.clone();
-        app.copy_text(&t);
+/// The source pane's context menu: undo and redo, the clipboard at the
+/// cursor or over the selection, select all, and the selection (or the
+/// whole text) translated, looked up or read aloud.
+fn source_menu(app: &mut GlossaApp, ui: &mut egui::Ui, edit: egui::Id) {
+    use crate::text_menu as tm;
+    let ctx = ui.ctx().clone();
+    let range = tm::selection(&ctx, edit);
+    let selected = tm::selected(&app.main.source, range).map(str::to_owned);
+    let has_text = !app.main.source.is_empty();
+    let can_undo = tm::can_undo(&ctx, edit, &app.main.source, false);
+    let can_redo = tm::can_undo(&ctx, edit, &app.main.source, true);
+    let locale = app.locale.clone();
+    let button =
+        |ui: &mut egui::Ui, enabled: bool, key: &str| ui.add_enabled(enabled, egui::Button::new(locale.get(key)));
+    let mut changed = false;
+    if button(ui, can_undo, "edit.undo").clicked() {
+        changed |= tm::undo(&ctx, edit, &mut app.main.source, false);
         ui.close();
     }
-    if source && ui.button(app.t("edit.cut_all")).clicked() {
-        let t = std::mem::take(&mut app.main.source);
-        app.copy_text(&t);
-        ui.close();
-    }
-    if source && ui.button(app.t("edit.paste")).clicked() {
-        if let Some(t) = app.clipboard_text() {
-            app.main.source.push_str(&t);
-            app.main.edited_at = Some(std::time::Instant::now());
-        }
+    if button(ui, can_redo, "edit.redo").clicked() {
+        changed |= tm::undo(&ctx, edit, &mut app.main.source, true);
         ui.close();
     }
     ui.separator();
-    if ui.button(app.t("edit.translate")).clicked() {
+    if button(ui, selected.is_some(), "edit.cut").clicked() {
+        if let Some(s) = &selected {
+            app.copy_text(s);
+            tm::remember_for_undo(&ctx, edit, &app.main.source);
+            let at = tm::replace(&mut app.main.source, range, "");
+            tm::set_selection(&ctx, edit, tm::cursor_at(at));
+            changed = true;
+        }
+        ui.close();
+    }
+    if button(ui, selected.is_some(), "edit.copy").clicked() {
+        if let Some(s) = &selected {
+            app.copy_text(s);
+        }
+        ui.close();
+    }
+    if ui.button(app.t("edit.paste")).clicked() {
+        if let Some(t) = app.clipboard_text() {
+            tm::remember_for_undo(&ctx, edit, &app.main.source);
+            let at = tm::replace(&mut app.main.source, range, &t);
+            tm::set_selection(&ctx, edit, tm::cursor_at(at));
+            changed = true;
+        }
+        ui.close();
+    }
+    if button(ui, has_text, "edit.select_all").clicked() {
+        tm::select_all(&ctx, edit, &app.main.source);
+        ui.close();
+    }
+    ui.separator();
+    if button(ui, has_text, "edit.copy_all").clicked() {
+        let t = app.main.source.clone();
+        app.copy_text(&t);
+        ui.close();
+    }
+    if button(ui, has_text, "edit.cut_all").clicked() {
+        tm::remember_for_undo(&ctx, edit, &app.main.source);
+        let t = std::mem::take(&mut app.main.source);
+        app.copy_text(&t);
+        tm::set_selection(&ctx, edit, tm::cursor_at(0));
+        changed = true;
+        ui.close();
+    }
+    ui.separator();
+    // The selection, or all of it.
+    let subject = selected.clone().unwrap_or_else(|| app.main.source.clone());
+    if button(ui, has_text, "edit.translate").clicked() {
+        if selected.is_some() {
+            app.main.source = subject.clone();
+        }
         retranslate(app);
         ui.close();
     }
-    if ui.button(app.t("edit.dictionary")).clicked() {
-        let t = app.main.source.clone();
-        crate::dictionary::open(app, Some(t));
+    if button(ui, has_text, "edit.dictionary").clicked() {
+        crate::dictionary::open(app, Some(subject.clone()));
         ui.close();
     }
+    if button(ui, has_text, "edit.listen").clicked() {
+        app.speak(&subject, LangId::AUTO);
+        ui.close();
+    }
+    if changed {
+        source_edited(app);
+    }
+}
+
+/// The translation pane's context menu: copy the selection or all of it,
+/// select all, read aloud, look up.
+fn translation_menu(app: &mut GlossaApp, ui: &mut egui::Ui, edit: egui::Id, text: &str, lang: LangId) {
+    use crate::text_menu as tm;
+    let ctx = ui.ctx().clone();
+    let selected = tm::selected(text, tm::selection(&ctx, edit)).map(str::to_owned);
+    if ui.add_enabled(selected.is_some(), egui::Button::new(app.t("edit.copy"))).clicked() {
+        if let Some(s) = &selected {
+            app.copy_text(s);
+        }
+        ui.close();
+    }
+    if ui.button(app.t("edit.copy_all")).clicked() {
+        app.copy_text(text);
+        ui.close();
+    }
+    if ui.button(app.t("edit.select_all")).clicked() {
+        tm::select_all(&ctx, edit, text);
+        ui.close();
+    }
+    ui.separator();
+    let subject = selected.unwrap_or_else(|| text.to_owned());
     if ui.button(app.t("edit.listen")).clicked() {
-        let t = app.main.source.clone();
-        app.speak(&t, LangId::AUTO);
+        app.speak(&subject, lang);
+        ui.close();
+    }
+    if ui.button(app.t("edit.dictionary")).clicked() {
+        crate::dictionary::open(app, Some(subject));
         ui.close();
     }
 }
@@ -722,7 +945,7 @@ fn toast(app: &mut GlossaApp, ctx: &egui::Context) {
         .anchor(egui::Align2::CENTER_BOTTOM, vec2(0.0, -58.0))
         .interactable(false)
         .show(ctx, |ui| {
-            egui::Frame::popup(ui.style()).show(ui, |ui| {
+            egui::Frame::popup(ui.style()).corner_radius(ui.visuals().menu_corner_radius).show(ui, |ui| {
                 ui.set_max_width(460.0);
                 ui.label(RichText::new(&t.text).color(col));
             });

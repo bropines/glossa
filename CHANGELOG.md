@@ -231,8 +231,47 @@ for Windows and Linux.
   popup shade and the mouse mode switches.
 - Licenses (MIT or Apache-2.0), NOTICE, CI on Linux and Windows, release
   builds, issue templates, contributing and security guides.
+- **First run**: the main window opens once with a note that Glossa lives
+  in the tray (the menu bar on macOS) and which hotkey translates a
+  selection, until *Got it* (`general.show_tray_hint`).
+- **Text pane menus**: the source pane's context menu has Undo, Redo, Cut,
+  Copy, Paste at the cursor (over the selection), Select all, and acts on
+  the selection where there is one; the translation pane is selectable and
+  has Copy, Copy all, Select all. The dictionary article has Copy,
+  Translate, Search (on the dictionary's site) and Listen.
+- **Always on top** for the main window, in its ⋮ menu
+  (`appearance.main_always_on_top`); **Help** in the same menu opens the
+  documentation. A right click on the back and forward arrows lists the
+  recent texts and *Show full history*.
+- **Language names in the interface language**: pickers and labels show
+  them in Russian with the Russian interface (a `languages` table in the
+  native locale format, complete for the built-in Russian pack), with each
+  language's own name beside it; a search finds any of the names.
+- A list of problems found at start-up, shown once, for the engine to fill.
 
 ### Fixed
+
+- Messages were invisible while the app sat in the tray: a hotkey's "nothing
+  to translate", OCR unavailable, a failed copy, replace or layout
+  conversion and the speech input stub drew a toast in the hidden main
+  window. They now show in a small notice by the pointer that takes no
+  focus, errors in the error colour.
+- Dropdown lists could close before a click on them counted (where the
+  list takes the focus, as on macOS and X11), closed by themselves when
+  opened from a window not in the foreground, and dropped a click made
+  before the pointer moved over a freshly opened list.
+- Mouse mode failing to start was silent: it now says why (a notice, and
+  Options → Advanced), the tray's check mark shows whether it really runs,
+  and where mouse mode cannot work the tray item and the options are greyed
+  out.
+- The history window laid out every entry each frame (up to 5000); it now
+  lays out only the rows in view, with their heights remembered.
+- Dead controls: the microphone button and the speech input language are
+  hidden until there is speech input. Unused interface strings were removed
+  (`article.print`, `article.select_all`, `lang.edit`, `msg.no_internet`).
+- Corners follow the theme: text panes, cards, history rows, notices and the
+  popup (where its window can be see-through) use its radii, and dropdown
+  windows get the system's rounded corners on Windows 11.
 
 - Classic themes such as Metro left the options window without visible
   labels: their `Window.Text` is the caption's (white on a blue caption)

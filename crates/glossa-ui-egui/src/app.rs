@@ -160,6 +160,9 @@ pub struct GlossaApp {
     pub popup_target: Option<glossa_core::LangId>,
     /// The last OCR region, for "repeat last recognition".
     pub last_region: Option<glossa_core::ocr::Rect>,
+    /// Problems met while starting, shown once (a banner in the main window,
+    /// or a notice when it is hidden) until put away.
+    pub startup_warnings: Vec<String>,
 }
 
 impl GlossaApp {
@@ -182,6 +185,7 @@ impl GlossaApp {
         fonts.install_base(&ctx, &cfg.appearance.font_family, &look.theme);
         *shell.wake.ctx.lock() = Some(ctx.clone());
 
+        crate::langs::set_locale(engine.locale());
         let events = engine.subscribe();
         let (tasks_tx, tasks) = mpsc::channel();
         let start_visible = !launch.hidden;
@@ -244,6 +248,7 @@ impl GlossaApp {
             popup_blurred: false,
             popup_target: None,
             last_region: None,
+            startup_warnings: shell.startup_warnings,
         }
     }
 
@@ -331,6 +336,16 @@ impl GlossaApp {
         self.ctx.send_viewport_cmd_to(egui::ViewportId::ROOT, egui::ViewportCommand::Visible(true));
         self.ctx.send_viewport_cmd_to(egui::ViewportId::ROOT, egui::ViewportCommand::Minimized(false));
         self.ctx.send_viewport_cmd_to(egui::ViewportId::ROOT, egui::ViewportCommand::Focus);
+    }
+
+    /// Keep the main window above the others, or not, as set.
+    pub fn apply_main_window_level(&self) {
+        let level = if self.cfg.appearance.main_always_on_top {
+            egui::WindowLevel::AlwaysOnTop
+        } else {
+            egui::WindowLevel::Normal
+        };
+        self.ctx.send_viewport_cmd_to(egui::ViewportId::ROOT, egui::ViewportCommand::WindowLevel(level));
     }
 
     pub fn hide_main(&mut self) {
@@ -609,6 +624,7 @@ impl GlossaApp {
             self.cfg.windows = windows;
         }
         self.locale = self.engine.locale();
+        crate::langs::set_locale(self.locale.clone());
         if let Some(scale) = unsaved_zoom {
             self.cfg.appearance.text_scale = scale;
         }
@@ -617,13 +633,15 @@ impl GlossaApp {
         self.fonts.install_base(&self.ctx, &self.cfg.appearance.font_family, &self.look.theme);
         self.backdrop_dirty = true;
         self.backdrop_generation += 1;
-        if let Some(m) = self.mouse.as_mut() {
-            m.sync(self.cfg.mouse_mode.enabled);
+        let mouse_failed = self.mouse.as_mut().and_then(|m| m.sync(self.cfg.mouse_mode.enabled));
+        if let Some(e) = mouse_failed {
+            let m = self.locale.fmt("mouse.failed", &e);
+            self.notify(m, true);
         }
         if let Some(t) = &self.tray {
             let c = self.look.theme.accent;
             let accent = [c.r as f32 / 255.0, c.g as f32 / 255.0, c.b as f32 / 255.0];
-            t.set_look(accent, self.look.theme.dark, self.cfg.mouse_mode.enabled);
+            t.set_look(accent, self.look.theme.dark, self.mouse_running());
         }
         if before_hotkeys != self.cfg.hotkeys {
             self.register_hotkeys();
@@ -742,6 +760,16 @@ impl GlossaApp {
         crate::actions::perform(self, action, text);
     }
 
+    /// Whether mouse mode is watching the mouse now.
+    pub fn mouse_running(&self) -> bool {
+        self.mouse.as_ref().is_some_and(|m| m.running())
+    }
+
+    /// Why mouse mode is switched on but not running, if it failed to start.
+    pub fn mouse_error(&self) -> Option<String> {
+        self.mouse.as_ref().and_then(|m| m.error()).map(str::to_owned)
+    }
+
     /// Whether the control API is serving now (it starts with the program).
     pub fn server_running(&self) -> bool {
         self.server.is_some()
@@ -814,6 +842,11 @@ impl eframe::App for GlossaApp {
             }
             if let Some(text) = self.launch.popup_text.clone() {
                 crate::popup::open(self, text, None);
+            }
+            if !self.main_visible && !self.startup_warnings.is_empty() {
+                let text = format!("{}\n{}", self.t("main.startup_warnings"), self.startup_warnings.join("\n"));
+                self.startup_warnings.clear();
+                self.notify(text, true);
             }
             for p in std::mem::take(&mut self.pending) {
                 match p {
@@ -997,6 +1030,7 @@ impl eframe::App for GlossaApp {
             audio: std::mem::replace(&mut self.audio, AudioPlayer::new()),
             wake: self.wake.clone(),
             pending: Vec::new(),
+            startup_warnings: Vec::new(),
             // Unless this was an unload, the window closing means quitting.
             quit: !self.unloading || self.quitting,
             restart: self.restarting,

@@ -425,7 +425,7 @@ fn basics(app: &mut GlossaApp, ui: &mut egui::Ui, st: &mut OptionsState) {
     group(ui, &look, &app.t("options.basics.auto_detect_group"), |ui| {
         lang_row(app, ui, &app.t("options.basics.first_language"), "first", &mut d.general.first_language, false);
         lang_row(app, ui, &app.t("options.basics.second_language"), "second", &mut d.general.second_language, false);
-        lang_row(app, ui, &app.t("options.basics.speech_input"), "speech", &mut d.general.speech_language, false);
+
         ui.checkbox(&mut d.general.smart_direction, app.t("options.basics.smart_direction"));
     });
     group(ui, &look, &app.t("options.basics.history_group"), |ui| {
@@ -1085,14 +1085,14 @@ fn option_field(
 fn languages(app: &mut GlossaApp, ui: &mut egui::Ui, st: &mut OptionsState) {
     let d = &mut st.draft.languages;
     let mut langs: Vec<LangId> = LangId::all().collect();
-    langs.sort_by_key(|l| l.english_name());
+    crate::langs::sort(&mut langs);
     let per_col = langs.len().div_ceil(4);
     egui::Grid::new("langs").num_columns(4).spacing(vec2(18.0, 2.0)).show(ui, |ui| {
         for r in 0..per_col {
             for col in 0..4 {
                 if let Some(l) = langs.get(col * per_col + r) {
                     let mut on = !d.disabled.contains(l);
-                    if ui.checkbox(&mut on, l.english_name()).on_hover_text(l.native_name()).changed() {
+                    if ui.checkbox(&mut on, crate::langs::name(*l)).on_hover_text(l.native_name()).changed() {
                         if on {
                             d.disabled.retain(|x| x != l);
                         } else {
@@ -1417,27 +1417,35 @@ fn advanced(app: &mut GlossaApp, ui: &mut egui::Ui, st: &mut OptionsState) {
         ui.checkbox(&mut d.advanced.remove_line_breaks, app.t("options.advanced.remove_line_breaks"));
         hint(ui, &look, &app.t("options.advanced.remove_line_breaks_hint"));
     });
+    let supported = crate::mouse::MouseHub::supported();
+    let mouse_error = app.mouse_error().filter(|_| d.mouse_mode.enabled);
     group(ui, &look, &app.t("options.advanced.mouse_mode_group"), |ui| {
-        ui.checkbox(&mut d.mouse_mode.enabled, app.t("tray.mouse_enabled"));
-        ui.horizontal(|ui| {
-            ui.radio_value(&mut d.mouse_mode.behaviour, MouseBehaviour::ShowIcon, app.t("tray.mouse_icon"));
-            ui.radio_value(
-                &mut d.mouse_mode.behaviour,
-                MouseBehaviour::ShowTranslation,
-                app.t("tray.mouse_translation"),
-            );
-            ui.radio_value(
-                &mut d.mouse_mode.behaviour,
-                MouseBehaviour::ShowTranslationAndRead,
-                app.t("tray.mouse_translation_read"),
-            );
-        });
-        ui.checkbox(&mut d.mouse_mode.ctrl_only, app.t("options.advanced.mouse_ctrl_only"));
-        hint(ui, &look, &app.t("options.advanced.mouse_ctrl_only_hint"));
-        ui.checkbox(&mut d.mouse_mode.tray_click_toggles, app.t("options.advanced.tray_toggles_mouse"));
-        hint(ui, &look, &app.t("options.advanced.tray_toggles_mouse_hint"));
-        ui.label(RichText::new(app.t("options.advanced.mouse_mode_note")).small().color(look.weak_text()));
+        if !supported {
+            ui.label(RichText::new(app.t("mouse.unavailable")).color(look.weak_text()));
+        } else if let Some(e) = &mouse_error {
+            ui.label(RichText::new(app.locale.fmt("mouse.failed", e)).color(look.error()));
+        }
+        ui.add_enabled_ui(supported, |ui| mouse_mode_options(app, ui, &look, d));
     });
+}
+
+/// The mouse mode switches, greyed out by the caller where it cannot work.
+fn mouse_mode_options(app: &GlossaApp, ui: &mut egui::Ui, look: &crate::style::Look, d: &mut Config) {
+    ui.checkbox(&mut d.mouse_mode.enabled, app.t("tray.mouse_enabled"));
+    ui.horizontal(|ui| {
+        ui.radio_value(&mut d.mouse_mode.behaviour, MouseBehaviour::ShowIcon, app.t("tray.mouse_icon"));
+        ui.radio_value(&mut d.mouse_mode.behaviour, MouseBehaviour::ShowTranslation, app.t("tray.mouse_translation"));
+        ui.radio_value(
+            &mut d.mouse_mode.behaviour,
+            MouseBehaviour::ShowTranslationAndRead,
+            app.t("tray.mouse_translation_read"),
+        );
+    });
+    ui.checkbox(&mut d.mouse_mode.ctrl_only, app.t("options.advanced.mouse_ctrl_only"));
+    hint(ui, look, &app.t("options.advanced.mouse_ctrl_only_hint"));
+    ui.checkbox(&mut d.mouse_mode.tray_click_toggles, app.t("options.advanced.tray_toggles_mouse"));
+    hint(ui, look, &app.t("options.advanced.tray_toggles_mouse_hint"));
+    ui.label(RichText::new(app.t("options.advanced.mouse_mode_note")).small().color(look.weak_text()));
 }
 
 fn ocr(app: &mut GlossaApp, ui: &mut egui::Ui, st: &mut OptionsState) {

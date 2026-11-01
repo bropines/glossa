@@ -12,6 +12,8 @@ use crate::style::Look;
 pub enum Icon {
     Listen,
     Copy,
+    /// For the speech input button, hidden until there is speech input.
+    #[allow(dead_code)]
     Mic,
     Swap,
     Clear,
@@ -332,7 +334,8 @@ pub fn sized_button(ui: &mut Ui, look: &Look, icon: Icon, tooltip: &str, size: f
             WidgetState::Normal
         };
         if enabled && resp.hovered() {
-            ui.painter().rect_filled(rect, 3.0, hover_plate(look, resp.is_pointer_button_down_on()));
+            let radius = look.theme.metrics.button_radius.max(3.0);
+            ui.painter().rect_filled(rect, radius, hover_plate(look, resp.is_pointer_button_down_on()));
         }
         paint(ui.painter(), rect.shrink(size * 0.17), icon, look.icon(state));
     }

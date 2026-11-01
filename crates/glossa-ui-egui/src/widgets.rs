@@ -108,7 +108,8 @@ pub fn service_tab(ui: &mut Ui, look: &Look, id: &str, name: &str, selected: boo
 const LIST_HEIGHT: f32 = 380.0;
 
 /// A language picker: a button showing the language, opening a searchable
-/// list (English and native names) in a window of its own under the button
+/// list (names in the interface language and native names, see
+/// [`crate::langs`]) in a window of its own under the button
 /// (see [`crate::dropdown`]). Type to search; the arrow keys and Page
 /// Up/Down move through the list, Enter picks. `search_hint` fills the empty
 /// search box.
@@ -133,7 +134,7 @@ pub fn lang_combo(
             d.remove::<usize>(mark_id);
         })
     };
-    let label = if current == LangId::AUTO { auto_label.to_owned() } else { current.english_name().to_owned() };
+    let label = if current == LangId::AUTO { auto_label.to_owned() } else { crate::langs::name(current) };
     let button = dropdown::combo_button(ui, &label, width, dropdown::is_open(ui.ctx(), id));
     if button.clicked() {
         dropdown::toggle(ui.ctx(), id);
@@ -156,13 +157,8 @@ pub fn lang_combo(
             items.push(LangId::AUTO);
         }
         let mut langs: Vec<LangId> = LangId::all().filter(|l| !disabled.contains(l)).collect();
-        langs.sort_by_key(|l| l.english_name());
-        items.extend(langs.into_iter().filter(|l| {
-            needle.is_empty()
-                || l.english_name().to_lowercase().contains(&needle)
-                || l.native_name().to_lowercase().contains(&needle)
-                || l.bcp47().eq_ignore_ascii_case(&needle)
-        }));
+        crate::langs::sort(&mut langs);
+        items.extend(langs.into_iter().filter(|l| crate::langs::matches(*l, &needle)));
 
         // The keyboard's place in the list: the current language at first,
         // the first match once the search changes.
@@ -206,12 +202,7 @@ pub fn lang_combo(
                 if l == LangId::AUTO {
                     return auto_label.to_owned();
                 }
-                let (name, native) = (l.english_name(), l.native_name());
-                if native.is_empty() || native == name {
-                    name.to_owned()
-                } else {
-                    format!("{name}  ·  {native}")
-                }
+                crate::langs::label(l)
             })
             .collect();
         // The list scrolls under the search box, which stays in view. A

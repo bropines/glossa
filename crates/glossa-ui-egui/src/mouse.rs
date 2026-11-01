@@ -29,17 +29,41 @@ pub struct MouseHub {
     tx: Sender<Gesture>,
     rx: Receiver<Gesture>,
     wake: WakeFn,
-    pub error: Option<String>,
+    /// Why the watcher did not start, the last time it was asked to; shown
+    /// in Options → Advanced until it starts.
+    error: Option<String>,
+    /// The setting the watcher was last synced to, so a failure is reported
+    /// once per attempt rather than on every settings change.
+    wanted: bool,
 }
 
 impl MouseHub {
     pub fn new(wake: WakeFn) -> MouseHub {
         let (tx, rx) = mpsc::channel();
-        MouseHub { watcher: None, tx, rx, wake, error: None }
+        MouseHub { watcher: None, tx, rx, wake, error: None, wanted: false }
     }
 
-    /// Start or stop watching to match the setting.
-    pub fn sync(&mut self, enabled: bool) {
+    /// Whether mouse mode can work on this system at all.
+    pub fn supported() -> bool {
+        MouseWatcher::supported()
+    }
+
+    /// Whether the watcher is running: what the tray's check mark shows.
+    pub fn running(&self) -> bool {
+        self.watcher.is_some()
+    }
+
+    /// Why mouse mode is not running though it is switched on, if it failed.
+    pub fn error(&self) -> Option<&str> {
+        self.error.as_deref()
+    }
+
+    /// Start or stop watching to match the setting. Returns the reason when
+    /// it was switched on just now and could not start, for the caller to
+    /// tell the user.
+    pub fn sync(&mut self, enabled: bool) -> Option<String> {
+        let newly = enabled && !self.wanted;
+        self.wanted = enabled;
         match (enabled, self.watcher.is_some()) {
             (true, false) => {
                 let (tx, wake) = (self.tx.clone(), self.wake.clone());
@@ -50,15 +74,24 @@ impl MouseHub {
                     Ok(w) => {
                         self.watcher = Some(w);
                         self.error = None;
+                        None
                     }
                     Err(e) => {
                         tracing::warn!("mouse mode: {e}");
                         self.error = Some(e.to_string());
+                        newly.then(|| e.to_string())
                     }
                 }
             }
-            (false, true) => self.watcher = None,
-            _ => {}
+            (false, true) => {
+                self.watcher = None;
+                None
+            }
+            (false, false) => {
+                self.error = None;
+                None
+            }
+            (true, true) => None,
         }
     }
 

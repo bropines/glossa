@@ -549,7 +549,7 @@ fn picture_info(app: &mut GlossaApp, ui: &mut egui::Ui, st: &mut ResultWindow, r
         let mut facts = vec![format!("{} × {} px", st.image.width(), st.image.height())];
         facts.push(app.locale.fmt("msg.ms", &o.ocr.elapsed_ms.to_string()));
         if let Some(l) = o.ocr.detected_lang.filter(|l| l.is_language()) {
-            facts.push(l.english_name().to_owned());
+            facts.push(crate::langs::name(l));
         }
         lines.push(RichText::new(facts.join(" · ")).small().color(weak));
         let count = app.locale.fmt_args(
@@ -685,7 +685,7 @@ fn direction_bar(app: &mut GlossaApp, ui: &mut egui::Ui, st: &mut ResultWindow) 
         let combo_w = ((ui.available_width() - translate_w - translator_w - swap_w - spacing) / 2.0).max(90.0);
         let detected = source_language(st);
         let from_label = match (st.from, detected) {
-            (LangId::AUTO, d) if d.is_language() => app.locale.fmt("main.auto_detect_as", d.english_name()),
+            (LangId::AUTO, d) if d.is_language() => app.locale.fmt("main.auto_detect_as", &crate::langs::name(d)),
             _ => auto.clone(),
         };
         if let Some(l) =
@@ -863,8 +863,8 @@ fn status_line(app: &mut GlossaApp, ui: &mut egui::Ui, st: &ResultWindow) {
         let mut s = format!(
             "{} · {} → {}",
             provider_name(app, &t.translation.provider_id),
-            t.pair.from.english_name(),
-            t.pair.to.english_name()
+            crate::langs::name(t.pair.from),
+            crate::langs::name(t.pair.to)
         );
         if t.translation.elapsed_ms > 0 {
             s.push_str(" · ");

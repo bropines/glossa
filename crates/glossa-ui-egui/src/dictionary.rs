@@ -236,6 +236,15 @@ fn body(app: &mut GlossaApp, ui: &mut egui::Ui, st: &mut DictState) {
         });
     });
     app.text_zoom_wheel(ui, article_panel.response.rect);
+    // The article's context menu, for a right click anywhere over it (its
+    // text and links take the clicks themselves).
+    let area = article_panel.response.rect;
+    let right_click =
+        ui.input(|i| i.pointer.secondary_clicked() && i.pointer.interact_pos().is_some_and(|p| area.contains(p)));
+    let menu_id = egui::Id::unique("dict-article-menu");
+    if let Some(a) = st.article.clone() {
+        crate::dropdown::context_menu_in(ui, menu_id, right_click, area.center(), |ui| article_menu(app, ui, st, &a));
+    }
     match click {
         Some(ArticleClick::Lookup(w)) => {
             st.query = w;
@@ -244,5 +253,30 @@ fn body(app: &mut GlossaApp, ui: &mut egui::Ui, st: &mut DictState) {
         Some(ArticleClick::Open(url)) => app.open_url(&url),
         Some(ArticleClick::Listen(w)) => app.speak(&w, st.from),
         None => {}
+    }
+}
+
+/// The article's context menu: copy it, translate or hear the word, or
+/// search for it on the dictionary's website.
+fn article_menu(app: &mut GlossaApp, ui: &mut egui::Ui, st: &DictState, a: &Article) {
+    let word = st.query.trim().to_owned();
+    if ui.button(app.t("article.copy")).clicked() {
+        app.copy_text(&a.to_plain_text());
+        ui.close();
+    }
+    if ui.button(app.t("article.translate")).clicked() {
+        app.perform(glossa_core::Action::ShowMainWindow, Some(word.clone()));
+        ui.close();
+    }
+    let link = st.service.as_deref().and_then(|s| app.engine.web_link(s, &word, LangPair::new(st.from, st.to)));
+    if let Some(url) = link {
+        if ui.button(app.t("article.search")).clicked() {
+            app.open_url(&url);
+            ui.close();
+        }
+    }
+    if ui.button(app.t("article.listen")).clicked() {
+        app.speak(&word, st.from);
+        ui.close();
     }
 }

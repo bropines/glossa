@@ -29,7 +29,7 @@ use glossa_platform::window;
 const MARGIN: i8 = 4;
 const EDGE: f32 = MARGIN as f32 + 1.0;
 /// Longest a menu gets before it scrolls.
-const MENU_MAX_HEIGHT: f32 = 640.0;
+const MENU_MAX_HEIGHT: f32 = 760.0;
 /// Longest a [`ComboBox`]'s list gets before it scrolls, unless it says.
 const COMBO_MAX_HEIGHT: f32 = 400.0;
 
@@ -190,12 +190,23 @@ pub fn menu<R>(ui: &Ui, button: &Response, add: impl FnOnce(&mut Ui) -> R) -> Op
     show(ui, id, button.rect, button.rect.width(), MENU_MAX_HEIGHT, |ui, _| add(ui))
 }
 
+/// The id of [`context_menu`]'s dropdown for `target`.
+pub fn context_menu_id(target: &Response) -> Id {
+    target.id.with("dropdown-context")
+}
+
 /// A context menu for `target`: opens at the pointer on a right click.
 pub fn context_menu<R>(ui: &Ui, target: &Response, add: impl FnOnce(&mut Ui) -> R) -> Option<R> {
-    let id = target.id.with("dropdown-context");
+    context_menu_in(ui, context_menu_id(target), target.secondary_clicked(), target.rect.center(), add)
+}
+
+/// A context menu `id` for an area whose parts take the clicks themselves
+/// (selectable text, links): `clicked` says the right button was clicked
+/// over it, found out by the caller.
+pub fn context_menu_in<R>(ui: &Ui, id: Id, clicked: bool, fallback: Pos2, add: impl FnOnce(&mut Ui) -> R) -> Option<R> {
     let at_id = id.with("at");
-    if target.secondary_clicked() {
-        let at = ui.ctx().input(|i| i.pointer.interact_pos()).unwrap_or(target.rect.center());
+    if clicked {
+        let at = ui.ctx().input(|i| i.pointer.interact_pos()).unwrap_or(fallback);
         ui.ctx().data_mut(|d| d.insert_temp(at_id, at));
         open(ui.ctx(), id);
     }

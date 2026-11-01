@@ -95,7 +95,14 @@ fn build_menu(locale: &Locale) -> (Menu, CheckMenuItem, CheckMenuItem) {
     let menu = Menu::new();
     let item = |id: &str, key: &str| MenuItem::with_id(id, locale.get(key), true, None);
     let hotkeys = CheckMenuItem::with_id("hotkeys", locale.get("tray.hotkeys"), true, true, None);
-    let mouse = CheckMenuItem::with_id("mouse", locale.get("tray.mouse_mode"), true, false, None);
+    // Greyed out where mouse mode cannot work at all.
+    let mouse = CheckMenuItem::with_id(
+        "mouse",
+        locale.get("tray.mouse_mode"),
+        crate::mouse::MouseHub::supported(),
+        false,
+        None,
+    );
     // Recognition actions go by their action id; the classic item stays
     // first, with copy mode and in-place translation next to it where they
     // are seen, and the rest a level down.
@@ -249,8 +256,9 @@ impl Tray {
         self.events.try_iter().collect()
     }
 
-    /// Recolour the icon for the theme's accent and mouse mode's state, and
-    /// make the menu dark or light to match the theme.
+    /// Recolour the icon for the theme's accent and mouse mode's state
+    /// (running, not merely switched on), and make the menu dark or light to
+    /// match the theme.
     pub fn set_look(&self, accent: [f32; 3], dark: bool, mouse_mode: bool) {
         // The menu is drawn by the system (TrackPopupMenu on Windows), which
         // follows the process-wide menu theme rather than any window's.
@@ -280,7 +288,7 @@ pub fn handle(app: &mut GlossaApp, e: TrayEvent) {
     match e {
         TrayEvent::ShowMain => app.show_main(),
         TrayEvent::Click => {
-            if app.cfg.mouse_mode.tray_click_toggles {
+            if app.cfg.mouse_mode.tray_click_toggles && crate::mouse::MouseHub::supported() {
                 app.perform(Action::ToggleMouseMode, None);
             } else if app.main_visible {
                 app.hide_main();

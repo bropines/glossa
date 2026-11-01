@@ -257,8 +257,10 @@ impl PopupState {
         match &self.outcome {
             Some(o) => {
                 let short = short_service(&service_name);
-                app.locale
-                    .fmt_args("popup.title_direction", &[o.pair.from.english_name(), o.pair.to.english_name(), &short])
+                app.locale.fmt_args(
+                    "popup.title_direction",
+                    &[crate::langs::name(o.pair.from).as_str(), crate::langs::name(o.pair.to).as_str(), &short],
+                )
             }
             None if self.busy => app.t("msg.translating"),
             None => service_name,
@@ -386,9 +388,19 @@ fn body(app: &mut GlossaApp, ui: &mut egui::Ui, st: &mut PopupState) -> (bool, e
     // toward black so its text stays readable.
     let fill = crate::style::c(cfg.shaded(back, app.popup_blurred));
     let border = if cfg.show_border { look.popup_frame_width.max(0.0) } else { 0.0 };
+    // Rounded as the theme rounds overlays where the window's corners can
+    // be see-through: a translucent window with no backdrop (a backdrop
+    // fills the whole rectangle, and would show square behind them).
+    let see_through = cfg!(not(target_os = "macos")) || app.transparent_root();
+    let radius = if see_through && !look.popup_backdrop.is_some() {
+        look.theme.metrics.overlay_radius.max(look.theme.metrics.button_radius).clamp(0.0, 12.0)
+    } else {
+        0.0
+    };
     let frame = egui::Frame::new()
         .fill(fill)
         .stroke(egui::Stroke::new(border, look.popup_frame))
+        .corner_radius(radius)
         .inner_margin(egui::Margin::symmetric(6, 4));
     // Base size of the header icons; `sized_button` applies the icon scale,
     // `icon` is what they really take, for measuring.
@@ -770,7 +782,10 @@ fn target_menu(app: &GlossaApp, st: &PopupState, ui: &mut egui::Ui) -> Option<La
     }
     if let Some(o) = st.outcome.as_ref().filter(|o| o.pair.from.is_language() && o.pair.to.is_language()) {
         if o.pair.from != o.pair.to {
-            let label = app.locale.fmt_args("popup.swap", &[o.pair.to.english_name(), o.pair.from.english_name()]);
+            let label = app.locale.fmt_args(
+                "popup.swap",
+                &[crate::langs::name(o.pair.to).as_str(), crate::langs::name(o.pair.from).as_str()],
+            );
             if ui.button(label).clicked() {
                 out = Some(LangPair::new(o.pair.to, o.pair.from));
             }
@@ -786,7 +801,7 @@ fn target_menu(app: &GlossaApp, st: &PopupState, ui: &mut egui::Ui) -> Option<La
         }
     }
     for l in recent {
-        if ui.selectable_label(to == l, l.english_name()).clicked() {
+        if ui.selectable_label(to == l, crate::langs::name(l)).clicked() {
             out = Some(LangPair::new(LangId::AUTO, l));
         }
     }
@@ -801,20 +816,15 @@ fn target_menu(app: &GlossaApp, st: &PopupState, ui: &mut egui::Ui) -> Option<La
     let needle = search.trim().to_lowercase();
     let mut langs: Vec<LangId> = LangId::all()
         .filter(|l| l.is_language() && !disabled.contains(l))
-        .filter(|l| {
-            needle.is_empty()
-                || l.english_name().to_lowercase().contains(&needle)
-                || l.native_name().to_lowercase().contains(&needle)
-                || l.bcp47().eq_ignore_ascii_case(&needle)
-        })
+        .filter(|l| crate::langs::matches(*l, &needle))
         .collect();
-    langs.sort_by_key(|l| l.english_name());
+    crate::langs::sort(&mut langs);
     if ui.input(|i| i.key_pressed(egui::Key::Enter)) && !needle.is_empty() {
         out = out.or(langs.first().map(|l| LangPair::new(LangId::AUTO, *l)));
     }
     egui::ScrollArea::vertical().id_salt("popup-target-list").max_height(240.0).show(ui, |ui| {
         for l in langs {
-            if ui.selectable_label(to == l, l.english_name()).clicked() {
+            if ui.selectable_label(to == l, crate::langs::name(l)).clicked() {
                 out = Some(LangPair::new(LangId::AUTO, l));
             }
         }

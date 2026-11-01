@@ -61,6 +61,11 @@ pub fn perform(app: &mut GlossaApp, action: Action, text: Option<String>) {
             }
         }
         Action::ToggleMouseMode => {
+            if !crate::mouse::MouseHub::supported() {
+                let m = app.t("mouse.unavailable");
+                app.notify(m, true);
+                return;
+            }
             let on = !app.cfg.mouse_mode.enabled;
             let _ = app.engine.update_config(move |c| c.mouse_mode.enabled = on);
         }
