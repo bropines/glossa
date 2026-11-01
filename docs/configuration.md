@@ -354,6 +354,8 @@ described in [ocr.md](ocr.md).
 | `watch_interval_ms` | integer | `800` | How often a watched region is checked for changes, 200–60 000 ms. |
 | `lens` | table | | See [`[ocr.lens]`](#ocrlens). |
 | `oneocr` | table | | See [`[ocr.oneocr]`](#ocroneocr). |
+| `tesseract` | table | | See [`[ocr.tesseract]`](#ocrtesseract). |
+| `vision` | table | | See [`[ocr.vision]`](#ocrvision). |
 
 ### `[ocr.lens]`
 
@@ -372,6 +374,30 @@ Lens*.
 | key | type | default | what it does |
 |---|---|---|---|
 | `folder` | string | `""` | A folder holding `oneocr.dll`, `onnxruntime.dll` and `oneocr.onemodel`. Empty finds the Snipping Tool's and copies the libraries into the cache folder. Windows only; set in *Options → Text recognition*. |
+
+### `[ocr.tesseract]`
+
+How to run Tesseract. Set in *Options → Text recognition → Tesseract*.
+
+| key | type | default | what it does |
+|---|---|---|---|
+| `path` | string | `""` | The `tesseract` executable. Empty looks on `PATH`, then in the usual install folders (`C:\Program Files\Tesseract-OCR`, Homebrew's, MacPorts'). |
+| `tessdata_dir` | string | `""` | Where the `.traineddata` files are, if not Tesseract's own folder. |
+| `auto_languages` | string | `""` | Languages for pictures whose language is automatic, in Tesseract's form (`eng+rus`). Empty uses English. |
+| `psm` | integer or absent | absent | Page segmentation mode (`--psm`); absent keeps Tesseract's default. |
+| `oem` | integer or absent | absent | OCR engine mode (`--oem`); absent keeps Tesseract's default. |
+| `extra_args` | string | `""` | More arguments, split the way a shell splits them (`-c preserve_interword_spaces=1`). |
+
+### `[ocr.vision]`
+
+How to ask Apple Vision (macOS only). Set in *Options → Text recognition →
+Apple Vision*.
+
+| key | type | default | what it does |
+|---|---|---|---|
+| `level` | `"accurate"`, `"fast"` | `"accurate"` | Vision's trade-off between speed and accuracy. |
+| `language_correction` | bool | `true` | Let Vision correct words with its language model. Off reads codes, names and other non-words more literally. |
+| `auto_languages` | string | `""` | Vision's language identifiers (`en-US, ru-RU`) for pictures whose language is automatic. Empty lets macOS 13 and later detect the language; older systems read English. |
 
 ### `[dictionary]`
 
