@@ -37,8 +37,8 @@ import os
 import sys
 import traceback
 
-__all__ = ["Module", "ModuleError", "Host", "PROTOCOL_VERSION"]
-__version__ = "1.0.0"
+__all__ = ["Module", "ModuleError", "Host", "Images", "map_box_back", "PROTOCOL_VERSION"]
+__version__ = "1.1.0"
 
 PROTOCOL_VERSION = 1
 
@@ -157,12 +157,108 @@ def _log_local(message):
         pass
 
 
+def map_box_back(box, transform):
+    """A box found in a derived image, as the axis-aligned box in the original.
+
+    ``transform`` is the ``"transform"`` of an image the image API returned
+    (or that info dict itself); every image carries the map back to the image
+    it was first decoded from (for ``recognize``, the request's image).
+    ``box`` is ``(x0, y0, x1, y1)`` or ``{"x", "y", "width", "height"}`` and
+    comes back in the same shape.
+    """
+    if isinstance(transform, dict):
+        transform = transform.get("transform")
+    if not transform:
+        return box
+    a, b, c, d, e, f = transform
+    if isinstance(box, dict):
+        x0, y0 = box["x"], box["y"]
+        x1, y1 = x0 + box["width"], y0 + box["height"]
+    else:
+        x0, y0, x1, y1 = box
+    pts = [(a * x + b * y + c, d * x + e * y + f) for x, y in ((x0, y0), (x1, y0), (x1, y1), (x0, y1))]
+    xs = [p[0] for p in pts]
+    ys = [p[1] for p in pts]
+    if isinstance(box, dict):
+        return {"x": min(xs), "y": min(ys), "width": max(xs) - min(xs), "height": max(ys) - min(ys)}
+    return (min(xs), min(ys), max(xs), max(ys))
+
+
+class Images:
+    """The host's image API, as ``host.image``: PIL-style preprocessing done
+    by Glossa, so a module needs no imaging library.
+
+    Every operation takes the image first -- a handle (``req["image_handle"]``
+    for the request's image), an info dict another operation returned, or
+    encoded ``bytes`` -- then keyword parameters, and returns an info dict:
+    ``{"handle", "width", "height", "channels", "transform", ...}``. Handles
+    last for the current request::
+
+        g = host.image.grayscale(req["image_handle"])
+        big = host.image.scale_to_min_height(g, min_height=32)
+        jpeg = host.image.to_bytes(big, "jpeg", quality=85)
+        ...
+        box = map_box_back((x0, y0, x1, y1), big)   # back onto the input
+
+    Operations: decode, info, encode, pixels, free, new, crop, resize,
+    scale_to_min_height, rotate, flip, grayscale, invert, threshold,
+    adaptive_threshold, adjust, normalize, blur, sharpen, pad, deskew,
+    split_tiles, paste, draw_rect. Parameters are documented in
+    docs/modules/ocr-modules.md.
+    """
+
+    OPS = (
+        "decode", "info", "encode", "pixels", "free", "new", "crop", "resize", "scale_to_min_height",
+        "rotate", "flip", "grayscale", "invert", "threshold", "adaptive_threshold", "adjust", "normalize",
+        "auto_levels", "blur", "sharpen", "pad", "deskew", "split_tiles", "paste", "composite", "draw_rect",
+    )
+
+    def __init__(self, channel):
+        self._channel = channel
+
+    def call(self, op, image=None, **params):
+        """Any operation by name."""
+        import base64
+
+        if isinstance(image, (bytes, bytearray)):
+            params["data_base64"] = base64.b64encode(bytes(image)).decode("ascii")
+        elif isinstance(image, dict):
+            params["handle"] = image["handle"]
+        elif image is not None:
+            params["handle"] = int(image)
+        return self._channel.host_call("image." + op, params) or {}
+
+    def __getattr__(self, name):
+        if name in Images.OPS:
+            return lambda image=None, **params: self.call(name, image, **params)
+        raise AttributeError(name)
+
+    def __dir__(self):
+        return list(super().__dir__()) + list(Images.OPS)
+
+    def from_bytes(self, data):
+        """Register encoded image bytes (PNG, JPEG, WebP) and get its info."""
+        return self.call("decode", bytes(data))
+
+    def to_bytes(self, image, format="png", quality=None):
+        """Encode an image (``png``, ``jpeg`` or lossless ``webp``) and return the bytes."""
+        import base64
+
+        params = {"format": format}
+        if quality is not None:
+            params["quality"] = int(quality)
+        out = self.call("encode", image, **params)
+        return base64.b64decode(out.get("data_base64") or "")
+
+
 class Host:
     """What a handler may ask of Glossa during one request."""
 
     def __init__(self, channel, params):
         self._channel = channel
         self.options = (params or {}).get("options") or {}
+        #: The image API; see :class:`Images`.
+        self.image = Images(channel)
 
     # -- network ---------------------------------------------------------
 
@@ -287,9 +383,11 @@ class Module:
         return self.handler("speak")(fn)
 
     def recognize(self, fn):
-        """``fn(req, host)``; req has image_base64, lang, translate_to, preserve_line_breaks.
+        """``fn(req, host)``; req has image_base64, image_handle, lang, translate_to,
+        granularity, preserve_line_breaks.
 
-        Return ``{"text", "translation"?, "detected_lang"?}``.
+        Return ``{"text", "translation"?, "detected_lang"?, "blocks"?, "hocr"?,
+        "alto"?, "transform"?}`` or just the text; see docs/modules/ocr-modules.md.
         """
         return self.handler("recognize")(fn)
 

@@ -8,10 +8,11 @@ license.workspace = true
 authors.workspace = true
 
 [features]
-default = ["js", "python", "native"]
+default = ["js", "python", "native", "image"]
 js = ["glossa-modules/js"]
 python = ["glossa-modules/python"]
 native = ["glossa-modules/native"]
+image = ["glossa-modules/image"]
 
 [dependencies]
 glossa-core = { workspace = true }

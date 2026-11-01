@@ -547,22 +547,67 @@ mod tests {
     /// itself, whatever `CARGO_TARGET_DIR` or profile is in effect.
     fn rot13_library() -> &'static Path {
         static LIB: OnceLock<PathBuf> = OnceLock::new();
-        LIB.get_or_init(|| {
-            let out = Command::new(env!("CARGO"))
-                .current_dir(workspace_root())
-                .args(["build", "--quiet", "-p", "glossa-example-rot13", "--lib", "--message-format=json"])
-                .output()
-                .expect("run cargo");
-            assert!(out.status.success(), "building the example failed:\n{}", String::from_utf8_lossy(&out.stderr));
-            String::from_utf8_lossy(&out.stdout)
-                .lines()
-                .filter_map(|l| serde_json::from_str::<serde_json::Value>(l).ok())
-                .filter(|m| m["reason"] == "compiler-artifact" && m["target"]["name"] == "glossa_example_rot13")
-                .flat_map(|m| m["filenames"].as_array().cloned().unwrap_or_default())
-                .filter_map(|f| f.as_str().map(PathBuf::from))
-                .find(|f| f.extension().is_some_and(|e| e == "so" || e == "dll" || e == "dylib"))
-                .expect("cargo reported no cdylib for the example")
-        })
+        LIB.get_or_init(|| build_example("glossa-example-rot13"))
+    }
+
+    fn build_example(package: &str) -> PathBuf {
+        let out = Command::new(env!("CARGO"))
+            .current_dir(workspace_root())
+            .args(["build", "--quiet", "-p", package, "--lib", "--message-format=json"])
+            .output()
+            .expect("run cargo");
+        assert!(out.status.success(), "building {package} failed:\n{}", String::from_utf8_lossy(&out.stderr));
+        let target = package.replace('-', "_");
+        String::from_utf8_lossy(&out.stdout)
+            .lines()
+            .filter_map(|l| serde_json::from_str::<serde_json::Value>(l).ok())
+            .filter(|m| m["reason"] == "compiler-artifact" && m["target"]["name"] == target.as_str())
+            .flat_map(|m| m["filenames"].as_array().cloned().unwrap_or_default())
+            .filter_map(|f| f.as_str().map(PathBuf::from))
+            .find(|f| f.extension().is_some_and(|e| e == "so" || e == "dll" || e == "dylib"))
+            .expect("cargo reported no cdylib for the example")
+    }
+
+    #[cfg(feature = "image")]
+    #[test]
+    fn the_native_ocr_example_finds_lines_through_the_image_api() {
+        let dir = temp_dir("lines");
+        std::fs::copy(workspace_root().join("modules/native/example-lines/module.toml"), dir.join("module.toml"))
+            .unwrap();
+        let lib = build_example("glossa-example-lines");
+        std::fs::copy(&lib, dir.join(lib.file_name().unwrap())).unwrap();
+        let manifest = Manifest::load(&dir.join("module.toml")).unwrap();
+        let provider = load(&dir, manifest, &RuntimeContext::default()).expect("load the example");
+        // Two dark bars on white, the second shorter.
+        let mut img = image::GrayImage::from_pixel(60, 40, image::Luma([255]));
+        for x in 5..50 {
+            for y in 6..12 {
+                img.put_pixel(x, y, image::Luma([0]));
+            }
+        }
+        for x in 5..30 {
+            for y in 24..30 {
+                img.put_pixel(x, y, image::Luma([0]));
+            }
+        }
+        let mut bytes = Vec::new();
+        image::DynamicImage::ImageLuma8(img)
+            .write_to(&mut std::io::Cursor::new(&mut bytes), image::ImageFormat::Png)
+            .unwrap();
+        let http = MockHttp::new();
+        let opts = OptionValues::new();
+        with_test_host(&http, &opts, |host| {
+            let mut req = glossa_core::OcrRequest::new(glossa_core::ocr::ImageSource::Bytes(bytes.clone()));
+            req.granularity = glossa_core::ocr::OcrGranularity::Lines;
+            let r = provider.recognize(host, &req).unwrap();
+            assert_eq!(r.text, "line 1\nline 2");
+            assert_eq!(r.blocks.len(), 2);
+            assert_eq!(r.blocks[0].bounds, Some(glossa_core::ocr::Rect::new(5.0, 6.0, 45.0, 6.0)));
+            assert_eq!(r.blocks[1].bounds, Some(glossa_core::ocr::Rect::new(5.0, 24.0, 25.0, 6.0)));
+            assert_eq!(r.image_size, Some((60, 40)));
+        });
+        drop(provider);
+        std::fs::remove_dir_all(&dir).ok();
     }
 
     /// Lay the example out as an installed module: its real `module.toml`

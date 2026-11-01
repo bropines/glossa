@@ -185,6 +185,41 @@ mod tests {
         assert!(http.requests().is_empty(), "the out-of-scope request never left");
     }
 
+    #[cfg(feature = "image")]
+    #[test]
+    fn a_recognize_module_preprocesses_with_the_image_api() {
+        let p = provider(
+            r#"
+            function recognize(req, host) {
+                var g = host.image.grayscale(req.image_handle);
+                var big = host.image.scaleToMinHeight(g, { min_height: 32 });
+                var png = host.image.encode(big, { format: "png" });
+                if (png.mime !== "image/png" || !png.data_base64) throw new Error("no png");
+                var back = host.image.mapBoxBack([0, 0, big.width, big.height], big);
+                return { text: big.width + "x" + big.height, image_size: [big.width, big.height],
+                         blocks: [{ level: "line", text: "t", bbox: [8, 0, 16, 32] }],
+                         transform: big.transform,
+                         translation: back.join(",") };
+            }
+            "#,
+            "",
+        );
+        let mut bytes = Vec::new();
+        image::DynamicImage::ImageRgba8(image::RgbaImage::new(16, 8))
+            .write_to(&mut std::io::Cursor::new(&mut bytes), image::ImageFormat::Png)
+            .unwrap();
+        let http = MockHttp::new();
+        let opts = OptionValues::new();
+        with_test_host(&http, &opts, |host| {
+            let req = glossa_core::OcrRequest::new(glossa_core::ocr::ImageSource::Bytes(bytes.clone()));
+            let r = p.recognize(host, &req).unwrap();
+            assert_eq!(r.text, "64x32");
+            assert_eq!(r.translation.as_deref(), Some("0,0,16,8"), "mapBoxBack undoes the scaling");
+            assert_eq!(r.blocks[0].bounds, Some(glossa_core::ocr::Rect::new(2.0, 0.0, 2.0, 8.0)));
+            assert_eq!(r.image_size, Some((16, 8)), "the input's size, not the copy's");
+        });
+    }
+
     #[test]
     fn missing_entry_points_are_unsupported_not_crashes() {
         let p = provider("function translate() { return 'x'; }", "");

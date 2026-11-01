@@ -1,9 +1,11 @@
 //! The host side of the module protocol: what a module may ask of us.
 //!
-//! Python and native modules call back with `http`, `log`, `cache_get` and
-//! `cache_set`. [`HostApi`] answers those for one module, applying its
-//! network permissions — a module asking for a host outside its allowlist gets
-//! an error, not a request.
+//! Modules of every runtime call back with `http`, `log`, `cache_get`,
+//! `cache_set` and the `image.*` operations. [`HostApi`] answers those for
+//! one module during one call, applying its network permissions — a module
+//! asking for a host outside its allowlist gets an error, not a request —
+//! and holding that call's images. The dispatch is by method name only, so
+//! any runtime whose transport forwards host calls gets all of them.
 
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -87,13 +89,49 @@ impl ModuleCache {
     }
 }
 
-/// Answers one module's host calls.
+/// Answers one module's host calls during one call into it.
 pub struct HostApi<'a> {
     pub http: ScopedHttp<'a>,
     pub cache: &'a ModuleCache,
+    /// The images of this call (`image.*` host calls); dropped with it.
+    #[cfg(feature = "image")]
+    pub images: Mutex<crate::image_ops::ImageStore>,
 }
 
-impl HostApi<'_> {
+impl<'a> HostApi<'a> {
+    pub fn new(http: ScopedHttp<'a>, cache: &'a ModuleCache) -> Self {
+        Self {
+            http,
+            cache,
+            #[cfg(feature = "image")]
+            images: Mutex::new(crate::image_ops::ImageStore::new()),
+        }
+    }
+
+    /// Register encoded image bytes with this call's image API, decoded on
+    /// first use. `None` when the image API is not built in.
+    pub fn register_image(&self, bytes: Vec<u8>) -> Option<u32> {
+        #[cfg(feature = "image")]
+        {
+            Some(self.images.lock().insert_encoded(bytes))
+        }
+        #[cfg(not(feature = "image"))]
+        {
+            let _ = bytes;
+            None
+        }
+    }
+
+    #[cfg(feature = "image")]
+    fn image_op(&self, op: &str, params: serde_json::Value) -> Result<serde_json::Value, ModuleError> {
+        let info = self.images.lock().call(op, &params)?;
+        serde_json::to_value(info).map_err(|e| ModuleError::other(e.to_string()))
+    }
+
+    #[cfg(not(feature = "image"))]
+    fn image_op(&self, _op: &str, _params: serde_json::Value) -> Result<serde_json::Value, ModuleError> {
+        Err(ModuleError::new(ErrorKind::Unsupported, "this Glossa was built without the image API"))
+    }
     pub fn handle(&self, method: &str, params: serde_json::Value) -> Reply {
         match self.dispatch(method, params) {
             Ok(v) => Reply::ok(v),
@@ -134,6 +172,7 @@ impl HostApi<'_> {
                 self.cache.set(module, key, value, ttl);
                 Ok(serde_json::Value::Null)
             }
+            op if op.starts_with("image.") => self.image_op(&op["image.".len()..], params),
             other => Err(ModuleError::new(ErrorKind::Unsupported, format!("unknown host call {other:?}"))),
         }
     }
@@ -230,7 +269,28 @@ mod tests {
     use glossa_net::mock::MockHttp;
 
     fn api<'a>(http: &'a MockHttp, perms: &'a Permissions, cache: &'a ModuleCache) -> HostApi<'a> {
-        HostApi { http: ScopedHttp { inner: http, permissions: perms, module_id: "m" }, cache }
+        HostApi::new(ScopedHttp { inner: http, permissions: perms, module_id: "m" }, cache)
+    }
+
+    #[cfg(feature = "image")]
+    #[test]
+    fn image_calls_reach_the_image_api_and_live_for_the_call() {
+        let http = MockHttp::new();
+        let perms = Permissions::default();
+        let cache = ModuleCache::default();
+        let api = api(&http, &perms, &cache);
+        let made = api.handle("image.new", serde_json::json!({"width": 4, "height": 3})).into_result().unwrap();
+        assert_eq!(made["width"], 4);
+        let h = made["handle"].clone();
+        let png = api.handle("image.encode", serde_json::json!({"handle": h})).into_result().unwrap();
+        assert_eq!(png["mime"], "image/png");
+        let err = api.handle("image.crop", serde_json::json!({"handle": 77})).into_result().unwrap_err();
+        assert_eq!(err.kind, ErrorKind::BadRequest);
+        let second = HostApi::new(ScopedHttp { inner: &http, permissions: &perms, module_id: "m" }, &cache);
+        assert!(
+            second.handle("image.info", serde_json::json!({"handle": h})).into_result().is_err(),
+            "a new call starts empty"
+        );
     }
 
     #[test]

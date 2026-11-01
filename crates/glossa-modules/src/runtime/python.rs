@@ -787,6 +787,54 @@ mod.run()
         assert_eq!(calls[3].1["ttl_secs"], 60);
     }
 
+    #[cfg(feature = "image")]
+    #[test]
+    fn the_sdk_image_api_preprocesses_and_maps_boxes_back() {
+        if !have_python() {
+            return;
+        }
+        let m = TempModule::new(
+            "images",
+            "",
+            r#"
+from glossa_module import Module, map_box_back
+mod = Module()
+
+@mod.recognize
+def recognize(req, host):
+    g = host.image.grayscale(req["image_handle"])
+    padded = host.image.pad(g, all=4, color="white")
+    big = host.image.scale_to_min_height(padded, min_height=32)
+    png = host.image.to_bytes(big, "png")
+    again = host.image.from_bytes(png)
+    box = map_box_back((4 * 2, 4 * 2, 12 * 2, 8 * 2), big)
+    return {"text": "%dx%d %d %s" % (big["width"], big["height"], again["width"], req["granularity"]),
+            "blocks": [{"level": "word", "text": "w", "bbox": list(box)}]}
+
+mod.run()
+"#,
+        );
+        let provider = crate::protocol::ProtocolProvider::new(
+            m.manifest.clone(),
+            m.transport(Duration::from_secs(20)),
+            crate::host_api::ModuleCache::new(),
+        );
+        let mut bytes = Vec::new();
+        image::DynamicImage::ImageRgba8(image::RgbaImage::new(16, 8))
+            .write_to(&mut std::io::Cursor::new(&mut bytes), image::ImageFormat::Png)
+            .unwrap();
+        let http = MockHttp::new();
+        let opts = OptionValues::new();
+        with_test_host(&http, &opts, |host| {
+            let req = glossa_core::OcrRequest::new(glossa_core::ocr::ImageSource::Bytes(bytes.clone()));
+            let r = crate::provider::Provider::recognize(&provider, host, &req).unwrap();
+            assert_eq!(r.text, "48x32 48 full_text");
+            // (8, 8)-(24, 16) in the doubled, padded copy is (0, 0)-(8, 4) in the input.
+            assert_eq!(r.blocks[0].bounds, Some(glossa_core::ocr::Rect::new(0.0, 0.0, 8.0, 4.0)));
+        });
+        crate::provider::Provider::suspend(&provider);
+    }
+
     #[test]
     fn a_hung_module_is_killed_and_the_next_call_starts_afresh() {
         if !have_python() {

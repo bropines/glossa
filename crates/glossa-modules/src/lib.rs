@@ -7,8 +7,12 @@
 //! * [`protocol`] / [`host_api`] — the module protocol, shared by the Python
 //!   and native runtimes.
 //! * [`runtime`] — the runtimes: JavaScript (three dialects), Python, native.
+//! * [`image_ops`] — the image API modules reach through `image.*` host calls
+//!   (the `image` feature).
 
 pub mod host_api;
+#[cfg(feature = "image")]
+pub mod image_ops;
 pub mod manifest;
 pub mod protocol;
 pub mod provider;
