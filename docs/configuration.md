@@ -458,7 +458,8 @@ in the main window's panes when it closed.
 ### `[windows]`
 
 Kept by the program: window positions and sizes, one sub-table per window
-name (`main`, `popup`, `popup-size`…).
+name (`main`, `popup`, `popup-size`, `ocr-result` for the OCR result
+window…).
 
 ```toml
 [windows.main]
