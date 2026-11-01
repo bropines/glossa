@@ -94,7 +94,7 @@ pub fn show(app: &mut GlossaApp, ctx: &egui::Context) {
         if ui.input(|i| i.viewport().close_requested()) {
             open = false;
         }
-        app.zoom_input(ui);
+        app.text_zoom_keys(ui);
         body(app, ui, &mut st);
     });
     app.child_backdrop(&title, false);
@@ -105,7 +105,8 @@ pub fn show(app: &mut GlossaApp, ctx: &egui::Context) {
 
 fn body(app: &mut GlossaApp, ui: &mut egui::Ui, st: &mut DictState) {
     let look = app.look.clone();
-    let zoom = app.cfg.dictionary.zoom as f32 / 100.0;
+    // The dictionary's own zoom, times the text zoom shared by all text areas.
+    let zoom = app.cfg.dictionary.zoom as f32 / 100.0 * look.text_scale;
     let mut click: Option<ArticleClick> = None;
     egui::Panel::top("dict-top").show(ui, |ui| {
         ui.add_space(4.0);
@@ -114,7 +115,7 @@ fn body(app: &mut GlossaApp, ui: &mut egui::Ui, st: &mut DictState) {
                 egui::TextEdit::singleline(&mut st.query)
                     .desired_width(ui.available_width() - 330.0)
                     .hint_text(app.t("dict.title"))
-                    .font(look.text_font()),
+                    .font(look.field_font()),
             );
             if st.focus {
                 r.request_focus();
@@ -147,7 +148,7 @@ fn body(app: &mut GlossaApp, ui: &mut egui::Ui, st: &mut DictState) {
                 lookup(app, st);
             }
             let menu = crate::icons::sized_button(ui, &look, crate::icons::Icon::Menu, "", 24.0, true);
-            egui::Popup::menu(&menu).show(|ui| {
+            crate::dropdown::menu(ui, &menu, |ui| {
                 let mut exact = app.cfg.dictionary.exact_search;
                 if ui.checkbox(&mut exact, app.t("dict.exact_search")).changed() {
                     let _ = app.engine.update_config(move |c| c.dictionary.exact_search = exact);
@@ -198,7 +199,7 @@ fn body(app: &mut GlossaApp, ui: &mut egui::Ui, st: &mut DictState) {
             });
         });
     }
-    egui::CentralPanel::default().show(ui, |ui| {
+    let article_panel = egui::CentralPanel::default().show(ui, |ui| {
         egui::ScrollArea::vertical().id_salt("article").show(ui, |ui| {
             ui.set_width(ui.available_width());
             if st.busy {
@@ -233,6 +234,7 @@ fn body(app: &mut GlossaApp, ui: &mut egui::Ui, st: &mut DictState) {
             }
         });
     });
+    app.text_zoom_wheel(ui, article_panel.response.rect);
     match click {
         Some(ArticleClick::Lookup(w)) => {
             st.query = w;

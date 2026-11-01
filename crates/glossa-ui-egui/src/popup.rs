@@ -345,7 +345,9 @@ pub fn show(app: &mut GlossaApp, ctx: &egui::Context) {
 
 /// Draw the popup. Returns (close requested, desired size).
 fn body(app: &mut GlossaApp, ui: &mut egui::Ui, st: &mut PopupState) -> (bool, egui::Vec2) {
-    app.zoom_input(ui);
+    // The popup is all text: Ctrl+wheel anywhere over it zooms the text.
+    app.text_zoom_keys(ui);
+    app.text_zoom_wheel(ui, ui.ctx().content_rect());
     let look = app.look.clone();
     let cfg = app.cfg.appearance.popup.clone();
     let mut close = ui.input(|i| i.key_pressed(egui::Key::Escape) || i.viewport().close_requested());
@@ -390,7 +392,7 @@ fn body(app: &mut GlossaApp, ui: &mut egui::Ui, st: &mut PopupState) -> (bool, e
     let min_w = cfg.min_width;
     // Width follows the content: measure the text wrapped at the maximum, and
     // the header, and take the wider, within the configured bounds.
-    let font = egui::FontId::proportional(look.text_size * 1.33);
+    let font = look.text_font();
     let body_text = st
         .partial
         .clone()

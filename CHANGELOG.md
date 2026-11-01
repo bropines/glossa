@@ -108,8 +108,16 @@ for Windows and Linux.
 - **Look**: Fluent Dark and Fluent Light (WinUI 3) themes following the
   system accent colour; Mica, Mica Alt, Acrylic and blur backdrops for the
   windows and the popup (Windows 11, vibrancy on macOS; OpenGL engine);
-  Ctrl+wheel scales the interface; an icon size setting; changing the
-  graphics engine offers to restart.
+  an icon size setting; changing the graphics engine offers to restart.
+- **Text zoom**: Ctrl+wheel over a text area (the main window's panes, the
+  popup, the dictionary article) and Ctrl+plus / minus / 0 zoom the text
+  alone (`appearance.text_scale`); the interface scale is set in Options
+  only.
+- **Dropdowns in their own windows**: language lists, the main window's
+  menus and the panes' context menus open in a borderless window under the
+  control (above it only when the screen has no room below), no longer cut
+  off by a short window or opened off to the side. The window they belong to
+  keeps the focus; typing searches, the arrow keys and Enter pick.
 - **Options**: the Services page uses the whole window, the list in a
   resizable pane beside the settings.
 - Licenses (MIT or Apache-2.0), NOTICE, CI on Linux and Windows, release
@@ -128,6 +136,11 @@ for Windows and Linux.
   where it was dragged), *Auto size* off gives a fixed box; exception rules
   for controls (list views, hotkey fields, Explorer's file view) match, and
   *Smart detection* works.
+- Language lists showed boxes for Bengali, Kannada, Khmer, Korean, Lao and
+  other scripts: the fonts the language names need now load when a list
+  opens, and every script in the language table has a font on Windows and
+  through fontconfig. Right-to-left names read the right way round.
+- The source and translation panes have the same inner margins.
 
 ### Known gaps
 

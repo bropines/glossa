@@ -104,8 +104,14 @@ pub fn service_tab(ui: &mut Ui, look: &Look, id: &str, name: &str, selected: boo
     resp.on_hover_text(name)
 }
 
+/// How tall a language list gets before it scrolls, under its search box.
+const LIST_HEIGHT: f32 = 380.0;
+
 /// A language picker: a button showing the language, opening a searchable
-/// list (English and native names). `search_hint` fills the empty search box.
+/// list (English and native names) in a window of its own under the button
+/// (see [`crate::dropdown`]). Type to search; the arrow keys and Page
+/// Up/Down move through the list, Enter picks. `search_hint` fills the empty
+/// search box.
 #[allow(clippy::too_many_arguments)] // the labels come from the caller's locale
 pub fn lang_combo(
     ui: &mut Ui,
@@ -117,44 +123,141 @@ pub fn lang_combo(
     disabled: &[LangId],
     width: f32,
 ) -> Option<LangId> {
-    let mut picked = None;
+    use crate::dropdown;
+    let id = ui.make_persistent_id(("lang-combo", id_salt));
+    let search_id = id.with("search");
+    let mark_id = id.with("mark");
+    let forget = |ui: &Ui| {
+        ui.ctx().data_mut(|d| {
+            d.remove::<String>(search_id);
+            d.remove::<usize>(mark_id);
+        })
+    };
     let label = if current == LangId::AUTO { auto_label.to_owned() } else { current.english_name().to_owned() };
-    let search_id = ui.make_persistent_id((id_salt, "search"));
-    egui::ComboBox::from_id_salt(id_salt).width(width).selected_text(label).height(420.0).show_ui(ui, |ui| {
-        let mut search: String = ui.data_mut(|d| d.get_temp::<String>(search_id).unwrap_or_default());
+    let button = dropdown::combo_button(ui, &label, width, dropdown::is_open(ui.ctx(), id));
+    if button.clicked() {
+        dropdown::toggle(ui.ctx(), id);
+        forget(ui);
+    }
+    if dropdown::is_open(ui.ctx(), id) {
+        // The list shows every language's own name, in its own script.
+        crate::fonts::request_language_fonts(ui.ctx());
+    }
+    let mut picked = None;
+    dropdown::show(ui, id, button.rect, button.rect.width(), LIST_HEIGHT + 60.0, |ui, settling| {
+        let mut search: String = ui.ctx().data(|d| d.get_temp(search_id)).unwrap_or_default();
         let r = ui.add(egui::TextEdit::singleline(&mut search).hint_text(search_hint).desired_width(f32::INFINITY));
-        if !r.has_focus() && search.is_empty() {
+        if !r.has_focus() {
             r.request_focus();
         }
-        ui.data_mut(|d| d.insert_temp(search_id, search.clone()));
-        let needle = search.to_lowercase();
-        if allow_auto
-            && (needle.is_empty() || auto_label.to_lowercase().contains(&needle))
-            && ui.selectable_label(current == LangId::AUTO, auto_label).clicked()
-        {
-            picked = Some(LangId::AUTO);
+        let needle = search.trim().to_lowercase();
+        let mut items: Vec<LangId> = Vec::new();
+        if allow_auto && (needle.is_empty() || auto_label.to_lowercase().contains(&needle)) {
+            items.push(LangId::AUTO);
         }
         let mut langs: Vec<LangId> = LangId::all().filter(|l| !disabled.contains(l)).collect();
         langs.sort_by_key(|l| l.english_name());
-        for l in langs {
-            let name = l.english_name();
-            let native = l.native_name();
-            if !needle.is_empty()
-                && !name.to_lowercase().contains(&needle)
-                && !native.to_lowercase().contains(&needle)
-                && !l.bcp47().eq_ignore_ascii_case(&needle)
-            {
-                continue;
-            }
-            let text =
-                if native.is_empty() || native == name { name.to_owned() } else { format!("{name}  ·  {native}") };
-            if ui.selectable_label(current == l, text).clicked() {
-                picked = Some(l);
-            }
+        items.extend(langs.into_iter().filter(|l| {
+            needle.is_empty()
+                || l.english_name().to_lowercase().contains(&needle)
+                || l.native_name().to_lowercase().contains(&needle)
+                || l.bcp47().eq_ignore_ascii_case(&needle)
+        }));
+
+        // The keyboard's place in the list: the current language at first,
+        // the first match once the search changes.
+        let stored: Option<usize> = ui.ctx().data(|d| d.get_temp(mark_id));
+        let mut mark = match stored {
+            Some(_) if r.changed() => 0,
+            Some(m) => m,
+            None => items.iter().position(|l| *l == current).unwrap_or(0),
+        };
+        let (down, up, page_down, page_up, enter) = ui.input(|i| {
+            (
+                i.key_pressed(egui::Key::ArrowDown),
+                i.key_pressed(egui::Key::ArrowUp),
+                i.key_pressed(egui::Key::PageDown),
+                i.key_pressed(egui::Key::PageUp),
+                i.key_pressed(egui::Key::Enter),
+            )
+        });
+        if down {
+            mark += 1;
         }
+        if page_down {
+            mark += 10;
+        }
+        if up {
+            mark = mark.saturating_sub(1);
+        }
+        if page_up {
+            mark = mark.saturating_sub(10);
+        }
+        mark = mark.min(items.len().saturating_sub(1));
+        let moved = down || up || page_down || page_up || r.changed();
+        if enter && !items.is_empty() {
+            picked = Some(items[mark]);
+            ui.close();
+        }
+
+        let labels: Vec<String> = items
+            .iter()
+            .map(|&l| {
+                if l == LangId::AUTO {
+                    return auto_label.to_owned();
+                }
+                let (name, native) = (l.english_name(), l.native_name());
+                if native.is_empty() || native == name {
+                    name.to_owned()
+                } else {
+                    // egui lays text out left to right: put a right-to-left
+                    // name (Arabic, Hebrew, Persian…) in visual order first.
+                    let native = glossa_core::text::for_display(native, true);
+                    format!("{name}  ·  {native}")
+                }
+            })
+            .collect();
+        // The list scrolls under the search box, which stays in view. A
+        // scrolling list reports no wider than it is shown, so make room
+        // for the longest name here: the dropdown grows to fit it.
+        let font = egui::TextStyle::Button.resolve(ui.style());
+        let widest = ui.fonts_mut(|f| {
+            labels
+                .iter()
+                .map(|t| f.layout_no_wrap(t.clone(), font.clone(), Color32::WHITE).size().x)
+                .fold(0.0, f32::max)
+        });
+        ui.set_min_width(widest + 2.0 * ui.spacing().button_padding.x + ui.spacing().scroll.bar_width + 8.0);
+        let marked_fill = ui.visuals().widgets.hovered.weak_bg_fill;
+        let radius = ui.visuals().widgets.hovered.corner_radius;
+        egui::ScrollArea::vertical().id_salt("languages").max_height(LIST_HEIGHT).auto_shrink([false, true]).show(
+            ui,
+            |ui| {
+                ui.with_layout(egui::Layout::top_down_justified(egui::Align::Min), |ui| {
+                    for (n, (l, text)) in items.iter().copied().zip(labels).enumerate() {
+                        let behind = ui.painter().add(egui::Shape::Noop);
+                        let resp = ui.selectable_label(l == current, text);
+                        if n == mark && l != current {
+                            ui.painter().set(behind, egui::Shape::rect_filled(resp.rect, radius, marked_fill));
+                        }
+                        if (moved && n == mark) || (settling && needle.is_empty() && l == current) {
+                            resp.scroll_to_me(Some(egui::Align::Center));
+                        }
+                        if resp.clicked() {
+                            picked = Some(l);
+                            ui.close();
+                        }
+                    }
+                });
+            },
+        );
+        ui.ctx().data_mut(|d| {
+            d.insert_temp(search_id, search);
+            d.insert_temp(mark_id, mark);
+        });
     });
     if picked.is_some() {
-        ui.data_mut(|d| d.remove::<String>(search_id));
+        forget(ui);
     }
     picked
 }

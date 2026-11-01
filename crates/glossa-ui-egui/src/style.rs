@@ -31,6 +31,9 @@ pub struct Look {
     pub popup_frame_width: f32,
     pub popup_opacity: f32,
     pub text_size: f32,
+    /// The text areas' own zoom (Ctrl+wheel over them), on top of
+    /// `text_size`.
+    pub text_scale: f32,
     /// Alpha for window and pane backgrounds (1.0 = opaque).
     pub window_alpha: f32,
     /// Multiplier for icon buttons (Options → Appearance).
@@ -86,6 +89,7 @@ impl Look {
             popup_frame_width: p.frame_thickness,
             popup_opacity: p.opacity().min(theme.popup.opacity.max(0.1)).max(0.1),
             text_size: cfg.appearance.text_size,
+            text_scale: glossa_core::config::clamp_text_scale(cfg.appearance.text_scale),
             icon_scale: cfg.appearance.icon_scale.clamp(0.75, 3.0),
             // A backdrop replaces the transparency slider for the body.
             window_alpha: if window_backdrop != Backdrop::None {
@@ -212,8 +216,15 @@ impl Look {
         ctx.set_zoom_factor(ui_scale.clamp(0.5, 3.0));
     }
 
-    /// The font for the source and translation panes.
+    /// The font for the text areas: the source and translation panes, the
+    /// popup's text, the OCR result. Follows the text zoom.
     pub fn text_font(&self) -> egui::FontId {
+        egui::FontId::proportional(self.text_size * 1.33 * self.text_scale)
+    }
+
+    /// The text areas' font at its set size, without the zoom: for fields
+    /// that sit among the controls (the dictionary's query box).
+    pub fn field_font(&self) -> egui::FontId {
         egui::FontId::proportional(self.text_size * 1.33)
     }
 }

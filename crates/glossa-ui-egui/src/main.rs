@@ -8,6 +8,7 @@
 mod actions;
 mod app;
 mod dictionary;
+mod dropdown;
 mod fonts;
 mod history;
 mod icons;

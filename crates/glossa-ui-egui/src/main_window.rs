@@ -15,6 +15,7 @@ pub fn show(app: &mut GlossaApp, ui: &mut egui::Ui) {
     let ctx = ui.ctx().clone();
     let custom = app.cfg.appearance.custom_frame;
 
+    app.text_zoom_keys(ui);
     // Keyboard shortcuts of the classic window.
     let (go, swap, clear, back, fwd) = ctx.input(|i| {
         (
@@ -250,7 +251,7 @@ fn top_pane(app: &mut GlossaApp, ui: &mut egui::Ui) {
         }
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
             let menu_btn = icons::sized_button(ui, &look, Icon::Menu, "", 24.0, true);
-            egui::Popup::menu(&menu_btn).show(|ui| main_menu(app, ui));
+            crate::dropdown::menu(ui, &menu_btn, |ui| main_menu(app, ui));
             if icons::sized_button(ui, &look, Icon::Gear, &app.t("menu.options"), 24.0, true).clicked() {
                 app.perform(Action::ShowOptions, None);
             }
@@ -294,7 +295,10 @@ fn main_menu(app: &mut GlossaApp, ui: &mut egui::Ui) {
     ui.separator();
     ui.checkbox(&mut g.minimize_to_tray_on_minimize, app.t("menu.tray_on_minimize"));
     ui.checkbox(&mut g.minimize_to_tray_on_close, app.t("menu.tray_on_close"));
-    ui.menu_button(app.t("menu.on_startup"), |ui| {
+    // In line rather than a submenu: the menu is a window of its own, and a
+    // submenu inside it would be cut off at its edge.
+    ui.label(RichText::new(app.t("menu.on_startup")).color(app.look.weak_text()));
+    ui.indent("startup-action", |ui| {
         ui.radio_value(&mut g.startup_action, StartupAction::ShowWindow, app.t("menu.startup_show"));
         ui.radio_value(&mut g.startup_action, StartupAction::MinimizeToTray, app.t("menu.startup_tray"));
         ui.radio_value(&mut g.startup_action, StartupAction::RestorePrevious, app.t("menu.startup_restore"));
@@ -334,34 +338,34 @@ fn source_pane(app: &mut GlossaApp, ui: &mut egui::Ui, height: f32) {
     let look = app.look.clone();
     let font = look.text_font();
     app.fonts.ensure(&app.ctx, &app.main.source);
-    let frame = egui::Frame::new()
-        .fill(look.edit_back())
-        .stroke(egui::Stroke::new(1.0, c(look.theme.edit.normal.border)))
-        .corner_radius(2);
-    frame.show(ui, |ui| {
-        ui.set_min_size(vec2(ui.available_width(), height));
-        ui.set_max_height(height);
+    let inner_h = height - 2.0 * PANE_MARGIN as f32;
+    let shown = pane_frame(&look).show(ui, |ui| {
+        ui.set_min_size(vec2(ui.available_width(), inner_h));
+        ui.set_max_height(inner_h);
         let rect = ui.max_rect();
-        egui::ScrollArea::vertical().id_salt("source").max_height(height).show(ui, |ui| {
+        egui::ScrollArea::vertical().id_salt("source").max_height(inner_h).show(ui, |ui| {
+            // No frame and no margin of its own: the pane's frame gives the
+            // same inset as the translation pane's.
             let edit = egui::TextEdit::multiline(&mut app.main.source)
                 .font(font)
+                .text_color(c(look.theme.edit.normal.text))
                 .frame(egui::Frame::NONE)
                 .desired_width(f32::INFINITY)
                 .desired_rows(4)
                 .hint_text(app.locale.get("main.source_placeholder"))
                 .lock_focus(false);
-            let r = ui.add_sized(vec2(ui.available_width(), height - 6.0), edit);
+            let r = ui.add_sized(vec2(ui.available_width(), inner_h), edit);
             if r.changed() {
                 app.main.edited_at = Some(std::time::Instant::now());
                 if app.cfg.general.auto_cleanup_translation {
                     app.main.outcome = None;
                 }
             }
-            r.context_menu(|ui| edit_menu(app, ui, true));
+            crate::dropdown::context_menu(ui, &r, |ui| edit_menu(app, ui, true));
         });
         // Listen and microphone in the bottom-right corner, as in the classic
         // window.
-        let corner = egui::Rect::from_min_size(rect.right_bottom() - vec2(54.0, 26.0), vec2(52.0, 24.0));
+        let corner = egui::Rect::from_min_size(rect.right_bottom() - vec2(54.0, 24.0), vec2(52.0, 24.0));
         let mut child = ui.new_child(
             egui::UiBuilder::new().max_rect(corner).layout(egui::Layout::right_to_left(egui::Align::Center)),
         );
@@ -384,6 +388,20 @@ fn source_pane(app: &mut GlossaApp, ui: &mut egui::Ui, height: f32) {
             app.perform(Action::SpeechInput, None);
         }
     });
+    app.text_zoom_wheel(ui, shown.response.rect);
+}
+
+/// The inner margin of the source and translation panes, the same for both
+/// so their texts line up.
+const PANE_MARGIN: i8 = 4;
+
+/// The frame of the source and translation panes.
+fn pane_frame(look: &crate::style::Look) -> egui::Frame {
+    egui::Frame::new()
+        .fill(look.edit_back())
+        .stroke(egui::Stroke::new(1.0, c(look.theme.edit.normal.border)))
+        .corner_radius(2)
+        .inner_margin(egui::Margin::same(PANE_MARGIN))
 }
 
 fn middle_bar(app: &mut GlossaApp, ui: &mut egui::Ui) {
@@ -395,7 +413,7 @@ fn middle_bar(app: &mut GlossaApp, ui: &mut egui::Ui) {
         }
         // Recent direction pairs, as the classic ⋮ next to the clear button.
         let pairs_btn = icons::sized_button(ui, &look, Icon::Menu, "", 26.0, true);
-        egui::Popup::menu(&pairs_btn).show(|ui| {
+        crate::dropdown::menu(ui, &pairs_btn, |ui| {
             for p in app.cfg.general.recent_pairs.clone() {
                 if ui.button(format!("{} → {}", p.from.english_name(), p.to.english_name())).clicked() {
                     app.set_pair(p);
@@ -475,14 +493,10 @@ fn retranslate(app: &mut GlossaApp) {
 
 fn result_pane(app: &mut GlossaApp, ui: &mut egui::Ui, height: f32) {
     let look = app.look.clone();
-    let frame = egui::Frame::new()
-        .fill(look.edit_back())
-        .stroke(egui::Stroke::new(1.0, c(look.theme.edit.normal.border)))
-        .corner_radius(2)
-        .inner_margin(egui::Margin::same(4));
-    frame.show(ui, |ui| {
-        ui.set_min_size(vec2(ui.available_width(), height - 8.0));
-        ui.set_max_height(height - 8.0);
+    let inner_h = height - 2.0 * PANE_MARGIN as f32;
+    let shown = pane_frame(&look).show(ui, |ui| {
+        ui.set_min_size(vec2(ui.available_width(), inner_h));
+        ui.set_max_height(inner_h);
         let rect = ui.max_rect();
         egui::ScrollArea::vertical().id_salt("result").stick_to_bottom(app.main.busy).show(ui, |ui| {
             if let Some(partial) = app.main.partial.clone().filter(|_| app.main.busy) {
@@ -517,7 +531,7 @@ fn result_pane(app: &mut GlossaApp, ui: &mut egui::Ui, height: f32) {
                         .selectable(true)
                         .wrap(),
                     );
-                    r.context_menu(|ui| {
+                    crate::dropdown::context_menu(ui, &r, |ui| {
                         if ui.button(app.t("edit.copy_all")).clicked() {
                             app.copy_text(&text);
                             ui.close();
@@ -532,22 +546,28 @@ fn result_pane(app: &mut GlossaApp, ui: &mut egui::Ui, height: f32) {
                         }
                     });
                 });
+                // The rest of the result follows the text zoom too.
+                let body = ui.style().text_styles.get(&egui::TextStyle::Body).map_or(14.0, |f| f.size);
+                let size = body * look.text_scale;
                 if let Some(r) = &o.translation.romanisation {
                     ui.add_space(6.0);
                     ui.label(
-                        RichText::new(format!("{}{r}", app.t("msg.romanization"))).color(look.weak_text()).italics(),
+                        RichText::new(format!("{}{r}", app.t("msg.romanization")))
+                            .size(size)
+                            .color(look.weak_text())
+                            .italics(),
                     );
                 }
                 for entry in &o.translation.parts_of_speech {
                     ui.add_space(6.0);
-                    ui.label(RichText::new(&entry.part_of_speech).strong());
+                    ui.label(RichText::new(&entry.part_of_speech).size(size).strong());
                     for s in &entry.senses {
                         let back = if s.back_translations.is_empty() {
                             String::new()
                         } else {
                             format!("  ({})", s.back_translations.join(", "))
                         };
-                        ui.label(format!("    {}{back}", s.word));
+                        ui.label(RichText::new(format!("    {}{back}", s.word)).size(size));
                     }
                 }
                 if !o.failed.is_empty() {
@@ -578,6 +598,7 @@ fn result_pane(app: &mut GlossaApp, ui: &mut egui::Ui, height: f32) {
             }
         }
     });
+    app.text_zoom_wheel(ui, shown.response.rect);
 }
 
 fn back_translation_pane(app: &mut GlossaApp, ui: &mut egui::Ui, height: f32) {
@@ -587,9 +608,9 @@ fn back_translation_pane(app: &mut GlossaApp, ui: &mut egui::Ui, height: f32) {
         .fill(c(look.theme.window.client_back))
         .stroke(egui::Stroke::new(1.0, look.border()))
         .corner_radius(2)
-        .inner_margin(egui::Margin::same(4));
-    frame.show(ui, |ui| {
-        ui.set_min_size(vec2(ui.available_width(), height - 8.0));
+        .inner_margin(egui::Margin::same(PANE_MARGIN));
+    let shown = frame.show(ui, |ui| {
+        ui.set_min_size(vec2(ui.available_width(), height - 2.0 * PANE_MARGIN as f32));
         egui::ScrollArea::vertical().id_salt("back").show(ui, |ui| {
             ui.label(RichText::new(app.t("menu.back_translation")).small().color(look.weak_text()));
             ui.add(
@@ -599,12 +620,13 @@ fn back_translation_pane(app: &mut GlossaApp, ui: &mut egui::Ui, height: f32) {
             );
         });
     });
+    app.text_zoom_wheel(ui, shown.response.rect);
 }
 
 fn stacked_results(app: &mut GlossaApp, ui: &mut egui::Ui, height: f32) {
     let look = app.look.clone();
     let reg = app.engine.registry();
-    egui::ScrollArea::vertical().id_salt("stacked").max_height(height).show(ui, |ui| {
+    let shown = egui::ScrollArea::vertical().id_salt("stacked").max_height(height).show(ui, |ui| {
         for id in app.cfg.services.enabled.clone() {
             let Some(p) = reg.get(&id) else { continue };
             let frame = egui::Frame::new()
@@ -651,6 +673,7 @@ fn stacked_results(app: &mut GlossaApp, ui: &mut egui::Ui, height: f32) {
             ui.add_space(4.0);
         }
     });
+    app.text_zoom_wheel(ui, shown.inner_rect);
 }
 
 fn service_strip(app: &mut GlossaApp, ui: &mut egui::Ui) {
