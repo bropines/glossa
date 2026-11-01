@@ -582,15 +582,21 @@ mod native {
         }
         let page = glossa_lens::parse_response(&response.body)
             .map_err(|detail| Error::BadResponse { provider: NAME.into(), detail })?;
-        Ok(result(&page, size, req))
+        Ok(result(&page, size, (upload.width, upload.height), req))
     }
 
     /// The page as our result, its boxes in pixels of the picture as given
-    /// (Lens measures the smaller copy it was sent, normalised).
-    pub(super) fn result(page: &Page, size: (u32, u32), req: &OcrRequest) -> OcrResult {
+    /// (`size`). Lens measures the copy it was sent (`sent`, smaller when
+    /// Chromium's rule shrank it): a normalised box only needs the picture's
+    /// size, a box in pixels is scaled from the copy's.
+    pub(super) fn result(page: &Page, size: (u32, u32), sent: (u32, u32), req: &OcrRequest) -> OcrResult {
         let rect = |b: &Option<Bounds>| -> (Option<Rect>, f32) {
             let Some(b) = b else { return (None, 0.0) };
-            let (sx, sy) = if b.normalized { (size.0 as f32, size.1 as f32) } else { (1.0, 1.0) };
+            let (sx, sy) = if b.normalized {
+                (size.0 as f32, size.1 as f32)
+            } else {
+                (size.0 as f32 / sent.0.max(1) as f32, size.1 as f32 / sent.1.max(1) as f32)
+            };
             let (w, h) = (b.width * sx, b.height * sy);
             (Some(Rect::new(b.center_x * sx - w / 2.0, b.center_y * sy - h / 2.0, w, h)), b.rotation)
         };
@@ -1540,6 +1546,46 @@ mod tests {
                 ..Default::default()
             };
             Ok(HttpResponse { status: 200, body: reply.encode_to_vec(), ..Default::default() })
+        }
+    }
+
+    #[test]
+    fn boxes_in_pixels_of_a_shrunk_copy_are_scaled_back_to_the_picture() {
+        // Lens saw a 1600×900 copy of a 3200×1800 picture.
+        let bounds = |normalized: bool, cx: f32, cy: f32, w: f32, h: f32| glossa_lens::Bounds {
+            center_x: cx,
+            center_y: cy,
+            width: w,
+            height: h,
+            rotation: 0.0,
+            normalized,
+        };
+        let line = |b| glossa_lens::Line {
+            words: vec![glossa_lens::Word { text: "hi".into(), separator: String::new(), bounds: None }],
+            bounds: Some(b),
+        };
+        let page = glossa_lens::Page {
+            language: None,
+            paragraphs: vec![
+                glossa_lens::Paragraph {
+                    lines: vec![line(bounds(false, 800.0, 450.0, 160.0, 90.0))],
+                    bounds: None,
+                    language: None,
+                },
+                glossa_lens::Paragraph {
+                    lines: vec![line(bounds(true, 0.5, 0.5, 0.1, 0.1))],
+                    bounds: None,
+                    language: None,
+                },
+            ],
+            translations: Vec::new(),
+        };
+        let mut request = req();
+        request.granularity = OcrGranularity::Lines;
+        let r = native::result(&page, (3200, 1800), (1600, 900), &request);
+        for b in &r.blocks {
+            let rect = b.bounds.unwrap();
+            assert_eq!((rect.x, rect.y, rect.width, rect.height), (1440.0, 810.0, 320.0, 180.0));
         }
     }
 
