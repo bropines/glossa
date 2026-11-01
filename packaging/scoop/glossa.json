@@ -1,0 +1,35 @@
+{
+    "version": "@VERSION@",
+    "description": "Popup translator with OCR and dictionaries, a successor to QTranslate.",
+    "homepage": "https://github.com/@REPO@",
+    "license": "MIT|Apache-2.0",
+    "architecture": {
+        "64bit": {
+            "url": "@ZIP_URL@",
+            "hash": "@ZIP_SHA256@",
+            "extract_dir": "glossa-@VERSION@-x86_64-windows"
+        }
+    },
+    "bin": "glossa-cli.exe",
+    "shortcuts": [
+        [
+            "glossa.exe",
+            "Glossa"
+        ]
+    ],
+    "notes": "Settings live in %APPDATA%\\Glossa and survive updates and uninstalling.",
+    "checkver": {
+        "github": "https://github.com/@REPO@"
+    },
+    "autoupdate": {
+        "architecture": {
+            "64bit": {
+                "url": "https://github.com/@REPO@/releases/download/v$version/glossa-$version-x86_64-windows.zip",
+                "hash": {
+                    "url": "$baseurl/SHA256SUMS"
+                },
+                "extract_dir": "glossa-$version-x86_64-windows"
+            }
+        }
+    }
+}

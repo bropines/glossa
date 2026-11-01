@@ -1,0 +1,28 @@
+# yaml-language-server: $schema=https://aka.ms/winget-manifest.defaultLocale.1.9.0.schema.json
+# Template: fill-manifests.sh fills in the version and repository.
+PackageIdentifier: Bropines.Glossa
+PackageVersion: '@VERSION@'
+PackageLocale: en-US
+Publisher: Bropines
+PublisherUrl: https://github.com/bropines
+PublisherSupportUrl: https://github.com/@REPO@/issues
+PackageName: Glossa
+PackageUrl: https://github.com/@REPO@
+License: MIT OR Apache-2.0
+LicenseUrl: https://github.com/@REPO@/blob/main/LICENSE-MIT
+ShortDescription: Popup translator with OCR and dictionaries, a successor to QTranslate.
+Description: |-
+  Glossa translates the selected text in any program in a popup by the
+  pointer, recognises text in a region of the screen and looks words up in
+  online and offline dictionaries. It sits in the tray and works with many
+  translation services, including any OpenAI-compatible API.
+Moniker: glossa
+Tags:
+  - translator
+  - translation
+  - dictionary
+  - ocr
+  - qtranslate
+ReleaseNotesUrl: https://github.com/@REPO@/releases/tag/v@VERSION@
+ManifestType: defaultLocale
+ManifestVersion: 1.9.0
