@@ -111,7 +111,9 @@ fn summary(app: &mut GlossaApp, ui: &mut egui::Ui, doc: &mut Option<Doc>) {
         );
         ui.add_space(4.0);
         ui.heading(RichText::new("Glossa").strong());
-        ui.label(RichText::new(format!("{}{}", app.t("msg.version"), glossa_core::VERSION)).color(look.weak_text()));
+        ui.label(
+            RichText::new(format!("{}{}", app.t("msg.version"), glossa_core::long_version())).color(look.weak_text()),
+        );
         ui.add_space(8.0);
         ui.add(egui::Label::new(app.t("about.description")).wrap());
 

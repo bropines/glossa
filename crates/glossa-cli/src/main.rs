@@ -52,6 +52,7 @@ glossa-cli — translate, look up and recognise text from the command line
 
 USAGE
     glossa-cli [--json] [--home DIR] [-v] <command> [options] [text…]
+    glossa-cli --version              the version and the commit it was built from
 
 COMMANDS
     translate  [-f FROM] [-t TO] [-s SERVICE] [--back] [--save-history] [--full] [TEXT…]
@@ -133,6 +134,8 @@ const SWITCHES: &[&str] = &[
     "--verbose",
     "-h",
     "--help",
+    "-V",
+    "--version",
     "--back",
     "--slow",
     "--favorites",
@@ -143,7 +146,7 @@ const SWITCHES: &[&str] = &[
 ];
 
 /// Flags every command takes.
-const GLOBAL: &[&str] = &["--json", "-v", "--verbose", "-h", "--help", "--home"];
+const GLOBAL: &[&str] = &["--json", "-v", "--verbose", "-h", "--help", "-V", "--version", "--home"];
 
 /// The flags each command takes besides the global ones, or `None` for a
 /// command that does not exist (that error is reported instead).
@@ -170,7 +173,7 @@ fn command_flags(command: &str) -> Option<&'static [&'static str]> {
         "services" => &["-c", "--capability"],
         "history" => &["--search", "--favorites", "--export"],
         "detect" | "modules" | "import-classic" | "theme" | "locale" | "config" | "serve" | "action" | "doctor"
-        | "" | "help" => &[],
+        | "" | "help" | "version" => &[],
         _ => return None,
     })
 }
@@ -213,6 +216,7 @@ fn parse(argv: Vec<String>) -> Result<Args, String> {
                     "--json" => a.json = true,
                     "-v" | "--verbose" => a.verbose = true,
                     "-h" | "--help" => a.command = "help".into(),
+                    "-V" | "--version" => a.command = "version".into(),
                     _ => {}
                 }
                 a.flags.push((name, value));
@@ -363,6 +367,17 @@ fn run(args: &Args) -> Result<(), Fail> {
     match args.command.as_str() {
         "" | "help" => {
             outp!("{USAGE}");
+            Ok(())
+        }
+        "version" => {
+            if args.json {
+                out!(
+                    "{}",
+                    json!({ "name": "glossa-cli", "version": glossa_core::VERSION, "commit": glossa_core::COMMIT })
+                );
+            } else {
+                out!("glossa-cli {}", glossa_core::long_version());
+            }
             Ok(())
         }
         "translate" | "tr" => {

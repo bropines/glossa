@@ -20,6 +20,9 @@ for Windows, macOS and Linux.
   dictionary and history windows; every classic options page plus OCR,
   Modules and Control API; a tray icon with the classic menu. Hotkeys wake a
   hidden app, and a second launch hands over to the running one.
+- **The commit in the version**: About, `glossa-cli --version` and the
+  control API's `/health` show the commit Glossa was built from
+  (`0.1.0 (1a2b3c4d)`, `-dirty` for uncommitted changes).
 - **Welcome guide** on the first start (and from *Options → Basics*): what
   Glossa is, its main hotkeys (changeable there), how to use it, where to
   keep API keys and data (a portable copy beside the program on request),

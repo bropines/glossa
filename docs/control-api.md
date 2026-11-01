@@ -159,10 +159,11 @@ The examples use `$T` for the token and the default address.
 
 ```console
 $ curl -s http://127.0.0.1:60828/health
-{"name":"glossa","version":"0.1.0"}
+{"name":"glossa","version":"0.1.0","commit":"1a2b3c4d"}
 ```
 
-`/` answers the same. Neither needs the token, so a script can check that
+`commit` is the commit the program was built from (`-dirty` when it had
+uncommitted changes), empty when unknown. `/` answers the same. Neither needs the token, so a script can check that
 Glossa is running before it does anything else.
 
 ### GET /v1/services

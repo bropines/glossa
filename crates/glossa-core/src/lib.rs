@@ -41,6 +41,20 @@ pub use translate::{Detection, ProviderInfo, TranslateRequest, Translation};
 /// The program's version, for the about box and the control API.
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");
 
+/// The commit the program was built from (`1a2b3c4d`, with `-dirty` when
+/// tracked files had uncommitted changes), or empty when that is unknown (a
+/// build from a source archive without `GLOSSA_COMMIT`). See `build.rs`.
+pub const COMMIT: &str = env!("GLOSSA_COMMIT");
+
+/// The version with its commit, `0.1.0 (1a2b3c4d)`, or the version alone.
+pub fn long_version() -> String {
+    if COMMIT.is_empty() {
+        VERSION.to_owned()
+    } else {
+        format!("{VERSION} ({COMMIT})")
+    }
+}
+
 /// Seconds since the Unix epoch, for timestamps in history and logs.
 pub fn now_unix() -> i64 {
     std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs() as i64).unwrap_or(0)

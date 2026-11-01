@@ -25,6 +25,7 @@ command list and exits with 0.
 | `--json` | Machine-readable output on stdout (shapes are given per command below). Errors become `{"error": "…"}` on stdout. |
 | `--home DIR` | Use `DIR` as the data folder, as `GLOSSA_HOME` does. `--home=DIR` works too. |
 | `-v`, `--verbose` | Log at `debug` level to stderr. `GLOSSA_LOG`, when set, takes precedence. |
+| `-V`, `--version` | Print the version and the commit it was built from (`glossa-cli 0.1.0 (1a2b3c4d)`; with `--json`, `{"name","version","commit"}`) and exit. A build without git (from a source archive) takes the commit from `GLOSSA_COMMIT` at build time, or shows the version alone. |
 | `--` | Everything after it is text, even if it starts with `-`. |
 
 Global flags may stand anywhere on the line, before or after the command.

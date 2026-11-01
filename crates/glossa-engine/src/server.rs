@@ -434,7 +434,10 @@ fn route(engine: &Engine, req: &mut Request) -> Reply {
     let method = req.method().clone();
 
     if path.is_empty() || path == "/health" {
-        return Reply::json(200, json!({ "name": "glossa", "version": glossa_core::VERSION }));
+        return Reply::json(
+            200,
+            json!({ "name": "glossa", "version": glossa_core::VERSION, "commit": glossa_core::COMMIT }),
+        );
     }
     if !authorised(engine, req) && !pot_route_open(engine, req, &path) {
         return Reply::error(401, "missing or wrong token");
@@ -684,6 +687,7 @@ mod tests {
             request(server.addr, "GET /health HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: close\r\n\r\n");
         assert_eq!(status, 200);
         assert!(body.contains("\"glossa\""));
+        assert!(body.contains("\"commit\""), "{body}");
 
         let (status, _) =
             request(server.addr, "GET /v1/services HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: close\r\n\r\n");

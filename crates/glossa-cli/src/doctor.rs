@@ -72,6 +72,7 @@ pub fn report(paths: &Paths) -> Value {
     let proxy_mode = format!("{:?}", cfg.network.proxy.mode).to_lowercase();
     json!({
         "version": glossa_core::VERSION,
+        "commit": glossa_core::COMMIT,
         "system": {
             "os": std::env::consts::OS,
             "arch": std::env::consts::ARCH,
