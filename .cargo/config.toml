@@ -1,0 +1,6 @@
+# Test threads get Rust's 2 MB default stack, less than the engine gives its
+# workers (8 MB). Script modules running on the JavaScript engine in an
+# unoptimised build can need more than that (the bundled Youdao module's
+# test overflowed on macOS), so tests get the workers' size.
+[env]
+RUST_MIN_STACK = "8388608"
