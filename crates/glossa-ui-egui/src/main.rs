@@ -63,6 +63,8 @@ fn parse_args() -> Launch {
         match a.as_str() {
             "--hidden" | "--tray" => l.hidden = true,
             "--home" => l.home = it.next().map(Into::into),
+            // --home=DIR, as glossa-cli takes it too.
+            a if a.starts_with("--home=") => l.home = Some(a["--home=".len()..].into()),
             "--popup" => l.popup_text = it.next(),
             "--screenshot" => {
                 let what = it.next().unwrap_or_else(|| "main".into());

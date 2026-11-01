@@ -504,7 +504,7 @@ pub static STRINGS: &[(&str, &str, Option<&str>)] = &[
     // -- options: basics --------------------------------------------------------
     ("options.appearance.preview", "Preview", None),
     ("options.appearance.preview_source", "Hello, everyone! How are you today?", None),
-    ("options.appearance.preview_translation", "Bonjour à tous ! Comment allez-vous ?", None),
+    ("options.appearance.preview_translation", "Всем привет! Как у вас дела?", None),
     ("options.ocr.ai_group", "AI endpoints (vision models)", None),
     ("options.ocr.ai_hint", "%s reads the picture with a vision model, and only when chosen here. Its model, answer format and box coordinates are in its settings.", None),
     ("options.ocr.ai_settings", "Settings…", None),
@@ -872,7 +872,7 @@ pub static STRINGS: &[(&str, &str, Option<&str>)] = &[
     ("options.ocr.lens_cli_hint", "found on PATH", None),
     (
         "options.ocr.lens_install",
-        "Install: pip install \"chrome-lens-py[clipboard]\" — the warm daemon makes a scan take ~0.4 s.",
+        "Lens is built in and needs nothing installed. The daemon and CLI fields are only for chrome-lens-py, if you run it yourself.",
         None,
     ),
     ("options.ocr.windows_title", "Windows OCR", None),

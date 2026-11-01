@@ -262,6 +262,7 @@ pub fn print(r: &Value) -> String {
         if p["reachable"] == true {
             let _ = writeln!(o, "  global shortcuts {}", version(&p["global_shortcuts"]));
             let _ = writeln!(o, "  screenshot       {}", version(&p["screenshot"]));
+            let _ = writeln!(o, "  remote desktop   {}", version(&p["remote_desktop"]));
         } else {
             let _ = writeln!(o, "  not reachable: {}", s(&p["error"]));
         }

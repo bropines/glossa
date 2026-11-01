@@ -437,7 +437,7 @@
     "options.ocr.lens_endpoint_hint": "определяется автоматически",
     "options.ocr.lens_cli_path": "Путь к lens_scan:",
     "options.ocr.lens_cli_hint": "ищется в PATH",
-    "options.ocr.lens_install": "Установка: pip install \"chrome-lens-py[clipboard]\" — с запущенным демоном распознавание занимает ~0,4 с.",
+    "options.ocr.lens_install": "Lens встроен, ничего ставить не нужно. Поля демона и CLI нужны, только если вы сами запускаете chrome-lens-py.",
     "options.ocr.windows_title": "Windows OCR",
     "options.ocr.windows_note": "Встроено в Windows, работает без сети. Читает языки, для которых установлен пакет распознавания (Параметры → Время и язык → Язык и регион → параметры языка). Если язык не выбран, используются языки интерфейса Windows.",
     "options.ocr.oneocr_title": "OneOCR (Ножницы)",

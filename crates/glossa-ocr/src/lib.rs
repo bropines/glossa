@@ -89,26 +89,34 @@ pub struct EngineStatus {
 /// Look for each built-in engine without recognising anything. Runs
 /// `tesseract --list-langs` and asks Windows for its OCR packs, so it takes
 /// a moment; call it off the UI thread.
+/// Google Lens as its mode will reach it: built in (no Python) unless the
+/// settings ask for chrome-lens-py's daemon or CLI only.
+fn lens_status(cfg: &OcrConfig) -> EngineStatus {
+    use glossa_core::config::LensMode;
+    let lens = lens::Locator::system(&cfg.lens.cli_path);
+    let endpoint = cfg.lens.endpoint.trim();
+    let announced = lens.daemon_file.as_ref().is_some_and(|f| f.is_file());
+    let status = |available, detail: String| EngineStatus { id: "lens", available, detail };
+    match cfg.lens.mode {
+        LensMode::Native => status(true, "built in".into()),
+        LensMode::Auto if !endpoint.is_empty() => status(true, format!("daemon at {endpoint}, else built in")),
+        LensMode::Auto if announced => status(true, "a chrome-lens-py daemon is announced, else built in".into()),
+        LensMode::Auto => status(true, "built in".into()),
+        LensMode::Daemon if !endpoint.is_empty() => status(true, format!("daemon at {endpoint}")),
+        LensMode::Daemon if announced => status(true, "a chrome-lens-py daemon is announced".into()),
+        LensMode::Daemon => {
+            status(false, "daemon mode, and no chrome-lens-py daemon is announced (`lens_scan daemon start`)".into())
+        }
+        LensMode::Cli => match &lens.cli {
+            Some(cli) => status(true, format!("lens_scan at {}", cli.display())),
+            None => status(false, "CLI mode, and chrome-lens-py's lens_scan was not found".into()),
+        },
+    }
+}
+
 pub fn engine_status(cfg: &OcrConfig) -> Vec<EngineStatus> {
     let mut out = Vec::new();
-    let lens = lens::Locator::system(&cfg.lens.cli_path);
-    out.push(if !cfg.lens.endpoint.trim().is_empty() {
-        EngineStatus { id: "lens", available: true, detail: format!("daemon at {}", cfg.lens.endpoint.trim()) }
-    } else {
-        match &lens.cli {
-            Some(cli) => {
-                EngineStatus { id: "lens", available: true, detail: format!("lens_scan at {}", cli.display()) }
-            }
-            None if lens.daemon_file.as_ref().is_some_and(|f| f.is_file()) => {
-                EngineStatus { id: "lens", available: true, detail: "a chrome-lens-py daemon is announced".into() }
-            }
-            None => EngineStatus {
-                id: "lens",
-                available: false,
-                detail: "chrome-lens-py not found (pip install \"chrome-lens-py[clipboard]\")".into(),
-            },
-        }
-    });
+    out.push(lens_status(cfg));
     if cfg!(windows) {
         let langs = winocr::installed_languages();
         out.push(EngineStatus {
