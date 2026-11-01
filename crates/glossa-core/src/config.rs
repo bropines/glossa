@@ -1424,6 +1424,16 @@ pub struct WindowGeometry {
 
 // -- loading and saving ---------------------------------------------------------
 
+/// A config file that could not be parsed and was moved aside
+/// ([`Config::load_or_recover`]).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RecoveredConfig {
+    /// Where the unreadable file went.
+    pub backup: PathBuf,
+    /// What was wrong with it.
+    pub error: String,
+}
+
 impl Config {
     /// Read a config file. A missing file is not an error: it means "all
     /// defaults". A malformed one is, so the user's settings are never
@@ -1433,6 +1443,41 @@ impl Config {
             Ok(text) => Config::from_toml(&text),
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(Config::default()),
             Err(e) => Err(e.into()),
+        }
+    }
+
+    /// [`Config::load`] for starting the program: a file that cannot be
+    /// parsed is moved aside to `config.toml.broken-<unix time>` and the
+    /// defaults are used, so a typo in a hand edit cannot keep the program
+    /// from starting. What happened is returned for the user to be told.
+    /// Errors other than parsing (a file that cannot be read) still fail.
+    pub fn load_or_recover(path: &Path) -> crate::Result<(Config, Option<RecoveredConfig>)> {
+        let text = match std::fs::read_to_string(path) {
+            Ok(text) => text,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok((Config::default(), None)),
+            Err(e) => return Err(e.into()),
+        };
+        match Config::from_toml(&text) {
+            Ok(c) => Ok((c, None)),
+            Err(e) => {
+                let secs = std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .map(|d| d.as_secs())
+                    .unwrap_or_default();
+                let mut name = path.file_name().unwrap_or_default().to_os_string();
+                name.push(format!(".broken-{secs}"));
+                let backup = path.with_file_name(name);
+                // Moved, not copied: the next save writes a fresh file, and
+                // the user's text survives beside it.
+                std::fs::rename(path, &backup).map_err(|io| {
+                    crate::Error::Config(format!(
+                        "{e}; and the file could not be moved aside to {}: {io}",
+                        backup.display()
+                    ))
+                })?;
+                tracing::error!("{e}; moved it to {} and started with the defaults", backup.display());
+                Ok((Config::default(), Some(RecoveredConfig { backup, error: e.to_string() })))
+            }
         }
     }
 
@@ -1559,6 +1604,29 @@ mod tests {
         // Untouched sibling fields keep their defaults.
         assert_eq!(c.general.second_language, LangId::ENGLISH);
         assert_eq!(c.appearance.popup.auto_hide_secs, 5);
+    }
+
+    #[test]
+    fn a_broken_file_is_moved_aside_and_defaults_are_used() {
+        let dir = std::env::temp_dir().join(format!("glossa-recover-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("config.toml");
+        std::fs::write(&path, "[general\nbroken = ").unwrap();
+        let (c, recovered) = Config::load_or_recover(&path).unwrap();
+        assert_eq!(c, Config::default());
+        let r = recovered.expect("reported");
+        assert!(!path.exists(), "moved, so the next save starts afresh");
+        assert_eq!(std::fs::read_to_string(&r.backup).unwrap(), "[general\nbroken = ", "kept verbatim");
+        let name = r.backup.file_name().unwrap().to_string_lossy().into_owned();
+        assert!(name.starts_with("config.toml.broken-") && name[19..].parse::<u64>().is_ok(), "{name}");
+        assert!(r.error.contains("config file"), "{}", r.error);
+        // A good file, or none, is not a recovery.
+        std::fs::write(&path, "[general]\ninstant_translation = true\n").unwrap();
+        let (c, recovered) = Config::load_or_recover(&path).unwrap();
+        assert!(c.general.instant_translation && recovered.is_none());
+        std::fs::remove_file(&path).unwrap();
+        assert!(Config::load_or_recover(&path).unwrap().1.is_none());
+        std::fs::remove_dir_all(&dir).ok();
     }
 
     #[test]
