@@ -640,6 +640,7 @@ impl GlossaApp {
 
 impl eframe::App for GlossaApp {
     fn logic(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+        let _frame = crate::watchdog::frame("logic");
         if !self.started {
             self.started = true;
             if !self.main_visible {
@@ -755,6 +756,8 @@ impl eframe::App for GlossaApp {
     }
 
     fn ui(&mut self, ui: &mut egui::Ui, frame: &mut eframe::Frame) {
+        use crate::watchdog::phase;
+        let _frame = crate::watchdog::frame("backdrop");
         if std::mem::take(&mut self.backdrop_dirty) {
             self.apply_main_backdrop(ui.ctx(), frame);
         }
@@ -763,14 +766,22 @@ impl eframe::App for GlossaApp {
         self.zoom_input(ui);
         self.save_zoom_later();
         if self.main_visible {
+            phase("main window");
             crate::main_window::show(self, ui);
         }
+        phase("popup");
         crate::popup::show(self, &ctx);
+        phase("mouse icon");
         crate::mouse::show_icon(self, &ctx);
+        phase("ocr");
         crate::ocr::show(self, &ctx);
+        phase("options");
         crate::options::show(self, &ctx);
+        phase("dictionary");
         crate::dictionary::show(self, &ctx);
+        phase("history");
         crate::history::show(self, &ctx);
+        phase("about, keyboard");
         crate::main_window::show_about(self, &ctx);
         crate::main_window::show_keyboard(self, &ctx);
         if let Some((what, path)) = self.launch.screenshot.clone() {
