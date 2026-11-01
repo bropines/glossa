@@ -345,7 +345,7 @@ Without `slow`, the classic rule applies: the same text asked for again
 within five seconds is spoken slowly, if `[advanced] slower_listen_repeat`
 is on.
 
-### /v1/action/<action>
+### `/v1/action/<action>`
 
 GET or POST. Asks the desktop program to perform an action, as its hotkey
 would, and returns at once:

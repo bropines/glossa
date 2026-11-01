@@ -209,9 +209,9 @@ Threading:
 
 The library must match Glossa's operating system **and architecture**: a
 32-bit DLL cannot be loaded into 64-bit Glossa, nor an x86-64 library into an
-ARM64 build. Build for the Glossa you run; the download's name says its
-architecture, and a universal macOS build loads a universal library or one
-for the Mac's own architecture.
+ARM64 build. Build for the Glossa you run: the download's name says its
+architecture (`x86_64` or `arm64`). On macOS a universal library loads into
+either.
 
 **Windows (MSVC toolchain).** Link the C runtime statically so the DLL does
 not depend on a particular Visual C++ redistributable being installed:

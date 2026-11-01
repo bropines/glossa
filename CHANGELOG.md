@@ -152,15 +152,17 @@ for Windows, macOS and Linux.
   Apple Vision or Tesseract, in that order of availability. OneOCR and AI
   endpoints are never a fallback.
 - **macOS builds** in CI and the release: `Glossa.app` (a menu-bar app) and
-  `glossa-cli`, for Apple silicon and as a universal binary; not notarised
+  `glossa-cli`, for Apple silicon and for Intel Macs; not notarised
   (the README's macOS section says how to open it the first time).
 - **Installers and packages** in every release, beside the archives
   ([docs/install.md](docs/install.md)): a Windows installer (per user
   without admin rights, or for all users; Start menu, optional desktop icon
   and autostart that agrees with Glossa's own option; upgrades in place and
   keeps the settings when uninstalling unless asked), a `.deb` for Debian
-  and Ubuntu, an AppImage, macOS disk images, and winget and Scoop manifests
-  for when the repository is public. The scripts are in `packaging/`.
+  and Ubuntu, an AppImage, macOS disk images, portable archives (with a
+  `portable.txt` marker) for Windows and Linux, and winget and Scoop
+  manifests for when the repository is public. Windows and Linux come for
+  x86-64 and ARM64. The scripts are in `packaging/`.
   Autostart from an AppImage registers the image file, not its temporary
   mount.
 - **Mouse mode on macOS**: a listen-only event tap reports drags and double

@@ -30,7 +30,24 @@ the Windows host for building, and everything runs in WSL (Debian) through
 `x86_64-pc-windows-gnu` target. AGENTS.md has the commands; you only need
 them if your setup is like that.
 
-Before sending a change, run what CI runs:
+### A macOS app bundle
+
+With Rust and the Xcode Command Line Tools, on the Mac:
+
+```bash
+cargo build --release -p glossa-ui-egui -p glossa-cli
+scripts/macos-bundle.sh            # Glossa.app in ~/Desktop/Glossa; or give a folder
+```
+
+An ad-hoc signature changes with every build, so macOS forgets the
+permissions each time. Run `scripts/macos-dev-identity.sh` once, in Terminal
+on the Mac (it asks for the keychain password): it creates a self-signed
+"Glossa Dev" identity, which `macos-bundle.sh` then signs with, and the
+permissions survive rebuilds.
+
+### Before sending a change
+
+Run what CI runs:
 
 ```bash
 cargo fmt --all -- --check

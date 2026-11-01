@@ -36,6 +36,10 @@ Fluent Dark on Windows, macOS Light and macOS Dark on macOS, Glossa Light
 and Glossa Dark elsewhere. With following off, or where the mode cannot be
 told, the one theme chosen there is used.
 
+<p align="center">
+  <img src="screenshots/options-appearance-follow.png" alt="Options, Appearance, with the switch to follow the system's mode and a theme for light and one for dark" width="700">
+</p>
+
 | system | where the mode is read |
 |---|---|
 | Windows | *Settings → Personalisation → Colours*, the app mode |

@@ -264,6 +264,14 @@ glossa-cli -v translate -s my-translator -t de "Hi"   # with the module's log li
 clean test with only your module in `<dir>/modules`. Each guide ends with
 the debugging tips for its runtime.
 
+*Options → Modules* shows the same list in the program, with what failed
+and why:
+
+<picture>
+  <source media="(prefers-color-scheme: light)" srcset="../screenshots/options-modules-light.png">
+  <img src="../screenshots/options-modules-dark.png" alt="Options, Modules: three modules loaded, none failed" width="700">
+</picture>
+
 ## Bundled modules
 
 Some services ship inside Glossa as ordinary JavaScript modules. Their

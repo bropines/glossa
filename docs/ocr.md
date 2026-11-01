@@ -190,6 +190,11 @@ choosing the action again, stops it.
 
 ## Engines
 
+<picture>
+  <source media="(prefers-color-scheme: light)" srcset="screenshots/options-ocr-light.png">
+  <img src="screenshots/options-ocr-dark.png" alt="Options, Text recognition: the engine, what happens after a region is selected, and who translates" width="700">
+</picture>
+
 Pick one in *Options → Text recognition → Provider*; the list shows the
 engines this system has. If the chosen engine fails, the others are tried in
 turn (except OneOCR and the AI endpoints, which only run when chosen).
