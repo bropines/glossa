@@ -22,7 +22,7 @@ use crate::app::GlossaApp;
 
 const TITLE: &str = "Glossa in-place translation";
 /// The strip with the buttons, in points.
-const BAR: f32 = 28.0;
+const BAR: f32 = 34.0;
 /// The window is at least this wide so the strip fits; a narrower region
 /// leaves the rest of the window transparent.
 const MIN_WIDTH: f32 = 240.0;
@@ -68,6 +68,7 @@ pub fn open(app: &mut GlossaApp, image: image::RgbaImage, region: GRect, outcome
     let scale = monitor.as_ref().map(|m| m.scale).filter(|s| *s > 0.0).unwrap_or(1.0);
     let bottom = monitor.map(|m| m.work_area.y + m.work_area.height).unwrap_or(f32::MAX);
     let bar_on_top = region.y + region.height + BAR * scale > bottom;
+    tracing::debug!(?region, scale, bar_on_top, blocks = outcome.blocks.len(), "in-place window");
     let items = items_for(&image, &outcome);
     for item in &items {
         app.fonts.ensure(&app.ctx, &item.text);
@@ -195,16 +196,26 @@ fn body(app: &mut GlossaApp, ui: &mut egui::Ui, st: &mut InPlace, size: Vec2) ->
             }
         }
         p.rect_filled(bar, 0.0, look.popup_back);
-        let mut child = ui.new_child(egui::UiBuilder::new().max_rect(bar.shrink2(vec2(6.0, 3.0))));
+        let mut child = ui.new_child(egui::UiBuilder::new().max_rect(bar.shrink2(vec2(4.0, 2.0))));
         child.horizontal_centered(|ui| {
-            let label = if st.show_original { app.t("ocr.translation") } else { app.t("ocr.original") };
-            if ui.small_button(label).clicked() {
+            ui.spacing_mut().item_spacing.x = 2.0;
+            ui.spacing_mut().interact_size.y = BAR - 4.0;
+            use crate::icons::{command_button, Icon};
+            // Names while the strip has room for them; icons with tooltips
+            // over a narrow region.
+            let named = bar.width() >= 480.0;
+            let shown = |label: &str| if named { label.to_owned() } else { String::new() };
+            let (label, key) =
+                if st.show_original { (app.t("ocr.translation"), "Space") } else { (app.t("ocr.original"), "Space") };
+            if command_button(ui, &look, Icon::Image, &shown(&label), &format!("{label} ({key})"), true).clicked() {
                 st.show_original = !st.show_original;
             }
-            if ui.small_button(app.t("history.copy_translation")).clicked() {
+            let copy_tr = app.t("history.copy_translation");
+            if command_button(ui, &look, Icon::Copy, &shown(&copy_tr), &format!("{copy_tr} (C)"), true).clicked() {
                 copy_translation(app, st);
             }
-            if ui.small_button(app.t("ocr.copy_text")).clicked() {
+            let copy_text = app.t("ocr.copy_text");
+            if command_button(ui, &look, Icon::Copy, &shown(&copy_text), &copy_text, true).clicked() {
                 let text = glossa_engine::ocr::copy_text(&st.outcome.ocr, app.cfg.ocr.copy_joined_lines);
                 app.copy_text(&text);
             }

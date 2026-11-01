@@ -274,7 +274,7 @@ fn hover_plate(look: &Look, pressed: bool) -> Color32 {
 pub fn command_button(ui: &mut Ui, look: &Look, icon: Icon, label: &str, tooltip: &str, enabled: bool) -> Response {
     let icon_size = (16.0 * look.icon_scale).round();
     let pad = 8.0;
-    let height = ui.spacing().interact_size.y.max(icon_size + 12.0).round();
+    let height = ui.spacing().interact_size.y.max(icon_size + 8.0).round();
     let font = egui::TextStyle::Button.resolve(ui.style());
     let galley = (!label.is_empty()).then(|| ui.painter().layout_no_wrap(label.to_owned(), font, Color32::PLACEHOLDER));
     let width = match &galley {

@@ -448,7 +448,9 @@ fn body(app: &mut GlossaApp, ui: &mut egui::Ui, st: &mut ResultWindow) -> bool {
         if let Some(c) = direction_bar(app, ui, st) {
             command = Some(c);
         }
-        translation_pane(app, ui, st, (avail - text_h).max(60.0));
+        // What is left, now that the bars took what they needed.
+        let tr_h = (ui.available_height() - status_h - ui.spacing().item_spacing.y).max(60.0);
+        translation_pane(app, ui, st, tr_h);
         status_line(app, ui, st);
     });
     match command {
@@ -572,7 +574,10 @@ fn picture_info(app: &mut GlossaApp, ui: &mut egui::Ui, st: &mut ResultWindow, r
         }
     };
     if row {
-        for l in lines {
+        for (i, l) in lines.into_iter().enumerate() {
+            if i > 0 {
+                ui.label(RichText::new("·").small().color(weak));
+            }
             ui.label(l);
         }
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| toggles(ui, st));
@@ -748,10 +753,30 @@ fn translator_picker(app: &mut GlossaApp, ui: &mut egui::Ui, st: &ResultWindow, 
     }
     let items = translators(app);
     let lens_note = app.t("ocr.result.lens_note");
+    let mark_id = id.with("mark");
+    if !crate::dropdown::is_open(ui.ctx(), id) {
+        ui.ctx().data_mut(|d| d.remove::<usize>(mark_id));
+    }
     let mut picked = None;
     crate::dropdown::show(ui, id, button.rect, button.rect.width(), 420.0, |ui, _| {
-        for (pid, name) in &items {
-            let mut r = ui.selectable_label(*pid == current, name);
+        // The keyboard's place in the list, the current translator at first.
+        let stored: Option<usize> = ui.ctx().data(|d| d.get_temp(mark_id));
+        let mut mark = stored.unwrap_or_else(|| items.iter().position(|(p, _)| *p == current).unwrap_or(0));
+        let (down, up, enter) =
+            ui.input(|i| (i.key_pressed(Key::ArrowDown), i.key_pressed(Key::ArrowUp), i.key_pressed(Key::Enter)));
+        if down {
+            mark += 1;
+        }
+        if up {
+            mark = mark.saturating_sub(1);
+        }
+        mark = mark.min(items.len().saturating_sub(1));
+        if enter {
+            picked = items.get(mark).map(|(p, _)| p.clone());
+            ui.close();
+        }
+        for (n, (pid, name)) in items.iter().enumerate() {
+            let mut r = ui.selectable_label(n == mark, name);
             if pid == LENS {
                 r = r.on_hover_text(&lens_note);
             }
@@ -760,6 +785,7 @@ fn translator_picker(app: &mut GlossaApp, ui: &mut egui::Ui, st: &ResultWindow, 
                 ui.close();
             }
         }
+        ui.ctx().data_mut(|d| d.insert_temp(mark_id, mark));
     });
     picked
 }
@@ -853,8 +879,26 @@ fn action_bar(app: &mut GlossaApp, ui: &mut egui::Ui, st: &ResultWindow) -> Opti
     let has_text = !st.text.trim().is_empty();
     let has_translation = st.translation.is_some();
     let mut command = None;
-    // Names only while they fit; the tooltips say them anyway.
-    let labelled = ui.available_width() >= 600.0;
+    // Names only while they fit beside the icons on the right; the tooltips
+    // say them anyway.
+    let named = ["ocr.copy_text", "history.copy_translation", "ocr.in_place", "ocr.result.to_main"];
+    let font = egui::TextStyle::Button.resolve(ui.style());
+    let icon = (16.0 * look.icon_scale).round();
+    let button_h = ui.spacing().interact_size.y.max(icon + 12.0);
+    // In order of importance: each gets its name while there is room.
+    let mut room = ui.available_width() - 4.0 * button_h - 9.0 * 2.0 - 24.0;
+    let mut labelled = [false; 4];
+    for (i, k) in named.iter().enumerate() {
+        let named_w =
+            ui.painter().layout_no_wrap(app.t(k), font.clone(), egui::Color32::PLACEHOLDER).size().x + icon + 22.0;
+        let others = (named.len() - i - 1) as f32 * button_h;
+        if named_w + others <= room {
+            labelled[i] = true;
+            room -= named_w;
+        } else {
+            room -= button_h;
+        }
+    }
     ui.horizontal(|ui| {
         ui.spacing_mut().item_spacing.x = 2.0;
         let mut button = |ui: &mut egui::Ui, icon: Icon, key: &str, cmd: Command, enabled: bool, named: bool| {
@@ -863,10 +907,10 @@ fn action_bar(app: &mut GlossaApp, ui: &mut egui::Ui, st: &ResultWindow) -> Opti
                 command = Some(cmd);
             }
         };
-        button(ui, Icon::Copy, "ocr.copy_text", Command::CopyText, has_text, labelled);
-        button(ui, Icon::Copy, "history.copy_translation", Command::CopyTranslation, has_translation, labelled);
-        button(ui, Icon::Overlay, "ocr.in_place", Command::InPlace, !st.recognising, labelled);
-        button(ui, Icon::Open, "ocr.result.to_main", Command::ToMain, has_text, labelled);
+        button(ui, Icon::Copy, named[0], Command::CopyText, has_text, labelled[0]);
+        button(ui, Icon::Copy, named[1], Command::CopyTranslation, has_translation, labelled[1]);
+        button(ui, Icon::Overlay, named[2], Command::InPlace, !st.recognising, labelled[2]);
+        button(ui, Icon::Open, named[3], Command::ToMain, has_text, labelled[3]);
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
             button(ui, Icon::Crop, "ocr.result.select_again", Command::SelectAgain, true, false);
             button(ui, Icon::Save, "ocr.save_image", Command::SaveImage, true, false);
