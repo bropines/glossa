@@ -277,7 +277,9 @@ pub fn show(app: &mut GlossaApp, ctx: &egui::Context) {
         .with_min_inner_size([160.0, 48.0])
         .with_taskbar(false)
         .with_window_level(egui::WindowLevel::AlwaysOnTop)
-        .with_transparent(true)
+        // macOS's OpenGL refuses a translucent window unless the main window
+        // was made with an alpha channel; it would not open at all.
+        .with_transparent(cfg!(not(target_os = "macos")) || app.transparent_root())
         .with_active(cfg.activate_on_open)
         .with_position(state.pos)
         .with_inner_size(state.size);

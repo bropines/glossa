@@ -149,7 +149,9 @@ pub fn show_icon(app: &mut GlossaApp, ctx: &egui::Context) {
         .with_decorations(false)
         .with_resizable(false)
         .with_taskbar(false)
-        .with_transparent(true)
+        // macOS's OpenGL refuses a translucent window unless the main window
+        // was made with an alpha channel; it would not open at all.
+        .with_transparent(cfg!(not(target_os = "macos")) || app.transparent_root())
         .with_active(false)
         .with_window_level(egui::WindowLevel::AlwaysOnTop)
         .with_position(icon.pos)
