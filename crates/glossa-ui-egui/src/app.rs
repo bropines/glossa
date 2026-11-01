@@ -121,6 +121,7 @@ pub struct GlossaApp {
     /// The window showing a recognised region's text and translation.
     pub ocr_result: Option<crate::ocr_result::ResultWindow>,
     pub options: Option<crate::options::OptionsState>,
+    pub welcome: Option<crate::welcome::WelcomeState>,
     pub dictionary: Option<crate::dictionary::DictState>,
     pub history: Option<crate::history::HistoryState>,
     pub about_open: bool,
@@ -177,6 +178,7 @@ impl GlossaApp {
         let shell = slot.borrow_mut().take().expect("the shell is handed to each GUI run");
         let engine = shell.engine.clone();
         let cfg = engine.config();
+        let welcome = cfg.general.show_welcome.then(crate::welcome::WelcomeState::default);
         let transparent_root = crate::style::needs_transparent_root(&cfg);
         let look = Look::new(engine.current_theme(), &cfg);
         look.apply(&ctx, cfg.appearance.ui_scale);
@@ -232,6 +234,7 @@ impl GlossaApp {
             in_place: None,
             ocr_result: None,
             options: None,
+            welcome,
             dictionary: None,
             history: None,
             about_open: false,
@@ -940,7 +943,8 @@ impl eframe::App for GlossaApp {
             || self.dictionary.is_some()
             || self.history.is_some()
             || self.about_open
-            || self.keyboard_open;
+            || self.keyboard_open
+            || self.welcome.is_some();
         // Only until one of those windows exists: eframe runs the ui anyway
         // while a child window is shown (an immediate viewport not drawn in
         // a pass is dropped, so one that exists is on screen), and the
@@ -959,7 +963,8 @@ impl eframe::App for GlossaApp {
             || self.dictionary.is_some()
             || self.history.is_some()
             || self.about_open
-            || self.keyboard_open;
+            || self.keyboard_open
+            || self.welcome.is_some();
         if glossa_platform::shell::SHELL.switcher_follows_windows && windowed != self.in_app_switcher {
             self.in_app_switcher = windowed;
             glossa_platform::window::set_in_app_switcher(windowed);
@@ -1018,6 +1023,7 @@ impl eframe::App for GlossaApp {
         crate::history::show(self, &ctx);
         phase("about, keyboard");
         crate::about::show_about(self, &ctx);
+        crate::welcome::show(self, &ctx);
         crate::keyboard::show_keyboard(self, &ctx);
         if let Some((what, path)) = self.launch.screenshot.clone() {
             crate::actions::screenshot_flow(self, &ctx, &what, &path);

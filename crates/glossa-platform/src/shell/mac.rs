@@ -20,6 +20,7 @@ pub const SHELL: Shell = Shell {
     command_is_ctrl: false,
     app_menu: true,
     switcher_follows_windows: true,
+    portable_beside_exe: false,
     autostart_label: "options.basics.start_with_system_macos",
 };
 

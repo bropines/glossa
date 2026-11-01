@@ -53,6 +53,8 @@ async-io = "2.6"
 futures-lite = "2.6"
 
 [target.'cfg(target_os = "macos")'.dependencies]
+# The Keychain (`secrets`); already in the tree through TLS.
+security-framework = "3"
 enigo = { version = "0.6", default-features = false }
 # Vibrancy (NSVisualEffectView), the accent colour and the menu bar; already
 # in the tree (with these features) through the clipboard, the tray and the
@@ -85,6 +87,7 @@ windows = { workspace = true, features = [
     "Win32_Graphics_Dwm",
     "Win32_Graphics_Gdi",
     "Win32_Security",
+    "Win32_Security_Credentials",
     "Win32_Storage_FileSystem",
     "Win32_System_Com",
     "Win32_System_DataExchange",

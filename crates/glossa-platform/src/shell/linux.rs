@@ -18,6 +18,7 @@ pub const SHELL: Shell = Shell {
     command_is_ctrl: true,
     app_menu: false,
     switcher_follows_windows: false,
+    portable_beside_exe: true,
     autostart_label: "options.basics.start_with_system_linux",
 };
 

@@ -145,6 +145,14 @@ pub struct General {
     /// users know.
     #[serde(default)]
     pub show_tray_hint: bool,
+    /// Show the welcome guide at start: what Glossa is, its hotkeys, how to
+    /// use it, where to keep keys and data. On for a fresh configuration,
+    /// off for a file written before the guide existed.
+    #[serde(default)]
+    pub show_welcome: bool,
+    /// Where API keys, the proxy password and the Lens token are kept: in
+    /// this file, or in the system's keychain (see [`crate::secrets`]).
+    pub secret_storage: crate::secrets::SecretStorage,
 }
 
 impl Default for General {
@@ -178,6 +186,8 @@ impl Default for General {
             minimize_to_tray_on_close: true,
             startup_action: StartupAction::MinimizeToTray,
             show_tray_hint: true,
+            show_welcome: true,
+            secret_storage: crate::secrets::SecretStorage::File,
         }
     }
 }

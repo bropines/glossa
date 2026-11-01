@@ -96,6 +96,34 @@ impl Paths {
         self.data_dir.join("themes")
     }
 
+    /// Whether the program's own folder takes new files: where a portable
+    /// copy would keep its data.
+    pub fn exe_dir_writable(&self) -> bool {
+        let probe = self.exe_dir.join(format!(".glossa-write-test-{}", std::process::id()));
+        let ok = std::fs::write(&probe, b"").is_ok();
+        let _ = std::fs::remove_file(&probe);
+        ok
+    }
+
+    /// Start keeping the data beside the program: copy the settings, the
+    /// history and the user's modules and themes into `<exe>/data`, which
+    /// makes the next start portable. The old folder is left as it was.
+    /// Returns the new data folder.
+    pub fn make_portable(&self) -> std::io::Result<PathBuf> {
+        let target = self.exe_dir.join("data");
+        std::fs::create_dir_all(&target)?;
+        for file in ["config.toml", "history.json", "dictionary-history.json"] {
+            let from = self.data_dir.join(file);
+            if from.is_file() {
+                std::fs::copy(&from, target.join(file))?;
+            }
+        }
+        for dir in ["modules", "themes"] {
+            copy_tree(&self.data_dir.join(dir), &target.join(dir))?;
+        }
+        Ok(target)
+    }
+
     /// `<exe>/<name>`, then `<exe>/../share/glossa/<name>` for a Unix install,
     /// then `<data>/<name>`. Only directories that exist are returned.
     fn resource_dirs(&self, name: &str) -> Vec<PathBuf> {
@@ -123,6 +151,23 @@ impl Paths {
     }
 }
 
+fn copy_tree(from: &Path, to: &Path) -> std::io::Result<()> {
+    if !from.is_dir() {
+        return Ok(());
+    }
+    std::fs::create_dir_all(to)?;
+    for entry in std::fs::read_dir(from)? {
+        let entry = entry?;
+        let path = entry.path();
+        if entry.file_type()?.is_dir() {
+            copy_tree(&path, &to.join(entry.file_name()))?;
+        } else {
+            std::fs::copy(&path, to.join(entry.file_name()))?;
+        }
+    }
+    Ok(())
+}
+
 fn app_dir_name() -> &'static str {
     if cfg!(any(target_os = "windows", target_os = "macos")) {
         "Glossa"
@@ -140,6 +185,38 @@ mod tests {
         std::fs::remove_dir_all(&p).ok();
         std::fs::create_dir_all(&p).unwrap();
         p
+    }
+
+    #[test]
+    fn making_a_copy_portable_moves_its_data_beside_it() {
+        let dir = temp("make-portable");
+        let exe = dir.join("app");
+        std::fs::create_dir_all(&exe).unwrap();
+        let profile = Paths {
+            portable: false,
+            exe_dir: exe.clone(),
+            data_dir: dir.join("profile"),
+            cache_dir: dir.join("cache"),
+        };
+        std::fs::create_dir_all(profile.data_dir.join("modules/mine")).unwrap();
+        std::fs::write(
+            profile.config_file(),
+            "[general]
+",
+        )
+        .unwrap();
+        std::fs::write(profile.data_dir.join("modules/mine/module.toml"), "id = 'mine'").unwrap();
+        assert!(profile.exe_dir_writable());
+        let data = profile.make_portable().unwrap();
+        assert_eq!(
+            std::fs::read_to_string(data.join("config.toml")).unwrap(),
+            "[general]
+"
+        );
+        assert!(data.join("modules/mine/module.toml").is_file());
+        // The next start finds it.
+        assert!(Paths::for_exe_dir(exe, None).portable);
+        std::fs::remove_dir_all(&dir).ok();
     }
 
     #[test]

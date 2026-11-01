@@ -31,6 +31,7 @@ mod style;
 mod text_menu;
 mod tray;
 mod watchdog;
+mod welcome;
 mod widgets;
 
 use std::cell::RefCell;
@@ -181,6 +182,9 @@ fn main() -> eframe::Result<()> {
             std::process::exit(1);
         }
     };
+    // Before anything is translated: keys the settings keep in the system
+    // keychain are fetched now.
+    engine.attach_secret_store(glossa_platform::secrets::system_store());
 
     if let Some(guard) = &instance {
         let engine = engine.clone();
@@ -234,6 +238,7 @@ fn main() -> eframe::Result<()> {
     let mut start_visible = !launch.hidden
         && (launch.screenshot.is_some()
             || cfg.general.show_tray_hint
+            || cfg.general.show_welcome
             || match cfg.general.startup_action {
                 glossa_core::config::StartupAction::ShowWindow
                 | glossa_core::config::StartupAction::RestorePrevious => true,

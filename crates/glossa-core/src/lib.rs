@@ -19,6 +19,7 @@ pub mod legacy;
 pub mod locale;
 pub mod ocr;
 pub mod paths;
+pub mod secrets;
 pub mod text;
 pub mod theme;
 pub mod translate;

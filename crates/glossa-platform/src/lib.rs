@@ -51,6 +51,7 @@ pub mod layout;
 pub mod mouse;
 pub mod permissions;
 pub mod portal;
+pub mod secrets;
 pub mod selection;
 pub mod session;
 pub mod shell;

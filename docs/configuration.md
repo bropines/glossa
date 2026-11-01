@@ -117,6 +117,8 @@ installation) but nothing reads it yet.
 | `minimize_to_tray_on_close` | bool | `true` | main window menu | Closing the main window hides it in the tray instead of quitting (when there is a tray). |
 | `startup_action` | `"show_window"`, `"minimize_to_tray"`, `"restore_previous"` | `"minimize_to_tray"` | main window menu, *On start-up* | What the program shows when it starts. `--hidden` overrides it. |
 | `show_tray_hint` | bool | `true` for a new configuration, `false` when the key is missing from an existing file | the note's *Got it* button | While on, the main window opens at start with a note that Glossa lives in the tray (the menu bar on macOS) and which hotkey translates a selection. *Got it* turns it off. A file written before the note existed reads as off, so only a first run sees it. |
+| `show_welcome` | bool | `true` for a new configuration, `false` when the key is missing from an existing file | the welcome guide's *Finish*; *Options → Basics → Show the welcome guide* turns it back on | Show the welcome guide at start: what Glossa is, its hotkeys, how to use it, and where to keep keys and data. |
+| `secret_storage` | `"file"`, `"system"` | `"file"` | *Options → Basics*, the welcome guide | Where API keys (`services.options`, AI endpoints included), the proxy password and the Lens token are kept. `"system"` puts each in the system keychain (Windows Credential Manager, the macOS Keychain, the Secret Service on Linux) and this file keeps `"@system-keychain"` in its place. Where no keychain answers (a Linux session without one), they stay in the file. |
 
 A language pair (`pair`, each item of `recent_pairs`) has two keys, `from`
 and `to`, each a language:

@@ -31,12 +31,15 @@ use glossa_core::config::OcrTranslateWith;
 use glossa_core::error::catch_panic;
 use glossa_core::history::{HistoryEntry, HistoryResult};
 use glossa_core::ocr::{ImageSource, OcrGranularity, OcrRequest};
+use glossa_core::secrets::{SecretSlot, SecretStorage, SecretStore, SecretSync, IN_STORE};
 use glossa_core::{
     Action, Article, Audio, Capabilities, Config, Detection, DictRequest, Error, History, LangId, LangPair, Locale,
     OcrResult, Paths, ProviderInfo, Result, SpeakRequest, Theme,
 };
 use glossa_modules::host_api::ModuleCache;
-use glossa_modules::{CancelToken, Host, OptionSpec, OptionValues, Origin, Provider, Registry, RuntimeContext};
+use glossa_modules::{
+    CancelToken, Host, OptionKind, OptionSpec, OptionValues, Origin, Provider, Registry, RuntimeContext,
+};
 use glossa_net::HttpClient;
 use parking_lot::{Mutex, RwLock};
 
@@ -234,6 +237,10 @@ struct Inner {
     /// The JavaScript modules compiled into the program, also created once.
     bundled: Vec<Arc<dyn Provider>>,
     startup_warnings: Mutex<Vec<StartupWarning>>,
+    /// The system keychain, once the front end attaches one (see
+    /// [`Engine::attach_secret_store`]).
+    secret_store: RwLock<Option<Arc<dyn SecretStore>>>,
+    secret_sync: Mutex<SecretSync>,
 }
 
 /// Something that went wrong at start without stopping it
@@ -334,6 +341,8 @@ impl Engine {
             ocr_builtins,
             bundled,
             startup_warnings: Mutex::new(Vec::new()),
+            secret_store: RwLock::new(None),
+            secret_sync: Mutex::new(SecretSync::new()),
         };
         let engine = Engine { inner: Arc::new(inner) };
         engine.reload_modules();
@@ -363,7 +372,7 @@ impl Engine {
             ensure_token(&mut cfg);
             (before, cfg.clone())
         };
-        after.save(&self.inner.paths.config_file())?;
+        self.write_config(&after)?;
         if before.network != after.network {
             *self.inner.http.write() = Arc::new(HttpClient::new(&after.network)?);
         }
@@ -400,7 +409,69 @@ impl Engine {
 
     /// Save the settings as they are (window positions, pane contents).
     pub fn save_config(&self) -> Result<()> {
-        self.inner.config.read().save(&self.inner.paths.config_file())
+        let cfg = self.inner.config.read().clone();
+        self.write_config(&cfg)
+    }
+
+    /// Write `cfg` to the settings file, with its secrets moved to the
+    /// system keychain when the settings say so (see
+    /// [`glossa_core::secrets`]).
+    fn write_config(&self, cfg: &Config) -> Result<()> {
+        let store = self.inner.secret_store.read().clone();
+        let slots = self.secret_slots(cfg);
+        let (out, errors) = self.inner.secret_sync.lock().prepare(cfg, &slots, store.as_deref());
+        for e in errors {
+            tracing::warn!("keychain: {e}; kept in the settings file instead");
+        }
+        out.save(&self.inner.paths.config_file())
+    }
+
+    /// Every place in `cfg` that holds a secret: the services' options of
+    /// the secret kind (and any option a service no longer loaded left in
+    /// the keychain), the proxy password, the Lens token.
+    fn secret_slots(&self, cfg: &Config) -> Vec<SecretSlot> {
+        let registry = self.registry();
+        let mut slots = Vec::new();
+        for (service, values) in &cfg.services.options {
+            let specs = registry.get(service).map(|p| p.options().to_vec()).unwrap_or_default();
+            for (key, value) in values {
+                let secret = specs.iter().any(|s| &s.key == key && s.kind == OptionKind::Secret)
+                    || value.as_str() == Some(IN_STORE);
+                if secret {
+                    slots.push(SecretSlot::ServiceOption { service: service.clone(), key: key.clone() });
+                }
+            }
+        }
+        slots.extend(SecretSlot::fixed());
+        slots
+    }
+
+    /// Attach the system keychain (`None` where there is none) and fetch the
+    /// secrets the settings file keeps there. Call it right after start,
+    /// before anything is translated: until then those settings read as
+    /// the placeholder.
+    pub fn attach_secret_store(&self, store: Option<Arc<dyn SecretStore>>) {
+        *self.inner.secret_store.write() = store.clone();
+        let wanted = self.inner.config.read().general.secret_storage == SecretStorage::System;
+        let Some(store) = store else {
+            if wanted {
+                self.inner
+                    .startup_warnings
+                    .lock()
+                    .push(StartupWarning { key: "startup.no_keychain", args: Vec::new() });
+            }
+            return;
+        };
+        let mut cfg = self.inner.config.write();
+        let slots = self.secret_slots(&cfg);
+        for problem in self.inner.secret_sync.lock().resolve(&mut cfg, &slots, store.as_ref()) {
+            tracing::warn!("keychain: {problem}");
+        }
+    }
+
+    /// The name of the attached keychain, if any.
+    pub fn secret_store_name(&self) -> Option<&'static str> {
+        self.inner.secret_store.read().as_ref().map(|s| s.name())
     }
 
     pub fn registry(&self) -> Arc<Registry> {
@@ -537,7 +608,9 @@ impl Engine {
             }
         }
         if cfg.services != before {
-            if let Err(e) = cfg.save(&self.inner.paths.config_file()) {
+            let snapshot = cfg.clone();
+            drop(cfg);
+            if let Err(e) = self.write_config(&snapshot) {
                 tracing::warn!("could not save the service lists: {e}");
             }
         }
@@ -1599,6 +1672,60 @@ mod tests {
         let mut cfg = Config::default();
         cfg.modules.allow_legacy_scripts = true;
         (Engine::with_config(paths, cfg).unwrap(), dir)
+    }
+
+    #[derive(Default)]
+    struct MemoryKeychain(Mutex<HashMap<String, String>>);
+
+    impl SecretStore for MemoryKeychain {
+        fn name(&self) -> &'static str {
+            "memory"
+        }
+        fn get(&self, account: &str) -> std::result::Result<Option<String>, String> {
+            Ok(self.0.lock().get(account).cloned())
+        }
+        fn set(&self, account: &str, secret: &str) -> std::result::Result<(), String> {
+            self.0.lock().insert(account.into(), secret.into());
+            Ok(())
+        }
+        fn delete(&self, account: &str) -> std::result::Result<(), String> {
+            self.0.lock().remove(account);
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn keys_kept_in_the_keychain_survive_a_restart_and_stay_out_of_the_file() {
+        let (e, dir) = engine("keychain");
+        let keychain: Arc<dyn SecretStore> = Arc::new(MemoryKeychain::default());
+        e.attach_secret_store(Some(keychain.clone()));
+        e.update_config(|c| {
+            c.general.secret_storage = SecretStorage::System;
+            c.services.set_option("deepl", "api_key", serde_json::json!("dk-secret"));
+            c.network.proxy.password = "hunter2".into();
+        })
+        .unwrap();
+        // The engine itself still sees the key.
+        assert_eq!(e.config().services.option("deepl", "api_key"), Some(&serde_json::json!("dk-secret")));
+        let file = std::fs::read_to_string(e.paths().config_file()).unwrap();
+        assert!(!file.contains("dk-secret") && !file.contains("hunter2"), "{file}");
+        assert!(file.contains(IN_STORE));
+        drop(e);
+
+        let again = Engine::start(Paths::for_exe_dir(dir.clone(), Some(dir.join("home")))).unwrap();
+        again.attach_secret_store(Some(keychain));
+        assert_eq!(again.config().services.option("deepl", "api_key"), Some(&serde_json::json!("dk-secret")));
+        assert_eq!(again.config().network.proxy.password, "hunter2");
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn no_keychain_where_one_is_wanted_is_said_once_at_start() {
+        let (e, dir) = engine("no-keychain");
+        e.update_config(|c| c.general.secret_storage = SecretStorage::System).unwrap();
+        e.attach_secret_store(None);
+        assert!(e.startup_warnings().iter().any(|w| w.key == "startup.no_keychain"));
+        std::fs::remove_dir_all(&dir).ok();
     }
 
     #[test]

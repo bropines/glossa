@@ -2276,6 +2276,7 @@ dependencies = [
  "objc2-foundation 0.3.2",
  "raw-window-handle",
  "rodio",
+ "security-framework",
  "thiserror 2.0.21",
  "tracing",
  "windows 0.62.2",

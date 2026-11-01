@@ -319,6 +319,7 @@ fn paths(args: &Args) -> Paths {
 
 fn engine(args: &Args) -> Result<Engine, Fail> {
     let e = Engine::start(paths(args))?;
+    e.attach_secret_store(glossa_platform::secrets::system_store());
     for w in e.startup_warnings() {
         eprintln!("glossa-cli: {}", w.message(&glossa_core::Locale::english()));
     }

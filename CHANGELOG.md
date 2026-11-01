@@ -20,6 +20,15 @@ for Windows, macOS and Linux.
   dictionary and history windows; every classic options page plus OCR,
   Modules and Control API; a tray icon with the classic menu. Hotkeys wake a
   hidden app, and a second launch hands over to the running one.
+- **Welcome guide** on the first start (and from *Options → Basics*): what
+  Glossa is, its main hotkeys (changeable there), how to use it, where to
+  keep API keys and data (a portable copy beside the program on request),
+  and on macOS the permissions it needs.
+- **API keys in the system keychain**, if chosen
+  (`general.secret_storage = "system"`): Windows Credential Manager, the
+  macOS Keychain or the Secret Service on Linux keep the services' keys, the
+  proxy password and the Lens token; the settings file holds a placeholder.
+- **macOS Dark and macOS Light themes** after AppKit's colours and metrics.
 - **Small resident cost**: when nothing has been on screen for a while
   (`appearance.unload_graphics_after_secs`), the GUI shuts down and the
   process waits in a plain message loop, a few MB in the tray. Fonts for CJK,

@@ -42,6 +42,7 @@ pub const DICTIONARY: &str = "glossa-dictionary";
 pub const HISTORY: &str = "glossa-history";
 pub const KEYBOARD: &str = "glossa-keyboard";
 pub const ABOUT: &str = "glossa-about";
+pub const WELCOME: &str = "glossa-welcome";
 
 /// The title bar's height, in points: WinUI's standard title bar.
 pub const TITLE_HEIGHT: f32 = 32.0;

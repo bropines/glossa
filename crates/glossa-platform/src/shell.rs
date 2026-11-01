@@ -51,6 +51,9 @@ pub struct Shell {
     /// A menu-bar app that shows in the app switcher (Cmd+Tab) and the Dock
     /// only while one of its full windows is open (macOS).
     pub switcher_follows_windows: bool,
+    /// A copy may keep its data beside the program (portable). Not inside a
+    /// macOS app bundle: writing there breaks its signature.
+    pub portable_beside_exe: bool,
     /// The interface text for "start with the system", by its locale key.
     pub autostart_label: &'static str,
 }

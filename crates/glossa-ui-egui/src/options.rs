@@ -415,6 +415,27 @@ fn basics(app: &mut GlossaApp, ui: &mut egui::Ui, st: &mut OptionsState) {
             ui.add(egui::Slider::new(&mut d.appearance.text_size, 7.0..=28.0).step_by(0.5));
         });
     });
+    group(ui, &look, &app.t("options.basics.privacy_group"), |ui| {
+        use glossa_core::secrets::SecretStorage;
+        let keychain = app.engine.secret_store_name();
+        ui.label(app.t("options.basics.secret_storage"));
+        ui.radio_value(&mut d.general.secret_storage, SecretStorage::File, app.t("options.basics.secrets_file"));
+        // Kept selectable when already chosen, so a missing keychain can be
+        // seen and switched away from.
+        ui.add_enabled_ui(keychain.is_some() || d.general.secret_storage == SecretStorage::System, |ui| {
+            ui.radio_value(
+                &mut d.general.secret_storage,
+                SecretStorage::System,
+                app.locale.fmt("options.basics.secrets_system", glossa_platform::secrets::system_store_name()),
+            );
+        });
+        let note = if keychain.is_some() { "options.basics.secrets_note" } else { "options.basics.secrets_none" };
+        ui.label(RichText::new(app.t(note)).small().color(look.weak_text()));
+        ui.add_space(4.0);
+        if ui.button(app.t("options.basics.show_welcome")).clicked() {
+            crate::welcome::open(app);
+        }
+    });
     group(ui, &look, &app.t("options.basics.auto_detect_group"), |ui| {
         lang_row(app, ui, &app.t("options.basics.first_language"), "first", &mut d.general.first_language, false);
         lang_row(app, ui, &app.t("options.basics.second_language"), "second", &mut d.general.second_language, false);
@@ -1847,7 +1868,7 @@ fn api(app: &mut GlossaApp, ui: &mut egui::Ui, st: &mut OptionsState) {
 }
 
 /// What the system lets Glossa do, with a way to ask for what is missing.
-fn permissions(app: &mut GlossaApp, ui: &mut egui::Ui) {
+pub(crate) fn permissions(app: &mut GlossaApp, ui: &mut egui::Ui) {
     use glossa_platform::permissions::{self as perm, Permission, Status};
     let look = app.look.clone();
     // Grants happen in System Settings, outside this window: look again now
