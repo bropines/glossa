@@ -1,6 +1,8 @@
-//! Google Lens, through the user's own chrome-lens-py.
+//! Google Lens: Glossa's own client (`glossa-lens`, the `native` mode), or
+//! the user's chrome-lens-py.
 //!
-//! chrome-lens-py can be reached three ways, fastest first:
+//! The built-in client needs nothing installed. chrome-lens-py, when the user
+//! has it, can be reached three ways, fastest first:
 //!
 //! 1. **A running daemon.** It is a small HTTP server on loopback (TCP on
 //!    Windows, a Unix socket on macOS and Linux) that has already paid for
@@ -23,10 +25,10 @@
 //!
 //! [`LensConfig::mode`] picks among them. In `auto` an explicit endpoint
 //! from the config comes first, then the discovery file, then the service
-//! file; if no daemon answers its `/health`, the CLI is asked to start one
-//! (`lens_scan daemon start`, at most once every few minutes) and, failing
-//! that, is run per image. `daemon` uses only the first three; `cli` only the
-//! last. The endpoint found is cached; when it stops answering it is dropped
+//! file; if no daemon answers its `/health`, the built-in client does the
+//! work (a daemon that comes up later is noticed and preferred: its
+//! connection to Google is already warm). `native` uses only the built-in
+//! client, `daemon` only the first three, `cli` only the last. The endpoint found is cached; when it stops answering it is dropped
 //! and looked up again, once, within the same request.
 //!
 //! # Proxies
@@ -58,7 +60,7 @@ use crate::process;
 use crate::tempimage::TempImage;
 
 pub const LENS_ID: &str = "lens";
-const NAME: &str = "Google Lens (chrome-lens)";
+const NAME: &str = "Google Lens";
 const APP_DIR: &str = "chrome-lens-py";
 /// The service daemon's port when `service.json` does not say.
 pub const DEFAULT_SERVICE_PORT: u16 = 8765;
@@ -68,12 +70,6 @@ pub const DEFAULT_SERVICE_PORT: u16 = 8765;
 const OCR_TIMEOUT: Duration = Duration::from_secs(90);
 const HEALTH_TIMEOUT: Duration = Duration::from_secs(3);
 const CLI_TIMEOUT: Duration = Duration::from_secs(120);
-const DAEMON_START_TIMEOUT: Duration = Duration::from_secs(20);
-/// `lens_scan daemon start` itself waits for the daemon to listen; this is
-/// only the slack for `daemon.json` to appear after it returns.
-const DAEMON_START_WAIT: Duration = Duration::from_secs(5);
-/// Do not keep trying to start a daemon that will not start.
-const DAEMON_START_RETRY: Duration = Duration::from_secs(300);
 
 /// Where chrome-lens-py keeps its files, and where its CLI is.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -197,6 +193,8 @@ enum Endpoint {
     Unix { path: PathBuf, token: String },
     /// The CLI, per image.
     Cli(PathBuf),
+    /// Glossa's own client (`glossa-lens`), straight to Google.
+    Native,
 }
 
 impl Endpoint {
@@ -205,6 +203,7 @@ impl Endpoint {
             Endpoint::Http { base, from, .. } => format!("{base} ({from})"),
             Endpoint::Unix { path, .. } => format!("unix:{} (daemon.json)", path.display()),
             Endpoint::Cli(p) => format!("CLI {}", p.display()),
+            Endpoint::Native => "the built-in client".into(),
         }
     }
 }
@@ -265,7 +264,6 @@ pub struct LensProvider {
 #[derive(Default)]
 struct State {
     endpoint: Option<Endpoint>,
-    last_start_attempt: Option<Instant>,
 }
 
 /// Why one attempt failed: worth looking the endpoint up again, or not.
@@ -277,9 +275,9 @@ enum Failure {
 impl LensProvider {
     pub fn new(cfg: LensConfig) -> Self {
         let mut info = ProviderInfo::new(LENS_ID, NAME, Capabilities::OCR);
-        info.description =
-            "Google Lens text recognition and translation through chrome-lens-py (its daemon or its lens_scan CLI)."
-                .into();
+        info.description = "Google Lens text recognition and translation: built in, or through a running \
+                            chrome-lens-py daemon, which keeps a warm connection to Google."
+            .into();
         info.homepage = "https://github.com/bropines/chrome-lens-py".into();
         Self {
             info,
@@ -346,7 +344,7 @@ impl LensProvider {
                 let body = body.map(|b| serde_json::to_vec(b).unwrap_or_default());
                 unix_request(socket, method, path, token, body, timeout)
             }
-            Endpoint::Cli(_) => Err(Error::Config("the CLI has no HTTP interface".into())),
+            Endpoint::Cli(_) | Endpoint::Native => Err(Error::Config("not a daemon: no HTTP interface".into())),
         }
     }
 
@@ -396,9 +394,9 @@ impl LensProvider {
     fn endpoint(&self, host: &Host) -> Result<Endpoint> {
         let mut st = self.state();
         match &st.endpoint {
-            // Running the CLI per image is the slow path; a daemon may have
-            // come up since (the CLI starts one itself), so look again.
-            Some(Endpoint::Cli(_)) if self.cfg.mode == LensMode::Auto => {
+            // A daemon may have come up since: it answers faster than a
+            // fresh connection of our own, so look again.
+            Some(Endpoint::Native) if self.cfg.mode == LensMode::Auto => {
                 if let Some(ep) = self.first_healthy_daemon(host) {
                     tracing::info!(endpoint = %ep.describe(), "chrome-lens daemon found");
                     st.endpoint = Some(ep.clone());
@@ -432,9 +430,13 @@ impl LensProvider {
         }
     }
 
-    fn resolve(&self, host: &Host, st: &mut State) -> Result<Endpoint> {
-        if self.cfg.mode == LensMode::Cli {
-            return self.locator().cli.clone().map(Endpoint::Cli).ok_or_else(|| self.not_installed());
+    fn resolve(&self, host: &Host, _st: &mut State) -> Result<Endpoint> {
+        match self.cfg.mode {
+            LensMode::Cli => {
+                return self.locator().cli.clone().map(Endpoint::Cli).ok_or_else(|| self.not_installed());
+            }
+            LensMode::Native => return Ok(Endpoint::Native),
+            LensMode::Auto | LensMode::Daemon => {}
         }
         let candidates = self.daemon_candidates();
         if let Some(ep) = candidates.iter().find(|ep| self.healthy(ep, host)) {
@@ -448,44 +450,8 @@ impl LensProvider {
             };
             return Err(Error::Network(format!("{NAME}: no chrome-lens-py daemon is answering ({tried})")));
         }
-        let Some(cli) = self.locator().cli.clone() else {
-            return Err(self.not_installed());
-        };
-        let may_start = st.last_start_attempt.is_none_or(|t| t.elapsed() >= DAEMON_START_RETRY);
-        if may_start {
-            st.last_start_attempt = Some(Instant::now());
-            if let Some(ep) = self.start_daemon(&cli, host) {
-                return Ok(ep);
-            }
-        }
-        Ok(Endpoint::Cli(cli))
-    }
-
-    /// `lens_scan daemon start`, then wait for the daemon to announce itself.
-    fn start_daemon(&self, cli: &Path, host: &Host) -> Option<Endpoint> {
-        let mut cmd = Command::new(cli);
-        cmd.args(["daemon", "start"]);
-        match process::run(cmd, DAEMON_START_TIMEOUT, Some(host.cancel)) {
-            Ok(out) if out.success() => {}
-            Ok(out) => {
-                tracing::warn!(code = ?out.code, "lens_scan daemon start failed: {}", out.stderr_tail());
-                return None;
-            }
-            Err(e) => {
-                tracing::warn!(error = %e, "cannot run lens_scan daemon start");
-                return None;
-            }
-        }
-        let deadline = Instant::now() + DAEMON_START_WAIT;
-        loop {
-            if let Some(ep) = self.first_healthy_daemon(host) {
-                return Some(ep);
-            }
-            if Instant::now() >= deadline || host.cancel.is_cancelled() {
-                return None;
-            }
-            std::thread::sleep(Duration::from_millis(100));
-        }
+        // No daemon: the built-in client, with no Python to start.
+        Ok(Endpoint::Native)
     }
 
     fn via_daemon(
@@ -551,6 +517,7 @@ impl Provider for LensProvider {
             let ep = self.endpoint(host)?;
             let outcome = match &ep {
                 Endpoint::Cli(cli) => self.via_cli(cli, &bytes, req, host).map_err(Failure::Fatal),
+                Endpoint::Native => native::recognize(&bytes, req, host).map_err(Failure::Fatal),
                 _ => self.via_daemon(&ep, &bytes, req, host),
             };
             match outcome {
@@ -574,6 +541,120 @@ impl Provider for LensProvider {
         // Nothing of ours is running; forget the endpoint so a daemon that
         // went away while we idled is not tried first.
         self.state().endpoint = None;
+    }
+}
+
+// -- the built-in client --------------------------------------------------------
+
+mod native {
+    //! Lens without chrome-lens-py: `glossa-lens` builds the request Chromium
+    //! sends and reads the reply; the host's client (with the user's proxy
+    //! settings) carries it.
+
+    use glossa_core::ocr::{OcrBlock, OcrGranularity, OcrLevel, Rect};
+    use glossa_core::{Error, OcrRequest, OcrResult, Result};
+    use glossa_lens::{Bounds, Page};
+    use glossa_modules::Host;
+    use glossa_net::HttpRequest;
+
+    use super::{translate_code, NAME, OCR_TIMEOUT};
+
+    pub fn recognize(bytes: &[u8], req: &OcrRequest, host: &Host) -> Result<OcrResult> {
+        let image = glossa_lens::decode_image(bytes).map_err(|e| Error::Internal(format!("{NAME}: {e}")))?;
+        let size = (image.width(), image.height());
+        let upload = glossa_lens::encode_image(&image).map_err(|e| Error::Internal(format!("{NAME}: {e}")))?;
+        let query = glossa_lens::Query {
+            ocr_language: if req.lang.is_language() { req.lang.bcp47().to_owned() } else { String::new() },
+            translate_to: req.translate_to.filter(|l| l.is_language()).map(|l| translate_code(l).to_owned()),
+            ..glossa_lens::Query::default()
+        };
+        let body = glossa_lens::objects_request(&upload, &query, glossa_lens::random_uuid());
+        let mut request =
+            HttpRequest::post(glossa_lens::ENDPOINT).body(body).timeout(OCR_TIMEOUT).provider(NAME.to_owned());
+        for (name, value) in glossa_lens::headers(glossa_lens::PUBLIC_API_KEY) {
+            request = request.header(name, value);
+        }
+        host.check_cancelled()?;
+        let response = host.http.send(request)?;
+        if !(200..300).contains(&response.status) {
+            let body = String::from_utf8_lossy(&response.body).chars().take(300).collect();
+            return Err(Error::HttpStatus { provider: NAME.into(), status: response.status, body });
+        }
+        let page = glossa_lens::parse_response(&response.body)
+            .map_err(|detail| Error::BadResponse { provider: NAME.into(), detail })?;
+        Ok(result(&page, size, req))
+    }
+
+    /// The page as our result, its boxes in pixels of the picture as given
+    /// (Lens measures the smaller copy it was sent, normalised).
+    pub(super) fn result(page: &Page, size: (u32, u32), req: &OcrRequest) -> OcrResult {
+        let rect = |b: &Option<Bounds>| -> (Option<Rect>, f32) {
+            let Some(b) = b else { return (None, 0.0) };
+            let (sx, sy) = if b.normalized { (size.0 as f32, size.1 as f32) } else { (1.0, 1.0) };
+            let (w, h) = (b.width * sx, b.height * sy);
+            (Some(Rect::new(b.center_x * sx - w / 2.0, b.center_y * sy - h / 2.0, w, h)), b.rotation)
+        };
+        let node = |level: OcrLevel, text: String, b: &Option<Bounds>, children: Vec<OcrBlock>| {
+            let (bounds, angle) = rect(b);
+            OcrBlock { bounds, angle, children, ..OcrBlock::new(level, &text) }
+        };
+        let words = req.granularity == OcrGranularity::Words;
+        let mut blocks: Vec<OcrBlock> = match req.granularity {
+            OcrGranularity::FullText => Vec::new(),
+            OcrGranularity::Lines => page
+                .paragraphs
+                .iter()
+                .flat_map(|p| p.lines.iter().map(|l| node(OcrLevel::Line, l.text(), &l.bounds, Vec::new())))
+                .collect(),
+            OcrGranularity::Blocks | OcrGranularity::Words => page
+                .paragraphs
+                .iter()
+                .map(|p| {
+                    let lines = p
+                        .lines
+                        .iter()
+                        .map(|l| {
+                            let kids = if words {
+                                l.words
+                                    .iter()
+                                    .map(|w| node(OcrLevel::Word, w.text.clone(), &w.bounds, Vec::new()))
+                                    .collect()
+                            } else {
+                                Vec::new()
+                            };
+                            node(OcrLevel::Line, l.text(), &l.bounds, kids)
+                        })
+                        .collect();
+                    node(OcrLevel::Block, p.text(), &p.bounds, lines)
+                })
+                .collect(),
+        };
+        // Each paragraph's translation on its block, and each translated line
+        // on its line when they pair up.
+        for t in &page.translations {
+            let Some(block) = blocks.get_mut(t.paragraph).filter(|b| b.level == Some(OcrLevel::Block)) else {
+                continue;
+            };
+            if t.lines.len() == block.children.len() {
+                for (i, line) in block.children.iter_mut().enumerate() {
+                    line.translation = t.line(i).filter(|s| !s.is_empty());
+                }
+            }
+            block.translation = Some(t.text.trim().to_owned());
+        }
+        let text = page.text();
+        OcrResult {
+            text: if req.preserve_line_breaks { text } else { text.split_whitespace().collect::<Vec<_>>().join(" ") },
+            blocks,
+            detected_lang: page
+                .language
+                .as_deref()
+                .and_then(glossa_core::LangId::from_code)
+                .filter(|l| l.is_language()),
+            translation: page.translation(),
+            image_size: Some(size),
+            ..Default::default()
+        }
     }
 }
 
@@ -1337,12 +1418,6 @@ mod tests {
             .with_loopback_http(Arc::new(MockHttp::new()));
         let err = recognize(&p).unwrap_err();
         assert!(err.to_string().contains("lens_scan daemon start"), "{err}");
-        let p = LensProvider::with_locator(cfg(LensMode::Auto), fx.locator(None))
-            .with_loopback_http(Arc::new(MockHttp::new()));
-        assert!(
-            recognize(&p).unwrap_err().to_string().contains("uv tool install"),
-            "auto without a CLI explains how to get one"
-        );
         let p = LensProvider::with_locator(cfg(LensMode::Cli), fx.locator(None));
         assert!(recognize(&p).is_err());
     }
@@ -1418,25 +1493,79 @@ mod tests {
     }
 
     #[cfg(unix)]
+    /// Lens itself, for the built-in client: answers the crupload endpoint
+    /// with one paragraph and remembers what it was sent.
+    struct FakeLens {
+        seen: Mutex<Vec<HttpRequest>>,
+    }
+
+    impl Http for FakeLens {
+        fn send(&self, request: HttpRequest) -> Result<HttpResponse> {
+            use glossa_lens::proto::*;
+            use prost::Message as _;
+            self.seen.lock().unwrap().push(request.clone());
+            assert_eq!(request.url, glossa_lens::ENDPOINT);
+            let word = |t: &str, sep: &str| text_layout::Word {
+                plain_text: Some(t.into()),
+                text_separator: Some(sep.into()),
+                ..Default::default()
+            };
+            let geometry = Some(Geometry {
+                bounding_box: Some(CenterRotatedBox {
+                    center_x: Some(0.5),
+                    center_y: Some(0.5),
+                    width: Some(0.5),
+                    height: Some(0.25),
+                    rotation_z: Some(0.0),
+                    coordinate_type: Some(CoordinateType::Normalized as i32),
+                }),
+                ..Default::default()
+            });
+            let line =
+                text_layout::Line { words: vec![word("Hello,", " "), word("world", "")], geometry: geometry.clone() };
+            let reply = LensOverlayServerResponse {
+                objects_response: Some(LensOverlayObjectsResponse {
+                    text: Some(Text {
+                        text_layout: Some(TextLayout {
+                            paragraphs: vec![text_layout::Paragraph {
+                                lines: vec![line],
+                                geometry,
+                                ..Default::default()
+                            }],
+                        }),
+                        content_language: Some("en".into()),
+                    }),
+                    ..Default::default()
+                }),
+                ..Default::default()
+            };
+            Ok(HttpResponse { status: 200, body: reply.encode_to_vec(), ..Default::default() })
+        }
+    }
+
     #[test]
-    fn auto_mode_starts_a_daemon_with_the_cli() {
-        let fx = Fixture::new("autostart");
-        let daemon_json = fx.dir.join("daemon.json");
-        let record = serde_json::json!({"version": "3.8.2", "pid": 1, "transport": "tcp", "address": "127.0.0.1:5004", "token": "new", "started_at": 0.0, "managed": "auto"});
-        let cli = script(
-            &fx.dir,
-            "lens_scan",
-            &format!(
-                "if [ \"$1 $2\" = \"daemon start\" ]; then echo '{}' > '{}'; echo started; exit 0; fi\nexit 7",
-                record,
-                daemon_json.display()
-            ),
-        );
-        let http = Arc::new(mock_daemon(5004));
-        let p = LensProvider::with_locator(cfg(LensMode::Auto), fx.locator(Some(cli))).with_loopback_http(http.clone());
-        assert_eq!(recognize(&p).unwrap().text, "Hello, world");
-        let post = http.requests().into_iter().find(|r| r.method == Method::Post).unwrap();
-        assert_eq!(post.url, "http://127.0.0.1:5004/v1/ocr");
+    fn auto_mode_without_a_daemon_uses_the_built_in_client() {
+        let fx = Fixture::new("native");
+        // No daemon answers, and no chrome-lens-py is installed either.
+        let p = LensProvider::with_locator(cfg(LensMode::Auto), fx.locator(None))
+            .with_loopback_http(Arc::new(MockHttp::new()));
+        let lens = FakeLens { seen: Mutex::new(Vec::new()) };
+        let mut png = Vec::new();
+        image::RgbImage::from_pixel(200, 100, image::Rgb([255, 255, 255]))
+            .write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png)
+            .unwrap();
+        let mut request = OcrRequest::new(ImageSource::Bytes(png));
+        request.granularity = OcrGranularity::Blocks;
+        let opts = OptionValues::new();
+        let r = with_test_host(&lens, &opts, |host| p.recognize(host, &request)).unwrap();
+        assert_eq!(r.text, "Hello, world");
+        assert_eq!(r.image_size, Some((200, 100)));
+        // The box is in pixels of the picture given: the middle half.
+        let b = r.blocks[0].bounds.unwrap();
+        assert_eq!((b.x, b.y, b.width, b.height), (50.0, 37.5, 100.0, 25.0));
+        let sent = lens.seen.lock().unwrap();
+        assert!(sent[0].headers.iter().any(|(k, v)| k == "X-Goog-Api-Key" && !v.is_empty()));
+        assert!(sent[0].headers.iter().any(|(k, v)| k == "Content-Type" && v == "application/x-protobuf"));
     }
 
     #[cfg(unix)]

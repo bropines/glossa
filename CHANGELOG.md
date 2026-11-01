@@ -20,6 +20,11 @@ for Windows, macOS and Linux.
   dictionary and history windows; every classic options page plus OCR,
   Modules and Control API; a tray icon with the classic menu. Hotkeys wake a
   hidden app, and a second launch hands over to the running one.
+- **Google Lens built in**: Glossa talks to Lens itself (the new
+  `glossa-lens` crate, on Chromium's own protocol definitions), so Lens
+  recognition and translation need no Python or chrome-lens-py any more. A
+  running chrome-lens-py daemon is still used when there is one
+  (`ocr.lens.mode = "auto"`); `"native"` uses the built-in client only.
 - **Translate the whole screen in place** (Ctrl+Alt+S, Windows: Win+Alt+S):
   the monitor under the pointer is recognised and every text on it is
   translated where it is, over a still of the screen, with no region to

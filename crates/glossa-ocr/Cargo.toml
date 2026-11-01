@@ -11,6 +11,7 @@ authors.workspace = true
 glossa-core = { workspace = true }
 glossa-net = { workspace = true }
 glossa-modules = { workspace = true }
+glossa-lens = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 tracing = { workspace = true }
@@ -61,3 +62,5 @@ objc2-vision = { version = "0.3", default-features = false, features = [
 ab_glyph = "0.2"
 epaint_default_fonts = "0.37"
 image = { workspace = true }
+# Building fake Lens replies for the built-in client's tests.
+prost = "0.14"

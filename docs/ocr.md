@@ -22,28 +22,28 @@ turn (except OneOCR and the AI endpoints, which only run when chosen).
 | AI endpoint | `openai`, `ai-…` | either | all | a vision model behind the endpoint (below) |
 | Module | its id | either | all | a module with the OCR capability ([modules/ocr-modules.md](modules/ocr-modules.md)) |
 
-### Google Lens (chrome-lens-py)
+### Google Lens
 
 The most accurate engine, for every script, and the only one that translates
-by itself. It goes through [chrome-lens-py](https://github.com/bropines/chrome-lens-py),
-which you install once:
+by itself. It works out of the box: Glossa has its own Lens client
+(`crates/glossa-lens`), which sends the request Chrome's Lens overlay sends,
+with nothing to install. A scan takes about half a second.
 
-```
-uv tool install chrome-lens-py      # or: pip install "chrome-lens-py[clipboard]"
-```
+[chrome-lens-py](https://github.com/bropines/chrome-lens-py) can serve it
+instead. Its daemon keeps a warm connection to Google, so when one is running
+(`lens_scan daemon start`, or the login service from `lens_scan service
+install`) *Auto* uses it, and the built-in client otherwise. *Built in*,
+*Daemon only* and *CLI only* force one way; the CLI runs `lens_scan` once per
+image, a second or two each. A daemon URL and token can be set by hand, and
+so can the path to `lens_scan` when it is not on `PATH`.
 
-Glossa finds it on its own, fastest way first:
+Every way translates. The line-by-line placement used for in-place
+translation comes with the built-in client and the daemon (with the CLI
+alone, the translator translates paragraph by paragraph instead).
 
-1. a **running daemon** (`lens_scan daemon start`, or the login service from
-   `lens_scan service install`): a scan takes a few hundred milliseconds;
-2. failing that, it asks the CLI to **start the daemon**;
-3. failing that, it runs **`lens_scan` per image** (a second or two each).
-
-*Auto* does all of that; *Daemon only* and *CLI only* force one path. A daemon
-URL and token can be set by hand, and so can the path to `lens_scan` when it
-is not on `PATH`. Both ways translate; the line-by-line placement used for
-in-place translation comes from the daemon (with the CLI alone, the
-translator translates paragraph by paragraph instead).
+The built-in client's protocol definitions are Chromium's own
+`lens_server_proto`, pinned to one Chromium commit; see
+`crates/glossa-lens/proto/README.md` for moving to newer ones.
 
 ### Windows OCR
 

@@ -107,14 +107,15 @@ executable keeps the settings beside it. On Linux, `./install.sh` from the
 unpacked archive adds Glossa to the application menu (the `.deb` does that
 itself).
 
-For OCR, install chrome-lens-py (`pip install "chrome-lens-py[clipboard]"`);
-Glossa finds it, and keeps its daemon warm so a scan takes about 0.4 s.
-Without it, recognition falls over to an offline engine. *Options → Text
+For OCR, Google Lens works out of the box: Glossa has its own Lens client,
+so a scan takes about half a second with nothing to install. A running
+chrome-lens-py daemon is used instead when there is one. Offline, recognition
+falls over to the system's engine. *Options → Text
 recognition* lists the engines this system has:
 
 | engine | id | works | platforms | setup |
 |---|---|---|---|---|
-| Google Lens | `lens` | online | all | `pip install "chrome-lens-py[clipboard]"` |
+| Google Lens | `lens` | online | all | built in (chrome-lens-py's daemon is used when running) |
 | Windows OCR | `windows-ocr` | offline | Windows 10, 11 | the language's OCR pack (Settings → Time & language) |
 | OneOCR | `oneocr` | offline | Windows 11 | the Snipping Tool; chosen only explicitly, never a fallback |
 | Apple Vision | `macos-vision` | offline | macOS 10.15+ (Russian from 13) | nothing |

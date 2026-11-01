@@ -1363,9 +1363,15 @@ impl Default for LensConfig {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum LensMode {
+    /// A running chrome-lens-py daemon when there is one (it keeps a warm
+    /// connection to Google), else the built-in client.
     #[default]
     Auto,
+    /// The built-in client only: no Python at all.
+    Native,
+    /// A chrome-lens-py daemon only.
     Daemon,
+    /// chrome-lens-py's CLI, per image.
     Cli,
 }
 

@@ -859,6 +859,7 @@ pub static STRINGS: &[(&str, &str, Option<&str>)] = &[
         None,
     ),
     ("options.ocr.lens_auto", "Auto", None),
+    ("options.ocr.lens_native", "Built in", None),
     ("options.ocr.lens_daemon", "Daemon only", None),
     ("options.ocr.lens_cli", "CLI only", None),
     ("options.ocr.lens_endpoint", "Daemon URL:", None),

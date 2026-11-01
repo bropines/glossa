@@ -32,6 +32,14 @@ third_party/eframe
   Vendored with one local fix, marked "Glossa patch" in the source and
   described in third_party/README.md.
 
+crates/glossa-lens/proto/lens.fds
+  Compiled descriptors of Chromium's third_party/lens_server_proto
+  (https://chromium.googlesource.com/chromium/src, the commit in
+  crates/glossa-lens/proto/CHROMIUM_COMMIT), BSD-3-Clause,
+  Copyright 2024 The Chromium Authors. They were taken from chrome-lens-py
+  (https://github.com/bropines/chrome-lens-py, MIT), which compiled them; the
+  request Glossa builds follows chrome-lens-py's.
+
 Notable dependencies
 --------------------
 

@@ -404,8 +404,8 @@ pub fn parse_response(body: &[u8]) -> Result<Page, String> {
 #[cfg(test)]
 mod tests {
     use super::proto::*;
-    use super::*;
     use super::Query;
+    use super::*;
 
     fn upload() -> Upload {
         Upload { jpeg: vec![0xff, 0xd8, 0xff], width: 800, height: 600 }

@@ -1728,10 +1728,11 @@ fn ocr(app: &mut GlossaApp, ui: &mut egui::Ui, st: &mut OptionsState) {
             }
         });
     });
-    group(ui, &look, "Google Lens (chrome-lens-py)", |ui| {
+    group(ui, &look, "Google Lens", |ui| {
         let l = &mut d.lens;
         ui.horizontal(|ui| {
             ui.radio_value(&mut l.mode, LensMode::Auto, app.t("options.ocr.lens_auto"));
+            ui.radio_value(&mut l.mode, LensMode::Native, app.t("options.ocr.lens_native"));
             ui.radio_value(&mut l.mode, LensMode::Daemon, app.t("options.ocr.lens_daemon"));
             ui.radio_value(&mut l.mode, LensMode::Cli, app.t("options.ocr.lens_cli"));
         });

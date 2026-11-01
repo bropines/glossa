@@ -426,6 +426,7 @@
     "options.ocr.translate_with_translator": "Текущего переводчика",
     "options.ocr.copy_joined": "Склеивать строки при копировании (для прозы); без этого переносы строк сохраняются (код, списки)",
     "options.ocr.lens_auto": "Авто",
+    "options.ocr.lens_native": "Встроенный",
     "options.ocr.lens_daemon": "Только демон",
     "options.ocr.lens_cli": "Только CLI",
     "options.ocr.lens_endpoint": "Адрес демона:",

@@ -382,7 +382,7 @@ described in [ocr.md](ocr.md).
 
 | key | type | default | what it does |
 |---|---|---|---|
-| `provider` | id | `"lens"` | The OCR engine: `lens` (Google Lens through chrome-lens-py), `windows-ocr`, `oneocr`, `macos-vision`, `tesseract`, `command-ocr`, or a module's id. |
+| `provider` | id | `"lens"` | The OCR engine: `lens` (Google Lens, built in or through chrome-lens-py), `windows-ocr`, `oneocr`, `macos-vision`, `tesseract`, `command-ocr`, or a module's id. |
 | `language` | language | `1` (auto) | Language of the text in the picture; auto lets the engine decide. |
 | `translate_after` | bool | `true` | Translate the recognised text, into the main window's target language. |
 | `preserve_line_breaks` | bool | `true` | Keep the picture's line breaks in the text. |
@@ -398,12 +398,12 @@ described in [ocr.md](ocr.md).
 
 ### `[ocr.lens]`
 
-How to reach chrome-lens-py. Set in *Options → Text recognition → Google
-Lens*.
+How to reach Google Lens: Glossa's built-in client, or chrome-lens-py.
+Set in *Options → Text recognition → Google Lens*.
 
 | key | type | default | what it does |
 |---|---|---|---|
-| `mode` | `"auto"`, `"daemon"`, `"cli"` | `"auto"` | `auto`: use a running daemon, else start one with the command-line tool, else run the tool once per image. `daemon` and `cli` force one way. |
+| `mode` | `"auto"`, `"native"`, `"daemon"`, `"cli"` | `"auto"` | `auto`: a running chrome-lens-py daemon when there is one (it keeps a warm connection to Google), else the built-in client. `native`: the built-in client only, no Python needed. `daemon`: a chrome-lens-py daemon only. `cli`: chrome-lens-py's `lens_scan` once per image. |
 | `endpoint` | string | `""` | A daemon URL to use instead of finding one (`http://127.0.0.1:8765`). |
 | `token` | string | `""` | Bearer token for `endpoint`. |
 | `cli_path` | string | `""` | The `lens_scan` executable, if it is not on `PATH`. |
