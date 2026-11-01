@@ -1600,7 +1600,6 @@ mod tests {
         assert!(err.contains("code 1") && err.contains("boom"), "{err}");
     }
 
-    #[cfg(unix)]
     /// Lens itself, for the built-in client: answers the crupload endpoint
     /// with one paragraph and remembers what it was sent.
     struct FakeLens {
