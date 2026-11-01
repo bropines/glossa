@@ -69,17 +69,22 @@ mod imp {
     use windows::Win32::UI::Input::KeyboardAndMouse::{GetAsyncKeyState, GetDoubleClickTime, VK_CONTROL};
     use windows::Win32::UI::WindowsAndMessaging::{
         CallNextHookEx, GetMessageW, GetWindowThreadProcessId, PostThreadMessageW, SetWindowsHookExW,
-        UnhookWindowsHookEx, WindowFromPoint, MSG, MSLLHOOKSTRUCT, WH_MOUSE_LL, WM_LBUTTONDOWN, WM_LBUTTONUP, WM_QUIT,
+        UnhookWindowsHookEx, WindowFromPoint, MSG, MSLLHOOKSTRUCT, WH_MOUSE_LL, WM_APP, WM_LBUTTONDOWN, WM_LBUTTONUP,
+        WM_QUIT,
     };
 
     use super::{is_double, is_drag, Gesture, Sink};
 
     struct HookState {
-        sink: Sink,
         down: Option<(i32, i32)>,
         last_click: Option<((i32, i32), u32)>,
         double_ms: u32,
+        /// Gestures seen by the hook, handed to the sink by the message loop.
+        pending: Vec<Gesture>,
     }
+
+    /// Posted by the hook to its own thread: "gestures are pending".
+    const WM_GESTURE: u32 = WM_APP + 1;
 
     thread_local! {
         // Low-level hooks call back on the thread that installed them.
@@ -99,6 +104,10 @@ mod imp {
         }
     }
 
+    /// The hook itself. Every mouse event in the session waits for it, and
+    /// Windows silently removes a hook that is too slow, so it only notes the
+    /// gesture and posts a message; the sink runs from the message loop.
+    /// It must not panic either: release builds abort on panic.
     unsafe extern "system" fn hook(code: i32, wparam: WPARAM, lparam: LPARAM) -> LRESULT {
         if code >= 0 {
             // SAFETY: for WH_MOUSE_LL, lparam points at an MSLLHOOKSTRUCT
@@ -108,7 +117,9 @@ mod imp {
             if msg == WM_LBUTTONDOWN || msg == WM_LBUTTONUP {
                 let at = (info.pt.x, info.pt.y);
                 STATE.with(|s| {
-                    let mut s = s.borrow_mut();
+                    // Re-entered (the loop is draining): skip this event
+                    // rather than panic on a second borrow.
+                    let Ok(mut s) = s.try_borrow_mut() else { return };
                     let Some(st) = s.as_mut() else { return };
                     if msg == WM_LBUTTONDOWN {
                         st.down = Some(at);
@@ -127,7 +138,11 @@ mod imp {
                     if selected && !own_window_at(info.pt) {
                         // SAFETY: no preconditions; the sign bit means "down now".
                         let ctrl = unsafe { GetAsyncKeyState(VK_CONTROL.0 as i32) } < 0;
-                        (st.sink)(Gesture::Selected { at, ctrl });
+                        st.pending.push(Gesture::Selected { at, ctrl });
+                        // SAFETY: posting to this very thread's queue.
+                        unsafe {
+                            let _ = PostThreadMessageW(GetCurrentThreadId(), WM_GESTURE, WPARAM(0), LPARAM(0));
+                        }
                     }
                 });
             }
@@ -152,8 +167,12 @@ mod imp {
                     // hooks require; GetDoubleClickTime has no preconditions.
                     unsafe {
                         STATE.with(|s| {
-                            *s.borrow_mut() =
-                                Some(HookState { sink, down: None, last_click: None, double_ms: GetDoubleClickTime() })
+                            *s.borrow_mut() = Some(HookState {
+                                down: None,
+                                last_click: None,
+                                double_ms: GetDoubleClickTime(),
+                                pending: Vec::new(),
+                            })
                         });
                         let module = GetModuleHandleW(None).ok();
                         let handle = match SetWindowsHookExW(WH_MOUSE_LL, Some(hook), module.map(Into::into), 0) {
@@ -165,7 +184,19 @@ mod imp {
                         };
                         let _ = ready_tx.send(Ok(GetCurrentThreadId()));
                         let mut msg = MSG::default();
-                        while GetMessageW(&mut msg, None, 0, 0).as_bool() {}
+                        while GetMessageW(&mut msg, None, 0, 0).as_bool() {
+                            if msg.message != WM_GESTURE {
+                                continue;
+                            }
+                            let pending = STATE.with(|s| {
+                                s.try_borrow_mut()
+                                    .ok()
+                                    .and_then(|mut s| s.as_mut().map(|st| std::mem::take(&mut st.pending)))
+                            });
+                            for g in pending.unwrap_or_default() {
+                                sink(g);
+                            }
+                        }
                         let _ = UnhookWindowsHookEx(handle);
                         STATE.with(|s| *s.borrow_mut() = None);
                     }
