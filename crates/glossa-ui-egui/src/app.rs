@@ -168,7 +168,7 @@ impl GlossaApp {
         // the whole interface as egui would by default.
         ctx.options_mut(|o| o.zoom_with_keyboard = false);
         let mut fonts = Fonts::default();
-        fonts.install_base(&ctx, &crate::fonts::base_families(&cfg.appearance.font_family, &look.theme));
+        fonts.install_base(&ctx, &cfg.appearance.font_family, &look.theme);
         *shell.wake.ctx.lock() = Some(ctx.clone());
 
         let events = engine.subscribe();
@@ -582,8 +582,7 @@ impl GlossaApp {
         }
         self.look = Look::new(self.engine.current_theme(), &self.cfg);
         self.look.apply(&self.ctx, self.cfg.appearance.ui_scale);
-        let families = crate::fonts::base_families(&self.cfg.appearance.font_family, &self.look.theme);
-        self.fonts.install_base(&self.ctx, &families);
+        self.fonts.install_base(&self.ctx, &self.cfg.appearance.font_family, &self.look.theme);
         self.backdrop_dirty = true;
         self.backdrop_generation += 1;
         if let Some(m) = self.mouse.as_mut() {

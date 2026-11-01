@@ -47,6 +47,114 @@ pub fn find_family(family: &str) -> Option<(PathBuf, u32)> {
     faces.iter().find(regular).or(faces.first()).map(|f| (f.path.clone(), f.index))
 }
 
+/// `family`'s file from the system's own list of installed fonts, without
+/// opening any font file: quick enough for the UI thread. Windows keeps that
+/// list in the registry ("Times New Roman (TrueType)" → `times.ttf`); other
+/// systems give `None` here (use [`find_family`]).
+pub fn registered_family(family: &str) -> Option<(PathBuf, u32)> {
+    #[cfg(windows)]
+    {
+        win::registered(family.trim())
+    }
+    #[cfg(not(windows))]
+    {
+        let _ = family;
+        None
+    }
+}
+
+/// Whether a registry font entry named `name` ("Cambria & Cambria Math
+/// (TrueType)") holds `family`, and at which index of the collection.
+#[cfg_attr(not(any(windows, test)), allow(dead_code))]
+fn registry_entry_index(name: &str, family: &str) -> Option<u32> {
+    let name = name.trim();
+    // The kind in parentheses at the end, if any.
+    let faces = match name.rfind(" (") {
+        Some(at) if name.ends_with(')') => &name[..at],
+        _ => name,
+    };
+    faces.split(" & ").position(|f| f.trim().eq_ignore_ascii_case(family)).map(|i| i as u32)
+}
+
+#[cfg(windows)]
+mod win {
+    use std::path::PathBuf;
+
+    use windows::core::{w, PWSTR};
+    use windows::Win32::Foundation::ERROR_SUCCESS;
+    use windows::Win32::System::Registry::{
+        RegCloseKey, RegEnumValueW, RegOpenKeyExW, HKEY, HKEY_CURRENT_USER, HKEY_LOCAL_MACHINE, KEY_READ, REG_SZ,
+    };
+
+    pub fn registered(family: &str) -> Option<(PathBuf, u32)> {
+        let windir = std::env::var_os("WINDIR").map(PathBuf::from).unwrap_or_else(|| PathBuf::from(r"C:\Windows"));
+        let fonts = windir.join("Fonts");
+        // Per-user fonts (with full paths) first: a user's copy wins.
+        for root in [HKEY_CURRENT_USER, HKEY_LOCAL_MACHINE] {
+            let mut key = HKEY::default();
+            // SAFETY: a constant, NUL-terminated key name and a valid out
+            // pointer; the key is closed below.
+            let rc = unsafe {
+                RegOpenKeyExW(root, w!(r"SOFTWARE\Microsoft\Windows NT\CurrentVersion\Fonts"), None, KEY_READ, &mut key)
+            };
+            if rc != ERROR_SUCCESS {
+                continue;
+            }
+            let found = find_in(key, family, &fonts);
+            // SAFETY: `key` was opened above.
+            unsafe {
+                let _ = RegCloseKey(key);
+            }
+            if found.is_some() {
+                return found;
+            }
+        }
+        None
+    }
+
+    fn find_in(key: HKEY, family: &str, fonts: &std::path::Path) -> Option<(PathBuf, u32)> {
+        let mut name = [0u16; 512];
+        let mut data = [0u16; 520];
+        for i in 0..4096u32 {
+            let mut name_len = name.len() as u32;
+            let mut data_len = (data.len() * 2) as u32;
+            let mut kind = 0u32;
+            // SAFETY: the buffers and their lengths (characters for the
+            // name, bytes for the data) describe the arrays above.
+            let rc = unsafe {
+                RegEnumValueW(
+                    key,
+                    i,
+                    Some(PWSTR(name.as_mut_ptr())),
+                    &mut name_len,
+                    None,
+                    Some(&mut kind),
+                    Some(data.as_mut_ptr().cast()),
+                    Some(&mut data_len),
+                )
+            };
+            if rc.0 == 259 {
+                // ERROR_NO_MORE_ITEMS
+                break;
+            }
+            if rc != ERROR_SUCCESS || kind != REG_SZ.0 {
+                continue;
+            }
+            let entry = String::from_utf16_lossy(&name[..name_len as usize]);
+            let Some(index) = super::registry_entry_index(&entry, family) else { continue };
+            let chars = (data_len as usize / 2).min(data.len());
+            let file = String::from_utf16_lossy(&data[..chars]);
+            let file = file.trim_end_matches('\0').trim();
+            let path = PathBuf::from(file);
+            let path = if path.is_absolute() { path } else { fonts.join(path) };
+            if path.is_file() {
+                return Some((path, index));
+            }
+        }
+        None
+    }
+}
+
 fn scan() -> Vec<FontFace> {
     #[cfg(target_os = "linux")]
     if let Some(faces) = fc_list() {
@@ -241,6 +349,15 @@ mod tests {
         t.extend(recs);
         t.extend(strings);
         t
+    }
+
+    #[test]
+    fn registry_entries_name_their_faces() {
+        assert_eq!(registry_entry_index("Times New Roman (TrueType)", "times new roman"), Some(0));
+        assert_eq!(registry_entry_index("Cambria & Cambria Math (TrueType)", "Cambria Math"), Some(1));
+        assert_eq!(registry_entry_index("Segoe UI Bold (TrueType)", "Segoe UI"), None);
+        assert_eq!(registry_entry_index("Inter", "Inter"), Some(0));
+        assert_eq!(registry_entry_index("Arial (TrueType)", "Arial Black"), None);
     }
 
     #[test]
