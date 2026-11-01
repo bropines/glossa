@@ -131,6 +131,7 @@ impl<T: Transport> Provider for ProtocolProvider<T> {
             detected_from: r.detected_from.as_deref().and_then(|c| self.manifest.lang_for(c)),
             actual_to: None,
             romanisation: r.romanization.filter(|s| !s.trim().is_empty()),
+            source_romanisation: None,
             alternatives: r.alternatives,
             parts_of_speech: r
                 .parts_of_speech
