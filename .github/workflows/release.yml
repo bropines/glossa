@@ -12,6 +12,12 @@ name: release
 #     sdk/python/                        glossa_module.py; Python modules
 #                                        import it, and Glossa looks for it
 #                                        beside the executable
+#   glossa-1.2.3-arm64-macos.zip         Apple silicon
+#   glossa-1.2.3-universal-macos.zip     Apple silicon and Intel
+#     Glossa.app                         menu-bar app (LSUIElement), ad-hoc
+#                                        signed; sdk/python in Resources
+#     glossa-cli
+#     the same documents and examples as above
 
 on:
   push:
@@ -121,9 +127,89 @@ jobs:
           path: dist/*.zip
           if-no-files-found: error
 
+  macos:
+    name: build (macOS arm64 + universal)
+    needs: version
+    # Apple silicon; the Intel half of the universal build cross-compiles
+    # with the same Xcode SDK.
+    runs-on: macos-latest
+    env:
+      VERSION: ${{ needs.version.outputs.version }}
+      # Apple Vision's text recogniser appeared in 10.15 (Apple silicon
+      # starts at 11 anyway). Matches LSMinimumSystemVersion in Info.plist.
+      MACOSX_DEPLOYMENT_TARGET: '10.15'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-apple-darwin, x86_64-apple-darwin
+      - name: Build
+        run: |
+          for target in aarch64-apple-darwin x86_64-apple-darwin; do
+            cargo build --release --locked --target "$target" -p glossa-ui-egui -p glossa-cli
+          done
+          mkdir -p build/universal
+          for bin in glossa glossa-cli; do
+            lipo -create -output "build/universal/$bin" \
+              "target/aarch64-apple-darwin/release/$bin" "target/x86_64-apple-darwin/release/$bin"
+          done
+          lipo -info build/universal/glossa
+      - name: Icon
+        run: |
+          # The source is 256 px: sizes above that would only be blurred
+          # copies, and iconutil accepts a set without them.
+          set -euo pipefail
+          mkdir -p build/glossa.iconset
+          for s in 16 32 128 256; do
+            sips -z "$s" "$s" assets/icons/glossa.png --out "build/glossa.iconset/icon_${s}x${s}.png" > /dev/null
+          done
+          for s in 16 32 128; do
+            d=$((s * 2))
+            sips -z "$d" "$d" assets/icons/glossa.png --out "build/glossa.iconset/icon_${s}x${s}@2x.png" > /dev/null
+          done
+          iconutil -c icns build/glossa.iconset -o build/glossa.icns
+      - name: Package
+        run: |
+          set -euo pipefail
+          package() { # flavour, folder holding glossa and glossa-cli
+            local name="glossa-$VERSION-$1-macos"
+            local root="dist/$name"
+            local app="$root/Glossa.app"
+            mkdir -p "$app/Contents/MacOS" "$app/Contents/Resources/sdk" "$root/examples/modules"
+            sed "s/@VERSION@/$VERSION/g" assets/macos/Info.plist > "$app/Contents/Info.plist"
+            plutil -lint "$app/Contents/Info.plist"
+            cp "$2/glossa" "$app/Contents/MacOS/"
+            cp build/glossa.icns "$app/Contents/Resources/"
+            # Python modules import glossa_module.py; Glossa looks for it in
+            # the bundle's Resources.
+            cp -r sdk/python "$app/Contents/Resources/sdk/"
+            cp "$2/glossa-cli" "$root/"
+            cp README.md CHANGELOG.md LICENSE-MIT LICENSE-APACHE NOTICE "$root/"
+            cp -r modules/js modules/python "$root/examples/modules/"
+            find "$root" -name __pycache__ -prune -exec rm -rf {} +
+            # Not notarised: an ad-hoc signature keeps Apple silicon willing
+            # to run it; the first launch needs right-click > Open (or
+            # xattr -dr com.apple.quarantine Glossa.app).
+            codesign --force --deep --sign - "$app"
+            codesign --force --sign - "$root/glossa-cli"
+            codesign --verify --deep --strict "$app"
+            # Smoke test: the engine starts and lists the OCR engines,
+            # Apple Vision among them.
+            "$root/glossa-cli" --home "$RUNNER_TEMP/glossa-$1" services -c ocr | tee "$RUNNER_TEMP/ocr-$1.txt"
+            grep -q macos-vision "$RUNNER_TEMP/ocr-$1.txt"
+            ditto -c -k --sequesterRsrc --keepParent "$root" "dist/$name.zip"
+          }
+          package arm64 target/aarch64-apple-darwin/release
+          package universal build/universal
+      - uses: actions/upload-artifact@v4
+        with:
+          name: macos
+          path: dist/*.zip
+          if-no-files-found: error
+
   release:
     name: draft release
-    needs: [version, linux, windows]
+    needs: [version, linux, windows, macos]
     runs-on: ubuntu-latest
     permissions:
       contents: write

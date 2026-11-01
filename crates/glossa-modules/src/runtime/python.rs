@@ -595,7 +595,8 @@ fn probe_python() -> Option<(OsString, Vec<String>)> {
 
 /// Directories holding the bundled `glossa_module.py`, found the way
 /// [`glossa_core::paths::Paths`] finds resources: beside the executable, in
-/// a Unix `share/glossa`, in a development checkout, and `$GLOSSA_PYTHON_SDK`.
+/// a Unix `share/glossa`, in a macOS app bundle's `Resources`, in a
+/// development checkout, and `$GLOSSA_PYTHON_SDK`.
 pub fn sdk_dirs() -> Vec<PathBuf> {
     let mut out = Vec::new();
     if let Some(p) = std::env::var_os("GLOSSA_PYTHON_SDK").filter(|v| !v.is_empty()) {
@@ -605,6 +606,8 @@ pub fn sdk_dirs() -> Vec<PathBuf> {
         out.push(exe_dir.join("sdk").join("python"));
         if let Some(prefix) = exe_dir.parent() {
             out.push(prefix.join("share").join("glossa").join("sdk").join("python"));
+            // Glossa.app/Contents/MacOS/glossa -> Contents/Resources.
+            out.push(prefix.join("Resources").join("sdk").join("python"));
         }
         // target/debug/glossa and target/debug/deps/<test> -> the repository.
         for up in [2, 3] {

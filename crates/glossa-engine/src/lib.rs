@@ -859,7 +859,10 @@ impl Engine {
         req.lang = lang;
         req.translate_to = translate_to;
         req.preserve_line_breaks = cfg.ocr.preserve_line_breaks;
-        let mut last = Error::NoProvider("text recognition");
+        // The first engine's error is the one reported: it is the one the
+        // user chose, and the fallbacks' complaints (not installed, not
+        // configured) would only hide it.
+        let mut first: Option<Error> = None;
         for provider in providers {
             if cancel.is_cancelled() {
                 return Err(Error::Cancelled);
@@ -897,17 +900,18 @@ impl Engine {
                     };
                     return Ok(OcrOutcome { ocr, translation });
                 }
+                Err(Error::Cancelled) => return Err(Error::Cancelled),
                 Err(e) => {
                     tracing::debug!(provider = %provider.info().id, error = %e, "OCR provider failed");
-                    let stop = !e.should_try_next_provider();
-                    last = e;
-                    if stop {
+                    let go_on = ocr_falls_over(&e);
+                    first.get_or_insert(e);
+                    if !go_on {
                         break;
                     }
                 }
             }
         }
-        Err(last)
+        Err(first.unwrap_or(Error::NoProvider("text recognition")))
     }
 
     pub fn recognize_async(&self, slot: Slot, image: Vec<u8>, lang: LangId, translate_to: Option<LangId>) -> u64 {
@@ -1160,9 +1164,62 @@ pub fn random_token() -> String {
     out
 }
 
+/// Whether OCR should try the next engine after `e`. Unlike translation, an
+/// engine that is not installed or not set up (Lens without chrome-lens-py,
+/// Tesseract missing, an empty command) does not stop the search: the
+/// default engine needs a separate install, and without it recognition
+/// should still reach the system's offline one.
+fn ocr_falls_over(e: &Error) -> bool {
+    e.should_try_next_provider() || e.is_configuration_fault()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn ocr_falls_over_past_engines_that_are_not_installed() {
+        assert!(ocr_falls_over(&Error::Config("chrome-lens-py was not found".into())));
+        assert!(ocr_falls_over(&Error::FileNotFound("lens_scan".into())));
+        assert!(ocr_falls_over(&Error::MissingCredential { provider: "x".into(), what: "command".into() }));
+        assert!(ocr_falls_over(&Error::Network("down".into())));
+        assert!(!ocr_falls_over(&Error::Cancelled));
+        assert!(!ocr_falls_over(&Error::EmptyInput));
+    }
+
+    /// Lens is not installed, so a picture reaches the next engine
+    /// (Tesseract, here a script printing its TSV); when nothing works, the
+    /// chosen engine's error is the one shown.
+    #[cfg(unix)]
+    #[test]
+    fn recognition_reaches_an_offline_engine_when_lens_is_missing() {
+        use std::os::unix::fs::PermissionsExt;
+        let (e, dir) = engine("ocr-fallover");
+        let fake = dir.join("tesseract");
+        std::fs::write(
+            &fake,
+            "#!/bin/sh\nprintf 'level\\tpage_num\\tblock_num\\tpar_num\\tline_num\\tword_num\\tleft\\ttop\\twidth\\theight\\tconf\\ttext\\n\
+             1\\t1\\t0\\t0\\t0\\t0\\t0\\t0\\t100\\t30\\t-1\\t\\n5\\t1\\t1\\t1\\t1\\t1\\t2\\t2\\t40\\t20\\t91\\tOffline\\n'\n",
+        )
+        .unwrap();
+        std::fs::set_permissions(&fake, std::fs::Permissions::from_mode(0o755)).unwrap();
+        e.update_config(|c| {
+            c.ocr.provider = "lens".into();
+            c.ocr.lens.mode = glossa_core::config::LensMode::Cli;
+            c.ocr.lens.cli_path = dir.join("no-lens_scan").to_string_lossy().into_owned();
+            c.ocr.tesseract.path = fake.to_string_lossy().into_owned();
+        })
+        .unwrap();
+        let png = vec![0x89, b'P', b'N', b'G', 0x0D, 0x0A, 0x1A, 0x0A];
+        let out = e.recognize(png.clone(), LangId::ENGLISH, None).unwrap();
+        assert_eq!(out.ocr.text, "Offline");
+        assert_eq!(out.ocr.provider_id, "tesseract");
+
+        e.update_config(|c| c.ocr.tesseract.path = dir.join("no-tesseract").to_string_lossy().into_owned()).unwrap();
+        let err = e.recognize(png, LangId::ENGLISH, None).unwrap_err();
+        assert!(matches!(err, Error::FileNotFound(ref p) if p.contains("no-lens_scan")), "{err:?}");
+        std::fs::remove_dir_all(&dir).ok();
+    }
 
     fn engine(name: &str) -> (Engine, PathBuf) {
         let dir = std::env::temp_dir().join(format!("glossa-engine-{}-{name}", std::process::id()));

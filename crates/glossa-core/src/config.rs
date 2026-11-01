@@ -970,7 +970,7 @@ pub enum MouseBehaviour {
 #[serde(default)]
 pub struct OcrConfig {
     /// Provider id: `lens` (chrome-lens), `windows-ocr`, `oneocr`,
-    /// `command-ocr` or a module's.
+    /// `macos-vision`, `tesseract`, `command-ocr` or a module's.
     pub provider: String,
     /// Language of the text in the picture; `AUTO` lets the provider decide.
     pub language: LangId,
@@ -985,6 +985,10 @@ pub struct OcrConfig {
     pub lens: LensConfig,
     /// The Windows 11 Snipping Tool's engine.
     pub oneocr: OneOcrConfig,
+    /// Tesseract, run as a program.
+    pub tesseract: TesseractConfig,
+    /// Apple Vision, on macOS.
+    pub vision: VisionConfig,
 }
 
 impl Default for OcrConfig {
@@ -998,6 +1002,8 @@ impl Default for OcrConfig {
             watch_interval_ms: 800,
             lens: LensConfig::default(),
             oneocr: OneOcrConfig::default(),
+            tesseract: TesseractConfig::default(),
+            vision: VisionConfig::default(),
         }
     }
 }
@@ -1010,6 +1016,57 @@ pub struct OneOcrConfig {
     /// `oneocr.onemodel`. Empty finds the Snipping Tool's and copies the
     /// libraries into the cache folder.
     pub folder: String,
+}
+
+/// How to run Tesseract.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct TesseractConfig {
+    /// The `tesseract` executable. Empty looks on `PATH` and in the usual
+    /// install folders (`C:\Program Files\Tesseract-OCR`, Homebrew's).
+    pub path: String,
+    /// Where the `.traineddata` files are, if not Tesseract's own folder.
+    pub tessdata_dir: String,
+    /// Languages for pictures whose language is automatic, in Tesseract's
+    /// form (`eng+rus`). Empty uses English.
+    pub auto_languages: String,
+    /// Page segmentation mode (`--psm`); `None` keeps Tesseract's default.
+    pub psm: Option<u8>,
+    /// OCR engine mode (`--oem`); `None` keeps Tesseract's default.
+    pub oem: Option<u8>,
+    /// More arguments, split the way a shell would split them
+    /// (`-c preserve_interword_spaces=1`).
+    pub extra_args: String,
+}
+
+/// How to ask Apple Vision.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct VisionConfig {
+    /// `accurate` (the default) or `fast`.
+    pub level: VisionLevel,
+    /// Let Vision correct words with its language model. Off reads codes,
+    /// names and other non-words more literally.
+    pub language_correction: bool,
+    /// Vision's language identifiers (`en-US, ru-RU`) to read when the
+    /// picture's language is automatic. Empty lets macOS 13 and later
+    /// detect the language; older systems then read English.
+    pub auto_languages: String,
+}
+
+impl Default for VisionConfig {
+    fn default() -> Self {
+        Self { level: VisionLevel::Accurate, language_correction: true, auto_languages: String::new() }
+    }
+}
+
+/// Apple Vision's trade-off between speed and accuracy.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum VisionLevel {
+    #[default]
+    Accurate,
+    Fast,
 }
 
 /// How to reach chrome-lens-py.

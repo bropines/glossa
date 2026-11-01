@@ -52,6 +52,18 @@ for Windows and Linux.
   Windows 11 Snipping Tool's engine, loaded from the user's own installation;
   nothing of Microsoft's is shipped). Both pick-able in *Options → Text
   recognition* and with `glossa-cli ocr --engine windows-ocr|oneocr`.
+- **Offline OCR on macOS and Linux**: Apple Vision (`macos-vision`, the Live
+  Text recogniser built into macOS 10.15 and later; accurate or fast,
+  language correction, automatic language on macOS 13+) and Tesseract
+  (`tesseract`, on every OS where it is installed; lines and words with
+  boxes from its TSV output, page segmentation and engine modes, clear
+  install instructions for a missing program or language). Both have their
+  own section in *Options → Text recognition*.
+- **OCR fail-over reaches an offline engine** when the chosen one is not
+  installed (Lens without chrome-lens-py): Windows OCR, Apple Vision or
+  Tesseract, in that order of availability. OneOCR is never a fallback.
+- **macOS builds** in CI and the release: `Glossa.app` (a menu-bar app) and
+  `glossa-cli`, for Apple silicon and as a universal binary; not notarised.
 - **Dictionaries**: online (Google) and offline (StarDict with dictzip, DSL,
   XDXF, tab-separated), with articles simplified for display.
 - **Text to speech** with the classic slower repeat; MP3, WAV and Ogg Vorbis
