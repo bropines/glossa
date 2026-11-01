@@ -422,7 +422,16 @@ fn middle_bar(app: &mut GlossaApp, ui: &mut egui::Ui) {
             (LangId::AUTO, Some(d)) => app.locale.fmt("main.auto_detect_as", d.english_name()),
             _ => auto.clone(),
         };
-        if let Some(l) = crate::widgets::lang_combo(ui, "from", pair.from, true, &from_label, &disabled, combo_w) {
+        if let Some(l) = crate::widgets::lang_combo(
+            ui,
+            "from",
+            pair.from,
+            true,
+            &from_label,
+            &app.t("lang.search"),
+            &disabled,
+            combo_w,
+        ) {
             app.set_pair(LangPair::new(l, pair.to));
             retranslate(app);
         }
@@ -441,7 +450,9 @@ fn middle_bar(app: &mut GlossaApp, ui: &mut egui::Ui) {
             (LangId::AUTO, Some(t)) => app.locale.fmt("main.auto_detect_as", t.english_name()),
             _ => auto.clone(),
         };
-        if let Some(l) = crate::widgets::lang_combo(ui, "to", pair.to, true, &to_label, &disabled, combo_w) {
+        if let Some(l) =
+            crate::widgets::lang_combo(ui, "to", pair.to, true, &to_label, &app.t("lang.search"), &disabled, combo_w)
+        {
             app.set_pair(LangPair::new(app.cfg.general.pair.from, l));
             retranslate(app);
         }
@@ -543,7 +554,9 @@ fn result_pane(app: &mut GlossaApp, ui: &mut egui::Ui, height: f32) {
                     ui.add_space(6.0);
                     let names: Vec<&str> = o.failed.iter().map(|(id, _)| id.as_str()).collect();
                     ui.label(
-                        RichText::new(format!("Tried first: {}", names.join(", "))).small().color(look.weak_text()),
+                        RichText::new(app.locale.fmt("main.tried_first", &names.join(", ")))
+                            .small()
+                            .color(look.weak_text()),
                     )
                     .on_hover_text(o.failed.iter().map(|(id, e)| format!("{id}: {e}")).collect::<Vec<_>>().join("\n"));
                 }
@@ -610,7 +623,7 @@ fn stacked_results(app: &mut GlossaApp, ui: &mut egui::Ui, height: f32) {
                                 app.copy_text(&o.translation.text);
                             }
                             ui.label(
-                                RichText::new(format!("{} ms", o.translation.elapsed_ms))
+                                RichText::new(app.locale.fmt("msg.ms", &o.translation.elapsed_ms.to_string()))
                                     .small()
                                     .color(look.weak_text()),
                             );
@@ -802,31 +815,20 @@ pub fn show_about(app: &mut GlossaApp, ctx: &egui::Context) {
                 ui.heading("Glossa");
                 ui.label(format!("{}{}", app.t("msg.version"), glossa_core::VERSION));
                 ui.add_space(6.0);
-                ui.label("A clean-room reincarnation of QTranslate.");
-                ui.label(
-                    RichText::new("Translation, dictionaries and screen OCR — Rust, egui, no web engine.")
-                        .small()
-                        .color(look.weak_text()),
-                );
+                ui.label(app.t("about.tagline"));
+                ui.label(RichText::new(app.t("about.summary")).small().color(look.weak_text()));
                 ui.add_space(10.0);
-                ui.label(RichText::new("OCR: chrome-lens-py by Bropines (MIT)").small());
-                ui.label(RichText::new("Scripting: Boa (JavaScript), CPython modules, native modules").small());
-                ui.label(
-                    RichText::new("Compatible with classic QTranslate services, themes, locales, and pot-app plugins")
-                        .small()
-                        .color(look.weak_text()),
-                );
+                ui.label(RichText::new(app.t("about.ocr_credit")).small());
+                ui.label(RichText::new(app.t("about.scripting")).small());
+                ui.label(RichText::new(app.t("about.compat")).small().color(look.weak_text()));
                 ui.add_space(10.0);
                 let s = app.engine.module_status();
+                let counts =
+                    [app.engine.registry().entries().len(), s.loaded.len(), s.failed.len()].map(|n| n.to_string());
                 ui.label(
-                    RichText::new(format!(
-                        "{} providers · {} modules loaded · {} failed",
-                        app.engine.registry().entries().len(),
-                        s.loaded.len(),
-                        s.failed.len()
-                    ))
-                    .small()
-                    .color(look.weak_text()),
+                    RichText::new(app.locale.fmt_args("about.status", &[&counts[0], &counts[1], &counts[2]]))
+                        .small()
+                        .color(look.weak_text()),
                 );
             });
         });
@@ -857,7 +859,7 @@ pub fn show_keyboard(app: &mut GlossaApp, ctx: &egui::Context) {
             ui.horizontal(|ui| {
                 ui.selectable_value(&mut russian, false, "EN");
                 ui.selectable_value(&mut russian, true, "RU");
-                ui.toggle_value(&mut shift, "Shift");
+                ui.toggle_value(&mut shift, app.t("keyboard.shift"));
             });
             let rows_en = ["`1234567890-=", "qwertyuiop[]\\", "asdfghjkl;'", "zxcvbnm,./"];
             let rows_ru = ["ё1234567890-=", "йцукенгшщзхъ\\", "фывапролджэ", "ячсмитьбю."];
@@ -874,13 +876,13 @@ pub fn show_keyboard(app: &mut GlossaApp, ctx: &egui::Context) {
                 });
             }
             ui.horizontal(|ui| {
-                if ui.add(egui::Button::new("Space").min_size(vec2(260.0, 30.0))).clicked() {
+                if ui.add(egui::Button::new(app.t("keyboard.space")).min_size(vec2(260.0, 30.0))).clicked() {
                     app.main.source.push(' ');
                 }
-                if ui.add(egui::Button::new("Backspace").min_size(vec2(60.0, 30.0))).clicked() {
+                if ui.add(egui::Button::new(app.t("keyboard.backspace")).min_size(vec2(60.0, 30.0))).clicked() {
                     app.main.source.pop();
                 }
-                if ui.add(egui::Button::new("Enter").min_size(vec2(60.0, 30.0))).clicked() {
+                if ui.add(egui::Button::new(app.t("keyboard.enter")).min_size(vec2(60.0, 30.0))).clicked() {
                     app.main.source.push('\n');
                 }
             });

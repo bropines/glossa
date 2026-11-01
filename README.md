@@ -105,7 +105,10 @@ Glossa finds it, and keeps its daemon warm so a scan takes about 0.4 s.
 
 *Options → Modules → Classic QTranslate installation*: pick the folder with
 `QTranslate.exe`, and its services, themes and interface languages are used
-in place. To bring over the settings and history as well:
+in place. A classic language file is laid over Glossa's own translation
+(Russian is built in), so strings the classic program never had are
+translated too; a native `<code>.json` in a `locales` folder rewords single
+strings on top. To bring over the settings and history as well:
 
 ```bash
 glossa-cli import-classic "C:\Program Files (x86)\QTranslate"

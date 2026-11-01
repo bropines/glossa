@@ -290,7 +290,8 @@ fn start_recognition(app: &mut GlossaApp, st: &mut OcrState, sel: Rect) -> bool 
     app.last_region = Some(region);
     if st.action == Action::WatchRegion {
         app.watch = Some(Watch::start(region, Duration::from_millis(app.cfg.ocr.watch_interval_ms), app.ctx.clone()));
-        app.notify("Watching the region — press the hotkey again to stop.", false);
+        let m = app.t("msg.watching");
+        app.notify(m, false);
         return false;
     }
     let translate_to = match st.action {
@@ -411,16 +412,27 @@ fn result_panel(app: &mut GlossaApp, ui: &mut egui::Ui, st: &mut OcrState, sel: 
                                 ui.label(RichText::new(app.t("ocr.language")).small());
                                 let disabled = app.cfg.languages.disabled.clone();
                                 let auto = app.t("main.auto_detect");
-                                if let Some(l) =
-                                    crate::widgets::lang_combo(ui, "ocr-lang", st.lang, true, &auto, &disabled, 160.0)
-                                {
+                                if let Some(l) = crate::widgets::lang_combo(
+                                    ui,
+                                    "ocr-lang",
+                                    st.lang,
+                                    true,
+                                    &auto,
+                                    &app.t("lang.search"),
+                                    &disabled,
+                                    160.0,
+                                ) {
                                     st.lang = l;
                                     let _ = app.engine.update_config(move |c| c.ocr.language = l);
                                 }
                                 ui.label(
-                                    RichText::new(format!("{} · {} ms", o.ocr.provider_id, o.ocr.elapsed_ms))
-                                        .small()
-                                        .color(look.weak_text()),
+                                    RichText::new(format!(
+                                        "{} · {}",
+                                        o.ocr.provider_id,
+                                        app.locale.fmt("msg.ms", &o.ocr.elapsed_ms.to_string())
+                                    ))
+                                    .small()
+                                    .color(look.weak_text()),
                                 );
                             });
                         }

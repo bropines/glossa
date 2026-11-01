@@ -2,7 +2,7 @@
 
 use std::path::{Path, PathBuf};
 
-use glossa_core::locale::Locale;
+use glossa_core::locale::{Locale, BUILTIN_LOCALES};
 use glossa_core::theme::{builtin, Theme};
 
 /// A theme the picker can offer.
@@ -107,7 +107,11 @@ pub struct LocaleEntry {
     pub native_name: String,
     /// The folder name, for classic `Locales/<Name>/lang.json` entries.
     pub folder: String,
-    pub path: Option<PathBuf>,
+    /// A pack for this language is compiled in.
+    pub builtin: bool,
+    /// Files laid over the built-in strings, lowest priority first: classic
+    /// `lang.json` files, then native locale files.
+    pub files: Vec<PathBuf>,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -116,16 +120,28 @@ pub struct LocaleCatalog {
 }
 
 impl LocaleCatalog {
-    /// English (built in), native `*.json` locale files, and classic
-    /// `<Folder>/lang.json` folders.
+    /// English and the compiled-in packs, then native `*.json` locale files
+    /// and classic `<Folder>/lang.json` folders. Files for a language that is
+    /// already known join it as layers instead of replacing it.
     pub fn discover(dirs: &[PathBuf]) -> LocaleCatalog {
         let mut entries = vec![LocaleEntry {
             code: "en".into(),
             name: "English".into(),
             native_name: "English".into(),
             folder: "English".into(),
-            path: None,
+            builtin: true,
+            files: Vec::new(),
         }];
+        entries.extend(BUILTIN_LOCALES.iter().map(|b| LocaleEntry {
+            code: b.code.into(),
+            name: b.name.into(),
+            native_name: b.native_name.into(),
+            folder: String::new(),
+            builtin: true,
+            files: Vec::new(),
+        }));
+        // Which files are classic, to order the layers once all are found.
+        let mut classic_files: Vec<PathBuf> = Vec::new();
         for dir in dirs {
             let Ok(rd) = std::fs::read_dir(dir) else { continue };
             let mut items: Vec<PathBuf> = rd.flatten().map(|e| e.path()).collect();
@@ -149,22 +165,42 @@ impl LocaleCatalog {
                 if locale.code.is_empty() {
                     continue;
                 }
-                let entry = LocaleEntry {
-                    code: locale.code.clone(),
-                    name: if locale.name.is_empty() { folder.clone() } else { locale.name.clone() },
-                    native_name: locale.native_name.clone(),
-                    folder,
-                    path: Some(file),
-                };
-                // English stays built in: a classic English file only repeats it.
-                if entry.code.eq_ignore_ascii_case("en") {
+                // English is built in: a classic English file only repeats it
+                // (with the old program's name in it). A native one may
+                // still reword single strings.
+                if locale.classic && locale.code.eq_ignore_ascii_case("en") {
                     continue;
                 }
-                match entries.iter_mut().find(|e| e.code.eq_ignore_ascii_case(&entry.code)) {
-                    Some(existing) => *existing = entry,
-                    None => entries.push(entry),
+                if locale.classic {
+                    classic_files.push(file.clone());
+                }
+                match entries.iter_mut().find(|e| e.code.eq_ignore_ascii_case(&locale.code)) {
+                    Some(existing) => {
+                        if !locale.name.is_empty() && existing.name.is_empty() {
+                            existing.name = locale.name.clone();
+                        }
+                        if !locale.native_name.is_empty() && existing.native_name.is_empty() {
+                            existing.native_name = locale.native_name.clone();
+                        }
+                        if !folder.is_empty() {
+                            existing.folder = folder;
+                        }
+                        existing.files.push(file);
+                    }
+                    None => entries.push(LocaleEntry {
+                        code: locale.code.clone(),
+                        name: if locale.name.is_empty() { folder.clone() } else { locale.name.clone() },
+                        native_name: locale.native_name.clone(),
+                        folder,
+                        builtin: false,
+                        files: vec![file],
+                    }),
                 }
             }
+        }
+        for e in &mut entries {
+            // Stable: discovery order holds within each kind.
+            e.files.sort_by_key(|f| !classic_files.contains(f));
         }
         LocaleCatalog { entries }
     }
@@ -190,40 +226,67 @@ impl LocaleCatalog {
             .or_else(|| self.entries.iter().find(|e| e.code.eq_ignore_ascii_case(&base)))
     }
 
+    /// Load a language as layers: English, the built-in pack, classic files,
+    /// the user's native files. A layer that fails to load is skipped, with
+    /// the reason logged, and the rest still apply.
     pub fn load(&self, wanted: &str) -> Locale {
         let Some(entry) = self.find(wanted) else { return Locale::english() };
-        let Some(path) = &entry.path else { return Locale::english() };
-        match std::fs::read_to_string(path).map_err(|e| e.to_string()).and_then(|t| Locale::parse(&t)) {
-            Ok(l) => l,
-            Err(e) => {
-                tracing::warn!("locale {}: {e}; using English", path.display());
-                Locale::english()
+        let mut out = Locale::english();
+        if entry.builtin {
+            if let Some(pack) = Locale::builtin(&entry.code) {
+                out.merge(pack);
             }
         }
+        for path in &entry.files {
+            match std::fs::read_to_string(path).map_err(|e| e.to_string()).and_then(|t| Locale::parse(&t)) {
+                Ok(l) => out.merge(l),
+                Err(e) => tracing::warn!("locale {}: {e}; skipped", path.display()),
+            }
+        }
+        out.code = entry.code.clone();
+        out.name = entry.name.clone();
+        out.native_name = entry.native_name.clone();
+        tracing::debug!(wanted, code = %out.code, builtin = entry.builtin, files = ?entry.files, "interface language");
+        out
     }
 }
 
-/// The user's language from the environment, as a BCP 47-ish code.
+/// The user's language, as a BCP 47-ish code (`ru-RU`).
+///
+/// `GLOSSA_LANG` overrides everything. On Windows the display language comes
+/// next: `LANG` and friends there are usually left behind by Unix-like
+/// toolkits rather than chosen by the user.
 pub fn system_language() -> String {
-    for var in ["GLOSSA_LANG", "LC_ALL", "LC_MESSAGES", "LANG"] {
-        if let Ok(v) = std::env::var(var) {
-            let v = v.split(['.', '@']).next().unwrap_or("").trim().to_owned();
-            if !v.is_empty() && v != "C" && v != "POSIX" {
-                return v.replace('_', "-");
-            }
-        }
-    }
-    windows_language().unwrap_or_else(|| "en".into())
+    let from_env = |var: &str| {
+        let v = std::env::var(var).ok()?;
+        let v = v.split(['.', '@']).next().unwrap_or("").trim().to_owned();
+        (!v.is_empty() && v != "C" && v != "POSIX").then(|| v.replace('_', "-"))
+    };
+    from_env("GLOSSA_LANG")
+        .or_else(windows_language)
+        .or_else(|| ["LC_ALL", "LC_MESSAGES", "LANG"].into_iter().find_map(from_env))
+        .unwrap_or_else(|| "en".into())
 }
 
 #[cfg(windows)]
 fn windows_language() -> Option<String> {
-    // The registry holds the user's locale name. Read it directly: running
-    // `reg.exe` from a GUI process opens a console window, which steals the
-    // focus from the program whose selection we are about to read.
-    let key =
-        winreg::RegKey::predef(winreg::enums::HKEY_CURRENT_USER).open_subkey(r"Control Panel\International").ok()?;
-    key.get_value::<String, _>("LocaleName").ok().filter(|s| !s.is_empty())
+    // Read the registry directly: running `reg.exe` from a GUI process opens
+    // a console window, which steals the focus from the program whose
+    // selection we are about to read.
+    use winreg::enums::HKEY_CURRENT_USER;
+    let hkcu = winreg::RegKey::predef(HKEY_CURRENT_USER);
+    let first = |path: &str, value: &str| {
+        let list = hkcu.open_subkey(path).ok()?.get_value::<Vec<String>, _>(value).ok()?;
+        list.into_iter().find(|s| !s.trim().is_empty())
+    };
+    // The display language the user picked, then the one Windows was
+    // installed with, then the regional format.
+    first(r"Control Panel\Desktop", "PreferredUILanguages")
+        .or_else(|| first(r"Control Panel\Desktop\MuiCached", "MachinePreferredUILanguages"))
+        .or_else(|| {
+            let key = hkcu.open_subkey(r"Control Panel\International").ok()?;
+            key.get_value::<String, _>("LocaleName").ok().filter(|s| !s.is_empty())
+        })
 }
 
 #[cfg(not(windows))]
@@ -272,18 +335,76 @@ mod tests {
         std::fs::create_dir_all(dir.join("Russian")).unwrap();
         std::fs::write(
             dir.join("Russian").join("lang.json"),
-            r#"{ "LanguageName": "Russian", "LanguageNativeName": "Русский", "LanguageCode": "ru", "Strings": [[172, "Перевести (Ctrl+Enter)"]] }"#,
+            r#"{ "LanguageName": "Russian", "LanguageNativeName": "Русский", "LanguageCode": "ru", "Strings": [[172, "Перевести! (Ctrl+Enter)"]] }"#,
         )
         .unwrap();
         std::fs::write(dir.join("de.json"), r#"{ "code": "de", "name": "German", "native_name": "Deutsch", "strings": { "main.translate": "Übersetzen" } }"#).unwrap();
         let cat = LocaleCatalog::discover(std::slice::from_ref(&dir));
-        assert_eq!(cat.entries().len(), 3, "English + two");
+        assert_eq!(cat.entries().len(), 3, "English, Russian (built in, the classic file joins it), German");
         assert_eq!(cat.find("ru").unwrap().native_name, "Русский");
         assert_eq!(cat.find("Russian").unwrap().code, "ru", "the classic options store the folder name");
         assert_eq!(cat.find("ru-RU").unwrap().code, "ru", "regional variants fall back to the base");
         assert_eq!(cat.load("de").get("main.translate"), "Übersetzen");
-        assert_eq!(cat.load("ru").get("msg.translate_tip"), "Перевести (Ctrl+Enter)");
+        assert_eq!(cat.load("ru").get("msg.translate_tip"), "Перевести! (Ctrl+Enter)");
         assert_eq!(cat.load("xx").code, "en");
         std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn built_in_languages_are_offered_without_any_files() {
+        let cat = LocaleCatalog::discover(&[]);
+        let ru = cat.find("ru-RU").expect("Russian is compiled in");
+        assert!(ru.builtin && ru.files.is_empty());
+        assert_eq!(ru.native_name, "Русский");
+        assert_eq!(cat.find("Russian").unwrap().code, "ru");
+        let l = cat.load("ru-RU");
+        assert_eq!(l.code, "ru");
+        assert_eq!(l.get("options.server"), "API управления");
+        assert_eq!(l.get("options.services.fail_over"), "Если сервис не ответил, пробовать следующий");
+        assert_eq!(cat.load("en").get("options.server"), "Control API");
+    }
+
+    /// English, then the built-in pack, then a classic file, then the user's
+    /// own file, whatever order the folders come in.
+    #[test]
+    fn layers_apply_in_order() {
+        let classic = temp("layers-classic");
+        let user = temp("layers-user");
+        std::fs::create_dir_all(classic.join("Russian")).unwrap();
+        std::fs::write(
+            classic.join("Russian").join("lang.json"),
+            r#"{ "LanguageName": "Russian", "LanguageCode": "ru",
+                 "Windows": [ { "Id": 1, "Controls": [ [1004, "Перевести!"] ] },
+                              { "Id": 16, "Caption": "Хоткеи", "Controls": [] } ] }"#,
+        )
+        .unwrap();
+        std::fs::write(
+            user.join("ru.json"),
+            r#"{ "code": "ru", "strings": { "options.hotkeys": "Сочетания клавиш", "options.ocr": "OCR" } }"#,
+        )
+        .unwrap();
+        // A classic English file is ignored; a native one rewords strings.
+        std::fs::create_dir_all(classic.join("English")).unwrap();
+        std::fs::write(
+            classic.join("English").join("lang.json"),
+            r#"{ "LanguageName": "English", "LanguageCode": "en", "Windows": [ { "Id": 1, "Caption": "QTranslate" } ] }"#,
+        )
+        .unwrap();
+        std::fs::write(user.join("en.json"), r#"{ "code": "en", "strings": { "main.translate": "Go" } }"#).unwrap();
+
+        for dirs in [[classic.clone(), user.clone()], [user.clone(), classic.clone()]] {
+            let cat = LocaleCatalog::discover(&dirs);
+            let ru = cat.load("ru");
+            assert_eq!(ru.get("main.translate"), "Перевести!", "the classic file over the pack");
+            assert_eq!(ru.get("options.hotkeys"), "Сочетания клавиш", "the user's file over the classic one");
+            assert_eq!(ru.get("options.ocr"), "OCR");
+            assert_eq!(ru.get("options.modules"), "Модули", "the pack fills what the files lack");
+            assert_eq!(cat.find("Russian").unwrap().folder, "Russian");
+            let en = cat.load("en");
+            assert_eq!(en.get("main.translate"), "Go");
+            assert_eq!(en.get("main.title"), "Glossa");
+        }
+        std::fs::remove_dir_all(&classic).ok();
+        std::fs::remove_dir_all(&user).ok();
     }
 }

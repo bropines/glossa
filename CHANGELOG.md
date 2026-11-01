@@ -71,6 +71,14 @@ for Windows and Linux.
   effort, token limit, timeout, extra headers and extra request fields; *Load
   models* and *Test* in the options. Answers stream into the popup, the main
   window and the terminal as they are written.
+- **Interface languages**: every label, tooltip, message and window title
+  goes through the locale, with English and Russian compiled in. A language
+  loads in layers: English, the built-in pack, a classic `lang.json` from the
+  QTranslate installation, then a native `<code>.json` of the user's, so a
+  classic file no longer leaves Glossa's newer strings in English and a user
+  file can reword single strings. *System* follows the Windows display
+  language. A test fails when the UI names a key the table lacks or a
+  built-in pack misses one.
 - **History** with favourites and export to text, CSV, HTML and JSON.
 - **Command line** (`glossa-cli`): translate, detect, dict, ocr, speak,
   services, modules, history, import-classic, theme, locale, config, serve
