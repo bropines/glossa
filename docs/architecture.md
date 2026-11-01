@@ -57,7 +57,8 @@ fourth without touching the rest.
 5. The result returns as an engine event; the UI shows it and records it in
    history.
 
-The CLI calls the blocking versions of the same functions.
+The CLI ([cli.md](cli.md)) and the control API ([control-api.md](control-api.md))
+call the blocking versions of the same functions.
 
 ## The desktop app and memory
 
@@ -90,7 +91,8 @@ process starts on first use and stops when idle; the renderer is selectable
 - Engine jobs run on short-lived threads with a cancellation token per slot
   (main window, popup, dictionary…); a newer job in a slot cancels the older.
 - Each Python module has one process; calls to it are serialised.
-- The control API runs on its own thread.
+- The control API runs on its own thread, and each request on a thread of
+  its own.
 
 ## Configuration and data
 
@@ -98,7 +100,13 @@ process starts on first use and stops when idle; the renderer is selectable
 by hand; the app rewrites it when settings are applied. History is
 `history.json`, the log is `glossa.log` in the cache folder. Portable mode
 (a `portable` file or a `data` folder next to the executable) keeps all of it
-beside the program; `GLOSSA_HOME` overrides the location.
+beside the program; `GLOSSA_HOME` overrides the location. Every key, the
+folders and the other files are described in
+[configuration.md](configuration.md); a test in `glossa-core`
+(`every_config_key_is_documented`) fails when a key is missing from that
+page.
+
+The index of all documentation is [README.md](README.md).
 
 ## Testing
 

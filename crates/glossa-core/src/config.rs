@@ -1470,4 +1470,99 @@ text_scale = 0.01",
         let some = PopupIcons::from_legacy(2 | 8);
         assert!(some.dictionary && some.copy && !some.listen && !some.replace);
     }
+
+    /// `docs/configuration.md` describes every key `config.toml` can hold.
+    /// A new setting fails this test until it is documented there.
+    ///
+    /// The page is split at headings whose first code span is a table name
+    /// (`` ### `[general]` ``, `` ### `[[exceptions.rules]]` ``). A key must
+    /// appear as `` `key` `` in its table's section; a nested table or array
+    /// of tables either has a heading of its own or is described, with its
+    /// keys, in its parent's section.
+    #[test]
+    fn every_config_key_is_documented() {
+        let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../docs/configuration.md");
+        let doc = std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("{}: {e}", path.display()));
+        let mut sections: BTreeMap<String, String> = BTreeMap::new();
+        let mut current: Option<String> = None;
+        for line in doc.lines() {
+            if line.starts_with('#') {
+                current = line
+                    .split('`')
+                    .nth(1)
+                    .filter(|s| s.starts_with('['))
+                    .map(|s| s.trim_matches(|c| c == '[' || c == ']').to_owned());
+                if let Some(name) = &current {
+                    sections.entry(name.clone()).or_default();
+                }
+            } else if let Some(name) = &current {
+                let text = sections.get_mut(name).expect("added at the heading");
+                text.push_str(line);
+                text.push('\n');
+            }
+        }
+
+        // A config with every optional value set and one entry in every
+        // list and map, so that each key is written out.
+        let mut c = Config::default();
+        c.classic.path = Some(PathBuf::from("classic"));
+        c.ocr.save_image_dir = Some(PathBuf::from("shots"));
+        c.appearance.popup.back = Some(Color::BLACK);
+        c.appearance.popup.text = Some(Color::WHITE);
+        c.appearance.popup.frame = Some(Color::BLACK);
+        c.windows.insert("main".into(), WindowGeometry { x: 0.0, y: 0.0, width: 1.0, height: 1.0, maximized: false });
+        c.services.ai_endpoints.push(AiEndpoint { id: "ai-x".into(), name: "X".into(), preset: "custom".into() });
+        c.services.set_option("deepl", "api_key", serde_json::json!("fake"));
+        c.dictionary.offline.push(PathBuf::from("dict.ifo"));
+        c.modules.dirs.push(PathBuf::from("modules"));
+        c.languages.disabled.push(LangId::RUSSIAN);
+        let root: toml::Table = toml::from_str(&c.to_toml()).expect("config serialises to a table");
+
+        fn documented(sections: &BTreeMap<String, String>, section: &str, key: &str) -> bool {
+            sections.get(section).is_some_and(|text| text.contains(&format!("`{key}`")))
+        }
+
+        fn check(
+            table: &toml::Table,
+            path: &str,
+            section: &str,
+            sections: &BTreeMap<String, String>,
+            missing: &mut Vec<String>,
+        ) {
+            for (key, value) in table {
+                let child = if path.is_empty() { key.clone() } else { format!("{path}.{key}") };
+                let nested: Vec<&toml::Table> = match value {
+                    toml::Value::Table(t) => vec![t],
+                    toml::Value::Array(items) => items.iter().filter_map(toml::Value::as_table).collect(),
+                    _ => Vec::new(),
+                };
+                let has_heading = !nested.is_empty() && sections.contains_key(&child);
+                if !has_heading && !documented(sections, section, key) {
+                    missing.push(child.clone());
+                }
+                let sub = if has_heading { child.as_str() } else { section };
+                match child.as_str() {
+                    // Maps keyed by user data: the keys are actions, module
+                    // ids and option names, not settings.
+                    "hotkeys.bindings" | "services.options" => {}
+                    // Keyed by window name; each value is a geometry.
+                    "windows" => {
+                        for geometry in nested.iter().flat_map(|t| t.values()).filter_map(toml::Value::as_table) {
+                            check(geometry, &child, sub, sections, missing);
+                        }
+                    }
+                    _ => {
+                        for t in nested {
+                            check(t, &child, sub, sections, missing);
+                        }
+                    }
+                }
+            }
+        }
+
+        let mut missing = Vec::new();
+        check(&root, "", "", &sections, &mut missing);
+        missing.dedup();
+        assert!(missing.is_empty(), "config keys not described in docs/configuration.md: {missing:?}");
+    }
 }
