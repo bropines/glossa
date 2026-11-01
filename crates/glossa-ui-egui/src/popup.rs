@@ -195,7 +195,7 @@ fn remembered_size(app: &GlossaApp) -> Option<egui::Vec2> {
 }
 
 fn scale_at(x: i32, y: i32) -> f32 {
-    glossa_platform::window::monitor_at(x, y).map(|m| m.scale).filter(|s| *s > 0.0).unwrap_or(1.0)
+    glossa_platform::window::monitor_at(x, y).map(|m| m.desktop_scale()).unwrap_or(1.0)
 }
 
 /// Keep an automatically placed popup of `size` (points) on the screen of

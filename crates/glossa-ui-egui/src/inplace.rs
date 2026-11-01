@@ -65,7 +65,7 @@ pub fn open(app: &mut GlossaApp, image: image::RgbaImage, region: GRect, outcome
     let (cx, cy) = region.centre();
     let monitor = glossa_platform::window::monitor_at(cx as i32, cy as i32)
         .or_else(|| glossa_platform::window::monitors().into_iter().find(|m| m.is_primary));
-    let scale = monitor.as_ref().map(|m| m.scale).filter(|s| *s > 0.0).unwrap_or(1.0);
+    let scale = monitor.as_ref().map(|m| m.desktop_scale()).unwrap_or(1.0);
     let bottom = monitor.map(|m| m.work_area.y + m.work_area.height).unwrap_or(f32::MAX);
     let bar_on_top = region.y + region.height + BAR * scale > bottom;
     tracing::debug!(?region, scale, bar_on_top, blocks = outcome.blocks.len(), "in-place window");

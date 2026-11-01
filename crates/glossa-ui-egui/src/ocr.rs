@@ -292,7 +292,12 @@ pub fn show(app: &mut GlossaApp, ctx: &egui::Context) {
         .with_decorations(false)
         .with_taskbar(false)
         .with_window_level(egui::WindowLevel::AlwaysOnTop)
-        .with_position(pos2(st.origin.0 as f32 / st.scale, st.origin.1 as f32 / st.scale))
+        // The origin is in desktop coordinates (points on macOS), the image
+        // in pixels.
+        .with_position({
+            let d = glossa_platform::window::desktop_scale(st.scale);
+            pos2(st.origin.0 as f32 / d, st.origin.1 as f32 / d)
+        })
         .with_inner_size([w, h])
         .with_active(true);
     let mut keep = true;
@@ -442,7 +447,11 @@ fn run(app: &mut GlossaApp, st: &mut OcrState, sel: Rect, choice: Choice) -> boo
     }
     let (x, y, w, h) = pixel_rect(st, sel);
     let crop = image::imageops::crop_imm(&st.image, x, y, w, h).to_image();
-    let region = GRect::new((st.origin.0 + x as i32) as f32, (st.origin.1 + y as i32) as f32, w as f32, h as f32);
+    // Image pixels to desktop coordinates (the same on Windows and Linux;
+    // half of them on a Retina Mac, whose desktop is in points).
+    let k = glossa_platform::window::desktop_scale(st.scale) / st.scale;
+    let region =
+        GRect::new(st.origin.0 as f32 + x as f32 * k, st.origin.1 as f32 + y as f32 * k, w as f32 * k, h as f32 * k);
     app.last_region = Some(region);
     if st.action == Action::WatchRegion {
         app.watch = Some(Watch::start(region, Duration::from_millis(app.cfg.ocr.watch_interval_ms), app.ctx.clone()));
@@ -613,7 +622,7 @@ fn show_notice(app: &mut GlossaApp, ctx: &egui::Context) {
     let (cx, cy) = n.region.centre();
     let monitor = glossa_platform::window::monitor_at(cx as i32, cy as i32)
         .or_else(|| glossa_platform::window::monitors().into_iter().find(|m| m.is_primary));
-    let scale = monitor.as_ref().map(|m| m.scale).filter(|s| *s > 0.0).unwrap_or(1.0);
+    let scale = monitor.as_ref().map(|m| m.desktop_scale()).unwrap_or(1.0);
     let size = vec2(340.0, if n.preview.is_some() { 64.0 } else { 34.0 });
     let pos = notice_pos(n.region, size * scale, monitor.map(|m| m.work_area)) / scale;
     let builder = egui::ViewportBuilder::default()

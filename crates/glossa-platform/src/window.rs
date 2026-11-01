@@ -42,7 +42,25 @@ pub struct Monitor {
     pub is_primary: bool,
 }
 
+/// Desktop coordinates per egui point at display `scale`. Windows and Linux
+/// report the desktop (cursor, monitors, window positions) in pixels, so a
+/// point is `scale` of them; macOS reports it in points already, so a point
+/// is one. Captured images are in pixels everywhere: use the monitor's
+/// `scale`, not this, to go between image pixels and points.
+pub fn desktop_scale(scale: f32) -> f32 {
+    if cfg!(target_os = "macos") || scale.is_nan() || scale <= 0.0 {
+        1.0
+    } else {
+        scale
+    }
+}
+
 impl Monitor {
+    /// Desktop coordinates per egui point on this monitor ([`desktop_scale`]).
+    pub fn desktop_scale(&self) -> f32 {
+        desktop_scale(self.scale)
+    }
+
     /// The full bounds as a rectangle.
     pub fn bounds(&self) -> Rect {
         Rect::new(self.x as f32, self.y as f32, self.width as f32, self.height as f32)

@@ -198,7 +198,7 @@ fn placement(app: &GlossaApp, region: GRect) -> (Pos2, Vec2) {
     let (cx, cy) = region.centre();
     let monitor = glossa_platform::window::monitor_at(cx as i32, cy as i32)
         .or_else(|| glossa_platform::window::monitors().into_iter().find(|m| m.is_primary));
-    let scale = monitor.as_ref().map(|m| m.scale).filter(|s| *s > 0.0).unwrap_or(1.0);
+    let scale = monitor.as_ref().map(|m| m.desktop_scale()).unwrap_or(1.0);
     let (x, y) = place_beside(region, DEFAULT_SIZE * scale, monitor.map(|m| m.work_area));
     (pos2(x / scale, y / scale), DEFAULT_SIZE)
 }

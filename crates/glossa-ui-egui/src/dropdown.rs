@@ -229,9 +229,8 @@ fn show_window<R>(
     let scale = monitors
         .iter()
         .find(|m| m.contains(centre.x, centre.y))
-        .map(|m| m.scale)
-        .filter(|s| *s > 0.0)
-        .unwrap_or(ppp / zoom.max(0.1));
+        .map(|m| m.desktop_scale())
+        .unwrap_or_else(|| window::desktop_scale(ppp / zoom.max(0.1)));
     let own_ppp = scale * zoom;
     let wanted = match st.content {
         Some(c) => vec2(c.x.max(min_width), c.y.min(max_height)),

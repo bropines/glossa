@@ -128,7 +128,7 @@ pub fn on_selection(app: &mut GlossaApp, text: String, cursor: Option<(i32, i32)
         }
         MouseBehaviour::ShowIcon => {
             let (x, y) = cursor.or_else(glossa_platform::window::cursor_position).unwrap_or((200, 200));
-            let scale = glossa_platform::window::monitor_at(x, y).map(|m| m.scale).filter(|s| *s > 0.0).unwrap_or(1.0);
+            let scale = glossa_platform::window::monitor_at(x, y).map(|m| m.desktop_scale()).unwrap_or(1.0);
             let pos = egui::pos2((x as f32 + 12.0 * scale) / scale, (y as f32 + 8.0 * scale) / scale);
             app.mouse_icon = Some(MouseIcon { text, cursor, pos, shown: Instant::now() });
             app.ctx.request_repaint();
