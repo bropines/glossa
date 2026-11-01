@@ -36,6 +36,7 @@ data: /home/me/.config/glossa  (portable: false)
 | `themes/` | data | Your themes, `.toml` or `.json` ([theming.md](theming.md)). |
 | `locales/` | data | Interface languages and rewordings ([below](#interface-languages)). |
 | `modules/` | data | Your modules ([modules/README.md](modules/README.md)). |
+| `remote-desktop-token` | data | Wayland only: the desktop's permission for Glossa to copy and paste through the RemoteDesktop portal, so it asks once. Delete it, or revoke the permission in the desktop's settings, to be asked again. |
 | `glossa.log` | cache | The desktop program's log. `GLOSSA_LOG` sets how much goes into it ([cli.md](cli.md#environment-variables)). |
 | `modules/` | cache | Module caches; unpacked pot-app `.potext` archives under `modules/potext/`. |
 | `oneocr/` | cache | The OneOCR engine's libraries, copied from the Snipping Tool ([ocr.md](ocr.md)). |
@@ -59,10 +60,13 @@ win over shipped ones of the same name.
   used are ignored like unknown ones, and dropped at the next save.
 - **Out-of-range numbers are pulled into range** when the file is read (the
   ranges are in the tables below), so a hand edit cannot break the program.
-- **A malformed file is an error**, not a silent reset: a syntax error, or a
-  value of the wrong type (`timeout_secs = "ten"`), stops the program from
-  starting with a message naming the line. Your settings are never replaced
-  with defaults behind your back.
+- **A malformed file is set aside, not lost**: on a syntax error, or a
+  value of the wrong type (`timeout_secs = "ten"`), the desktop program and
+  the commands that start the engine move the file to
+  `config.toml.broken-<unix seconds>` beside it, start with the defaults,
+  and say so once, naming the line. Fix the copy and rename it back while
+  Glossa is not running. `glossa-cli config show` reports the error
+  without moving anything.
 - **The program rewrites the whole file** when it saves: comments and key
   order are not kept, and every key is written out with its value. Writes go
   to `config.toml.tmp` first and then replace the file, so a crash cannot
@@ -116,8 +120,8 @@ installation) but nothing reads it yet.
 | `minimize_to_tray_on_minimize` | bool | `false` | main window menu | Minimising the main window hides it in the tray. |
 | `minimize_to_tray_on_close` | bool | `true` | main window menu | Closing the main window hides it in the tray instead of quitting (when there is a tray). |
 | `startup_action` | `"show_window"`, `"minimize_to_tray"`, `"restore_previous"` | `"minimize_to_tray"` | main window menu, *On start-up* | What the program shows when it starts. `--hidden` overrides it. |
-| `show_tray_hint` | bool | `true` for a new configuration, `false` when the key is missing from an existing file | the note's *Got it* button | While on, the main window opens at start with a note that Glossa lives in the tray (the menu bar on macOS) and which hotkey translates a selection. *Got it* turns it off. A file written before the note existed reads as off, so only a first run sees it. |
-| `show_welcome` | bool | `true` for a new configuration, `false` when the key is missing from an existing file | the welcome guide's *Finish*; *Options → Basics → Show the welcome guide* turns it back on | Show the welcome guide at start: what Glossa is, its hotkeys, how to use it, and where to keep keys and data. |
+| `show_tray_hint` | bool | `true` for a new configuration, `false` when the key is missing from an existing file | the note's *Got it* button; finishing the welcome guide also turns it off | While on, the main window opens at start with a note that Glossa lives in the tray (the menu bar on macOS) and which hotkey translates a selection. *Got it* turns it off. A file written before the note existed reads as off, so only a first run sees it. |
+| `show_welcome` | bool | `true` for a new configuration, `false` when the key is missing from an existing file | the welcome guide's *Finish* or *Skip*; *Options → Basics → Show the welcome guide* opens it again | Show the welcome guide at start: what Glossa is, its hotkeys, how to use it, and where to keep keys and data. |
 | `secret_storage` | `"file"`, `"system"` | `"file"` | *Options → Basics*, the welcome guide | Where API keys (`services.options`, AI endpoints included), the proxy password and the Lens token are kept. `"system"` puts each in the system keychain (Windows Credential Manager, the macOS Keychain, the Secret Service on Linux) and this file keeps `"@system-keychain"` in its place. Where no keychain answers (a Linux session without one), they stay in the file. |
 
 A language pair (`pair`, each item of `recent_pairs`) has two keys, `from`
@@ -159,7 +163,7 @@ recognize_to_clipboard = "Ctrl+Alt+C"    # Windows: Win+Alt+C
 show_main_window = "Ctrl+Alt+Q"          # Windows: Win+Alt+Q
 ```
 
-These five are the defaults of a new config (on macOS, Ctrl+Alt is
+These six are the defaults of a new config (on macOS, Ctrl+Alt is
 Control+Option). They differ by system because Windows reports AltGr as
 Ctrl+Alt: a Ctrl+Alt+letter hotkey there would swallow AltGr+letter, which
 types `@` on German keyboards and ó or ć on Polish ones. "Listen" has no
@@ -190,7 +194,7 @@ programs cannot register global hotkeys, bind keys to the
 | `host` | string | `"127.0.0.1"` | Options → Internet | The proxy's address, with `manual`. Empty means no proxy. |
 | `port` | integer | `8080` | Options → Internet | 1–65535. |
 | `username` | string | `""` | Options → Internet | Leave empty for a proxy without a login. |
-| `password` | string | `""` | Options → Internet | Stored in plain text. |
+| `password` | string | `""` | Options → Internet | Stored in plain text, unless [`[general] secret_storage`](#general) is `"system"`. |
 
 Requests to `localhost` and `127.0.0.1` never go through the proxy.
 
@@ -226,8 +230,11 @@ api_key = "…"
 url = "http://localhost:5000"
 ```
 
-A key that is absent takes the service's default. Keys are stored in plain
-text; keep the data folder private.
+A key that is absent takes the service's default. API keys and other
+secret options are stored in plain text unless
+[`[general] secret_storage`](#general) is `"system"`, in which case the file
+holds `"@system-keychain"` in their place; with the file, keep the data
+folder private.
 
 ### `[[services.ai_endpoints]]`
 
@@ -408,7 +415,7 @@ Set in *Options → Text recognition → Google Lens*.
 |---|---|---|---|
 | `mode` | `"auto"`, `"native"`, `"daemon"`, `"cli"` | `"auto"` | `auto`: a running chrome-lens-py daemon when there is one (it keeps a warm connection to Google), else the built-in client. `native`: the built-in client only, no Python needed. `daemon`: a chrome-lens-py daemon only. `cli`: chrome-lens-py's `lens_scan` once per image. |
 | `endpoint` | string | `""` | A daemon URL to use instead of finding one (`http://127.0.0.1:8765`). |
-| `token` | string | `""` | Bearer token for `endpoint`. |
+| `token` | string | `""` | Bearer token for `endpoint`. Kept in the system keychain with `secret_storage = "system"`. |
 | `cli_path` | string | `""` | The `lens_scan` executable, if it is not on `PATH`. |
 
 ### `[ocr.oneocr]`

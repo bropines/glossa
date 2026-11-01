@@ -60,7 +60,10 @@ each under its own license:
     audio playback for text to speech. Symphonia is used unmodified; its
     source is at https://github.com/pdeljanov/Symphonia.
   image, tiny_http and flate2 (MIT OR Apache-2.0), zip (MIT) and libloading
-    (ISC); on Linux enigo (MIT), on Windows xcap (Apache-2.0).
+    (ISC); on Linux enigo (MIT), on Windows and macOS xcap (Apache-2.0).
+  On Linux, zbus (MIT): D-Bus and the desktop portals; spellbook
+    (MPL-2.0): Hunspell dictionaries for spell checking, used unmodified,
+    source at https://github.com/helix-editor/spellbook.
 
 The full list, with versions, is in Cargo.lock; each crate's license file
 ships with its source on crates.io.
@@ -68,9 +71,11 @@ ships with its source on crates.io.
 Google Lens
 -----------
 
-Text recognition through Google Lens is provided by chrome-lens-py
-(https://github.com/bropines/chrome-lens-py, MIT, by the same author), a
-separate program the user installs; Glossa runs it and does not include it.
+Glossa talks to Google Lens itself, through chrome-lens-rs (above).
+chrome-lens-py (https://github.com/bropines/chrome-lens-py, MIT, by the same
+author) is an optional, separate program: when the user has installed it,
+Glossa can use its daemon or command line instead. Glossa does not include
+it.
 Google and Google Lens are trademarks of Google LLC. Glossa is not affiliated
 with Google or with any other translation service it can call; the services'
 own terms apply to their use.

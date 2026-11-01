@@ -36,6 +36,9 @@ for Windows, macOS and Linux.
   recognition and translation need no Python or chrome-lens-py any more. A
   running chrome-lens-py daemon is still used when there is one
   (`ocr.lens.mode = "auto"`); `"native"` uses the built-in client only.
+  After a network error or a 429, 500, 502, 503 or 504 answer the request
+  is tried again twice, with backoff or after the server's `Retry-After`,
+  and at most two Lens requests run at once.
 - **Translate the whole screen in place** (Ctrl+Alt+S, Windows: Win+Alt+S):
   the monitor under the pointer is recognised and every text on it is
   translated where it is, over a still of the screen, with no region to
@@ -101,9 +104,7 @@ for Windows, macOS and Linux.
   "Yandex Cloud (API key)" and "DeepL API (key)".
 - **Text recognition**: drag over a screen region to copy or translate its
   text, repeat the last region, or watch a region and re-translate when it
-  changes. Google Lens through
-  [chrome-lens-py](https://github.com/bropines/chrome-lens-py) (its warm
-  daemon, else its CLI), or any external command.
+  changes. Google Lens (built in, see above), or any external command.
 - **OCR to the clipboard, discoverable**: *Copy text from the screen*
   (Ctrl+Alt+C) closes the overlay at once and copies the text, with a notice
   by the region that takes no focus ("Copied N characters" and a preview).
@@ -147,8 +148,9 @@ for Windows, macOS and Linux.
   install instructions for a missing program or language). Both have their
   own section in *Options → Text recognition*.
 - **OCR fail-over reaches an offline engine** when the chosen one is not
-  installed (Lens without chrome-lens-py): Windows OCR, Apple Vision or
-  Tesseract, in that order of availability. OneOCR is never a fallback.
+  installed or cannot be reached (Lens without a network): Windows OCR,
+  Apple Vision or Tesseract, in that order of availability. OneOCR and AI
+  endpoints are never a fallback.
 - **macOS builds** in CI and the release: `Glossa.app` (a menu-bar app) and
   `glossa-cli`, for Apple silicon and as a universal binary; not notarised
   (the README's macOS section says how to open it the first time).
@@ -322,7 +324,7 @@ for Windows, macOS and Linux.
   macOS, fontconfig on Linux), listed once on a worker.
 - A one-line explanation under the Advanced options, the renderer, the
   popup shade and the mouse mode switches.
-- Licenses (MIT or Apache-2.0), NOTICE, CI on Linux and Windows, release
+- Licenses (MIT or Apache-2.0), NOTICE, CI on Linux, macOS and Windows, release
   builds, issue templates, contributing and security guides.
 - `glossa-cli doctor` (and `--json`): the session, which desktop features
   work there and its limitations, macOS permissions, installed OCR engines,
@@ -348,7 +350,6 @@ for Windows, macOS and Linux.
   them in Russian with the Russian interface (a `languages` table in the
   native locale format, complete for the built-in Russian pack), with each
   language's own name beside it; a search finds any of the names.
-- Problems found at start-up (a `config.toml` that could not be read) are shown once.
 - **D-Bus service** on Linux and the BSDs: `io.github.bropines.Glossa` on
   the session bus (`/io/github/bropines/Glossa`, interface
   `io.github.bropines.Glossa1`) with `Action`, `Translate`, `ShowPopup`,
@@ -438,7 +439,6 @@ for Windows, macOS and Linux.
 - Corners follow the theme: text panes, cards, history rows, notices and the
   popup (where its window can be see-through) use its radii, and dropdown
   windows get the system's rounded corners on Windows 11.
-
 - Classic themes such as Metro left the options window without visible
   labels: their `Window.Text` is the caption's (white on a blue caption)
   and was used on the white body. Labels now take the theme's other text
@@ -450,7 +450,6 @@ for Windows, macOS and Linux.
 - Window transparency works under the GPU and software engines (a
   DirectComposition swap chain on Windows) and in the other windows, not
   only the main one.
-
 - Windows opened while the main window was hidden (popup, OCR overlay,
   options from a hotkey or the tray) made egui panic; eframe is vendored with
   a fix (`third_party/README.md`).
@@ -561,7 +560,7 @@ for Windows, macOS and Linux.
   socket (Linux, macOS) carry the hand-over, with the API as a fallback.
 - A `config.toml` that does not parse no longer stops the program: it is
   moved to `config.toml.broken-<time>`, the defaults are used, and the
-  engine reports it once (`Engine::startup_warnings`).
+  program says so once (`Engine::startup_warnings`).
 - Default hotkeys: no default for "listen" (Ctrl+E is the browser's search
   box and end-of-line in shells and macOS text fields), and on Windows
   Win+Alt instead of Ctrl+Alt, which AltGr sends (Ctrl+Alt+Q swallowed `@`
@@ -571,6 +570,8 @@ for Windows, macOS and Linux.
 
 ### Known gaps
 
+- Linux builds pass the automated tests but have not been tried on a real
+  Linux desktop yet: treat Linux support as experimental.
 - Speech input and the update check are not implemented yet.
 - On Wayland, mouse mode and reading the selection depend on the
   compositor, and global hotkeys need the GlobalShortcuts portal; without
