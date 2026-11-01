@@ -2156,7 +2156,7 @@ dependencies = [
 
 [[package]]
 name = "glossa-cli"
-version = "0.1.0-beta.1"
+version = "0.1.0-beta.2"
 dependencies = [
  "glossa-core",
  "glossa-dict",
@@ -2172,7 +2172,7 @@ dependencies = [
 
 [[package]]
 name = "glossa-core"
-version = "0.1.0-beta.1"
+version = "0.1.0-beta.2"
 dependencies = [
  "dirs",
  "serde",
@@ -2186,7 +2186,7 @@ dependencies = [
 
 [[package]]
 name = "glossa-dict"
-version = "0.1.0-beta.1"
+version = "0.1.0-beta.2"
 dependencies = [
  "flate2",
  "glossa-core",
@@ -2199,7 +2199,7 @@ dependencies = [
 
 [[package]]
 name = "glossa-engine"
-version = "0.1.0-beta.1"
+version = "0.1.0-beta.2"
 dependencies = [
  "base64 0.22.1",
  "blocking",
@@ -2220,7 +2220,7 @@ dependencies = [
 
 [[package]]
 name = "glossa-example-lines"
-version = "0.1.0-beta.1"
+version = "0.1.0-beta.2"
 dependencies = [
  "glossa-module-sdk",
  "serde_json",
@@ -2228,7 +2228,7 @@ dependencies = [
 
 [[package]]
 name = "glossa-example-rot13"
-version = "0.1.0-beta.1"
+version = "0.1.0-beta.2"
 dependencies = [
  "glossa-module-sdk",
  "serde_json",
@@ -2236,7 +2236,7 @@ dependencies = [
 
 [[package]]
 name = "glossa-lens"
-version = "0.1.0-beta.1"
+version = "0.1.0-beta.2"
 dependencies = [
  "chrome_lens_ocr",
  "image",
@@ -2245,7 +2245,7 @@ dependencies = [
 
 [[package]]
 name = "glossa-module-sdk"
-version = "0.1.0-beta.1"
+version = "0.1.0-beta.2"
 dependencies = [
  "base64 0.22.1",
  "serde",
@@ -2254,7 +2254,7 @@ dependencies = [
 
 [[package]]
 name = "glossa-modules"
-version = "0.1.0-beta.1"
+version = "0.1.0-beta.2"
 dependencies = [
  "base64 0.22.1",
  "boa_engine",
@@ -2279,7 +2279,7 @@ dependencies = [
 
 [[package]]
 name = "glossa-net"
-version = "0.1.0-beta.1"
+version = "0.1.0-beta.2"
 dependencies = [
  "base64 0.22.1",
  "glossa-core",
@@ -2294,7 +2294,7 @@ dependencies = [
 
 [[package]]
 name = "glossa-ocr"
-version = "0.1.0-beta.1"
+version = "0.1.0-beta.2"
 dependencies = [
  "ab_glyph",
  "base64 0.22.1",
@@ -2317,7 +2317,7 @@ dependencies = [
 
 [[package]]
 name = "glossa-platform"
-version = "0.1.0-beta.1"
+version = "0.1.0-beta.2"
 dependencies = [
  "arboard",
  "async-io",
@@ -2347,7 +2347,7 @@ dependencies = [
 
 [[package]]
 name = "glossa-services"
-version = "0.1.0-beta.1"
+version = "0.1.0-beta.2"
 dependencies = [
  "base64 0.22.1",
  "glossa-core",
@@ -2362,7 +2362,7 @@ dependencies = [
 
 [[package]]
 name = "glossa-ui-egui"
-version = "0.1.0-beta.1"
+version = "0.1.0-beta.2"
 dependencies = [
  "eframe",
  "egui",

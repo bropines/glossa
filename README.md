@@ -73,7 +73,7 @@
   </tr>
 </table>
 
-> **Beta.** Glossa 0.1.0-beta.1 is the first public build. The downloads
+> **Beta.** Glossa 0.1.0-beta.2 is the second public build. The downloads
 > are not signed yet, so Windows and macOS warn on the first launch
 > ([how to open them](docs/install.md)). Windows is used daily, macOS is in
 > early testing, and Linux has not been tried on real hardware yet.

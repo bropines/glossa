@@ -7,6 +7,8 @@ the notes of its GitHub release.
 
 ## [Unreleased]
 
+## [0.1.0-beta.2] - 2026-11-02
+
 ### Added
 
 - **Support the project**: a link to the author's Boosty page in the About
@@ -20,6 +22,7 @@ the notes of its GitHub release.
   none of which can match on a Mac, where only the app is known. The list
   starts empty there (an untouched Windows list from an earlier build is
   cleared), and the class column, its field and smart detection are hidden.
+- The About window no longer leaves an empty band under its last button.
 
 ## [0.1.0-beta.1] - 2026-11-01
 
