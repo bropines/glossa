@@ -111,6 +111,7 @@ mod sys {
     }
 
     pub(super) fn installed_languages() -> Vec<String> {
+        crate::winimage::keep_mta();
         OcrEngine::AvailableRecognizerLanguages()
             .map(|v| v.into_iter().filter_map(|l| l.LanguageTag().ok()).map(|t| t.to_string()).collect())
             .unwrap_or_default()

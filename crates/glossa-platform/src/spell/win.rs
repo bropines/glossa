@@ -30,6 +30,7 @@ struct Com {
 
 impl Com {
     fn init() -> Com {
+        crate::uia::keep_mta();
         // SAFETY: initialising COM on the current thread; S_FALSE (already
         // initialised) still needs a matching CoUninitialize, while
         // RPC_E_CHANGED_MODE (already an STA) must not get one.

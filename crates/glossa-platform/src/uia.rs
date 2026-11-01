@@ -27,6 +27,7 @@ struct Com {
 
 impl Com {
     fn init() -> Com {
+        keep_mta();
         // SAFETY: initialising COM on the current thread; S_FALSE (already
         // initialised) still needs a matching CoUninitialize, while
         // RPC_E_CHANGED_MODE (already an STA) must not get one.
@@ -43,6 +44,22 @@ impl Drop for Com {
             unsafe { CoUninitialize() };
         }
     }
+}
+
+/// Keep the process's multithreaded apartment alive for good, once. WinRT
+/// caches its class factories process-wide; when the last thread in the MTA
+/// leaves it (a guard's CoUninitialize), the MTA and the objects in it go,
+/// and the next call through a cached factory crashes. A permanent MTA usage
+/// count keeps them valid whatever threads come and go.
+pub(crate) fn keep_mta() {
+    static ONCE: std::sync::Once = std::sync::Once::new();
+    ONCE.call_once(|| {
+        // SAFETY: no arguments to get wrong; the cookie is deliberately never
+        // given back (CoDecrementMTAUsage), which is what keeps the MTA.
+        if let Err(e) = unsafe { windows::Win32::System::Com::CoIncrementMTAUsage() } {
+            tracing::debug!("CoIncrementMTAUsage: {e}");
+        }
+    });
 }
 
 /// What UI Automation says about the focused element: its class (a Win32

@@ -136,6 +136,7 @@ struct Apartment {
 
 impl Apartment {
     fn enter() -> Apartment {
+        keep_mta();
         // S_OK and S_FALSE both need a matching CoUninitialize; failure (the
         // thread is already single-threaded) needs none and WinRT still works.
         let joined = unsafe { CoInitializeEx(None, COINIT_MULTITHREADED) }.is_ok();
@@ -149,6 +150,22 @@ impl Drop for Apartment {
             unsafe { CoUninitialize() };
         }
     }
+}
+
+/// Keep the process's multithreaded apartment alive for good, once. WinRT
+/// caches its class factories process-wide; when the last thread in the MTA
+/// leaves it (a guard's CoUninitialize), the MTA and the objects in it go,
+/// and the next call through a cached factory crashes. A permanent MTA usage
+/// count keeps them valid whatever threads come and go.
+fn keep_mta() {
+    static ONCE: std::sync::Once = std::sync::Once::new();
+    ONCE.call_once(|| {
+        // SAFETY: no arguments to get wrong; the cookie is deliberately never
+        // given back (CoDecrementMTAUsage), which is what keeps the MTA.
+        if let Err(e) = unsafe { windows::Win32::System::Com::CoIncrementMTAUsage() } {
+            tracing::debug!("CoIncrementMTAUsage: {e}");
+        }
+    });
 }
 
 #[cfg(test)]

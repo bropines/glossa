@@ -198,3 +198,16 @@ mod tests {
         assert_eq!(OcrConfig::default().provider, ids[0], "the default provider exists");
     }
 }
+
+/// WinRT through a cached factory, after a COM apartment came and went on
+/// the same thread (as glossa-cli doctor does): this crashed the process
+/// before the MTA was kept alive (`winimage::keep_mta`).
+#[cfg(all(test, windows))]
+mod com_lifetime {
+    #[test]
+    fn winrt_still_works_after_an_apartment_comes_and_goes() {
+        let before = crate::winocr::installed_languages();
+        drop(crate::winimage::Apartment::enter());
+        assert_eq!(crate::winocr::installed_languages(), before);
+    }
+}
