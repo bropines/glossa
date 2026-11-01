@@ -350,7 +350,10 @@ mod tests {
         })));
         let p = r.get("boom").unwrap();
         let http = glossa_net::mock::MockHttp::new();
-        let req = glossa_core::TranslateRequest::new("hi", glossa_core::LangPair::new(glossa_core::LangId::AUTO, glossa_core::LangId::ENGLISH));
+        let req = glossa_core::TranslateRequest::new(
+            "hi",
+            glossa_core::LangPair::new(glossa_core::LangId::AUTO, glossa_core::LangId::ENGLISH),
+        );
         let err = crate::provider::with_test_host(&http, &Default::default(), |h| p.translate(h, &req)).unwrap_err();
         match err {
             glossa_core::Error::Module { module, detail } => {

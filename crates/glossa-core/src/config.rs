@@ -1062,9 +1062,10 @@ impl Advanced {
                 continue;
             }
             for rule in rules.iter().map(TerminalRule::rule) {
-                let present = self.terminals.iter().any(|r| {
-                    r.program.eq_ignore_ascii_case(&rule.program) && r.window_class == rule.window_class
-                });
+                let present = self
+                    .terminals
+                    .iter()
+                    .any(|r| r.program.eq_ignore_ascii_case(&rule.program) && r.window_class == rule.window_class);
                 if !present {
                     self.terminals.push(rule);
                 }
@@ -1783,7 +1784,9 @@ copy_joined_lines = true",
         assert!(a.is_terminal("MINTTY.EXE", &["mintty", "", ""]), "program names ignore case");
         assert!(a.is_terminal("conhost.exe", &["ConsoleWindowClass"]));
         // VS Code: only its terminal, which UI Automation names by xterm.js's class.
-        assert!(a.is_terminal("Code.exe", &["Chrome_WidgetWin_1", "Chrome_RenderWidgetHostHWND", "xterm-helper-textarea"]));
+        assert!(
+            a.is_terminal("Code.exe", &["Chrome_WidgetWin_1", "Chrome_RenderWidgetHostHWND", "xterm-helper-textarea"])
+        );
         assert!(!a.is_terminal("Code.exe", &["Chrome_WidgetWin_1", "Chrome_RenderWidgetHostHWND", "inputarea"]));
         assert!(!a.is_terminal("notepad.exe", &["Notepad", "Edit", ""]));
         assert!(!a.is_terminal("", &["", "", ""]));

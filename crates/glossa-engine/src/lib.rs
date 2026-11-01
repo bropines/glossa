@@ -26,8 +26,8 @@ use std::sync::mpsc::{self, Receiver, Sender};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use glossa_core::error::catch_panic;
 use glossa_core::config::OcrTranslateWith;
+use glossa_core::error::catch_panic;
 use glossa_core::history::{HistoryEntry, HistoryResult};
 use glossa_core::ocr::{ImageSource, OcrGranularity, OcrRequest};
 use glossa_core::{

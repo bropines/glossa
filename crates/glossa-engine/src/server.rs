@@ -680,14 +680,18 @@ mod tests {
     fn health_is_open_and_everything_else_needs_the_token() {
         let (e, dir) = engine();
         let server = start(e.clone()).unwrap();
-        let (status, body) = request(server.addr, "GET /health HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: close\r\n\r\n");
+        let (status, body) =
+            request(server.addr, "GET /health HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: close\r\n\r\n");
         assert_eq!(status, 200);
         assert!(body.contains("\"glossa\""));
 
-        let (status, _) = request(server.addr, "GET /v1/services HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: close\r\n\r\n");
+        let (status, _) =
+            request(server.addr, "GET /v1/services HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: close\r\n\r\n");
         assert_eq!(status, 401);
-        let (status, body) =
-            request(server.addr, "GET /v1/services?token=secret HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: close\r\n\r\n");
+        let (status, body) = request(
+            server.addr,
+            "GET /v1/services?token=secret HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: close\r\n\r\n",
+        );
         assert_eq!(status, 200);
         assert!(body.contains("\"google\""));
         let (status, _) = request(
@@ -842,7 +846,9 @@ mod tests {
             // The token does not make a browser request acceptable either.
             let (status, _) = request(
                 server.addr,
-                &format!("GET /v1/services?token=secret HTTP/1.1\r\nHost: 127.0.0.1\r\n{extra}Connection: close\r\n\r\n"),
+                &format!(
+                    "GET /v1/services?token=secret HTTP/1.1\r\nHost: 127.0.0.1\r\n{extra}Connection: close\r\n\r\n"
+                ),
             );
             assert_eq!(status, 403, "{extra}");
         }
@@ -854,7 +860,13 @@ mod tests {
         let (e, dir) = engine();
         let server = start(e).unwrap();
         let port = server.addr.port();
-        for host in ["127.0.0.1".to_owned(), format!("127.0.0.1:{port}"), format!("localhost:{port}"), "LOCALHOST".into(), format!("[::1]:{port}")] {
+        for host in [
+            "127.0.0.1".to_owned(),
+            format!("127.0.0.1:{port}"),
+            format!("localhost:{port}"),
+            "LOCALHOST".into(),
+            format!("[::1]:{port}"),
+        ] {
             let (status, _) = request(
                 server.addr,
                 &format!("GET /v1/services?token=secret HTTP/1.1\r\nHost: {host}\r\nConnection: close\r\n\r\n"),
@@ -918,13 +930,17 @@ mod tests {
     fn a_wrong_method_is_405_with_allow() {
         let (e, dir) = engine();
         let server = start(e).unwrap();
-        let out =
-            raw(server.addr, "DELETE /v1/translate?token=secret HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: close\r\n\r\n");
+        let out = raw(
+            server.addr,
+            "DELETE /v1/translate?token=secret HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: close\r\n\r\n",
+        );
         assert!(out.starts_with("HTTP/1.1 405"), "{out}");
         assert!(out.lines().any(|l| l.eq_ignore_ascii_case("allow: GET, POST")), "{out}");
-        let out = raw(server.addr, "GET /v1/speak?token=secret HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: close\r\n\r\n");
+        let out =
+            raw(server.addr, "GET /v1/speak?token=secret HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: close\r\n\r\n");
         assert!(out.starts_with("HTTP/1.1 405") && out.contains("Allow: POST"), "{out}");
-        let out = raw(server.addr, "GET /translate?token=secret HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: close\r\n\r\n");
+        let out =
+            raw(server.addr, "GET /translate?token=secret HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: close\r\n\r\n");
         assert!(out.starts_with("HTTP/1.1 405"), "{out}");
         assert_eq!(call(server.addr, "GET", "/v1/nothing?token=secret", "").0, 404);
         std::fs::remove_dir_all(&dir).ok();

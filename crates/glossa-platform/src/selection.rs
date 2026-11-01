@@ -99,8 +99,7 @@ pub fn capture_selection(opts: &CaptureOptions) -> Result<Option<String>> {
             return Ok(None);
         }
         let win = crate::window::foreground_window().unwrap_or_default();
-        let action =
-            opts.copy_action_for(&win.process_name, &[&win.class_name, &win.focus_class, &focused.class]);
+        let action = opts.copy_action_for(&win.process_name, &[&win.class_name, &win.focus_class, &focused.class]);
         if action == CopyAction::AccessibilityOnly {
             tracing::debug!(program = %win.process_name, class = %win.class_name, uia_class = %focused.class,
                 "a terminal: no copy keystroke (Ctrl+C would interrupt it)");
