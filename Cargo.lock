@@ -815,7 +815,7 @@ dependencies = [
 [[package]]
 name = "chrome_lens_ocr"
 version = "0.4.0"
-source = "git+https://github.com/bropines/chrome-lens-rs?rev=c918f9dec5bb141558ba2bb2ee989711c726b445#c918f9dec5bb141558ba2bb2ee989711c726b445"
+source = "git+https://github.com/bropines/chrome-lens-rs?rev=2d96e6a2058c16b909552b322930df53ee9a5aeb#2d96e6a2058c16b909552b322930df53ee9a5aeb"
 dependencies = [
  "anyhow",
  "image",

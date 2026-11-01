@@ -629,6 +629,11 @@ mod native {
                                 Vec::new()
                             };
                             let mut line = node(OcrLevel::Line, l.text.clone(), &l.geometry, kids);
+                            // A line's part ends in the separator that joins it to
+                            // the next (so the parts add up to the paragraph's
+                            // translation). Each line is painted alone and its
+                            // font fitted to its box, where a trailing space
+                            // would only shrink the text.
                             line.translation =
                                 l.translation.as_deref().map(str::trim).filter(|s| !s.is_empty()).map(str::to_owned);
                             line

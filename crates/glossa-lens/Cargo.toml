@@ -13,7 +13,7 @@ authors.workspace = true
 # request Chromium sends, the reply. Without its `client` feature it brings no
 # HTTP stack of its own (Glossa sends through ureq), and without
 # `extra-formats` no image decoders beyond Glossa's.
-chrome_lens_ocr = { git = "https://github.com/bropines/chrome-lens-rs", rev = "c918f9dec5bb141558ba2bb2ee989711c726b445", default-features = false }
+chrome_lens_ocr = { git = "https://github.com/bropines/chrome-lens-rs", rev = "2d96e6a2058c16b909552b322930df53ee9a5aeb", default-features = false }
 image = { workspace = true }
 
 [dev-dependencies]
