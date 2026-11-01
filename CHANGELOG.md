@@ -339,6 +339,14 @@ for Windows, macOS and Linux.
 
 ### Fixed
 
+- A hotkey with Shift and a digit or symbol (Ctrl+Shift+1) could not be
+  set: the field took the character Shift makes ("!"), which names no
+  key. It now takes the key itself, whatever Shift or the layout makes it
+  type. Hotkeys show the system's names for the modifiers (Cmd and Option
+  on macOS, Win on Windows, Super on Linux); the settings file is
+  unchanged.
+- Every open child window redrew its icon and handed it to the system on
+  every frame.
 - AI endpoints: a model that does not take the reasoning level set for the
   endpoint (Gemini 3.8 Flash refuses "minimal") failed every request; it
   is now asked again without it, and the model is remembered. The Gemini

@@ -60,6 +60,21 @@ pub struct Shell {
     /// own names (Mica, Acrylic…) there and on Linux, the vibrancy
     /// materials they become on macOS.
     pub backdrop_names: BackdropNames,
+    /// What the modifier keys are called on this system's keyboards, for
+    /// showing a hotkey (the settings file keeps `Ctrl`, `Alt`, `Shift`,
+    /// `Meta` everywhere).
+    pub modifier_names: ModifierNames,
+}
+
+/// Names of the modifier keys, in the order a hotkey shows them (the order
+/// Apple and Microsoft both use: Control, Alt or Option, Shift, then the
+/// Command, Windows or Super key). See [`Shell::modifier_names`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ModifierNames {
+    pub ctrl: &'static str,
+    pub alt: &'static str,
+    pub shift: &'static str,
+    pub meta: &'static str,
 }
 
 /// Locale keys for the backdrop choices and the hint under the backdrop
@@ -122,6 +137,17 @@ mod tests {
         assert_eq!(SHELL.own_frame, !mac);
         assert_eq!(SHELL.command_is_ctrl, !mac);
         assert_eq!(SHELL.command_key, if mac { "Cmd" } else { "Ctrl" });
+        assert_eq!(
+            SHELL.modifier_names.meta,
+            if mac {
+                "Cmd"
+            } else if cfg!(windows) {
+                "Win"
+            } else {
+                "Super"
+            }
+        );
+        assert_eq!(SHELL.modifier_names.alt, if mac { "Option" } else { "Alt" });
         assert_eq!(SHELL.backdrop_names, if mac { MAC_BACKDROP_NAMES } else { WINDOWS_BACKDROP_NAMES });
     }
 

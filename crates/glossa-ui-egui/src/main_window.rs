@@ -157,7 +157,7 @@ fn banners(app: &mut GlossaApp, ui: &mut egui::Ui) {
 fn tray_hint(app: &GlossaApp) -> String {
     let hotkey = app.cfg.hotkeys.bindings.get(&Action::ShowPopup).filter(|_| app.cfg.hotkeys.enabled);
     match hotkey {
-        Some(h) => app.locale.fmt("main.tray_hint", &h.to_string()),
+        Some(h) => app.locale.fmt("main.tray_hint", &crate::widgets::hotkey_label(h)),
         None => app.t("main.tray_hint_no_hotkey"),
     }
 }
@@ -275,7 +275,7 @@ fn ocr_menu(app: &mut GlossaApp, ui: &mut egui::Ui) {
         (Action::RepeatLastRecognition, "ocr.menu.repeat"),
     ];
     for (action, key) in items {
-        let shortcut = app.cfg.hotkeys.bindings.get(&action).map(|h| h.to_string()).unwrap_or_default();
+        let shortcut = app.cfg.hotkeys.bindings.get(&action).map(crate::widgets::hotkey_label).unwrap_or_default();
         if ui.add(egui::Button::new(app.t(key)).shortcut_text(shortcut)).clicked() {
             ui.close();
             app.perform(action, None);
