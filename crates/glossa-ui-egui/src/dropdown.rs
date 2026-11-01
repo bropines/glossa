@@ -50,8 +50,11 @@ struct State {
     seeded: bool,
     /// The fallback popup's rectangle last frame, in the parent's points.
     area: Option<Rect>,
-    #[cfg_attr(not(windows), allow(dead_code))]
+    /// The list's own window, once found by its title.
     hwnd: Option<isize>,
+    /// The system rounds that window's corners (macOS, [`round_window`]):
+    /// the frame drawn in it is rounded the same so its border follows.
+    rounded: bool,
     /// Frames in a row the window has not had the size asked for.
     resizing: u8,
     /// Opened for a window that does not keep the keyboard focus (the
@@ -408,6 +411,7 @@ fn show_window<R>(
     // is drawn the first time.
     let (mut add, mut forwarded) = (Some(add), Some(forwarded));
     let seed = st.shown && !st.seeded;
+    let rounded = st.rounded;
     let mut seeded = false;
     ctx.show_viewport_immediate(viewport, builder, |ui, _class| {
         focused = ui.input(|i| i.focused);
@@ -424,7 +428,7 @@ fn show_window<R>(
         actual = ui.input(|i| i.viewport().inner_rect.map(|r| r.size()));
         let Some(add) = add.take() else { return };
         egui::CentralPanel::no_frame().show(ui, |ui| {
-            let (r, content, closing) = body(ui, true, size.x - 2.0 * EDGE, max_height, settling, add);
+            let (r, content, closing) = body(ui, true, rounded, size.x - 2.0 * EDGE, max_height, settling, add);
             result = Some(r);
             measured = Some(content);
             close_now |= closing;
@@ -468,8 +472,10 @@ fn show_window<R>(
             tracing::debug!(age = st.age, ms, "dropdown window shown");
         }
     }
-    let border = ctx.global_style().visuals.window_stroke.color;
+    let visuals = ctx.global_style().visuals.clone();
+    let border = visuals.window_stroke.color;
     keep_from_activating(st, &title, (border.r(), border.g(), border.b()));
+    round_window(st, &title, visuals.menu_corner_radius.nw as f32);
     (result, close_now, focused)
 }
 
@@ -521,6 +527,21 @@ fn keep_from_activating(st: &mut State, title: &str, border: (u8, u8, u8)) {
 #[cfg(not(windows))]
 fn keep_from_activating(_: &mut State, _: &str, _: (u8, u8, u8)) {}
 
+/// Round the list window's corners as the theme rounds menus, where the
+/// system does not (macOS; `window::round_corners` does nothing elsewhere,
+/// and Windows 11 rounds it in `keep_from_activating`).
+fn round_window(st: &mut State, title: &str, radius: f32) {
+    if st.rounded || radius <= 0.0 {
+        return;
+    }
+    if st.hwnd.is_none() {
+        st.hwnd = window::own_window_by_title(title);
+    }
+    if let Some(w) = st.hwnd {
+        st.rounded = window::round_corners(w, radius);
+    }
+}
+
 /// The fallback: an ordinary popup inside the window.
 fn show_area<R>(
     ctx: &Context,
@@ -544,7 +565,7 @@ fn show_area<R>(
         // The frame goes inside this width: asking for the content's width
         // here let the area settle that much narrower than the control.
         ui.set_min_width((width + 2.0 * EDGE).max(0.0));
-        out = Some(body(ui, false, width.max(1.0), max_height, settling, add));
+        out = Some(body(ui, false, false, width.max(1.0), max_height, settling, add));
     });
     st.area = Some(shown.response.rect);
     if let Some((_, c, _)) = &out {
@@ -565,6 +586,7 @@ fn show_area<R>(
 fn body<R>(
     ui: &mut Ui,
     fill_window: bool,
+    window_rounded: bool,
     width: f32,
     max_height: f32,
     settling: bool,
@@ -575,7 +597,13 @@ fn body<R>(
         .fill(visuals.window_fill)
         .stroke(egui::Stroke::new(1.0, visuals.window_stroke.color))
         .inner_margin(egui::Margin::same(MARGIN))
-        .corner_radius(if fill_window { egui::CornerRadius::ZERO } else { visuals.menu_corner_radius });
+        // A list filling its own window is square unless the system rounds
+        // that window, when the border follows the rounding.
+        .corner_radius(if fill_window && !window_rounded {
+            egui::CornerRadius::ZERO
+        } else {
+            visuals.menu_corner_radius
+        });
     let frame = if fill_window { frame } else { frame.shadow(visuals.popup_shadow) };
     frame
         .show(ui, |ui| {
@@ -739,7 +767,7 @@ mod tests {
             let mut measured = Vec2::ZERO;
             let mut out = ctx.run_ui(input, |ui| {
                 egui::CentralPanel::no_frame().show(ui, |ui| {
-                    measured = body(ui, true, w - 2.0 * EDGE, 400.0, false, items).1;
+                    measured = body(ui, true, false, w - 2.0 * EDGE, 400.0, false, items).1;
                 });
             });
             out.textures_delta.clear();
@@ -771,7 +799,7 @@ mod tests {
             let mut measured = Vec2::ZERO;
             let mut out = ctx.run_ui(input, |ui| {
                 egui::CentralPanel::no_frame().show(ui, |ui| {
-                    measured = body(ui, true, asked - 2.0 * EDGE, 400.0, false, search_and_items).1;
+                    measured = body(ui, true, false, asked - 2.0 * EDGE, 400.0, false, search_and_items).1;
                 });
             });
             out.textures_delta.clear();

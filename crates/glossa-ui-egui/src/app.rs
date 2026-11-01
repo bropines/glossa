@@ -152,6 +152,9 @@ pub struct GlossaApp {
     /// Child windows' backdrops as applied: title -> (window, kind, settings
     /// generation), so a recreated window or new settings apply again.
     child_backdrops: HashMap<String, (isize, glossa_core::config::Backdrop, u64)>,
+    /// Borderless child windows whose corners the system rounds (macOS),
+    /// by title, with the window they were rounded for.
+    rounded_windows: HashMap<String, isize>,
     /// Child windows' frames as styled (rounded corners, border colour):
     /// title -> (the root pass it was last drawn in, the settings generation
     /// it was styled for). A window not drawn in the previous pass was
@@ -256,6 +259,7 @@ impl GlossaApp {
             transparent_root,
             backdrop_dirty: true,
             child_backdrops: HashMap::new(),
+            rounded_windows: HashMap::new(),
             child_frames: HashMap::new(),
             backdrop_generation: 0,
             popup_blurred: false,
@@ -464,6 +468,31 @@ impl GlossaApp {
             tracing::debug!("frame for {title}: {e}");
         }
         entry.1 = Some(generation);
+    }
+
+    /// Round a borderless child window's corners by `radius` where the
+    /// system does not (macOS, `glossa_platform::window::round_corners`),
+    /// once per window. Returns whether its corners are rounded now, so the
+    /// frame drawn in it can follow them.
+    pub fn round_child(&mut self, title: &str, radius: f32) -> bool {
+        if radius <= 0.0 {
+            return false;
+        }
+        let Some(window) = glossa_platform::window::own_window_by_title(title) else { return false };
+        if self.rounded_windows.get(title) == Some(&window) {
+            return true;
+        }
+        let rounded = glossa_platform::window::round_corners(window, radius);
+        if rounded {
+            self.rounded_windows.insert(title.to_owned(), window);
+        }
+        rounded
+    }
+
+    /// Whether the child window titled `title` had its corners rounded by
+    /// [`Self::round_child`].
+    pub fn child_rounded(&self, title: &str) -> bool {
+        self.rounded_windows.contains_key(title)
     }
 
     /// Give a child window (popup, options…) its backdrop once it exists,

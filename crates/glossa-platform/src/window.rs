@@ -318,6 +318,23 @@ pub fn snap_layouts(title: &str, button: Option<(i32, i32, i32, i32)>) -> Option
     }
 }
 
+/// Round a borderless window's corners by `radius` points, given the
+/// pointer [`own_window_by_title`] found: on macOS, where nothing rounds
+/// them (on Windows 11 `backdrop::style_frame` asks the system to). Returns
+/// whether it was done; elsewhere it does nothing. Call it on the GUI's
+/// thread.
+pub fn round_corners(window: isize, radius: f32) -> bool {
+    #[cfg(target_os = "macos")]
+    {
+        mac::round_corners(window, radius)
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        let _ = (window, radius);
+        false
+    }
+}
+
 /// Lift one of this program's windows, by its exact title, above the menu
 /// bar and the Dock: on macOS a window meant to cover a whole screen is
 /// otherwise kept below the menu bar. Elsewhere an always-on-top window

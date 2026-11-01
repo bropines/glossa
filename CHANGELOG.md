@@ -360,6 +360,10 @@ for Windows, macOS and Linux.
 
 ### Fixed
 
+- macOS: the popup and the dropdown menus and lists that open in windows of
+  their own had square corners. They are rounded as the theme rounds
+  overlays (8 pt in the macOS themes), with their border following, under
+  any transparency or backdrop setting.
 - A hotkey with Shift and a digit or symbol (Ctrl+Shift+1) could not be
   set: the field took the character Shift makes ("!"), which names no
   key. It now takes the key itself, whatever Shift or the layout makes it
