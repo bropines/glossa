@@ -109,6 +109,7 @@
     "history.clear": "Очистить",
     "history.search": "Поиск по истории",
     "history.favorites_only": "Только избранное",
+    "history.favorite": "В избранное",
     "history.confirm_clear": "Удалить все записи, кроме избранных?",
     "history.format_text": "Текстовый файл",
     "history.format_csv": "Файл CSV",

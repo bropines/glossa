@@ -416,6 +416,7 @@ pub static STRINGS: &[(&str, &str, Option<&str>)] = &[
     ("history.clear", "Clear", Some("w:3:1067")),
     ("history.search", "Search history", None),
     ("history.favorites_only", "Favourites only", None),
+    ("history.favorite", "Favourite", None),
     ("history.confirm_clear", "Clear all non-favourite entries?", None),
     ("history.format_text", "Text file", None),
     ("history.format_csv", "CSV file", None),
