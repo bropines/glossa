@@ -568,8 +568,19 @@ impl Languages {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Appearance {
-    /// Theme name, as listed in the theme picker.
+    /// Theme name, as listed in the theme picker: the one used while
+    /// `follow_system_theme` is off.
     pub theme: String,
+    /// Follow the system's light or dark mode: `theme_light` while it is
+    /// light, `theme_dark` while it is dark, switching when the system does.
+    /// On for a fresh configuration, off for a file written before it existed
+    /// (those users chose one theme).
+    #[serde(default)]
+    pub follow_system_theme: bool,
+    /// The theme while the system is light, with `follow_system_theme`.
+    pub theme_light: String,
+    /// The theme while the system is dark, with `follow_system_theme`.
+    pub theme_dark: String,
     /// Draw our own window frame in theme colours rather than the system one.
     pub custom_frame: bool,
     /// UI font face, or empty for the theme's.
@@ -742,8 +753,19 @@ pub fn clamp_text_scale(scale: f32) -> f32 {
 
 impl Default for Appearance {
     fn default() -> Self {
+        // The pair that looks native here.
+        let (light, dark) = if cfg!(windows) {
+            ("Fluent Light", "Fluent Dark")
+        } else if cfg!(target_os = "macos") {
+            ("macOS Light", "macOS Dark")
+        } else {
+            ("Glossa Light", "Glossa Dark")
+        };
         Self {
             theme: "Glossa Dark".into(),
+            follow_system_theme: true,
+            theme_light: light.into(),
+            theme_dark: dark.into(),
             custom_frame: true,
             font_family: String::new(),
             ui_scale: 1.0,
@@ -758,6 +780,19 @@ impl Default for Appearance {
             backdrop_opacity: 100,
             main_always_on_top: false,
             popup: PopupConfig::default(),
+        }
+    }
+}
+
+impl Appearance {
+    /// The theme in effect: with `follow_system_theme`, the light or the
+    /// dark one by the system's mode (`system_dark`), otherwise, or when the
+    /// mode cannot be told, `theme`.
+    pub fn effective_theme(&self, system_dark: Option<bool>) -> &str {
+        match (self.follow_system_theme, system_dark) {
+            (true, Some(true)) => &self.theme_dark,
+            (true, Some(false)) => &self.theme_light,
+            _ => &self.theme,
         }
     }
 }
@@ -1637,6 +1672,21 @@ impl Config {
 
 #[cfg(test)]
 mod tests {
+
+    #[test]
+    fn the_theme_follows_the_system_for_a_fresh_configuration_only() {
+        let fresh = Config::default();
+        assert!(fresh.appearance.follow_system_theme);
+        assert_eq!(fresh.appearance.effective_theme(Some(true)), fresh.appearance.theme_dark);
+        assert_eq!(fresh.appearance.effective_theme(Some(false)), fresh.appearance.theme_light);
+        // The mode cannot be told: the one chosen theme.
+        assert_eq!(fresh.appearance.effective_theme(None), fresh.appearance.theme);
+        // A file from before: the theme it chose, whatever the system does.
+        let old = Config::from_toml("[appearance]\ntheme = \"Glossa Midnight\"\n").unwrap();
+        assert!(!old.appearance.follow_system_theme);
+        assert_eq!(old.appearance.effective_theme(Some(false)), "Glossa Midnight");
+    }
+
     use super::*;
 
     #[test]

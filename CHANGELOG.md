@@ -20,6 +20,10 @@ for Windows, macOS and Linux.
   dictionary and history windows; every classic options page plus OCR,
   Modules and Control API; a tray icon with the classic menu. Hotkeys wake a
   hidden app, and a second launch hands over to the running one.
+- **Themes that follow the system's light or dark mode**
+  (`appearance.follow_system_theme`, with `theme_light` and `theme_dark`):
+  on for a new configuration, Fluent on Windows and macOS's own themes on
+  macOS, switching as the system does.
 - **Google Lens built in**: Glossa talks to Lens itself (through
   [chrome-lens-rs](https://github.com/bropines/chrome-lens-rs), on Chromium's
   own protocol definitions), so Lens

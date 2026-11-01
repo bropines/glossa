@@ -252,6 +252,9 @@ One table per endpoint. Each becomes a translator of its own; its settings
 | key | type | default | set in | what it does |
 |---|---|---|---|---|
 | `theme` | string | `"Glossa Dark"` | Options → Appearance | The theme's name, as the theme list shows it ([theming.md](theming.md)). |
+| `follow_system_theme` | bool | `true` for a new configuration, `false` when the key is missing from an existing file | *Options → Appearance* | Follow the system's light or dark mode: `theme_light` while it is light, `theme_dark` while dark, switching when the system does. Off, `theme` is used. Where the mode cannot be told, `theme` is used too. |
+| `theme_light` | theme name | `"Fluent Light"` on Windows, `"macOS Light"` on macOS, `"Glossa Light"` elsewhere | *Options → Appearance* | The theme while the system is light, with `follow_system_theme`. |
+| `theme_dark` | theme name | `"Fluent Dark"` on Windows, `"macOS Dark"` on macOS, `"Glossa Dark"` elsewhere | *Options → Appearance* | The theme while the system is dark, with `follow_system_theme`. |
 | `custom_frame` | bool | `true` | Options → Appearance, *Enable window style* | Draw Glossa's own window frame in theme colours instead of the system's. |
 | `font_family` | string | `""` | Options → Basics | Interface font. Empty uses the theme's. |
 | `ui_scale` | number | `1.0` | Options → Appearance | Interface scale, 0.5–3.0 (the slider offers 0.75–2.0). |

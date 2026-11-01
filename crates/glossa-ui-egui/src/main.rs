@@ -186,6 +186,8 @@ fn main() -> eframe::Result<()> {
     // Before anything is translated: keys the settings keep in the system
     // keychain are fetched now.
     engine.attach_secret_store(glossa_platform::secrets::system_store());
+    // The theme in effect may follow the system's light or dark mode.
+    engine.set_system_dark(glossa_platform::appearance::system_prefers_dark());
 
     if let Some(guard) = &instance {
         let engine = engine.clone();

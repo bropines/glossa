@@ -246,6 +246,9 @@ struct Inner {
     /// The system keychain, once the front end attaches one (see
     /// [`Engine::attach_secret_store`]).
     secret_store: RwLock<Option<Arc<dyn SecretStore>>>,
+    /// Whether the system is in dark mode, as the front end last said (see
+    /// [`Engine::set_system_dark`]); `None` when it cannot tell.
+    system_dark: RwLock<Option<bool>>,
     secret_sync: Mutex<SecretSync>,
 }
 
@@ -348,6 +351,7 @@ impl Engine {
             bundled,
             startup_warnings: Mutex::new(Vec::new()),
             secret_store: RwLock::new(None),
+            system_dark: RwLock::new(None),
             secret_sync: Mutex::new(SecretSync::new()),
         };
         let engine = Engine { inner: Arc::new(inner) };
@@ -715,9 +719,32 @@ impl Engine {
         self.inner.themes.read().load(name)
     }
 
+    /// The theme in effect: the chosen one, or with
+    /// `appearance.follow_system_theme` the light or dark one by the
+    /// system's mode.
     pub fn current_theme(&self) -> Theme {
-        let name = self.inner.config.read().appearance.theme.clone();
+        let name = self.current_theme_name();
         self.theme(&name)
+    }
+
+    pub fn current_theme_name(&self) -> String {
+        let dark = *self.inner.system_dark.read();
+        self.inner.config.read().appearance.effective_theme(dark).to_owned()
+    }
+
+    /// Tell the engine whether the system is in dark mode (`None`: it cannot
+    /// be told). When that changes the theme in effect, the windows are told
+    /// to restyle (`Event::ConfigChanged`). Cheap to call often.
+    pub fn set_system_dark(&self, dark: Option<bool>) {
+        if *self.inner.system_dark.read() == dark {
+            return;
+        }
+        let before = self.current_theme_name();
+        *self.inner.system_dark.write() = dark;
+        if self.current_theme_name() != before {
+            tracing::debug!(dark = ?dark, theme = %self.current_theme_name(), "the system changed mode");
+            self.emit(Event::ConfigChanged);
+        }
     }
 
     /// Re-scan theme and locale folders (after the user edits a theme file).
@@ -1738,6 +1765,28 @@ mod tests {
         again.attach_secret_store(Some(keychain));
         assert_eq!(again.config().services.option("deepl", "api_key"), Some(&serde_json::json!("dk-secret")));
         assert_eq!(again.config().network.proxy.password, "hunter2");
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn the_theme_in_effect_follows_the_system_mode() {
+        let (e, dir) = engine("system-mode");
+        e.update_config(|c| {
+            c.appearance.follow_system_theme = true;
+            c.appearance.theme_light = "Glossa Light".into();
+            c.appearance.theme_dark = "Glossa Midnight".into();
+        })
+        .unwrap();
+        let events = e.subscribe();
+        e.set_system_dark(Some(true));
+        assert_eq!(e.current_theme_name(), "Glossa Midnight");
+        assert!(events.try_iter().any(|ev| matches!(ev, Event::ConfigChanged)), "the windows are told");
+        e.set_system_dark(Some(false));
+        assert_eq!(e.current_theme_name(), "Glossa Light");
+        // The same mode again changes nothing and says nothing.
+        let _ = events.try_iter().count();
+        e.set_system_dark(Some(false));
+        assert_eq!(events.try_iter().count(), 0);
         std::fs::remove_dir_all(&dir).ok();
     }
 

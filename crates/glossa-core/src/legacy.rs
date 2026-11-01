@@ -262,6 +262,8 @@ pub fn import_options(text: &str, config: &mut Config) -> Result<Vec<String>, St
     // -- Appearance ---------------------------------------------------------------------
     if let Some(theme) = s(&["Appearance", "ThemeName"]) {
         config.appearance.theme = theme;
+        // The classic program had one theme; keep it whatever the system does.
+        config.appearance.follow_system_theme = false;
     }
     flag!(config.appearance.custom_frame, "Appearance", "EnableWindowStyle");
     let p = &mut config.appearance.popup;

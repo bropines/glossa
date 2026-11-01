@@ -134,6 +134,9 @@ pub struct GlossaApp {
     pub main_visible: bool,
     /// macOS: shown in the Dock and Cmd+Tab (a full window is open).
     in_app_switcher: bool,
+    /// When the system's light or dark mode was last looked at, and what the
+    /// windows said it was then (see `follow_system_mode`).
+    mode_checked: Option<(Instant, Option<egui::Theme>)>,
     started: bool,
     quitting: bool,
     /// Quitting to start again (see [`GlossaApp::restart`]).
@@ -244,6 +247,7 @@ impl GlossaApp {
             toast: None,
             main_visible: start_visible,
             in_app_switcher: false,
+            mode_checked: None,
             started: false,
             quitting: false,
             restarting: false,
@@ -787,6 +791,26 @@ impl GlossaApp {
 
     /// The program is on its way out (Quit, the system ending it): windows
     /// closing now are not the user closing them.
+    /// With `appearance.follow_system_theme`, tell the engine the system's
+    /// light or dark mode: at once when a window reports the mode changed,
+    /// and every few seconds besides (not every system reports it). The
+    /// engine restyles the windows when the theme in effect changes.
+    fn follow_system_mode(&mut self, ctx: &egui::Context) {
+        if !self.cfg.appearance.follow_system_theme {
+            return;
+        }
+        let reported = ctx.input(|i| i.raw.system_theme);
+        let due = match self.mode_checked {
+            None => true,
+            Some((at, seen)) => seen != reported || at.elapsed() >= Duration::from_secs(5),
+        };
+        if due {
+            self.mode_checked = Some((Instant::now(), reported));
+            self.engine.set_system_dark(glossa_platform::appearance::system_prefers_dark());
+        }
+        ctx.request_repaint_after(Duration::from_secs(5));
+    }
+
     pub fn is_quitting(&self) -> bool {
         self.quitting
     }
@@ -851,6 +875,7 @@ impl GlossaApp {
 impl eframe::App for GlossaApp {
     fn logic(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         let _frame = crate::watchdog::frame("logic");
+        self.follow_system_mode(ctx);
         if !self.started {
             self.started = true;
             if !self.main_visible {
