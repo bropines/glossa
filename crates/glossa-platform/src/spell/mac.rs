@@ -4,8 +4,6 @@
 //!
 //! AppKit objects belong to the main thread, so every call here returns
 //! nothing elsewhere ([`MAIN_THREAD_ONLY`]).
-//!
-//! Not yet tried on a Mac.
 
 use objc2::rc::Retained;
 use objc2::MainThreadMarker;

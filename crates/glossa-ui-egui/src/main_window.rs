@@ -427,8 +427,11 @@ fn source_pane(app: &mut GlossaApp, ui: &mut egui::Ui, height: f32) {
 }
 
 /// The language to check the source's spelling in: the source language
-/// when one is set, else the one the last translation detected; `None`
-/// when spell checking is off or the language is unknown.
+/// when one is set. With "detect", the one written in the script most of
+/// the text is in, of the language the last translation detected and the
+/// first and second languages (so checking starts before any translation,
+/// and follows the text when it changes language); failing that, the
+/// detected one. `None` when spell checking is off or nothing fits.
 fn spell_lang(app: &GlossaApp) -> Option<LangId> {
     if !app.cfg.general.spell_checking {
         return None;
@@ -437,7 +440,11 @@ fn spell_lang(app: &GlossaApp) -> Option<LangId> {
     if from.is_language() {
         return Some(from);
     }
-    app.main.outcome.as_ref().map(|o| o.pair.from).filter(|l| l.is_language())
+    let detected = app.main.outcome.as_ref().map(|o| o.pair.from).filter(|l| l.is_language());
+    let g = &app.cfg.general;
+    let candidates: Vec<LangId> =
+        detected.into_iter().chain([g.first_language, g.second_language]).filter(|l| l.is_language()).collect();
+    glossa_platform::spell::guess_language(&app.main.source, &candidates).or(detected)
 }
 
 /// Underline the source's misspelled words, and note the one a right

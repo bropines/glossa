@@ -138,6 +138,23 @@ fn lang_script(lang: LangId) -> Option<u32> {
     counts.into_iter().max_by_key(|&(_, n)| n).map(|(s, _)| s)
 }
 
+/// Of `candidates`, in order, the first written in the script most of
+/// `text`'s letters are in (its first few thousand characters are enough):
+/// a guess at the language of text whose source language is "detect".
+/// `None` when the text has no letters or no candidate matches.
+pub fn guess_language(text: &str, candidates: &[LangId]) -> Option<LangId> {
+    let mut counts: Vec<(u32, usize)> = Vec::new();
+    for c in text.chars().take(4000).filter(|c| c.is_alphabetic()) {
+        let s = script(c);
+        match counts.iter_mut().find(|(k, _)| *k == s) {
+            Some((_, n)) => *n += 1,
+            None => counts.push((s, 1)),
+        }
+    }
+    let main = counts.into_iter().max_by_key(|&(_, n)| n)?.0;
+    candidates.iter().copied().find(|&l| lang_script(l) == Some(main))
+}
+
 /// Whether `word` has a letter in script `s`.
 fn in_script(word: &str, s: u32) -> bool {
     word.chars().filter(|c| c.is_alphabetic()).any(|c| script(c) == s)
@@ -292,6 +309,15 @@ mod tests {
         assert_eq!(pick_locale("ru", &have).as_deref(), Some("ru_RU"));
         assert_eq!(pick_locale("uk", &have).as_deref(), Some("uk"));
         assert_eq!(pick_locale("he", &tags(&["iw-IL"])).as_deref(), Some("iw-IL"));
+    }
+
+    #[test]
+    fn the_texts_script_picks_the_language() {
+        let pair = [LangId::RUSSIAN, LangId::ENGLISH];
+        assert_eq!(guess_language("Превет, как дила?", &pair), Some(LangId::RUSSIAN));
+        assert_eq!(guess_language("Helo wrld, это тест", &pair), Some(LangId::ENGLISH));
+        assert_eq!(guess_language("12 + 3", &pair), None);
+        assert_eq!(guess_language("Γειά σου", &pair), None);
     }
 
     #[test]
