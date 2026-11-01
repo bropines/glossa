@@ -20,7 +20,9 @@
 //!
 //! It opens hidden for a frame or two, to measure its content and take its
 //! size before it shows. Where windows cannot be placed (Wayland gives no
-//! window positions), an ordinary in-window popup stands in.
+//! window positions), an ordinary in-window popup stands in, and on macOS
+//! it does whenever the list fits in its window: making a window there
+//! takes long enough to see.
 
 use egui::{pos2, vec2, Context, Event, Id, Key, Pos2, Rect, Response, Ui, Vec2};
 use glossa_platform::window;
@@ -57,6 +59,16 @@ struct State {
     ignore_focus: bool,
     /// The pointer was over the list last frame.
     hovered: bool,
+    /// Drawn inside the owner's window rather than in one of its own,
+    /// decided when it opens (see [`in_window`]).
+    in_window: Option<bool>,
+    /// The in-window list opens above the control (no room below).
+    above: bool,
+    /// The window's size when it was last put in place (macOS, see
+    /// [`show_window`]).
+    placed_at: Option<Vec2>,
+    /// When it opened, for the log.
+    opened: Option<std::time::Instant>,
 }
 
 /// What a dropdown saw in one frame, for [`keep_open`].
@@ -256,10 +268,22 @@ pub fn show<R>(
     let press_outside = presses.iter().any(|p| !inside(p));
 
     let monitors = window::monitors();
-    let windowed = inner.is_some() && !monitors.is_empty();
-    let (result, close_now, list_focused) = if windowed {
+    let can_window = inner.is_some() && !monitors.is_empty();
+    let room = ctx.content_rect();
+    let last_size_id = id.with("last-size");
+    if st.in_window.is_none() {
+        let last: Option<Vec2> = ctx.data(|d| d.get_temp(last_size_id));
+        let wanted = last.unwrap_or(vec2(min_width, max_height));
+        let (inside, above) = in_window(room, anchor, wanted, max_height < MENU_MAX_HEIGHT);
+        st.in_window = Some(!can_window || (cfg!(target_os = "macos") && inside));
+        st.above = above;
+        st.opened = Some(std::time::Instant::now());
+    }
+    let (result, close_now, list_focused) = if st.in_window == Some(false) {
         show_window(&ctx, id, &mut st, anchor, inner.unwrap_or(Rect::ZERO), ppp, &monitors, min_width, max_height, add)
     } else {
+        let space = if st.above { anchor.min.y - room.min.y } else { room.max.y - anchor.max.y };
+        let max_height = max_height.min(space - 2.0 * EDGE - 4.0).max(60.0);
         let (r, c) = show_area(&ctx, id, &mut st, anchor, min_width, max_height, add);
         // In the same window: its focus is the owner's.
         (r, c, false)
@@ -267,6 +291,9 @@ pub fn show<R>(
     // The focus as both windows saw it in this same frame: the list's
     // window has just run its pass, so a click that moved the focus to it
     // is seen together with the owner losing it.
+    if let Some(size) = st.content.or(st.area.map(|a| a.size())) {
+        ctx.data_mut(|d| d.insert_temp(last_size_id, size));
+    }
     let seen = Seen { press_outside, owner_focused, list_focused };
     let keep = keep_open(&mut st.focus, st.ignore_focus, seen);
     if !keep {
@@ -286,6 +313,27 @@ pub fn show<R>(
     result
 }
 
+/// Whether a list of about `wanted` points fits inside the window's `room`
+/// at `anchor`, and whether it goes above the control for that (below when
+/// there is room). A list that scrolls anyway (`scrolls`) fits wherever it
+/// gets a fair height; a menu has to fit whole.
+fn in_window(room: Rect, anchor: Rect, wanted: Vec2, scrolls: bool) -> (bool, bool) {
+    let below = room.max.y - anchor.max.y;
+    let above = anchor.min.y - room.min.y;
+    let wide_enough = wanted.x <= room.width();
+    if wanted.y <= below {
+        (wide_enough, false)
+    } else if wanted.y <= above {
+        (wide_enough, true)
+    } else {
+        let best = below.max(above);
+        (wide_enough && scrolls && best >= 200.0, above > below)
+    }
+}
+
+/// A list in a window of its own. On macOS this is the slow path (a window
+/// and its GL context made on every open): lists that fit in their window
+/// are drawn there instead.
 #[allow(clippy::too_many_arguments)] // the geometry of the anchor and window
 fn show_window<R>(
     ctx: &Context,
@@ -384,6 +432,13 @@ fn show_window<R>(
     });
     st.hovered = hovered;
     st.seeded |= seeded || st.age > 12;
+    // macOS keeps a window's bottom-left corner where it was when the
+    // window changes size, so the list made shorter to fit its content
+    // would slide down from the control: put it back, once it has the size.
+    if cfg!(target_os = "macos") && actual.is_some() && actual != st.placed_at {
+        ctx.send_viewport_cmd_to(viewport, egui::ViewportCommand::OuterPosition(pos));
+        st.placed_at = actual;
+    }
 
     if let Some(c) = measured {
         let c = (c + Vec2::splat(2.0 * EDGE)).ceil();
@@ -409,6 +464,8 @@ fn show_window<R>(
         let settled = sized && st.age >= 2;
         if settled || st.age > 8 {
             st.shown = true;
+            let ms = st.opened.map_or(0, |t| t.elapsed().as_millis());
+            tracing::debug!(age = st.age, ms, "dropdown window shown");
         }
     }
     let border = ctx.global_style().visuals.window_stroke.color;
@@ -476,14 +533,16 @@ fn show_area<R>(
 ) -> (Option<R>, bool) {
     let settling = st.age <= 1;
     let mut out = None;
-    let shown = egui::Area::new(id.with("area"))
-        .order(egui::Order::Foreground)
-        .fixed_pos(anchor.left_bottom())
-        .constrain(true)
-        .show(ctx, |ui| {
-            ui.set_min_width((min_width - 2.0 * EDGE).max(0.0));
-            out = Some(body(ui, false, max_height, settling, add));
-        });
+    let area = egui::Area::new(id.with("area")).order(egui::Order::Foreground).constrain(true);
+    let area = if st.above {
+        area.fixed_pos(anchor.left_top()).pivot(egui::Align2::LEFT_BOTTOM)
+    } else {
+        area.fixed_pos(anchor.left_bottom())
+    };
+    let shown = area.show(ctx, |ui| {
+        ui.set_min_width((min_width - 2.0 * EDGE).max(0.0));
+        out = Some(body(ui, false, max_height, settling, add));
+    });
     st.area = Some(shown.response.rect);
     st.shown = true;
     let escape = ctx.input(|i| i.key_pressed(Key::Escape));
@@ -629,6 +688,20 @@ impl ComboBox {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_list_goes_below_the_control_then_above_then_out_of_the_window() {
+        let room = Rect::from_min_size(Pos2::ZERO, vec2(600.0, 500.0));
+        let high = Rect::from_min_size(pos2(10.0, 50.0), vec2(200.0, 24.0));
+        let low = Rect::from_min_size(pos2(10.0, 400.0), vec2(200.0, 24.0));
+        assert_eq!(in_window(room, high, vec2(200.0, 300.0), false), (true, false));
+        assert_eq!(in_window(room, low, vec2(200.0, 300.0), false), (true, true));
+        // Too tall either way: a menu leaves, a scrolling list stays.
+        assert_eq!(in_window(room, low, vec2(200.0, 700.0), false), (false, true));
+        assert_eq!(in_window(room, low, vec2(200.0, 700.0), true), (true, true));
+        // Wider than the window.
+        assert!(!in_window(room, high, vec2(900.0, 100.0), true).0);
+    }
 
     fn frame(owner: bool, list: bool) -> Seen {
         Seen { press_outside: false, owner_focused: owner, list_focused: list }
