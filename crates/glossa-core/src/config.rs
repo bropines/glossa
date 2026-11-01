@@ -139,6 +139,12 @@ pub struct General {
     pub minimize_to_tray_on_minimize: bool,
     pub minimize_to_tray_on_close: bool,
     pub startup_action: StartupAction,
+    /// Open the main window at start with a note that Glossa lives in the
+    /// tray, until the note is put away. On for a fresh configuration (the
+    /// first run), off for a file written before the note existed: those
+    /// users know.
+    #[serde(default)]
+    pub show_tray_hint: bool,
 }
 
 impl Default for General {
@@ -171,6 +177,7 @@ impl Default for General {
             minimize_to_tray_on_minimize: false,
             minimize_to_tray_on_close: true,
             startup_action: StartupAction::MinimizeToTray,
+            show_tray_hint: true,
         }
     }
 }
@@ -587,6 +594,8 @@ pub struct Appearance {
     /// there only the fills change.
     #[serde(default = "full_percent")]
     pub backdrop_opacity: u8,
+    /// Keep the main window above other windows.
+    pub main_always_on_top: bool,
     pub popup: PopupConfig,
 }
 
@@ -735,6 +744,7 @@ impl Default for Appearance {
             unload_graphics_after_secs: 45,
             backdrop: Backdrop::None,
             backdrop_opacity: 100,
+            main_always_on_top: false,
             popup: PopupConfig::default(),
         }
     }
@@ -2003,6 +2013,19 @@ copy_joined_lines = true",
         p.shade = 50;
         assert_eq!(p.shaded(back, true), back, "a real blur needs no shade");
         assert_eq!(p.shaded(back, false), Color::rgba(0x78, 0x78, 0x78, 0xc0));
+    }
+
+    #[test]
+    fn the_tray_hint_is_for_a_first_run_only() {
+        // No file yet: the first run shows it.
+        assert!(Config::default().general.show_tray_hint);
+        // A file from before the hint existed: its user knows the tray.
+        let old = Config::from_toml("[general]\nfirst_language = 17\n").unwrap();
+        assert!(!old.general.show_tray_hint);
+        // Put away, it stays away.
+        let mut c = Config::default();
+        c.general.show_tray_hint = false;
+        assert!(!Config::from_toml(&c.to_toml()).unwrap().general.show_tray_hint);
     }
 
     #[test]

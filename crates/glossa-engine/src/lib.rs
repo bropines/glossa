@@ -1351,6 +1351,11 @@ impl Engine {
         self.inner.history.lock().iter().cloned().collect()
     }
 
+    /// The newest `n` entries, newest first, without copying the rest.
+    pub fn recent_history(&self, n: usize) -> Vec<HistoryEntry> {
+        self.inner.history.lock().iter().take(n).cloned().collect()
+    }
+
     pub fn search_history(&self, needle: &str, favorites_only: bool) -> Vec<HistoryEntry> {
         self.inner.history.lock().search(needle, favorites_only).into_iter().cloned().collect()
     }

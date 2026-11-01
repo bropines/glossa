@@ -8,7 +8,10 @@
 //! Two file formats load:
 //!
 //! * **Native** — `{ "code": "ru", "name": "Russian", "native_name": "Русский",
-//!   "strings": { "main.translate": "Перевести", ... } }`.
+//!   "strings": { "main.translate": "Перевести", ... },
+//!   "languages": { "de": "Немецкий", ... } }`. `languages` names the
+//!   languages of the language table in this language, by BCP 47 tag; a
+//!   language it lacks keeps its English name.
 //! * **Classic** — the numeric-id `lang.json` files of the original program,
 //!   37 of them. Every string here that has a counterpart in the classic UI
 //!   carries the classic address in [`STRINGS`], so those files translate this
@@ -38,6 +41,8 @@ pub struct Locale {
     /// Read from a classic numeric-id `lang.json`.
     pub classic: bool,
     strings: HashMap<String, String>,
+    /// Language names in this language, by BCP 47 tag.
+    languages: HashMap<String, String>,
 }
 
 /// A language compiled into the program.
@@ -70,6 +75,7 @@ impl Locale {
             author: String::new(),
             classic: false,
             strings: HashMap::new(),
+            languages: HashMap::new(),
         }
     }
 
@@ -98,6 +104,18 @@ impl Locale {
             }
         }
         self.strings.extend(over.strings);
+        self.languages.extend(over.languages);
+    }
+
+    /// The name of `lang` in this language, or its English name where this
+    /// locale has none.
+    pub fn language_name(&self, lang: crate::LangId) -> &str {
+        self.languages.get(lang.bcp47()).map(String::as_str).unwrap_or_else(|| lang.english_name())
+    }
+
+    /// Whether this locale names `lang` itself.
+    pub fn names_language(&self, lang: crate::LangId) -> bool {
+        self.languages.contains_key(lang.bcp47())
     }
 
     /// Whether this locale itself translates `key` (rather than falling back
@@ -156,6 +174,8 @@ impl Locale {
                 author: String,
                 #[serde(default)]
                 strings: HashMap<String, String>,
+                #[serde(default)]
+                languages: HashMap<String, String>,
             }
             let n: Native = serde_json::from_value(value).map_err(|e| e.to_string())?;
             Ok(Locale {
@@ -165,6 +185,7 @@ impl Locale {
                 author: n.author,
                 classic: false,
                 strings: n.strings,
+                languages: n.languages,
             })
         }
     }
@@ -193,6 +214,7 @@ impl Locale {
             author: s("Author"),
             classic: true,
             strings,
+            languages: HashMap::new(),
         }
     }
 
@@ -202,14 +224,21 @@ impl Locale {
         strings.sort();
         let map: serde_json::Map<String, Value> =
             strings.into_iter().map(|(k, v)| (k.clone(), Value::String(v.clone()))).collect();
-        serde_json::to_string_pretty(&serde_json::json!({
+        let mut doc = serde_json::json!({
             "code": self.code,
             "name": self.name,
             "native_name": self.native_name,
             "author": self.author,
             "strings": map,
-        }))
-        .unwrap_or_default()
+        });
+        if !self.languages.is_empty() {
+            let mut names: Vec<(&String, &String)> = self.languages.iter().collect();
+            names.sort();
+            let names: serde_json::Map<String, Value> =
+                names.into_iter().map(|(k, v)| (k.clone(), Value::String(v.clone()))).collect();
+            doc["languages"] = Value::Object(names);
+        }
+        serde_json::to_string_pretty(&doc).unwrap_or_default()
     }
 }
 
@@ -320,7 +349,7 @@ pub static STRINGS: &[(&str, &str, Option<&str>)] = &[
     ("msg.romanization", "Romanization: ", Some("s:186")),
     ("msg.always_on_top", "Always on top", Some("s:187")),
     ("msg.keyboard", "Keyboard", Some("s:188")),
-    ("msg.no_internet", "No Internet connection.", Some("s:189")),
+
     ("msg.timeout", "No data returned (timeout while sending data).", Some("s:190")),
     ("msg.no_data", "No data returned.", Some("s:191")),
     ("msg.nothing_to_translate", "No data to translate.", Some("s:192")),
@@ -390,6 +419,21 @@ pub static STRINGS: &[(&str, &str, Option<&str>)] = &[
     ("popup.target_auto", "Automatic direction", None),
     ("popup.swap", "Swap: translate from %s into %s", None),
     ("mouse.translate", "Translate the selection", None),
+    ("mouse.unavailable", "Mouse mode is not available on this system.", None),
+    ("mouse.failed", "Mouse mode could not start: %s", None),
+    (
+        "main.tray_hint",
+        "Glossa lives in the tray (the menu bar on macOS) and is ready when you need it. Select text in any program and press %s to translate it.",
+        None,
+    ),
+    (
+        "main.tray_hint_no_hotkey",
+        "Glossa lives in the tray (the menu bar on macOS). Its icon's menu has text recognition, the dictionary and the settings.",
+        None,
+    ),
+    ("main.hint_dismiss", "Got it", None),
+    ("main.startup_warnings", "Problems found at start-up:", None),
+    ("main.recent", "Recent", None),
     ("options.appearance.backdrop", "Window backdrop:", None),
     ("options.appearance.popup_backdrop", "Popup backdrop:", None),
     ("options.appearance.popup_shade", "Shade when not blurred (0 - 90):", None),
@@ -882,6 +926,7 @@ pub static STRINGS: &[(&str, &str, Option<&str>)] = &[
     ("menu.stacked_results", "Show all services at once", None),
     // -- text field context menu -------------------------------------------------------------
     ("edit.undo", "Undo", Some("m:2:10")),
+    ("edit.redo", "Redo", None),
     ("edit.cut", "Cut", Some("m:2:20")),
     ("edit.cut_all", "Cut all", Some("m:2:30")),
     ("edit.copy", "Copy", Some("m:2:40")),
@@ -899,7 +944,7 @@ pub static STRINGS: &[(&str, &str, Option<&str>)] = &[
     ("history.listen", "Listen", Some("m:3:40")),
     // -- language menu ---------------------------------------------------------------------------
     ("lang.reset", "Reset", Some("m:4:10")),
-    ("lang.edit", "Edit...", Some("m:4:20")),
+
     ("lang.always_detect", "Always detect language", Some("m:4:30")),
     // -- tray menu --------------------------------------------------------------------------------
     ("tray.text_recognition", "Text recognition", Some("m:5:5")),
@@ -917,9 +962,7 @@ pub static STRINGS: &[(&str, &str, Option<&str>)] = &[
     ("tray.exit", "Exit", Some("m:5:100")),
     ("tray.show", "Show Glossa", None),
     // -- dictionary article menu --------------------------------------------------------------------
-    ("article.select_all", "Select all", Some("m:6:10")),
     ("article.copy", "Copy", Some("m:6:20")),
-    ("article.print", "Print...", Some("m:6:30")),
     ("article.translate", "Translate", Some("m:6:40")),
     ("article.search", "Search", Some("m:6:50")),
     ("article.listen", "Listen", Some("m:6:60")),
@@ -1082,6 +1125,38 @@ mod tests {
         for name in crate::Capabilities(u32::MAX).names() {
             let key = format!("capability.{name}");
             assert!(english(&key).is_some(), "missing {key}");
+        }
+    }
+
+    #[test]
+    fn language_names_come_from_the_locale_or_fall_back_to_english() {
+        use crate::LangId;
+        let ru = Locale::builtin("ru").unwrap();
+        assert_eq!(ru.language_name(LangId::ENGLISH), "Английский");
+        assert_eq!(Locale::english().language_name(LangId::ENGLISH), "English");
+        // A user's pack that names one language keeps the rest from below.
+        let mut merged = ru.clone();
+        merged.merge(Locale::parse(r#"{"code":"ru","languages":{"en":"Англ."}}"#).unwrap());
+        assert_eq!(merged.language_name(LangId::ENGLISH), "Англ.");
+        assert_eq!(merged.language_name(LangId::RUSSIAN), "Русский");
+        // They survive a round trip through the native format.
+        let back = Locale::parse(&ru.to_native_json()).unwrap();
+        assert_eq!(back.language_name(LangId::RUSSIAN), "Русский");
+    }
+
+    /// Every built-in pack names every language of the table, and names
+    /// only languages that exist.
+    #[test]
+    fn built_in_packs_name_every_language() {
+        use crate::LangId;
+        let tags: std::collections::HashSet<&str> = LangId::all().map(|l| l.bcp47()).collect();
+        for pack in BUILTIN_LOCALES {
+            let l = Locale::parse(pack.source).unwrap();
+            let missing: Vec<&str> = LangId::all().filter(|id| !l.names_language(*id)).map(|id| id.bcp47()).collect();
+            assert!(missing.is_empty(), "{}: no name for {missing:?}", pack.code);
+            let unknown: Vec<&String> = l.languages.keys().filter(|k| !tags.contains(k.as_str())).collect();
+            assert!(unknown.is_empty(), "{}: names for unknown tags {unknown:?}", pack.code);
+            assert!(l.languages.values().all(|n| !n.trim().is_empty()), "{}: a blank language name", pack.code);
         }
     }
 

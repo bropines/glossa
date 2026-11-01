@@ -18,14 +18,17 @@ mod history;
 mod icons;
 mod inplace;
 mod keyboard;
+mod langs;
 mod main_window;
 mod mouse;
+mod notice;
 mod ocr;
 mod ocr_result;
 mod options;
 mod popup;
 mod rich;
 mod style;
+mod text_menu;
 mod tray;
 mod watchdog;
 mod widgets;
@@ -89,6 +92,8 @@ pub struct Shell {
     pub restart: bool,
     /// Mouse mode's watcher; like the hotkeys it outlives the GUI.
     pub mouse: mouse::MouseHub,
+    /// Problems met while starting, for the first GUI run to show.
+    pub startup_warnings: Vec<String>,
 }
 
 /// Wakes whichever loop is running: the egui loop when the GUI is loaded,
@@ -214,8 +219,11 @@ fn main() -> eframe::Result<()> {
 
     let cfg = engine.config();
     let can_unload = glossa_platform::idle::IdlePump::supported() && launch.screenshot.is_none();
+    // The first run shows the window once, with the note that Glossa lives
+    // in the tray (`general.show_tray_hint`).
     let mut start_visible = !launch.hidden
         && (launch.screenshot.is_some()
+            || cfg.general.show_tray_hint
             || match cfg.general.startup_action {
                 glossa_core::config::StartupAction::ShowWindow
                 | glossa_core::config::StartupAction::RestorePrevious => true,
@@ -258,6 +266,11 @@ fn main() -> eframe::Result<()> {
             .with_decorations(!chrome::custom(&cfg))
             .with_transparent(style::needs_transparent_root(&cfg))
             .with_visible(start_visible)
+            .with_window_level(if cfg.appearance.main_always_on_top {
+                egui::WindowLevel::AlwaysOnTop
+            } else {
+                egui::WindowLevel::Normal
+            })
             .with_icon(app_icon(64));
         if let Some(g) = geometry {
             viewport = viewport.with_position([g.x, g.y]);
@@ -328,17 +341,31 @@ fn launch_once_only(start_visible: &mut bool) {
 /// on, with the menu's check marks, and the menus dark or light as the theme.
 pub fn refresh_tray_look(shell: &Shell) {
     let Some(t) = &shell.tray else { return };
-    let cfg = shell.engine.config();
     let (accent, dark) = tray::look_of(&shell.engine);
-    t.set_look(accent, dark, cfg.mouse_mode.enabled);
+    t.set_look(accent, dark, shell.mouse.running());
 }
 
-/// Mouse mode on or off from the tray, with no GUI needed.
+/// Mouse mode on or off from the tray, with no GUI needed. A failure to
+/// start brings the GUI up to say why.
 fn toggle_mouse_mode(shell: &mut Shell) {
+    if !mouse::MouseHub::supported() {
+        let message = shell.engine.locale().get("mouse.unavailable").to_owned();
+        shell.pending.push(tray::Pending::Task(actions::Task::Done { message, error: true }));
+        return;
+    }
     let on = !shell.engine.config().mouse_mode.enabled;
     let _ = shell.engine.update_config(move |c| c.mouse_mode.enabled = on);
-    shell.mouse.sync(on);
+    sync_mouse_mode(shell, on);
     refresh_tray_look(shell);
+}
+
+/// Start or stop mouse mode's watcher; a failure is queued for the GUI to
+/// show.
+fn sync_mouse_mode(shell: &mut Shell, on: bool) {
+    if let Some(e) = shell.mouse.sync(on) {
+        let message = shell.engine.locale().fmt("mouse.failed", &e);
+        shell.pending.push(tray::Pending::Task(actions::Task::Done { message, error: true }));
+    }
 }
 
 fn build_shell(engine: Engine, wake: Arc<Wake>) -> Shell {
@@ -395,11 +422,21 @@ fn build_shell(engine: Engine, wake: Arc<Wake>) -> Shell {
             let w = wake_for_mouse.clone();
             Arc::new(move || w.wake())
         }),
+        startup_warnings: Vec::new(),
     };
+    shell.startup_warnings = engine_startup_warnings(&shell.engine);
     register_hotkeys(&mut shell);
-    shell.mouse.sync(cfg.mouse_mode.enabled);
+    sync_mouse_mode(&mut shell, cfg.mouse_mode.enabled);
     refresh_tray_look(&shell);
     shell
+}
+
+/// Problems the engine met while starting (a configuration it could not
+/// read and set aside, say), in the interface language, for the user to see
+/// once.
+fn engine_startup_warnings(engine: &Engine) -> Vec<String> {
+    let locale = engine.locale();
+    engine.startup_warnings().iter().map(|w| w.message(&locale)).collect()
 }
 
 /// Bind the configured hotkeys; failures are kept for the options page.
@@ -460,7 +497,7 @@ fn collect_wake_events(shell: &mut Shell, events: &std::sync::mpsc::Receiver<glo
                 tray::TrayEvent::Action(Action::Quit) => shell.quit = true,
                 tray::TrayEvent::ToggleMouseMode => toggle_mouse_mode(shell),
                 tray::TrayEvent::Click => {
-                    if shell.engine.config().mouse_mode.tray_click_toggles {
+                    if shell.engine.config().mouse_mode.tray_click_toggles && mouse::MouseHub::supported() {
                         toggle_mouse_mode(shell);
                     } else {
                         shell.pending.push(tray::Pending::Tray(tray::TrayEvent::ShowMain));

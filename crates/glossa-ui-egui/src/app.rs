@@ -113,8 +113,10 @@ pub struct GlossaApp {
     pub watch: Option<crate::ocr::Watch>,
     /// A copy-mode or in-place recognition running after its overlay closed.
     pub ocr_background: Option<crate::ocr::Background>,
-    /// The small notice by an OCR region ("Copied 120 characters").
-    pub ocr_notice: Option<crate::ocr::Notice>,
+    /// The small notice that takes no focus: by an OCR region ("Copied 120
+    /// characters"), or by the pointer for messages while the main window
+    /// is hidden.
+    pub notice: Option<crate::notice::Notice>,
     pub in_place: Option<crate::inplace::InPlace>,
     /// The window showing a recognised region's text and translation.
     pub ocr_result: Option<crate::ocr_result::ResultWindow>,
@@ -160,6 +162,9 @@ pub struct GlossaApp {
     pub popup_target: Option<glossa_core::LangId>,
     /// The last OCR region, for "repeat last recognition".
     pub last_region: Option<glossa_core::ocr::Rect>,
+    /// Problems met while starting, shown once (a banner in the main window,
+    /// or a notice when it is hidden) until put away.
+    pub startup_warnings: Vec<String>,
 }
 
 impl GlossaApp {
@@ -182,6 +187,7 @@ impl GlossaApp {
         fonts.install_base(&ctx, &cfg.appearance.font_family, &look.theme);
         *shell.wake.ctx.lock() = Some(ctx.clone());
 
+        crate::langs::set_locale(engine.locale());
         let events = engine.subscribe();
         let (tasks_tx, tasks) = mpsc::channel();
         let start_visible = !launch.hidden;
@@ -222,7 +228,7 @@ impl GlossaApp {
             ocr: None,
             watch: None,
             ocr_background: None,
-            ocr_notice: None,
+            notice: None,
             in_place: None,
             ocr_result: None,
             options: None,
@@ -248,6 +254,7 @@ impl GlossaApp {
             popup_blurred: false,
             popup_target: None,
             last_region: None,
+            startup_warnings: shell.startup_warnings,
         }
     }
 
@@ -271,9 +278,25 @@ impl GlossaApp {
         }
     }
 
+    /// Tell the user something: at the bottom of the main window while it
+    /// is on screen, else in a notice by the pointer (the main window is
+    /// usually hidden in the tray when a hotkey's action has news).
     pub fn notify(&mut self, text: impl Into<String>, error: bool) {
-        self.toast = Some(Toast { text: text.into(), error, at: Instant::now() });
-        self.ctx.request_repaint();
+        let text = text.into();
+        if error {
+            tracing::info!("message for the user: {text}");
+        }
+        if self.main_on_screen() {
+            self.toast = Some(Toast { text, error, at: Instant::now() });
+            self.ctx.request_repaint();
+        } else {
+            crate::notice::at_cursor(self, text, error);
+        }
+    }
+
+    /// Whether the main window is showing (not hidden, not minimised).
+    pub fn main_on_screen(&self) -> bool {
+        self.main_visible && !self.ctx.input_for(egui::ViewportId::ROOT, |i| i.viewport().minimized.unwrap_or(false))
     }
 
     pub fn copy_text(&mut self, text: &str) {
@@ -319,6 +342,16 @@ impl GlossaApp {
         self.ctx.send_viewport_cmd_to(egui::ViewportId::ROOT, egui::ViewportCommand::Visible(true));
         self.ctx.send_viewport_cmd_to(egui::ViewportId::ROOT, egui::ViewportCommand::Minimized(false));
         self.ctx.send_viewport_cmd_to(egui::ViewportId::ROOT, egui::ViewportCommand::Focus);
+    }
+
+    /// Keep the main window above the others, or not, as set.
+    pub fn apply_main_window_level(&self) {
+        let level = if self.cfg.appearance.main_always_on_top {
+            egui::WindowLevel::AlwaysOnTop
+        } else {
+            egui::WindowLevel::Normal
+        };
+        self.ctx.send_viewport_cmd_to(egui::ViewportId::ROOT, egui::ViewportCommand::WindowLevel(level));
     }
 
     pub fn hide_main(&mut self) {
@@ -601,6 +634,7 @@ impl GlossaApp {
             self.app_menu = crate::app_menu::AppMenu::install(&self.ctx, &locale);
         }
         self.locale = locale;
+        crate::langs::set_locale(self.locale.clone());
         if let Some(scale) = unsaved_zoom {
             self.cfg.appearance.text_scale = scale;
         }
@@ -609,13 +643,15 @@ impl GlossaApp {
         self.fonts.install_base(&self.ctx, &self.cfg.appearance.font_family, &self.look.theme);
         self.backdrop_dirty = true;
         self.backdrop_generation += 1;
-        if let Some(m) = self.mouse.as_mut() {
-            m.sync(self.cfg.mouse_mode.enabled);
+        let mouse_failed = self.mouse.as_mut().and_then(|m| m.sync(self.cfg.mouse_mode.enabled));
+        if let Some(e) = mouse_failed {
+            let m = self.locale.fmt("mouse.failed", &e);
+            self.notify(m, true);
         }
         if let Some(t) = &self.tray {
             let c = self.look.theme.accent;
             let accent = [c.r as f32 / 255.0, c.g as f32 / 255.0, c.b as f32 / 255.0];
-            t.set_look(accent, self.look.theme.dark, self.cfg.mouse_mode.enabled);
+            t.set_look(accent, self.look.theme.dark, self.mouse_running());
         }
         if before_hotkeys != self.cfg.hotkeys {
             self.register_hotkeys();
@@ -734,6 +770,16 @@ impl GlossaApp {
         crate::actions::perform(self, action, text);
     }
 
+    /// Whether mouse mode is watching the mouse now.
+    pub fn mouse_running(&self) -> bool {
+        self.mouse.as_ref().is_some_and(|m| m.running())
+    }
+
+    /// Why mouse mode is switched on but not running, if it failed to start.
+    pub fn mouse_error(&self) -> Option<String> {
+        self.mouse.as_ref().and_then(|m| m.error()).map(str::to_owned)
+    }
+
     /// Whether the control API is serving now (it starts with the program).
     pub fn server_running(&self) -> bool {
         self.server.is_some()
@@ -807,6 +853,11 @@ impl eframe::App for GlossaApp {
             if let Some(text) = self.launch.popup_text.clone() {
                 crate::popup::open(self, text, None);
             }
+            if !self.main_visible && !self.startup_warnings.is_empty() {
+                let text = format!("{}\n{}", self.t("main.startup_warnings"), self.startup_warnings.join("\n"));
+                self.startup_warnings.clear();
+                self.notify(text, true);
+            }
             for p in std::mem::take(&mut self.pending) {
                 match p {
                     crate::tray::Pending::Action(a, text) => self.perform(a, text),
@@ -860,6 +911,7 @@ impl eframe::App for GlossaApp {
 
         crate::popup::tick(self);
         crate::ocr::tick(self);
+        crate::notice::tick(self);
 
         // Closing the main window hides it to the tray, when so configured.
         let close = ctx.input(|i| i.viewport().close_requested());
@@ -884,7 +936,7 @@ impl eframe::App for GlossaApp {
         let needs_ui = self.popup.is_some()
             || self.mouse_icon.is_some()
             || self.ocr.is_some()
-            || self.ocr_notice.is_some()
+            || self.notice.is_some()
             || self.in_place.is_some()
             || self.ocr_result.is_some()
             || self.options.is_some()
@@ -957,6 +1009,7 @@ impl eframe::App for GlossaApp {
         phase("mouse icon");
         crate::mouse::show_icon(self, &ctx);
         phase("ocr");
+        crate::notice::draw(self, &ctx);
         crate::ocr::show(self, &ctx);
         crate::inplace::show(self, &ctx);
         crate::ocr_result::show(self, &ctx);
@@ -988,6 +1041,7 @@ impl eframe::App for GlossaApp {
             audio: std::mem::replace(&mut self.audio, AudioPlayer::new()),
             wake: self.wake.clone(),
             pending: Vec::new(),
+            startup_warnings: Vec::new(),
             // Unless this was an unload, the window closing means quitting.
             quit: !self.unloading || self.quitting,
             restart: self.restarting,

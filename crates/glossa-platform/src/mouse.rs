@@ -41,9 +41,10 @@ impl MouseWatcher {
         Ok(MouseWatcher { imp: imp::Watcher::start(Box::new(on_gesture))? })
     }
 
-    /// Whether mouse mode can work in this session: Windows, macOS and X11.
-    /// Wayland gives no program the mouse or the PRIMARY selection of
-    /// another.
+    /// Whether mouse mode can work in this session (Windows, macOS, X11), so
+    /// the interface can grey it out rather than offer a switch that only
+    /// fails; it may still fail to start for want of a permission. Wayland
+    /// gives no program the mouse or the PRIMARY selection of another.
     pub fn supported() -> bool {
         if cfg!(any(windows, target_os = "macos")) {
             true

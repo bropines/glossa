@@ -21,7 +21,7 @@ pub enum Task {
     /// The whole desktop, for the OCR overlay.
     Screenshot { action: Action, image: image::RgbaImage, origin: (i32, i32), error: Option<String> },
     /// A translation made for an action with no window (copy, replace, listen).
-    Translated { action: Action, text: String, error: Option<String> },
+    Translated { action: Action, text: String, error: Option<glossa_core::Error> },
     /// A step finished; tell the user how it went.
     Done { message: String, error: bool },
     /// Text selected with the mouse in mouse mode.
@@ -61,6 +61,11 @@ pub fn perform(app: &mut GlossaApp, action: Action, text: Option<String>) {
             }
         }
         Action::ToggleMouseMode => {
+            if !crate::mouse::MouseHub::supported() {
+                let m = app.t("mouse.unavailable");
+                app.notify(m, true);
+                return;
+            }
             let on = !app.cfg.mouse_mode.enabled;
             let _ = app.engine.update_config(move |c| c.mouse_mode.enabled = on);
         }
@@ -225,7 +230,8 @@ pub fn on_task(app: &mut GlossaApp, task: Task) {
         },
         Task::Translated { action, text, error } => {
             if let Some(e) = error {
-                app.notify(e, true);
+                let m = app.describe(&e);
+                app.notify(m, true);
                 return;
             }
             match action {
@@ -259,8 +265,14 @@ fn with_selection(app: &mut GlossaApp, action: Action, text: String, cursor: Opt
             if converted == text {
                 return;
             }
+            let tx = app.tasks_tx.clone();
+            let ctx = app.ctx.clone();
             std::thread::spawn(move || {
-                let _ = glossa_platform::selection::replace_selection(&converted);
+                if let Err(e) = glossa_platform::selection::replace_selection(&converted) {
+                    let _ = tx.send(Task::Done { message: e.to_string(), error: true });
+                    ctx.request_repaint();
+                    return;
+                }
                 let _ = glossa_platform::layout::switch_keyboard_layout_of_foreground();
             });
         }
@@ -275,7 +287,7 @@ fn with_selection(app: &mut GlossaApp, action: Action, text: String, cursor: Opt
             std::thread::spawn(move || {
                 let task = match engine.translate(&text, LangPair::new(LangId::AUTO, LangId::AUTO), &opts) {
                     Ok(out) => Task::Translated { action, text: out.translation.text, error: None },
-                    Err(e) => Task::Translated { action, text: String::new(), error: Some(e.to_string()) },
+                    Err(e) => Task::Translated { action, text: String::new(), error: Some(e) },
                 };
                 let _ = tx.send(task);
                 ctx.request_repaint();

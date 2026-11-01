@@ -96,7 +96,7 @@ installation) but nothing reads it yet.
 | `start_with_system` | bool | `false` | Options → Basics, *Start with Windows* (*Open at login* on macOS) | Whether Glossa starts with the session. The checkbox shows and writes the system's own entry (`glossa --hidden`): the `Run` registry key on Windows, `~/Library/LaunchAgents/app.glossa.plist` on macOS, `~/.config/autostart/glossa.desktop` on Linux; Apply records the choice here. While it is on, each start points the entry at the running copy of the program, so it survives the program being moved; an entry removed elsewhere (Task Manager, System Settings) is not added back. The classic import fills it in, and the checkbox then offers it. Ignored with `GLOSSA_HOME` set. |
 | `first_language` | language | `46` (Russian) | Options → Basics | Your own language. With smart direction, text in this language is translated into the second; anything else into this one. Not a real language (such as `auto`) becomes the default, Russian. |
 | `second_language` | language | `17` (English) | Options → Basics | The language your own is usually translated into. Not a real language becomes English. |
-| `speech_language` | language | `46` (Russian) | Options → Basics | Language for speech input. |
+| `speech_language` | language | `46` (Russian) | file only | Language for speech input. Not used yet: there is no speech input, so the options no longer show it. |
 | `smart_direction` | bool | `true` | Options → Basics | Choose the target from the first and second language when the target is `auto`. |
 | `always_detect_language` | bool | `false` | main window, ⋮ menu by the languages | Detect the source language even when one is chosen. |
 | `pair` | language pair | `{ from = 1, to = 1 }` | main window, language selectors | The main window's direction. A `to` of `0` becomes `auto`. |
@@ -116,6 +116,7 @@ installation) but nothing reads it yet.
 | `minimize_to_tray_on_minimize` | bool | `false` | main window menu | Minimising the main window hides it in the tray. |
 | `minimize_to_tray_on_close` | bool | `true` | main window menu | Closing the main window hides it in the tray instead of quitting (when there is a tray). |
 | `startup_action` | `"show_window"`, `"minimize_to_tray"`, `"restore_previous"` | `"minimize_to_tray"` | main window menu, *On start-up* | What the program shows when it starts. `--hidden` overrides it. |
+| `show_tray_hint` | bool | `true` for a new configuration, `false` when the key is missing from an existing file | the note's *Got it* button | While on, the main window opens at start with a note that Glossa lives in the tray (the menu bar on macOS) and which hotkey translates a selection. *Got it* turns it off. A file written before the note existed reads as off, so only a first run sees it. |
 
 A language pair (`pair`, each item of `recent_pairs`) has two keys, `from`
 and `to`, each a language:
@@ -259,6 +260,7 @@ One table per endpoint. Each becomes a translator of its own; its settings
 | `renderer` | `"open_gl"`, `"gpu"`, `"software"` | `"open_gl"` | Options → Appearance | How windows are drawn: OpenGL (the lightest), the GPU through Direct3D 12, Vulkan or Metal, or a software rasteriser. Takes effect at the next start. `GLOSSA_RENDERER` overrides it for one run. The file is written with `open_gl`; `glow`, `opengl` and `gl` (the names `GLOSSA_RENDERER` uses) are read as `open_gl`, and `wgpu` as `gpu`. |
 | `unload_graphics_after_secs` | integer | `45` | Options → Appearance | After this long with every window hidden, the window system is unloaded and only the tray, hotkeys and engine stay in memory. `0` keeps it loaded. |
 | `backdrop` | `"none"`, `"mica"`, `"micaalt"`, `"acrylic"`, `"blur"` | `"none"` | Options → Appearance | The system material behind the main window and the other windows (Windows 11; vibrancy on macOS). `mica_alt` and `mica-alt` are read as `micaalt`. See [theming.md](theming.md#backdrops). |
+| `main_always_on_top` | bool | `false` | main window, ⋮ menu, *Always on top* | Keep the main window above other windows. |
 | `backdrop_opacity` | integer | `100` | Options → Appearance | 0–100 percent: how much of the theme's fills, and of the tint an Acrylic or blur backdrop is drawn with, cover the material. Lower lets more of what is behind show through (like the Windhawk *Translucent Windows* mod). Mica and macOS vibrancy tint themselves: there only Glossa's own fills thin out. |
 | `popup` | table | | | See [`[appearance.popup]`](#appearancepopup). |
 
