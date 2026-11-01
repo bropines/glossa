@@ -193,8 +193,8 @@ pub fn place_popup(anchor: Rect, size: (f32, f32), monitors: &[Monitor]) -> (f32
 pub struct DropdownPlace {
     pub x: f32,
     pub y: f32,
-    /// The height it gets: what it asked for, or less when neither side of
-    /// the anchor has that much room (it then scrolls).
+    /// The height it gets: what it asked for, or less when it is taller than
+    /// the work area (it then scrolls).
     pub height: f32,
     /// It opens upwards, ending at the anchor's top.
     pub above: bool,
@@ -203,7 +203,9 @@ pub struct DropdownPlace {
 /// Where to put a dropdown list of `size` for the control at `anchor`, as a
 /// native combo box does: under the control and aligned with its left edge;
 /// above it only when the work area of its monitor has no room below and
-/// more above. Horizontally it is kept inside the work area. With no
+/// enough above; over the control when neither side has the room but the
+/// work area does, as native menus slide to fit; scrolling only when it is
+/// taller than the work area. Horizontally it is kept inside the work area. With no
 /// monitors it goes under the anchor at the size asked.
 pub fn place_dropdown(anchor: Rect, size: (f32, f32), monitors: &[Monitor]) -> DropdownPlace {
     let (w, h) = (size.0.max(0.0), size.1.max(0.0));
@@ -216,11 +218,25 @@ pub fn place_dropdown(anchor: Rect, size: (f32, f32), monitors: &[Monitor]) -> D
     let x = if anchor.x + w <= hi_x { anchor.x.max(lo_x) } else { (hi_x - w).max(lo_x) };
     let below = (area.y + area.height - bottom).max(0.0);
     let above = (anchor.y - area.y).max(0.0);
-    if h <= below || below >= above {
-        DropdownPlace { x, y: bottom, height: h.min(below.max(1.0)), above: false }
+    let (top, floor) = (area.y, area.y + area.height);
+    if h <= below {
+        DropdownPlace { x, y: bottom, height: h, above: false }
+    } else if h <= above {
+        DropdownPlace { x, y: anchor.y - h, height: h, above: true }
+    } else if h <= area.height {
+        // Neither side has the room, but the screen does: slide it over the
+        // control until it fits, as native menus do, rather than make a
+        // list that scrolls by a few rows (the main window's menu, opened
+        // from a window low on the screen).
+        if below >= above {
+            DropdownPlace { x, y: floor - h, height: h, above: false }
+        } else {
+            DropdownPlace { x, y: top, height: h, above: true }
+        }
+    } else if below >= above {
+        DropdownPlace { x, y: bottom, height: below.max(1.0), above: false }
     } else {
-        let height = h.min(above);
-        DropdownPlace { x, y: anchor.y - height, height, above: true }
+        DropdownPlace { x, y: anchor.y - above, height: above, above: true }
     }
 }
 
@@ -504,13 +520,28 @@ mod tests {
     }
 
     #[test]
-    fn dropdowns_shrink_on_the_roomier_side_when_neither_fits() {
+    fn dropdowns_slide_over_the_control_rather_than_scroll_when_the_screen_has_room() {
         let short = mon(0, 0, 800, 400);
+        // 224 below, 150 above: neither holds 300, the screen does. It ends
+        // at the bottom of the screen, over the control, whole.
         let combo = Rect::new(10.0, 150.0, 100.0, 26.0);
         let p = place_dropdown(combo, LIST, &[short]);
-        assert_eq!(p, DropdownPlace { x: 10.0, y: 176.0, height: 224.0, above: false });
+        assert_eq!(p, DropdownPlace { x: 10.0, y: 100.0, height: 300.0, above: false });
+        // Room above: it opens there, as before.
         let combo = Rect::new(10.0, 300.0, 100.0, 26.0);
         let p = place_dropdown(combo, LIST, &[short]);
+        assert_eq!(p, DropdownPlace { x: 10.0, y: 0.0, height: 300.0, above: true });
+    }
+
+    #[test]
+    fn dropdowns_taller_than_the_screen_scroll_on_the_roomier_side() {
+        let short = mon(0, 0, 800, 400);
+        let tall = (200.0, 600.0);
+        let combo = Rect::new(10.0, 150.0, 100.0, 26.0);
+        let p = place_dropdown(combo, tall, &[short]);
+        assert_eq!(p, DropdownPlace { x: 10.0, y: 176.0, height: 224.0, above: false });
+        let combo = Rect::new(10.0, 300.0, 100.0, 26.0);
+        let p = place_dropdown(combo, tall, &[short]);
         assert_eq!(p, DropdownPlace { x: 10.0, y: 0.0, height: 300.0, above: true });
     }
 
