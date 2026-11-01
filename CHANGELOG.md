@@ -20,6 +20,8 @@ for Windows, macOS and Linux.
   dictionary and history windows; every classic options page plus OCR,
   Modules and Control API; a tray icon with the classic menu. Hotkeys wake a
   hidden app, and a second launch hands over to the running one.
+- **Snap Layouts** on Windows 11: resting the pointer on the maximise
+  button of Glossa's own title bar offers the system's window layouts.
 - **Themes that follow the system's light or dark mode**
   (`appearance.follow_system_theme`, with `theme_light` and `theme_dark`):
   on for a new configuration, Fluent on Windows and macOS's own themes on

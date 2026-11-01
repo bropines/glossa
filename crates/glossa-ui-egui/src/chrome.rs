@@ -187,6 +187,28 @@ fn title_bar(ui: &mut Ui, look: &Look, caption: &Caption, maximized: bool) {
             for b in &buttons {
                 x -= BUTTON_WIDTH;
                 let r = Rect::from_min_size(pos2(x, rect.top()), vec2(BUTTON_WIDTH, TITLE_HEIGHT));
+                if matches!(b, Button::Maximize | Button::Restore) {
+                    // Windows 11 offers Snap Layouts over this button when it
+                    // knows where it is; it then tracks the button and acts
+                    // on a click itself.
+                    let px = (
+                        (r.left() * ppp).round() as i32,
+                        (r.top() * ppp).round() as i32,
+                        (r.width() * ppp).round() as i32,
+                        (r.height() * ppp).round() as i32,
+                    );
+                    if let Some(state) = glossa_platform::window::snap_layouts(caption.title, Some(px)) {
+                        let forced = if state.pressed {
+                            WidgetState::Pressed
+                        } else if state.hovered {
+                            WidgetState::Hover
+                        } else {
+                            WidgetState::Normal
+                        };
+                        paint_caption_button(ui, look, r, *b, active, forced);
+                        continue;
+                    }
+                }
                 if caption_button(ui, look, r, *b, active).clicked() {
                     ui.ctx().send_viewport_cmd(match b {
                         Button::Close => ViewportCommand::Close,
@@ -229,7 +251,6 @@ enum Button {
 }
 
 fn caption_button(ui: &mut Ui, look: &Look, r: Rect, b: Button, active: bool) -> egui::Response {
-    let t = &look.theme;
     let resp = ui.interact(r, Id::unique(("chrome-caption", b as u8)), Sense::click());
     let state = if resp.is_pointer_button_down_on() {
         WidgetState::Pressed
@@ -238,6 +259,13 @@ fn caption_button(ui: &mut Ui, look: &Look, r: Rect, b: Button, active: bool) ->
     } else {
         WidgetState::Normal
     };
+    paint_caption_button(ui, look, r, b, active, state);
+    resp
+}
+
+/// A caption button drawn in `state`.
+fn paint_caption_button(ui: &mut Ui, look: &Look, r: Rect, b: Button, active: bool, state: WidgetState) {
+    let t = &look.theme;
     let style = t.window_button.get(state);
     // Opaque even under a backdrop (where `window.back` is clear): colours
     // mixed from it would come out see-through.
@@ -267,7 +295,6 @@ fn caption_button(ui: &mut Ui, look: &Look, r: Rect, b: Button, active: bool) ->
         c(t.window_button.normal.main.lerp(caption_back, 0.45))
     };
     paint_glyph(ui.painter(), r.center(), b, glyph);
-    resp
 }
 
 /// The caption glyphs, 10 points square and drawn with hairlines snapped to

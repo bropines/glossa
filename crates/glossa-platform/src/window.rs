@@ -273,6 +273,35 @@ pub fn own_window_by_title(title: &str) -> Option<isize> {
     }
 }
 
+/// A maximise button the system tracks for a title bar Glossa draws itself
+/// (see [`snap_layouts`]).
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+pub struct MaximizeButton {
+    pub hovered: bool,
+    pub pressed: bool,
+}
+
+/// Tell the system where the maximise button of this program's window
+/// `title` is, for a title bar drawn by Glossa (`button`: x, y, width,
+/// height in the window's client-area pixels; `None` when it has none now).
+/// On Windows 11 resting the pointer on it then offers Snap Layouts. The
+/// system takes over the button's pointer handling, so its hover and press
+/// come back from here, and a click maximises or restores the window by
+/// itself. `None` where this is not done (off Windows, or no such window):
+/// the button is then an ordinary one. Call it every frame from the GUI's
+/// thread.
+pub fn snap_layouts(title: &str, button: Option<(i32, i32, i32, i32)>) -> Option<MaximizeButton> {
+    #[cfg(windows)]
+    {
+        snap::snap_layouts(title, button)
+    }
+    #[cfg(not(windows))]
+    {
+        let _ = (title, button);
+        None
+    }
+}
+
 /// Lift one of this program's windows, by its exact title, above the menu
 /// bar and the Dock: on macOS a window meant to cover a whole screen is
 /// otherwise kept below the menu bar. Elsewhere an always-on-top window
@@ -343,6 +372,8 @@ fn distance_sq(r: Rect, x: f32, y: f32) -> f32 {
 
 #[cfg(target_os = "macos")]
 mod mac;
+#[cfg(windows)]
+mod snap;
 #[cfg(windows)]
 mod win;
 
