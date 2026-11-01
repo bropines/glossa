@@ -92,15 +92,24 @@ pub struct Options {
     /// prefer materials that render while it is inactive. See the module
     /// docs.
     pub unfocused: bool,
+    /// 0 to 100 percent of the tint the accent policy's acrylic is drawn
+    /// with ([`accent_tint`]): lower is more see-through. The system
+    /// backdrops (Mica, Windows 11 Acrylic) tint themselves and ignore it.
+    pub tint: u8,
 }
 
 impl Options {
     pub fn new(dark: bool) -> Self {
-        Self { dark, unfocused: false }
+        Self { dark, unfocused: false, tint: 100 }
     }
 
     pub fn unfocused(dark: bool) -> Self {
-        Self { dark, unfocused: true }
+        Self { dark, unfocused: true, tint: 100 }
+    }
+
+    /// The same, with the acrylic tint at `percent`.
+    pub fn with_tint(self, percent: u8) -> Self {
+        Self { tint: percent.min(100), ..self }
     }
 }
 
@@ -279,7 +288,14 @@ pub fn windows_build() -> Option<u32> {
 /// system backdrops tint themselves; this one has to be told. The colours
 /// are WinUI's base backgrounds, at 60 %.
 pub fn accent_tint(dark: bool) -> u32 {
-    let (rgb, alpha) = if dark { (0x20u32, 0x99u32) } else { (0xf3u32, 0x99u32) };
+    accent_tint_at(dark, 100)
+}
+
+/// [`accent_tint`] with its alpha scaled to `percent` (the way Windhawk's
+/// "Translucent Windows" mod exposes the same accent policy's opacity).
+pub fn accent_tint_at(dark: bool, percent: u8) -> u32 {
+    let rgb = if dark { 0x20u32 } else { 0xf3u32 };
+    let alpha = (0x99 as f32 * percent.min(100) as f32 / 100.0).round() as u32;
     (alpha << 24) | (rgb << 16) | (rgb << 8) | rgb
 }
 
@@ -445,7 +461,7 @@ mod win {
                 .map(|_| Applied::LegacyMica)
                 .map_err(|e| format!("DWMWA_MICA_EFFECT: {e}")),
             WinMethod::AccentAcrylic => {
-                set_accent(hwnd, ACCENT_ENABLE_ACRYLICBLURBEHIND, super::accent_tint(options.dark))
+                set_accent(hwnd, ACCENT_ENABLE_ACRYLICBLURBEHIND, super::accent_tint_at(options.dark, options.tint))
                     .map(|_| Applied::AccentAcrylic)
             }
             WinMethod::AccentBlur => set_accent(hwnd, ACCENT_ENABLE_BLURBEHIND, 0).map(|_| Applied::AccentBlur),
@@ -665,6 +681,9 @@ mod tests {
     fn accent_tint_is_abgr_with_alpha() {
         assert_eq!(accent_tint(true), 0x99202020);
         assert_eq!(accent_tint(false), 0x99f3f3f3);
+        assert_eq!(accent_tint_at(true, 0), 0x00202020);
+        assert_eq!(accent_tint_at(true, 50), 0x4d202020);
+        assert_eq!(accent_tint_at(false, 200), 0x99f3f3f3);
     }
 
     #[test]
@@ -678,6 +697,7 @@ mod tests {
             assert_eq!(windows_build(), None);
         }
         assert!(Applied::AccentBlur.blurs() && !Applied::Cleared.blurs());
-        assert_eq!(Options::unfocused(true), Options { dark: true, unfocused: true });
+        assert_eq!(Options::unfocused(true), Options { dark: true, unfocused: true, tint: 100 });
+        assert_eq!(Options::new(false).with_tint(130).tint, 100);
     }
 }

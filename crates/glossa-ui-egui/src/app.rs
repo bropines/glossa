@@ -152,6 +152,10 @@ pub struct GlossaApp {
     backdrop_generation: u64,
     /// Whether the popup's backdrop really blurs (else it is shaded).
     pub popup_blurred: bool,
+    /// A target language picked in the popup's header, used by later
+    /// popups too until "automatic direction" is picked again (for this run
+    /// of the program only).
+    pub popup_target: Option<glossa_core::LangId>,
     /// The last OCR region, for "repeat last recognition".
     pub last_region: Option<glossa_core::ocr::Rect>,
 }
@@ -173,7 +177,7 @@ impl GlossaApp {
         // the whole interface as egui would by default.
         ctx.options_mut(|o| o.zoom_with_keyboard = false);
         let mut fonts = Fonts::default();
-        fonts.install_base(&ctx, &crate::fonts::base_families(&cfg.appearance.font_family, &look.theme));
+        fonts.install_base(&ctx, &cfg.appearance.font_family, &look.theme);
         *shell.wake.ctx.lock() = Some(ctx.clone());
 
         let events = engine.subscribe();
@@ -236,6 +240,7 @@ impl GlossaApp {
             child_frames: HashMap::new(),
             backdrop_generation: 0,
             popup_blurred: false,
+            popup_target: None,
             last_region: None,
         }
     }
@@ -346,7 +351,8 @@ impl GlossaApp {
             egui::ViewportId::ROOT,
             egui::ViewportCommand::SetTheme(if dark { egui::SystemTheme::Dark } else { egui::SystemTheme::Light }),
         );
-        if let Err(e) = glossa_platform::backdrop::apply(frame, kind, dark) {
+        let options = glossa_platform::backdrop::Options::new(dark).with_tint(self.cfg.appearance.backdrop_opacity);
+        if let Err(e) = glossa_platform::backdrop::apply_with(frame, kind, options) {
             tracing::debug!("main window backdrop: {e}");
         }
     }
@@ -440,7 +446,11 @@ impl GlossaApp {
             return;
         }
         let dark = self.look.theme.dark;
-        let options = if popup { backdrop::Options::unfocused(dark) } else { backdrop::Options::new(dark) };
+        let options = if popup {
+            backdrop::Options::unfocused(dark).with_tint(self.cfg.appearance.popup.backdrop_opacity)
+        } else {
+            backdrop::Options::new(dark).with_tint(self.cfg.appearance.backdrop_opacity)
+        };
         let result = backdrop::apply_hwnd_with(hwnd, kind, options);
         if popup {
             self.popup_blurred = result.as_ref().is_ok_and(|a| a.blurs());
@@ -586,8 +596,7 @@ impl GlossaApp {
         }
         self.look = Look::new(self.engine.current_theme(), &self.cfg);
         self.look.apply(&self.ctx, self.cfg.appearance.ui_scale);
-        let families = crate::fonts::base_families(&self.cfg.appearance.font_family, &self.look.theme);
-        self.fonts.install_base(&self.ctx, &families);
+        self.fonts.install_base(&self.ctx, &self.cfg.appearance.font_family, &self.look.theme);
         self.backdrop_dirty = true;
         self.backdrop_generation += 1;
         if let Some(m) = self.mouse.as_mut() {
@@ -713,6 +722,11 @@ impl GlossaApp {
     /// Run an action from a hotkey, the tray, the control API or a menu.
     pub fn perform(&mut self, action: Action, text: Option<String>) {
         crate::actions::perform(self, action, text);
+    }
+
+    /// Whether the control API is serving now (it starts with the program).
+    pub fn server_running(&self) -> bool {
+        self.server.is_some()
     }
 
     pub fn quit(&mut self) {
@@ -867,7 +881,14 @@ impl eframe::App for GlossaApp {
             || self.history.is_some()
             || self.about_open
             || self.keyboard_open;
-        if !self.main_visible && needs_ui {
+        // Only until one of those windows exists: eframe runs the ui anyway
+        // while a child window is shown (an immediate viewport not drawn in
+        // a pass is dropped, so one that exists is on screen), and the
+        // command asks for a repaint each time it is sent; sending it every
+        // frame kept the program drawing ~10 frames a second for as long as
+        // a popup stayed open.
+        let child_shown = ctx.input(|i| i.raw.viewports.keys().any(|id| *id != egui::ViewportId::ROOT));
+        if !self.main_visible && needs_ui && !child_shown {
             ctx.send_viewport_cmd_to(egui::ViewportId::ROOT, egui::ViewportCommand::RequestPaintWhileHidden);
         }
         self.maybe_unload(needs_ui);
@@ -913,6 +934,7 @@ impl eframe::App for GlossaApp {
         }
         self.frames += 1;
         let ctx = ui.ctx().clone();
+        tracing::trace!(frame = self.frames, causes = ?ctx.repaint_causes(), "frame");
         self.fonts.serve_requests(&ctx);
         self.save_zoom_later();
         if self.main_visible {

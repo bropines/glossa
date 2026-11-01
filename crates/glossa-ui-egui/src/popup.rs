@@ -53,9 +53,17 @@ pub struct PopupState {
     pub favorite: bool,
     /// A result from the OCR watch, shown without a translation round trip.
     pub from_ocr: bool,
+    /// The direction asked for: automatic (smart) unless a target was
+    /// picked in the header, or the languages swapped there.
+    pub pair: LangPair,
 }
 
 const ID: &str = "glossa-popup";
+
+/// The header's language list.
+fn target_menu_id() -> egui::Id {
+    egui::Id::unique("glossa-popup-target")
+}
 /// Unique among Glossa's windows: backdrops find the window by its title.
 const POPUP_TITLE: &str = "Glossa popup";
 
@@ -73,8 +81,11 @@ pub fn open(app: &mut GlossaApp, text: String, cursor: Option<(i32, i32)>) {
     let service = popup_service(app);
     let (pos, cursor_px) = anchor(app, cursor);
     let min_w = app.cfg.appearance.popup.min_width;
-    let job = translate(app, &text, &service);
+    let pair = popup_pair(app);
+    let job = translate(app, &text, &service, pair);
     let now = Instant::now();
+    // A language list left open by the last popup goes with it.
+    crate::dropdown::close(&app.ctx, target_menu_id());
     app.popup = Some(PopupState {
         source: text,
         job,
@@ -94,6 +105,7 @@ pub fn open(app: &mut GlossaApp, text: String, cursor: Option<(i32, i32)>) {
         hovered: false,
         favorite: false,
         from_ocr: false,
+        pair,
     });
     app.ctx.request_repaint();
 }
@@ -110,6 +122,8 @@ pub fn show_text(app: &mut GlossaApp, source: String, outcome: Option<Arc<Transl
         let (pos, cursor_px) = anchor(app, Some(near));
         (pos, false, cursor_px)
     });
+    // A language list left open by the last popup goes with it.
+    crate::dropdown::close(&app.ctx, target_menu_id());
     app.popup = Some(PopupState {
         source,
         job: 0,
@@ -129,6 +143,7 @@ pub fn show_text(app: &mut GlossaApp, source: String, outcome: Option<Arc<Transl
         hovered: false,
         favorite: false,
         from_ocr: true,
+        pair: popup_pair(app),
     });
     app.ctx.request_repaint();
 }
@@ -142,9 +157,13 @@ fn popup_service(app: &GlossaApp) -> String {
     }
 }
 
-fn translate(app: &mut GlossaApp, text: &str, service: &str) -> u64 {
-    // The popup always runs the smart direction: first language <-> second.
-    let pair = LangPair::new(LangId::AUTO, LangId::AUTO);
+/// The direction a new popup translates in: the smart direction (first
+/// language <-> second), or into the target picked in a popup's header.
+fn popup_pair(app: &GlossaApp) -> LangPair {
+    LangPair::new(LangId::AUTO, app.popup_target.unwrap_or(LangId::AUTO))
+}
+
+fn translate(app: &mut GlossaApp, text: &str, service: &str, pair: LangPair) -> u64 {
     let opts = TranslateOptions { provider: Some(service.to_owned()).filter(|s| !s.is_empty()), ..Default::default() };
     app.engine.translate_async(Slot::Popup, text.to_owned(), pair, opts)
 }
@@ -359,18 +378,21 @@ fn body(app: &mut GlossaApp, ui: &mut egui::Ui, st: &mut PopupState) -> (bool, e
     }
     st.hovered = hovered_now;
 
-    let fill = look.popup_back.gamma_multiply(look.popup_opacity);
+    // The theme's fill (already translucent over a backdrop, and thinned by
+    // the backdrop opacity) at the popup's own opacity.
+    let back = crate::style::from32(look.popup_back);
+    let back = back.with_alpha((back.a as f32 * look.popup_opacity).round() as u8);
     // Without a real blur behind it, a translucent popup can be shaded
     // toward black so its text stays readable.
-    let fill = crate::style::c(cfg.shaded(crate::style::from32(fill), app.popup_blurred));
+    let fill = crate::style::c(cfg.shaded(back, app.popup_blurred));
     let border = if cfg.show_border { look.popup_frame_width.max(0.0) } else { 0.0 };
     let frame = egui::Frame::new()
-        .fill(Color32::from_rgba_unmultiplied(fill.r(), fill.g(), fill.b(), (look.popup_opacity * 255.0) as u8))
+        .fill(fill)
         .stroke(egui::Stroke::new(border, look.popup_frame))
         .inner_margin(egui::Margin::symmetric(6, 4));
     // Base size of the header icons; `sized_button` applies the icon scale,
     // `icon` is what they really take, for measuring.
-    let icon_base = 18.0;
+    let icon_base = 18.0 * cfg.icon_scale.clamp(0.75, 2.5);
     let icon = (icon_base * look.icon_scale).round();
     // The service strip's height, kept free even while it is hidden so the
     // window does not grow when the pointer enters.
@@ -411,9 +433,9 @@ fn body(app: &mut GlossaApp, ui: &mut egui::Ui, st: &mut PopupState) -> (bool, e
         })
         .size()
         .x
-        + 8.0;
-    // The actions sit in the middle, so each side needs room for the wider
-    // of the title and the window buttons.
+        + 20.0; // and the down arrow after it
+                // The actions sit in the middle, so each side needs room for the wider
+                // of the title and the window buttons.
     let title_w = 2.0 * title_w.max(3.0 * (icon + 2.0)) + 5.0 * (icon + 1.0) + 24.0;
     // A size the user gave it wins; "Auto size" off is a fixed box at the
     // maximum size; otherwise the width follows the content.
@@ -426,7 +448,9 @@ fn body(app: &mut GlossaApp, ui: &mut egui::Ui, st: &mut PopupState) -> (bool, e
     let mut overflow = 0.0f32;
     let resp = egui::CentralPanel::no_frame().show(ui, |ui| {
         frame.show(ui, |ui| {
-            ui.set_width(desired_w - 14.0);
+            // The frame adds its margins and border around this, and the
+            // whole must be the window's width: wider, it was cut off.
+            ui.set_width((desired_w - 12.0 - 2.0 * border).max(40.0));
             if fixed {
                 // A fixed box: the frame fills the window.
                 ui.set_min_height(ui.available_height());
@@ -481,6 +505,35 @@ fn body(app: &mut GlossaApp, ui: &mut egui::Ui, st: &mut PopupState) -> (bool, e
                     st.pinned = true;
                 }
                 ui.ctx().send_viewport_cmd(egui::ViewportCommand::StartDrag);
+            }
+            // A click on it offers another target language, a swap, and
+            // back to the automatic direction.
+            if !st.from_ocr {
+                let menu_id = target_menu_id();
+                let r = title_resp.rect;
+                if r.right() + 12.0 <= title_rect.right() {
+                    // A small down arrow says it opens something.
+                    let (c, s) = (egui::pos2(r.right() + 7.0, r.center().y), 3.5);
+                    ui.painter().add(egui::Shape::convex_polygon(
+                        vec![c + vec2(-s, -s * 0.5), c + vec2(s, -s * 0.5), c + vec2(0.0, s * 0.6)],
+                        text_color.gamma_multiply(0.6),
+                        egui::Stroke::NONE,
+                    ));
+                }
+                if title_resp.clicked() {
+                    crate::dropdown::toggle_unfocused(ui.ctx(), menu_id);
+                }
+                let anchor = title_resp.on_hover_text(app.t("popup.change_target")).rect;
+                if crate::dropdown::is_hovered(ui.ctx(), menu_id) {
+                    // The pointer is over the list, not the popup: keep it.
+                    st.last_hover = Instant::now();
+                    st.hovered = true;
+                }
+                let picked = crate::dropdown::show(ui, menu_id, anchor, 220.0, 460.0, |ui, _| target_menu(app, st, ui))
+                    .flatten();
+                if let Some(pair) = picked {
+                    retarget(app, st, pair);
+                }
             }
 
             // What to do with the translation, in the middle of the window.
@@ -570,7 +623,7 @@ fn body(app: &mut GlossaApp, ui: &mut egui::Ui, st: &mut PopupState) -> (bool, e
 
             // -- body ---------------------------------------------------------
             let scroll_h = if fixed {
-                (ui.available_height() - strip_h - 2.0).max(20.0)
+                (ui.available_height() - strip_h - 2.0 * ui.spacing().item_spacing.y).max(20.0)
             } else {
                 cfg.max_height - 40.0 - icon - strip_h
             };
@@ -616,7 +669,9 @@ fn body(app: &mut GlossaApp, ui: &mut egui::Ui, st: &mut PopupState) -> (bool, e
                         let y = ui.cursor().top();
                         ui.painter().hline(ui.max_rect().x_range(), y, separator);
                         ui.add_space(4.0);
-                        let rest = (ui.available_height() - strip_h - 2.0).max(20.0);
+                        // Less the spacing before this area and before the
+                        // strip, so the box ends at the window's edge.
+                        let rest = (ui.available_height() - strip_h - 2.0 * ui.spacing().item_spacing.y).max(20.0);
                         egui::ScrollArea::vertical()
                             .id_salt("popup-secondary")
                             .max_height(rest)
@@ -649,7 +704,7 @@ fn body(app: &mut GlossaApp, ui: &mut egui::Ui, st: &mut PopupState) -> (bool, e
             // -- service strip, while the pointer is over the popup ----------
             if fixed {
                 // Keep the strip at the bottom of a fixed box.
-                let spare = ui.available_height() - strip_h;
+                let spare = ui.available_height() - strip_h - ui.spacing().item_spacing.y;
                 if spare > 0.0 {
                     ui.add_space(spare);
                 }
@@ -681,7 +736,7 @@ fn body(app: &mut GlossaApp, ui: &mut egui::Ui, st: &mut PopupState) -> (bool, e
                     st.service = id.clone();
                     st.busy = true;
                     st.partial = None;
-                    st.job = translate(app, &st.source, &id);
+                    st.job = translate(app, &st.source, &id, st.pair);
                     let remembered = id.clone();
                     let _ = app.engine.update_config(move |c| c.services.popup_active = remembered);
                 }
@@ -701,6 +756,101 @@ fn body(app: &mut GlossaApp, ui: &mut egui::Ui, st: &mut PopupState) -> (bool, e
         None => cfg.max_height,
     };
     (close, vec2(desired_w.ceil(), h.ceil()))
+}
+
+/// The header's language menu: the automatic direction, a swap of the
+/// languages just used, recent targets, then every language with a search.
+/// Returns the direction picked.
+fn target_menu(app: &GlossaApp, st: &PopupState, ui: &mut egui::Ui) -> Option<LangPair> {
+    let mut out = None;
+    let to = st.pair.to;
+    let automatic = st.pair == LangPair::new(LangId::AUTO, LangId::AUTO);
+    if ui.selectable_label(automatic, app.t("popup.target_auto")).clicked() {
+        out = Some(LangPair::new(LangId::AUTO, LangId::AUTO));
+    }
+    if let Some(o) = st.outcome.as_ref().filter(|o| o.pair.from.is_language() && o.pair.to.is_language()) {
+        if o.pair.from != o.pair.to {
+            let label = app.locale.fmt_args("popup.swap", &[o.pair.to.english_name(), o.pair.from.english_name()]);
+            if ui.button(label).clicked() {
+                out = Some(LangPair::new(o.pair.to, o.pair.from));
+            }
+        }
+    }
+    ui.separator();
+    let g = &app.cfg.general;
+    let disabled = &app.cfg.languages.disabled;
+    let mut recent: Vec<LangId> = Vec::new();
+    for l in g.recent_pairs.iter().map(|p| p.to).chain([g.second_language, g.first_language]) {
+        if l.is_language() && !recent.contains(&l) && !disabled.contains(&l) && recent.len() < 6 {
+            recent.push(l);
+        }
+    }
+    for l in recent {
+        if ui.selectable_label(to == l, l.english_name()).clicked() {
+            out = Some(LangPair::new(LangId::AUTO, l));
+        }
+    }
+    ui.separator();
+    let search_id = egui::Id::unique("popup-target-search");
+    let mut search: String = ui.ctx().data(|d| d.get_temp(search_id)).unwrap_or_default();
+    let r =
+        ui.add(egui::TextEdit::singleline(&mut search).hint_text(app.t("lang.search")).desired_width(f32::INFINITY));
+    if !r.has_focus() {
+        r.request_focus();
+    }
+    let needle = search.trim().to_lowercase();
+    let mut langs: Vec<LangId> = LangId::all()
+        .filter(|l| l.is_language() && !disabled.contains(l))
+        .filter(|l| {
+            needle.is_empty()
+                || l.english_name().to_lowercase().contains(&needle)
+                || l.native_name().to_lowercase().contains(&needle)
+                || l.bcp47().eq_ignore_ascii_case(&needle)
+        })
+        .collect();
+    langs.sort_by_key(|l| l.english_name());
+    if ui.input(|i| i.key_pressed(egui::Key::Enter)) && !needle.is_empty() {
+        out = out.or(langs.first().map(|l| LangPair::new(LangId::AUTO, *l)));
+    }
+    egui::ScrollArea::vertical().id_salt("popup-target-list").max_height(240.0).show(ui, |ui| {
+        for l in langs {
+            if ui.selectable_label(to == l, l.english_name()).clicked() {
+                out = Some(LangPair::new(LangId::AUTO, l));
+            }
+        }
+    });
+    if out.is_some() {
+        search.clear();
+        ui.close();
+    }
+    ui.ctx().data_mut(|d| d.insert_temp(search_id, search));
+    out
+}
+
+/// Translate the popup's text again in `pair`. A picked target stays for
+/// later popups (until the automatic direction is picked again). A swap
+/// (a pair with a source language) works as the main window's: the
+/// translation becomes the text and is translated back, for this popup only.
+fn retarget(app: &mut GlossaApp, st: &mut PopupState, pair: LangPair) {
+    if pair.from != LangId::AUTO {
+        if let Some(o) = st.outcome.as_ref() {
+            st.source = o.translation.text.clone();
+        }
+    } else {
+        app.popup_target = Some(pair.to).filter(|l| l.is_language());
+        let detected = st.outcome.as_ref().map(|o| o.pair.from).unwrap_or(LangId::AUTO);
+        let used = LangPair::new(detected, pair.to);
+        if used.from.is_language() && used.to.is_language() && used.from != used.to {
+            app.cfg.remember_pair(used);
+            let _ = app.engine.update_config(move |c| c.remember_pair(used));
+        }
+    }
+    st.pair = pair;
+    st.busy = true;
+    st.partial = None;
+    st.error = None;
+    let (source, service) = (st.source.clone(), st.service.clone());
+    st.job = translate(app, &source, &service, pair);
 }
 
 /// `f32::clamp` that cannot panic. When the window is smaller than the layout

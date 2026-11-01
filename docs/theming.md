@@ -171,6 +171,16 @@ Every theme has workable defaults (the `*_alpha` factors), so classic themes
 work with backdrops too; the Fluent themes give the WinUI tokens as colours.
 The material is tinted dark or light to match the theme's `dark`.
 
+**Backdrop opacity.** `[appearance] backdrop_opacity` and
+`[appearance.popup] backdrop_opacity` (0 - 100 %, *Options → Appearance*)
+scale how much colour covers the material, the way Windhawk's *Translucent
+Windows* mod does: the alpha of Glossa's own `[backdrop]` fills, and for the
+accent-policy acrylic (the popup, Windows 10, Windows 11 21H2) the tint the
+compositor draws the blur with. 100 is the theme as made; 0 leaves only the
+material (and, for acrylic, an untinted blur). Mica, Mica Alt, Windows 11's
+own Acrylic and macOS vibrancy tint themselves and give no way to change
+that tint, so there the slider only thins Glossa's fills.
+
 `[appearance.popup] shade` (0 - 90) darkens a translucent popup when no
 backdrop blurs what is behind it, so its text stays readable over a busy
 page.

@@ -309,7 +309,7 @@ fn language_names() -> String {
 
 /// The interface faces to try, in order: the one chosen in the options,
 /// then the theme's (`fonts.family`, then `fonts.fallbacks`).
-pub fn base_families<'a>(chosen: &'a str, theme: &'a glossa_core::Theme) -> Vec<&'a str> {
+fn base_families<'a>(chosen: &'a str, theme: &'a glossa_core::Theme) -> Vec<&'a str> {
     std::iter::once(chosen).filter(|f| !f.trim().is_empty()).chain(theme.fonts.candidates()).collect()
 }
 
@@ -319,13 +319,23 @@ impl Fonts {
     /// (Segoe UI covers Arabic, Hebrew, Armenian and Georgian) then needs no
     /// further loading. Called again after a theme change; a face once loaded
     /// stays (egui cannot drop one), the new one just goes first.
-    pub fn install_base(&mut self, ctx: &egui::Context, families: &[&str]) {
-        let Some((path, index)) = base_font(families) else { return };
+    pub fn install_base(&mut self, ctx: &egui::Context, chosen: &str, theme: &glossa_core::Theme) {
+        let Some((path, index)) = base_font(&base_families(chosen, theme), chosen) else {
+            #[cfg(target_os = "macos")]
+            self.ensure(ctx, "\u{2192}");
+            return;
+        };
         if self.base.as_ref() == Some(&path) {
             return;
         }
         let name = format!("ui:{}", path.display());
         if self.add(ctx, &name, &path, index, FontPriority::Highest) {
+            // Of the macOS faces only SF covers the arrows and symbols the
+            // interface draws; with another, Apple Symbols backs it up.
+            #[cfg(target_os = "macos")]
+            if !path.ends_with("SFNS.ttf") {
+                self.ensure(ctx, "\u{2192}");
+            }
             self.base = Some(path);
         }
     }
@@ -418,8 +428,9 @@ fn squash(family: &str) -> String {
     family.chars().filter(|c| !c.is_whitespace()).collect::<String>().to_lowercase()
 }
 
+/// `chosen` is the family picked in the options (empty for the theme's).
 #[cfg(windows)]
-fn base_font(families: &[&str]) -> Option<(PathBuf, u32)> {
+fn base_font(families: &[&str], _chosen: &str) -> Option<(PathBuf, u32)> {
     let dir = fonts_dir();
     for family in families.iter().filter(|f| !f.trim().is_empty()) {
         let squashed = squash(family);
@@ -428,6 +439,11 @@ fn base_font(families: &[&str]) -> Option<(PathBuf, u32)> {
             if p.is_file() {
                 return Some((p, 0));
             }
+        }
+        // Most files are not named after their family ("Times New Roman" is
+        // times.ttf); the system's list of installed fonts says which is.
+        if let Some(found) = glossa_platform::fonts::registered_family(family) {
+            return Some(found);
         }
     }
     let p = dir.join("segoeui.ttf");
@@ -457,11 +473,35 @@ fn fc_match(pattern: &str) -> Option<(PathBuf, u32, String)> {
 /// "Segoe UI Variable") is passed over; with none left, egui's own face is
 /// fine for the chrome.
 #[cfg(not(windows))]
-fn base_font(families: &[&str]) -> Option<(PathBuf, u32)> {
-    families.iter().filter(|f| !f.trim().is_empty()).find_map(|family| {
+fn base_font(families: &[&str], _chosen: &str) -> Option<(PathBuf, u32)> {
+    let found = families.iter().filter(|f| !f.trim().is_empty()).find_map(|family| {
         let out = std::process::Command::new("fc-match").args(["-f", "%{family}", family]).output().ok()?;
         let found = squash(&String::from_utf8_lossy(&out.stdout));
         found.split(',').any(|f| f == squash(family)).then(|| fc_match(family)).flatten().map(|(p, i, _)| (p, i))
+    });
+    #[cfg(target_os = "macos")]
+    {
+        found.or_else(|| mac_base_font(_chosen))
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        found
+    }
+}
+
+/// macOS has no fontconfig unless one was installed: the family picked in
+/// the options, found in the font folders (a scan, done once per run and
+/// only for a family the user picked), else the system's interface face.
+/// The themes' families are Windows faces, and egui's own face lacks arrows
+/// and other symbols the interface uses ("→" in the popup's title).
+#[cfg(target_os = "macos")]
+fn mac_base_font(chosen: &str) -> Option<(PathBuf, u32)> {
+    Some(chosen).filter(|f| !f.trim().is_empty()).and_then(glossa_platform::fonts::find_family).or_else(|| {
+        first_existing(&[
+            "/System/Library/Fonts/SFNS.ttf",
+            "/System/Library/Fonts/HelveticaNeue.ttc",
+            "/System/Library/Fonts/Helvetica.ttc",
+        ])
     })
 }
 

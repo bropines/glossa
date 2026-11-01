@@ -46,6 +46,13 @@ struct State {
     area: Option<Rect>,
     #[cfg_attr(not(windows), allow(dead_code))]
     hwnd: Option<isize>,
+    /// Frames in a row the window has not had the size asked for.
+    resizing: u8,
+    /// Opened for a window that does not keep the keyboard focus (the
+    /// selection popup): the focus moving says nothing about it.
+    ignore_focus: bool,
+    /// The pointer was over the list last frame.
+    hovered: bool,
 }
 
 fn state(ctx: &Context, id: Id) -> Option<State> {
@@ -54,6 +61,11 @@ fn state(ctx: &Context, id: Id) -> Option<State> {
 
 pub fn is_open(ctx: &Context, id: Id) -> bool {
     state(ctx, id).is_some()
+}
+
+/// Whether the dropdown `id` is open with the pointer over it.
+pub fn is_hovered(ctx: &Context, id: Id) -> bool {
+    state(ctx, id).is_some_and(|s| s.hovered)
 }
 
 /// Where the pass number of the last pass that showed any dropdown is kept.
@@ -91,6 +103,18 @@ pub fn toggle(ctx: &Context, id: Id) {
         close(ctx, id);
     } else {
         open(ctx, id);
+    }
+}
+
+/// [`toggle`] for a window that does not keep the keyboard focus: the list
+/// stays open whatever has the focus, until a pick, Escape, a click elsewhere
+/// in that window, or the window going away.
+pub fn toggle_unfocused(ctx: &Context, id: Id) {
+    if is_open(ctx, id) {
+        close(ctx, id);
+    } else {
+        ctx.data_mut(|d| d.insert_temp(id, State { ignore_focus: true, ..State::default() }));
+        ctx.request_repaint();
     }
 }
 
@@ -155,8 +179,9 @@ pub fn show<R>(
         (presses, i.focused, i.viewport().inner_rect, i.pixels_per_point())
     });
     let inside = |p: &Pos2| anchor.contains(*p) || st.area.is_some_and(|a| a.contains(*p));
-    let lost_focus = st.age > 3 && !parent_focused && !st.focused;
+    let lost_focus = st.age > 3 && !st.ignore_focus && !parent_focused && !st.focused;
     if presses.iter().any(|p| !inside(p)) || lost_focus {
+        tracing::trace!(?presses, lost_focus, "dropdown closed from outside");
         close(&ctx, id);
         return None;
     }
@@ -169,6 +194,7 @@ pub fn show<R>(
         show_area(&ctx, id, &mut st, anchor, min_width, max_height, add)
     };
     if close_now {
+        tracing::trace!("dropdown closed from inside");
         close(&ctx, id);
     } else {
         ctx.data_mut(|d| d.insert_temp(id, st));
@@ -246,11 +272,13 @@ fn show_window<R>(
     let mut measured = None;
     let mut actual = None;
     let mut focused = false;
+    let mut hovered = false;
     // The viewport callback may in principle run more than once; the content
     // is drawn the first time.
     let (mut add, mut forwarded) = (Some(add), Some(forwarded));
     ctx.show_viewport_immediate(viewport, builder, |ui, _class| {
         focused = ui.input(|i| i.focused);
+        hovered = ui.input(|i| i.pointer.has_pointer());
         if let Some(events) = forwarded.take().filter(|e| !focused && !e.is_empty()) {
             ui.ctx().input_mut(|i| i.events.extend(events));
         }
@@ -267,16 +295,30 @@ fn show_window<R>(
         });
     });
     st.focused = focused;
+    st.hovered = hovered;
 
     if let Some(c) = measured {
         let c = (c + Vec2::splat(2.0 * EDGE)).ceil();
         // The width only grows while it is open (a search narrowing the
         // list should not make it jump); the height follows the content.
         let w = st.content.map_or(c.x, |old| old.x.max(c.x));
-        st.content = Some(vec2(w, c.y));
+        let new = vec2(w, c.y);
+        // Content that changed size without any input (a list filled in by
+        // a worker) needs another frame for the window to follow.
+        if st.content.is_some_and(|old| (old - new).abs().max_elem() > 0.5) {
+            ctx.request_repaint();
+        }
+        st.content = Some(new);
+    }
+    // A window being resized has to be drawn again at its new size, input
+    // or not; a few frames, in case the system will not give it that size.
+    let sized = actual.is_some_and(|a| (a - size).abs().max_elem() < 1.5);
+    st.resizing = if sized { 0 } else { st.resizing.saturating_add(1) };
+    if st.shown && (1..=10).contains(&st.resizing) {
+        ctx.request_repaint_after(std::time::Duration::from_millis(16));
     }
     if !st.shown {
-        let settled = actual.is_some_and(|a| (a - size).abs().max_elem() < 1.5) && st.age >= 2;
+        let settled = sized && st.age >= 2;
         if settled || st.age > 8 {
             st.shown = true;
         }

@@ -93,7 +93,7 @@ installation) but nothing reads it yet.
 | key | type | default | set in | what it does |
 |---|---|---|---|---|
 | `ui_language` | string | `""` | Options → Basics | Interface language: a code (`ru`), a language name, or a classic locale folder name. Empty follows `GLOSSA_LANG`, then the system language. |
-| `start_with_system` | bool | `false` | not used | *Options → Basics → Start with Windows* adds or removes the system's autostart entry (`glossa --hidden`) directly and does not use this key; the classic import fills it in. |
+| `start_with_system` | bool | `false` | Options → Basics, *Start with Windows* (*Open at login* on macOS) | Whether Glossa starts with the session. The checkbox shows and writes the system's own entry (`glossa --hidden`): the `Run` registry key on Windows, `~/Library/LaunchAgents/app.glossa.plist` on macOS, `~/.config/autostart/glossa.desktop` on Linux; Apply records the choice here. While it is on, each start points the entry at the running copy of the program, so it survives the program being moved; an entry removed elsewhere (Task Manager, System Settings) is not added back. The classic import fills it in, and the checkbox then offers it. Ignored with `GLOSSA_HOME` set. |
 | `first_language` | language | `46` (Russian) | Options → Basics | Your own language. With smart direction, text in this language is translated into the second; anything else into this one. Not a real language (such as `auto`) becomes the default, Russian. |
 | `second_language` | language | `17` (English) | Options → Basics | The language your own is usually translated into. Not a real language becomes English. |
 | `speech_language` | language | `46` (Russian) | Options → Basics | Language for speech input. |
@@ -103,9 +103,9 @@ installation) but nothing reads it yet.
 | `recent_pairs` | array of language pairs | ru→en, en→ru | kept by the program | Recently used directions, newest first, offered in the ⋮ menu. At most 12; pairs with `auto` are not added. A pair listed more than once keeps only its first (newest) place. |
 | `instant_translation` | bool | `false` | main window menu | Translate as you type, after a pause. |
 | `instant_delay_ms` | integer | `700` | file only | The pause before an instant translation, 150–5000 ms. |
-| `spell_checking` | bool | `true` | not used yet | |
+| `spell_checking` | bool | `true` | file only | Kept from the classic settings; there is no spell checker yet, and no switch for it in the options. |
 | `back_translation` | bool | `false` | main window menu | Translate the translation back, shown in a third pane. |
-| `read_phonetically` | bool | `false` | main window menu | Stored, but not used yet. |
+| `read_phonetically` | bool | `false` | file only | Kept from the classic settings; not used yet, so the main window menu no longer shows it. |
 | `clear_on_drag_drop` | bool | `true` | main window menu | Clear the source pane before text is dropped on it. |
 | `auto_cleanup_translation` | bool | `false` | main window menu | Clear the translation when the source text changes. |
 | `save_contents_on_exit` | bool | `true` | main window menu | Keep the panes' text across restarts, in [`[contents]`](#contents). |
@@ -174,7 +174,7 @@ programs cannot register global hotkeys, bind keys to the
 
 | key | type | default | set in | what it does |
 |---|---|---|---|---|
-| `mode` | `"system"`, `"none"`, `"manual"`, `"auto"` | `"system"` | Options → Internet | `system`: the `HTTPS_PROXY`/`ALL_PROXY`/`HTTP_PROXY` environment variables (with `NO_PROXY`), else on Windows the system proxy. `none`: connect directly. `manual`: the fields below. `auto` is an alias of `system`: proxy auto-discovery (WPAD, PAC scripts) is not implemented; the value is kept so classic settings and older files load. |
+| `mode` | `"system"`, `"none"`, `"manual"`, `"auto"` | `"system"` | Options → Internet | `system`: the `HTTPS_PROXY`/`ALL_PROXY`/`HTTP_PROXY` environment variables (with `NO_PROXY`), else on Windows the system proxy. `none`: connect directly. `manual`: the fields below. `auto` (the classic choice) is an alias of `system`: proxy auto-discovery (WPAD, PAC scripts) is not implemented; the value is kept so classic settings load, and the options show it as *System*. |
 | `scheme` | `"http"`, `"https"`, `"socks4"`, `"socks5"` | `"http"` | Options → Internet | The proxy's protocol, with `manual`. |
 | `host` | string | `"127.0.0.1"` | Options → Internet | The proxy's address, with `manual`. Empty means no proxy. |
 | `port` | integer | `8080` | Options → Internet | 1–65535. |
@@ -252,6 +252,7 @@ One table per endpoint. Each becomes a translator of its own; its settings
 | `renderer` | `"open_gl"`, `"gpu"`, `"software"` | `"open_gl"` | Options → Appearance | How windows are drawn: OpenGL (the lightest), the GPU through Direct3D 12, Vulkan or Metal, or a software rasteriser. Takes effect at the next start. `GLOSSA_RENDERER` overrides it for one run. The file is written with `open_gl`; `glow`, `opengl` and `gl` (the names `GLOSSA_RENDERER` uses) are read as `open_gl`, and `wgpu` as `gpu`. |
 | `unload_graphics_after_secs` | integer | `45` | Options → Appearance | After this long with every window hidden, the window system is unloaded and only the tray, hotkeys and engine stay in memory. `0` keeps it loaded. |
 | `backdrop` | `"none"`, `"mica"`, `"micaalt"`, `"acrylic"`, `"blur"` | `"none"` | Options → Appearance | The system material behind the main window and the other windows (Windows 11; vibrancy on macOS). `mica_alt` and `mica-alt` are read as `micaalt`. See [theming.md](theming.md#backdrops). |
+| `backdrop_opacity` | integer | `100` | Options → Appearance | 0–100 percent: how much of the theme's fills, and of the tint an Acrylic or blur backdrop is drawn with, cover the material. Lower lets more of what is behind show through (like the Windhawk *Translucent Windows* mod). Mica and macOS vibrancy tint themselves: there only Glossa's own fills thin out. |
 | `popup` | table | | | See [`[appearance.popup]`](#appearancepopup). |
 
 ### `[appearance.popup]`
@@ -270,6 +271,8 @@ One table per endpoint. Each becomes a translator of its own; its settings
 | `max_width` | number | `600.0` | Options → Appearance → Popup | Widest popup, 160–4000. |
 | `max_height` | number | `480.0` | file only | Tallest popup before its text scrolls, 80–4000. |
 | `backdrop` | as `[appearance] backdrop` | `"none"` | Options → Appearance → Popup | The material behind the popup; `acrylic` suits it best. |
+| `backdrop_opacity` | integer | `100` | Options → Appearance → Popup | As `[appearance] backdrop_opacity`, for the popup. |
+| `icon_scale` | number | `1.0` | Options → Appearance → Popup | Size of the popup's header icons, 0.75–2.5, as a multiple of `[appearance] icon_scale`. The header grows with them. |
 | `shade` | integer | `0` | Options → Appearance → Popup | 0–90 percent: how much a translucent popup is darkened when nothing blurs what is behind it, to keep the text readable. |
 | `back` | colour | the theme's | Options → Appearance → Popup | Background colour override. Editable only with *Enable window style* off. Absent keeps the theme's. |
 | `text` | colour | the theme's | Options → Appearance → Popup | Text colour override, likewise. |
@@ -320,9 +323,9 @@ classes `SysListView32`, `SysTreeView32`, `ListBox`, `ScrollBar`, `ComboBox`,
 |---|---|---|---|---|
 | `browser` | string | `""` | Options → Advanced | Command to open links with. Empty uses the system's default browser. |
 | `copy_action` | `"ctrl_c"`, `"ctrl_insert"`, `"accessibility_only"` | `"ctrl_c"` | Options → Advanced | How the selection is copied out of another program when the accessibility interface does not give it: Ctrl+C, Ctrl+Insert (for terminals where Ctrl+C interrupts), or never send a keystroke. |
-| `layout_indicator` | `"none"`, `"caret"`, `"tray"` | `"none"` | not used yet | |
+| `layout_indicator` | `"none"`, `"caret"`, `"tray"` | `"none"` | file only | Kept from the classic settings (a keyboard layout indicator); not implemented, not in the options. |
 | `preferred_domain` | string | `"com"` | Options → Advanced | The Google domain to use: `com`, `ru`, `com.ua`, `de`, `co.jp`… |
-| `gui_translation` | bool | `false` | not used yet | |
+| `gui_translation` | bool | `false` | file only | Kept from the classic settings (translating other programs' controls); not implemented, not in the options. |
 | `slower_listen_repeat` | bool | `true` | Options → Advanced | Listening to the same text again within five seconds plays it slowly. |
 | `remove_line_breaks` | bool | `false` | Options → Advanced | Join lines before translating. |
 | `copy_wait_ms` | integer | `250` | Options → Advanced | How long to wait for the other program to put the selection on the clipboard after the copy keystroke, 20–3000 ms. |
@@ -416,7 +419,7 @@ Apple Vision*.
 
 | key | type | default | set in | what it does |
 |---|---|---|---|---|
-| `check_automatically` | bool | `false` | Options → Updates | Stored; there is no update check yet. |
+| `check_automatically` | bool | `false` | file only | Kept; there is no update server yet, so *Options → Updates* has no switch for it. |
 
 ### `[server]`
 

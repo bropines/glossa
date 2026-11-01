@@ -24,6 +24,7 @@
 //! | Layout conversion ([`layout`])  | pure + switch foreground layout | pure                    | pure                                            | pure                           |
 //! | Window backdrops ([`backdrop`]) | Mica / Acrylic / blur (DWM)     | KWin blur-behind        | none                                            | `NSVisualEffectView`           |
 //! | Accent, dark mode ([`appearance`]) | registry                     | `gsettings` (dark only) | `gsettings` (dark only)                         | `NSColor`, `AppleInterfaceStyle` |
+//! | Installed fonts ([`fonts`])     | font folders, `name` tables     | `fc-list`               | `fc-list`                                       | font folders, `name` tables    |
 //!
 //! Threading: [`hotkeys::HotkeyService`] must be created on the thread that
 //! runs the event loop on Windows (the hotkeys are bound to that thread's
@@ -38,6 +39,7 @@ pub mod backdrop;
 pub mod capture;
 pub mod clipboard;
 pub mod crash;
+pub mod fonts;
 pub mod hotkeys;
 pub mod idle;
 pub mod input;

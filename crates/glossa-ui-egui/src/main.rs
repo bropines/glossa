@@ -335,6 +335,7 @@ fn build_shell(engine: Engine, wake: Arc<Wake>) -> Shell {
             .map_err(|e| tracing::warn!("no tray icon: {e}"))
             .ok()
     };
+    refresh_autostart(&cfg);
     let (server, server_error) = if cfg.server.enabled {
         match glossa_engine::server::start(engine.clone()) {
             Ok(h) => (Some(h), None),
@@ -553,6 +554,23 @@ fn init_logging(paths: &Paths) {
         }
         Err(_) => {
             let _ = tracing_subscriber::fmt().with_env_filter(filter).try_init();
+        }
+    }
+}
+
+/// With "start with the system" on, point the autostart entry at this copy
+/// of the program, so it survives the program being moved or updated in a
+/// new folder. An entry the user removed elsewhere is not added back, and a
+/// throwaway data folder (`GLOSSA_HOME`) leaves the system alone.
+fn refresh_autostart(cfg: &glossa_core::Config) {
+    use glossa_platform::autostart;
+    if !cfg.general.start_with_system || std::env::var_os("GLOSSA_HOME").is_some() || !autostart::is_autostart_enabled()
+    {
+        return;
+    }
+    if let Ok(exe) = std::env::current_exe() {
+        if let Err(e) = autostart::set_autostart(true, &exe, &["--hidden".to_owned()]) {
+            tracing::debug!("autostart entry not refreshed: {e}");
         }
     }
 }

@@ -527,7 +527,17 @@ pub struct Appearance {
     /// (options, dictionary, history). See [`Backdrop`].
     #[serde(default)]
     pub backdrop: Backdrop,
+    /// 0 to 100 percent: how much of the windows' own fills and of the
+    /// material's tint is drawn over a backdrop. 100 is the theme as made;
+    /// lower lets more of what is behind show through. Mica tints itself, so
+    /// there only the fills change.
+    #[serde(default = "full_percent")]
+    pub backdrop_opacity: u8,
     pub popup: PopupConfig,
+}
+
+fn full_percent() -> u8 {
+    100
 }
 
 /// A material the window system draws behind a window: what WinUI calls a
@@ -670,6 +680,7 @@ impl Default for Appearance {
             renderer: Renderer::OpenGl,
             unload_graphics_after_secs: 45,
             backdrop: Backdrop::None,
+            backdrop_opacity: 100,
             popup: PopupConfig::default(),
         }
     }
@@ -713,6 +724,17 @@ pub struct PopupConfig {
     /// busy page. 0 leaves the fill as the theme and transparency make it.
     #[serde(default)]
     pub shade: u8,
+    /// [`Appearance::backdrop_opacity`] for the popup.
+    #[serde(default = "full_percent")]
+    pub backdrop_opacity: u8,
+    /// Size of the popup's header icons, as a multiple of the toolbar icons'
+    /// size (`icon_scale`). The header grows with them.
+    #[serde(default = "one")]
+    pub icon_scale: f32,
+}
+
+fn one() -> f32 {
+    1.0
 }
 
 impl Default for PopupConfig {
@@ -735,6 +757,8 @@ impl Default for PopupConfig {
             max_height: 480.0,
             backdrop: Backdrop::None,
             shade: 0,
+            backdrop_opacity: 100,
+            icon_scale: 1.0,
         }
     }
 }

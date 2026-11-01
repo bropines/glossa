@@ -386,10 +386,18 @@ pub static STRINGS: &[(&str, &str, Option<&str>)] = &[
     ("popup.copy", "Copy translation to clipboard", Some("w:6:10:40")),
     ("popup.title_direction", "%s to %s (%s)", None),
     ("popup.reset_size", "Back to automatic size", None),
+    ("popup.change_target", "Click to translate into another language", None),
+    ("popup.target_auto", "Automatic direction", None),
+    ("popup.swap", "Swap: translate from %s into %s", None),
     ("mouse.translate", "Translate the selection", None),
     ("options.appearance.backdrop", "Window backdrop:", None),
     ("options.appearance.popup_backdrop", "Popup backdrop:", None),
     ("options.appearance.popup_shade", "Shade when not blurred (0 - 90):", None),
+    (
+        "options.appearance.popup_shade_hint",
+        "Darkens a see-through popup when nothing blurs what is behind it, so its text stays readable.",
+        None,
+    ),
     ("options.backdrop.none", "None", None),
     ("options.backdrop.blur", "Blur", None),
     ("options.backdrop.needs_opengl", "Backdrops need Windows, or macOS with the OpenGL engine.", None),
@@ -405,6 +413,13 @@ pub static STRINGS: &[(&str, &str, Option<&str>)] = &[
     ("options.restart_now", "Restart now", None),
     ("options.restart_later", "Later", None),
     ("options.appearance.icon_scale", "Icon size:", None),
+    ("options.appearance.popup_icon_scale", "Header icon size:", None),
+    ("options.appearance.backdrop_opacity", "Backdrop opacity:", None),
+    (
+        "options.appearance.backdrop_opacity_hint",
+        "How much of the theme's colour (and of Acrylic's tint) covers the backdrop; lower shows more of what is behind. Mica tints itself: only the window's own colours thin out there.",
+        None,
+    ),
     ("options.appearance.show_border", "Show the popup border", None),
     ("popup.replace", "Replace selected text", Some("w:6:10:50")),
     // -- dictionary ---------------------------------------------------------
@@ -538,6 +553,11 @@ pub static STRINGS: &[(&str, &str, Option<&str>)] = &[
     ("options.appearance.renderer_opengl", "OpenGL — lightest", None),
     ("options.appearance.renderer_gpu", "GPU — Direct3D 12 / Vulkan / Metal", None),
     ("options.appearance.renderer_software", "Software — no GPU (WARP)", None),
+    (
+        "options.appearance.renderer_hint",
+        "How windows are drawn. OpenGL uses the least memory; try another if windows stay black or flicker.",
+        None,
+    ),
     ("options.appearance.unload_after", "Unload graphics after hiding, s (0 = never):", None),
     (
         "options.appearance.unload_hint",
@@ -580,7 +600,10 @@ pub static STRINGS: &[(&str, &str, Option<&str>)] = &[
         None,
     ),
     ("action.show_main_window", "Show main window", Some("w:16:1165:0")),
-    ("action.show_popup", "Show popup window", Some("w:16:1165:1")),
+    // The classic "Show popup window" (w:16:1165:1) read as if it only
+    // opened a window; it translates the selection there, so it is not
+    // mapped and the classic files' wording does not win over this one.
+    ("action.show_popup", "Translate selection", None),
     ("action.show_dictionary", "Show dictionary window", Some("w:16:1165:2")),
     ("action.show_history", "Show history window", Some("w:16:1165:3")),
     ("action.show_keyboard", "Show keyboard window", Some("w:16:1165:4")),
@@ -618,11 +641,43 @@ pub static STRINGS: &[(&str, &str, Option<&str>)] = &[
     ("options.advanced.mouse_mode_group", "Mouse mode", Some("w:17:1186")),
     ("options.advanced.mouse_ctrl_only", "Enable mouse mode only when Ctrl is pressed", Some("w:17:1155")),
     ("options.advanced.tray_toggles_mouse", "Click on system tray icon switches mouse mode", Some("w:17:1156")),
+    (
+        "options.advanced.mouse_ctrl_only_hint",
+        "Only a selection made with Ctrl held down is translated; ordinary selections are left alone.",
+        None,
+    ),
+    ("options.advanced.tray_toggles_mouse_hint", "Otherwise a click on the tray icon shows or hides the main window.", None),
     ("options.advanced.api_keys", "API keys", Some("w:17:1158")),
     ("options.advanced.ocr_key", "OCR API key:", Some("w:17:1195")),
     ("options.advanced.browser_default", "system default", None),
     ("options.advanced.copy_accessibility", "Accessibility only", None),
     ("options.advanced.copy_wait", "Selection copy wait, ms:", None),
+    (
+        "options.advanced.browser_hint",
+        "Opens a service's website (the service name in the main window) and links. Empty uses the system's default browser; otherwise the path of a browser's program.",
+        None,
+    ),
+    (
+        "options.advanced.copy_action_hint",
+        "How the selection is taken from programs that cannot be read directly: by pressing these keys for them (the clipboard is put back afterwards), or not at all.",
+        None,
+    ),
+    (
+        "options.advanced.preferred_domain_hint",
+        "The country site used by services that have several, such as translate.google.ru for \"ru\".",
+        None,
+    ),
+    (
+        "options.advanced.copy_wait_hint",
+        "How long to wait for a program to copy the selection. Raise it if a slow program's selection is sometimes missed.",
+        None,
+    ),
+    ("options.advanced.slower_listen_hint", "Listening to the same text again reads it more slowly.", None),
+    (
+        "options.advanced.remove_line_breaks_hint",
+        "Joins lines broken in the middle of a sentence (text copied from PDFs and e-mails) before translating.",
+        None,
+    ),
     (
         "options.advanced.mouse_mode_note",
         "Select text with the mouse to translate it, no hotkey needed. The text is read through UI Automation, so the clipboard is left alone; a click on the tray icon turns the mode on and off.",
@@ -776,6 +831,7 @@ pub static STRINGS: &[(&str, &str, Option<&str>)] = &[
     ("options.server.show_token", "Show token", None),
     ("options.server.running", "Running.", None),
     ("options.server.not_running", "Not running: %s", None),
+    ("options.server.stopped", "Not running. Turn it on above and restart Glossa to start it.", None),
     (
         "options.server.bind_hint",
         "Bind any of these to a key in your desktop or launcher (essential on Wayland):",
@@ -942,7 +998,8 @@ mod tests {
         assert_eq!(ru.get("msg.translate_tip"), "Перевести (Ctrl+Enter)");
         assert_eq!(ru.get("options.hotkeys"), "Горячие клавиши");
         assert_eq!(ru.get("options.hotkeys.enable"), "Использовать горячие клавиши");
-        assert_eq!(ru.get("action.show_popup"), "Показать всплывающее окно");
+        // Deliberately not mapped: Glossa's own wording wins.
+        assert_eq!(ru.get("action.show_popup"), "Translate selection");
         assert_eq!(ru.get("dict.title"), "Словарь");
         // Keys the file lacks fall back to English.
         assert_eq!(ru.get("history.title"), "History");
