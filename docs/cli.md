@@ -233,26 +233,38 @@ dictionaries) are converted to plain text.
 ### ocr
 
 ```
-glossa-cli ocr IMAGE [-l LANG] [-t TO] [-e ENGINE]
+glossa-cli ocr IMAGE [-l LANG] [-t TO] [-e ENGINE] [--in-place] [--join-lines] [--translate-with W]
 ```
 
 | option | default | meaning |
 |---|---|---|
 | `-l`, `--lang LANG` | `auto` | Language of the text in the image. |
 | `-t`, `--to LANG` | none | Translate the recognised text into this language. |
-| `-e`, `--engine ID` (also `-s`, `--service`) | `[ocr] provider`, with fail-over | Use only this OCR provider: `lens`, `windows-ocr`, `oneocr`, `command-ocr` or a module's id. |
+| `-e`, `--engine ID` (also `-s`, `--service`) | `[ocr] provider`, with fail-over | Use only this OCR provider: `lens`, `windows-ocr`, `oneocr`, `macos-vision`, `tesseract`, `command-ocr` or a module's id. |
+| `--in-place` | off | Translate block by block, each block with its place in the picture (what an in-place rendering paints). Translates into `-t`, else the first language. |
+| `--join-lines` | off | Join the lines of each paragraph into one, as *Join lines when copying text* does. |
+| `--translate-with W` | `[ocr] translate_with` | `ocr`: the OCR engine translates when it can (Google Lens, no second request); `translator`: always the current translator. |
 
 `IMAGE` is a file path (PNG, JPEG, whatever the engine reads). Without `-t`,
 stdout is the recognised text; with it, the translation. The timing line goes
 to stderr.
 
+With `--in-place`, stdout has one line per block: the source and its
+translation, separated by a tab.
+
 `--json`:
 
 ```json
-{"text": "…recognised text…", "translation": "…or null…", "detected": "ja", "service": "lens", "elapsed_ms": 412}
+{"text": "…recognised text…", "translation": "…or null…", "detected": "ja", "service": "lens",
+ "translator": "lens", "elapsed_ms": 412, "image_size": [725, 280], "blocks": []}
 ```
 
-`detected` is the language the engine reported, or null. Engines and their
+`detected` is the language the engine reported, or null. `translator` is the
+provider that translated (`lens` when Lens translated the picture itself), or
+null. `blocks` is filled with `--in-place`: `{"source", "translation",
+"bounds": {"x", "y", "width", "height"}, "angle", "lines"?}`, in the picture's
+pixels, the angle in radians; `lines` (Lens) places the translation line by
+line. Engines and their
 setup are described in [ocr.md](ocr.md).
 
 ### speak
@@ -544,6 +556,7 @@ reading the selection by the actions marked "text"; the others ignore it.
 | `repeat_last_recognition` | Recognise the last region again. | |
 | `recognize_to_clipboard` | Recognise a region straight to the clipboard. | |
 | `watch_region` | Watch a region and re-translate when it changes. | |
+| `translate_region_in_place` | Translate a region over the picture itself. | |
 | `swap_languages` | Swap the main window's direction. | |
 | `next_service` | Switch to the next enabled translation service. | |
 | `show_options` | Open the options. | |

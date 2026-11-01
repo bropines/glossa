@@ -10,7 +10,7 @@ Everything about Glossa beyond the [README](../README.md), by topic.
 | [Command line](cli.md) | Every `glossa-cli` command and flag, output and exit codes, environment variables. |
 | [Control API](control-api.md) | The local HTTP API a running Glossa answers: endpoints, the token, binding hotkeys on Wayland, macOS and with AutoHotkey. |
 | [Configuration](configuration.md) | `config.toml` field by field, where it lives, and the other files in the data folder. |
-| [Text recognition](ocr.md) | OCR engines (Google Lens, Windows OCR, OneOCR, commands), setting them up, and the OCR actions. |
+| [Text recognition](ocr.md) | OCR engines (Google Lens, Windows OCR, OneOCR, Apple Vision, Tesseract, commands) and setting them up; the OCR actions, the result window, copy mode, Lens's own translation, translating in place. |
 | [AI endpoints](ai-endpoints.md) | OpenAI-compatible translators: presets, settings, streaming, troubleshooting. |
 | [Themes](theming.md) | Theme files, backdrops, transparency, classic themes. |
 

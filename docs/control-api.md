@@ -233,6 +233,7 @@ Two ways to send the image:
 |---|---|---|
 | `lang` | `auto` | Language of the text in the image. |
 | `translate_to` | none | Translate the recognised text into this language. |
+| `in_place` | `false` | Translate block by block, each block with its box, under `blocks` (into `translate_to`, else the first language). In the JSON body, or `in_place=1` in the query string. |
 
 ```console
 $ curl -s -H "Authorization: Bearer $T" -H "Content-Type: image/png" \
@@ -241,7 +242,10 @@ $ curl -s -H "Authorization: Bearer $T" -H "Content-Type: image/png" \
 ```
 
 `translation` is null without `translate_to`; `detected` is the language the
-engine reported, or null. The engine is the one set in `[ocr] provider`,
+engine reported, or null. The reply also has `translator` (who translated:
+`lens` when Google Lens translated the picture itself, as `[ocr]
+translate_with` allows), `image_size`, and `blocks` (with `in_place`; the same
+shape as `glossa-cli --json ocr --in-place`, see [cli.md](cli.md#ocr)). The engine is the one set in `[ocr] provider`,
 with fail-over to the others; the API cannot pick one per request (the
 command line can, with `-e`). Engines and their setup:
 [ocr.md](ocr.md).
@@ -303,7 +307,8 @@ The action ids are listed in [cli.md](cli.md#action): `show_main_window`,
 `translate_clipboard_in_popup`, `dictionary_from_clipboard`,
 `convert_layout`, `listen_translation`, `text_recognition`, `speech_input`,
 `recognize_and_translate`, `repeat_last_recognition`,
-`recognize_to_clipboard`, `watch_region`, `swap_languages`, `next_service`,
+`recognize_to_clipboard`, `watch_region`, `translate_region_in_place`,
+`swap_languages`, `next_service`,
 `show_options`, `quit`.
 
 [`glossa-cli action`](cli.md#action) sends these requests for you, reading

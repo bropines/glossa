@@ -1,15 +1,25 @@
 # Text recognition (OCR)
 
 Glossa reads text off the screen: drag over a region and it recognises what
-is written there. The text can go straight to the clipboard, be shown with
-its translation, or be translated **in place**, painted over the picture the
-way Chrome's Google Lens overlay does it.
+is written there. The text can go straight to the clipboard, open in the
+result window with its translation, or be translated **in place**, painted
+over the picture the way Chrome's Google Lens overlay does it.
 
 ## Engines
 
-Pick one in *Options → Text recognition → Provider*. If the chosen engine
-fails, the others are tried in turn (except OneOCR, which only runs when
-chosen).
+Pick one in *Options → Text recognition → Provider*; the list shows the
+engines this system has. If the chosen engine fails, the others are tried in
+turn (except OneOCR, which only runs when chosen).
+
+| engine | id | works | platforms | setup |
+|---|---|---|---|---|
+| Google Lens | `lens` | online | all | chrome-lens-py (below) |
+| Windows OCR | `windows-ocr` | offline | Windows 10, 11 | the language's OCR pack |
+| OneOCR | `oneocr` | offline | Windows 11 | the Snipping Tool |
+| Apple Vision | `macos-vision` | offline | macOS 10.15+ | nothing |
+| Tesseract | `tesseract` | offline | all | Tesseract and its language data |
+| External command | `command-ocr` | either | all | a command line |
+| Module | its id | either | all | a module with the OCR capability ([modules/ocr-modules.md](modules/ocr-modules.md)) |
 
 ### Google Lens (chrome-lens-py)
 
@@ -30,15 +40,18 @@ Glossa finds it on its own, fastest way first:
 
 *Auto* does all of that; *Daemon only* and *CLI only* force one path. A daemon
 URL and token can be set by hand, and so can the path to `lens_scan` when it
-is not on `PATH`.
+is not on `PATH`. Both ways translate; the line-by-line placement used for
+in-place translation comes from the daemon (with the CLI alone, the
+translator translates paragraph by paragraph instead).
 
 ### Windows OCR
 
 Built into Windows 10 and 11, offline. It reads the languages whose **OCR
 pack** is installed: *Settings → Time & language → Language & region*, open a
 language's options and add its optical character recognition feature (or add
-the language). With the OCR language on *auto* it uses your Windows display
-languages.
+the language). With the OCR language on *auto* it reads with your Windows
+display language, so set the OCR language when the picture is in another
+script (on a Russian Windows, auto reads English as Cyrillic look-alikes).
 
 ### OneOCR (Snipping Tool)
 
@@ -48,10 +61,27 @@ time, it **copies the two libraries (about 55 MB) into its cache folder**,
 once. Nothing is downloaded. A folder set by hand must hold `oneocr.dll`,
 `onnxruntime.dll` and `oneocr.onemodel`.
 
+### Apple Vision (macOS)
+
+The Live Text recogniser built into macOS 10.15 and later: offline, nothing
+to install. *Accurate* or *Fast*, optional language correction, and on macOS
+13 and later the language is detected by itself (Russian needs 13). Glossa
+needs the **Screen Recording** permission to capture the screen; *Options →
+Permissions* shows it and opens the right page of System Settings.
+
+### Tesseract
+
+Offline, on every system where it is installed: `apt install tesseract-ocr
+tesseract-ocr-rus`, `brew install tesseract tesseract-lang`, or the UB
+Mannheim installer on Windows. Glossa looks for it on `PATH` and in the usual
+folders; the program, the language data folder, the languages used on
+*auto* (`eng+rus`), the page layout and engine modes are in *Options → Text
+recognition → Tesseract*.
+
 ### External command
 
-Any program that prints the text on stdout: Tesseract, a cloud CLI, a script.
-Set its command line in the provider's options, for example
+Any program that prints the text on stdout: a cloud CLI, a script. Set its
+command line in the provider's options, for example
 `tesseract {image} - -l {lang3}`. `{image}` is a temporary PNG, `{lang}` the
 language as `en`/`zh-Hans`/`auto`, `{lang3}` Tesseract's code. It runs
 without a shell, so nothing in a path or language code can inject anything.
@@ -64,11 +94,11 @@ and in *Options → Hotkeys*, where any of them can be given a hotkey.
 | action | default hotkey | what it does |
 |---|---|---|
 | Text recognition | Ctrl+Shift+O | select a region; then what *After selecting a region* says (below) |
-| Recognise and translate | Ctrl+Alt+O | select a region; its text and translation appear beside it |
+| Recognise and translate | Ctrl+Alt+O | select a region; the result window opens with its text and translation |
 | **Copy text from the screen** | **Ctrl+Alt+C** | select a region; its text goes to the clipboard, nothing opens |
 | **Translate the screen in place** | none | select a region; the translation is painted over it |
 | Watch a region | none | select a region; whenever it changes, its translation pops up (subtitles); the hotkey again stops |
-| Repeat the last region | none | recognise the last region again without selecting it |
+| Repeat the last region | none | read the last region again, without selecting it, into the result window |
 
 In the selection overlay, Esc or a right click cancels, and dragging again
 starts a new selection. The same actions are available to scripts:
@@ -80,17 +110,53 @@ starts a new selection. The same actions are available to scripts:
 *Options → Text recognition → After selecting a region* decides what plain
 *Text recognition* does:
 
-- **Show the text and its translation** (the default): a panel by the region
-  with the text (editable), its translation when *Translate the recognised
-  text* is on, and buttons to copy, translate in the main window, translate
-  in place, copy or save the image.
+- **Show the text and its translation** (the default): the result window
+  (below), with the translation when *Translate the recognised text* is on.
 - **Copy the text to the clipboard**: the same as *Copy text from the screen*.
 - **Translate it in place**: the same as *Translate the screen in place*.
 - **Ask, with a toolbar**: a bar appears under the selection, like the
-  Snipping Tool's: *Copy text*, *Translate*, *Translate in place*, *Copy
-  image*, *Save image*, *Cancel*. Keys: **Enter** does the default (translate
-  when the setting is *Ask*), **C** copies the text, **T** translates, **I**
-  translates in place, **Esc** cancels.
+  Snipping Tool's: *Copy text*, *Translate*, *Translate in place*, then
+  *Copy image*, *Save image* and *Cancel*. Keys: **Enter** does the
+  default (underlined; translate when the setting is *Ask*), **C** copies
+  the text, **T** translates, **I** translates in place, **Esc** cancels.
+
+## The result window
+
+Recognising a region to read it opens a window of its own as soon as the
+region is chosen; the text fills in when the engine has read it.
+
+- **The picture** at the top, with what read it, how long it took, the
+  language it found and how many characters and lines. A click on the
+  picture (or the arrows beside it) makes it larger; the boxes button draws
+  where the engine found text.
+- **The text**, editable, in the same font and zoom as the main window's
+  panes (Ctrl+wheel or Ctrl+plus/minus).
+- **The direction bar**: the text's language, swap, the target language, the
+  translator, and *Translate*. The translator list has *Google Lens* (its
+  own translation of the picture, no second request) and your enabled
+  translators. Changing the text's language while the text is as read has
+  the engine read the picture again with that language.
+- **The translation**, with the translator, direction and time under it, or
+  a note that the text changed since it was translated.
+- **The action bar**. Each action's tooltip shows its shortcut:
+
+| action | shortcut |
+|---|---|
+| Copy text (with *Join lines when copying text* applied) | Ctrl+Shift+C |
+| Copy translation | Ctrl+Shift+T |
+| Translate in place (over the region the picture came from) | Ctrl+P |
+| To main window (with the translation, no second request) | Ctrl+M |
+| Read aloud (the translation, else the text) | Ctrl+L |
+| Copy image | Ctrl+Shift+I |
+| Save image | Ctrl+S |
+| Select again | Ctrl+R |
+| Translate | Ctrl+Enter |
+| Swap: the translation becomes the text | Ctrl+I |
+| Close | Esc |
+
+On macOS the shortcuts use Cmd. The window remembers its size and place
+(`[windows.ocr-result]` in `config.toml`); the first time it opens beside the
+region. Translations made in it go into the history.
 
 ## Copy mode
 
@@ -117,9 +183,12 @@ request goes to a translator. *Options → Text recognition → Translate with*:
 - **The current translator**: Lens only recognises, and the translator you
   use in the main window translates.
 
-A translation made by Lens is labelled and saved in the history under
-*Google Lens*. Translations go into the target language of the main window
-(the first language when the target is *auto*).
+A translation made by Lens is labelled *Google Lens* and saved in the
+history under it. Translations go into the target language of the main
+window (the first language when the target is *auto*); the result window can
+pick another one, and another translator, for the text at hand. From the
+command line, `glossa-cli ocr --translate-with ocr|translator` makes the same
+choice for one run.
 
 ## Translating in place
 
@@ -163,12 +232,21 @@ choosing the action again, stops it.
 - **Lens is slow (seconds per scan)**: it is running the CLI per image. Start
   the daemon (`lens_scan daemon start`) or install the login service
   (`lens_scan service install`).
+- **Lens recognises but its translation never shows**: *Translate with* is
+  set to the current translator, or *Translate the recognised text* is off
+  (the result window then waits for *Translate*).
 - **No text found with Windows OCR**: the language's OCR pack is missing, or
   the OCR language is set to one without a pack. Install the pack, or set the
-  language to *auto*.
+  language to *auto*. **Wrong letters** (Cyrillic look-alikes in English
+  text): auto used your display language; set the OCR language.
 - **OneOCR does not load**: it needs the Windows 11 Snipping Tool (a recent
   version). Glossa's log (`glossa.log` in the cache folder) says which file it
   could not find.
+- **Nothing is captured on macOS**: grant Screen Recording in *Options →
+  Permissions* (or System Settings → Privacy & Security), then restart
+  Glossa.
+- **Tesseract reads gibberish**: its language data for that script is not
+  installed, or *auto* reads English only; set *Languages when automatic*.
 - **The in-place translation shows only the original**: the engine returned
   no positions for the text (an external command gives plain text). The
   translation then opens in the popup instead.
@@ -176,3 +254,5 @@ choosing the action again, stops it.
   which ones failed to register; pick another chord.
 - **Copy mode copied nothing**: the region held no text Glossa could read; the
   notice says so. Try a larger region or another engine.
+- **The result window opens off screen** (a monitor was unplugged): delete the
+  `[windows.ocr-result]` table from `config.toml`.

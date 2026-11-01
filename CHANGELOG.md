@@ -55,9 +55,21 @@ for Windows and Linux.
   plain text recognition does: show, copy, translate in place, or ask with a
   Snipping Tool style toolbar (Enter, C, T, I, Esc). *Join lines when
   copying* turns hard-wrapped prose into paragraphs.
+- **OCR result window**: a recognised region opens in a tool window of its
+  own, framed like the others, as soon as the region is chosen: the picture
+  (larger on a click, with the boxes the engine found), what read it, the
+  editable text in the panes' font and zoom, the direction with swap and a
+  translator picker (Google Lens or any enabled translator), the
+  translation, and an action bar (copy text or translation, translate in
+  place, to the main window, read aloud, copy or save the picture, select
+  again), each with a shortcut. It remembers its size and place
+  (`[windows.ocr-result]`). The selection toolbar is drawn as a command bar
+  with icons.
 - **Translation by Google Lens itself**: Lens's own translation is shown
   without a second request and saved in the history under Google Lens;
-  *Translate with* can send the text to the current translator instead.
+  *Translate with* can send the text to the current translator instead, and
+  `glossa-cli ocr --translate-with ocr|translator` chooses per run. The
+  history window names each entry's translator.
 - **Translate the screen in place**: the translation painted over the region
   in a window laid exactly over it, block by block, on the sampled
   background colour, in the text's colour and angle, fitted to each box (Lens
