@@ -1195,6 +1195,7 @@ fn appearance(app: &mut GlossaApp, ui: &mut egui::Ui, st: &mut OptionsState) {
                 }
             });
         });
+        hint(ui, &look, &app.t("options.appearance.renderer_hint"));
         row(ui, &app.t("options.appearance.unload_after"), |ui| {
             ui.add(egui::DragValue::new(&mut d.appearance.unload_graphics_after_secs).range(0..=3600));
         });
@@ -1216,6 +1217,7 @@ fn appearance(app: &mut GlossaApp, ui: &mut egui::Ui, st: &mut OptionsState) {
         row(ui, &app.t("options.appearance.popup_shade"), |ui| {
             ui.add(egui::Slider::new(&mut p.shade, 0..=90));
         });
+        hint(ui, &look, &app.t("options.appearance.popup_shade_hint"));
         row(ui, &app.t("options.appearance.auto_hide"), |ui| {
             ui.label(app.t("options.appearance.seconds"));
             ui.add(egui::DragValue::new(&mut p.auto_hide_secs).range(0..=600));
@@ -1431,7 +1433,9 @@ fn advanced(app: &mut GlossaApp, ui: &mut egui::Ui, st: &mut OptionsState) {
             );
         });
         ui.checkbox(&mut d.mouse_mode.ctrl_only, app.t("options.advanced.mouse_ctrl_only"));
+        hint(ui, &look, &app.t("options.advanced.mouse_ctrl_only_hint"));
         ui.checkbox(&mut d.mouse_mode.tray_click_toggles, app.t("options.advanced.tray_toggles_mouse"));
+        hint(ui, &look, &app.t("options.advanced.tray_toggles_mouse_hint"));
         ui.label(RichText::new(app.t("options.advanced.mouse_mode_note")).small().color(look.weak_text()));
     });
 }
@@ -1740,6 +1744,9 @@ fn modules(app: &mut GlossaApp, ui: &mut egui::Ui, st: &mut OptionsState) {
     );
     if reload_draft {
         st.draft = app.engine.config();
+        // The classic program's "start with Windows" comes in with its
+        // settings: offered as the checkbox, written to the system on Apply.
+        st.autostart = st.draft.general.start_with_system;
     }
 }
 

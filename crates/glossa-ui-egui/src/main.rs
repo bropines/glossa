@@ -541,8 +541,6 @@ fn init_logging(paths: &Paths) {
     }
 }
 
-/// Ask an already running Glossa to show its main window. True if one
-/// answered.
 /// With "start with the system" on, point the autostart entry at this copy
 /// of the program, so it survives the program being moved or updated in a
 /// new folder. An entry the user removed elsewhere is not added back, and a
@@ -560,6 +558,8 @@ fn refresh_autostart(cfg: &glossa_core::Config) {
     }
 }
 
+/// Ask an already running Glossa to show its main window. True if one
+/// answered.
 fn hand_over_to_running_instance(paths: &Paths) -> bool {
     let Ok(cfg) = glossa_core::Config::load(&paths.config_file()) else { return false };
     if !cfg.server.enabled || cfg.server.token.is_empty() {

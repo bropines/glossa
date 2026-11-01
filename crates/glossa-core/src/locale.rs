@@ -393,6 +393,11 @@ pub static STRINGS: &[(&str, &str, Option<&str>)] = &[
     ("options.appearance.backdrop", "Window backdrop:", None),
     ("options.appearance.popup_backdrop", "Popup backdrop:", None),
     ("options.appearance.popup_shade", "Shade when not blurred (0 - 90):", None),
+    (
+        "options.appearance.popup_shade_hint",
+        "Darkens a see-through popup when nothing blurs what is behind it, so its text stays readable.",
+        None,
+    ),
     ("options.backdrop.none", "None", None),
     ("options.backdrop.blur", "Blur", None),
     ("options.backdrop.needs_opengl", "Backdrops need Windows, or macOS with the OpenGL engine.", None),
@@ -548,6 +553,11 @@ pub static STRINGS: &[(&str, &str, Option<&str>)] = &[
     ("options.appearance.renderer_opengl", "OpenGL — lightest", None),
     ("options.appearance.renderer_gpu", "GPU — Direct3D 12 / Vulkan / Metal", None),
     ("options.appearance.renderer_software", "Software — no GPU (WARP)", None),
+    (
+        "options.appearance.renderer_hint",
+        "How windows are drawn. OpenGL uses the least memory; try another if windows stay black or flicker.",
+        None,
+    ),
     ("options.appearance.unload_after", "Unload graphics after hiding, s (0 = never):", None),
     (
         "options.appearance.unload_hint",
@@ -630,6 +640,12 @@ pub static STRINGS: &[(&str, &str, Option<&str>)] = &[
     ("options.advanced.mouse_mode_group", "Mouse mode", Some("w:17:1186")),
     ("options.advanced.mouse_ctrl_only", "Enable mouse mode only when Ctrl is pressed", Some("w:17:1155")),
     ("options.advanced.tray_toggles_mouse", "Click on system tray icon switches mouse mode", Some("w:17:1156")),
+    (
+        "options.advanced.mouse_ctrl_only_hint",
+        "Only a selection made with Ctrl held down is translated; ordinary selections are left alone.",
+        None,
+    ),
+    ("options.advanced.tray_toggles_mouse_hint", "Otherwise a click on the tray icon shows or hides the main window.", None),
     ("options.advanced.api_keys", "API keys", Some("w:17:1158")),
     ("options.advanced.ocr_key", "OCR API key:", Some("w:17:1195")),
     ("options.advanced.browser_default", "system default", None),
