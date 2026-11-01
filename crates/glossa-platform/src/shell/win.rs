@@ -22,6 +22,8 @@ pub const SHELL: Shell = Shell {
     autostart_label: "options.basics.start_with_system",
     backdrop_names: super::WINDOWS_BACKDROP_NAMES,
     modifier_names: super::ModifierNames { ctrl: "Ctrl", alt: "Alt", shift: "Shift", meta: "Win" },
+    window_classes: true,
+    program_example: "program.exe",
 };
 
 pub fn open(target: &str) -> std::io::Result<()> {

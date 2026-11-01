@@ -935,22 +935,46 @@ pub struct Exceptions {
 
 impl Default for Exceptions {
     fn default() -> Self {
-        let any = |class: &str| ExceptionRule { program: String::new(), window_class: class.into() };
-        Self {
-            mode: ExceptionMode::DisabledFor,
-            rules: vec![
-                any("SysListView32"),
-                any("SysTreeView32"),
-                any("ListBox"),
-                any("ScrollBar"),
-                any("ComboBox"),
-                any("msctls_hotkey32"),
-                any("ConsoleWindowClass"),
-                ExceptionRule { program: "mstsc.exe".into(), window_class: String::new() },
-            ],
-            smart_detection: true,
+        Self::default_for(Os::current())
+    }
+}
+
+impl Exceptions {
+    /// What a new config starts with on `os`. The classic list names
+    /// Windows controls and Remote Desktop; X11 windows have classes too, so
+    /// Linux keeps it. macOS reports no window classes and its apps by their
+    /// (localised) names, so it starts with an empty list.
+    pub fn default_for(os: Os) -> Self {
+        let rules = match os {
+            Os::MacOs => Vec::new(),
+            Os::Windows | Os::Unix => windows_rules(),
+        };
+        Self { mode: ExceptionMode::DisabledFor, rules, smart_detection: true }
+    }
+
+    /// On macOS, swap the untouched Windows defaults (saved by earlier
+    /// builds, or carried over from a classic installation) for this
+    /// system's. They can never match there, and the list read as nonsense.
+    /// A list the user changed is left alone.
+    pub fn adopt_platform_defaults(&mut self, os: Os) {
+        if os == Os::MacOs && self.rules == windows_rules() {
+            self.rules = Self::default_for(os).rules;
         }
     }
+}
+
+fn windows_rules() -> Vec<ExceptionRule> {
+    let any = |class: &str| ExceptionRule { program: String::new(), window_class: class.into() };
+    vec![
+        any("SysListView32"),
+        any("SysTreeView32"),
+        any("ListBox"),
+        any("ScrollBar"),
+        any("ComboBox"),
+        any("msctls_hotkey32"),
+        any("ConsoleWindowClass"),
+        ExceptionRule { program: "mstsc.exe".into(), window_class: String::new() },
+    ]
 }
 
 impl Exceptions {
@@ -1622,6 +1646,7 @@ impl Config {
         self.appearance.window_transparency = self.appearance.window_transparency.min(90);
         self.dictionary.zoom = self.dictionary.zoom.clamp(50, 400);
         self.advanced.migrate_terminal_rules();
+        self.exceptions.adopt_platform_defaults(Os::current());
         self.general.instant_delay_ms = self.general.instant_delay_ms.clamp(150, 5000);
         // Keep the first (newest) of each pair, wherever the repeats are.
         let mut seen = Vec::with_capacity(self.general.recent_pairs.len());
@@ -1937,8 +1962,25 @@ copy_joined_lines = true",
     }
 
     #[test]
+    fn macos_drops_the_untouched_windows_exceptions() {
+        assert!(Exceptions::default_for(Os::MacOs).rules.is_empty());
+        let mut stock = Exceptions::default_for(Os::Windows);
+        stock.adopt_platform_defaults(Os::MacOs);
+        assert!(stock.rules.is_empty());
+        // Kept elsewhere, and kept on macOS once the user changed the list.
+        let mut win = Exceptions::default_for(Os::Windows);
+        win.adopt_platform_defaults(Os::Windows);
+        assert_eq!(win, Exceptions::default_for(Os::Windows));
+        let mut edited = Exceptions::default_for(Os::Windows);
+        edited.rules.pop();
+        let before = edited.clone();
+        edited.adopt_platform_defaults(Os::MacOs);
+        assert_eq!(edited, before);
+    }
+
+    #[test]
     fn exceptions_follow_the_classic_rules() {
-        let e = Exceptions::default();
+        let e = Exceptions::default_for(Os::Windows);
         // Disabled for list views in any program, and for all of mstsc.
         assert!(!e.allows("explorer.exe", "SysListView32"));
         assert!(!e.allows("mstsc.exe", "TscShellContainerClass"));
@@ -1959,7 +2001,7 @@ copy_joined_lines = true",
     fn control_rules_and_smart_detection_look_at_the_focused_control() {
         // The top-level window of Explorer is CabinetWClass; the file list
         // inside it is what the default SysListView32 rule is about.
-        let mut e = Exceptions::default();
+        let mut e = Exceptions::default_for(Os::Windows);
         assert!(!e.allows_window("explorer.exe", "CabinetWClass", "SysListView32"));
         assert!(e.allows_window("explorer.exe", "CabinetWClass", "Edit"), "the address bar is fine");
 

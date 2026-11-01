@@ -701,6 +701,7 @@ pub static STRINGS: &[(&str, &str, Option<&str>)] = &[
     ("options.exceptions.any_window", "* All Windows *", None),
     ("options.exceptions.from_active", "From the active window", None),
     ("options.exceptions.from_active_tip", "Fill from the window that was active before this one", None),
+    ("options.exceptions.empty", "No programs yet. Add one by its name, or take it from the active window.", None),
     // -- options: hotkeys ----------------------------------------------------------------
     ("options.hotkeys", "Hotkeys", Some("w:16:caption")),
     ("options.hotkeys.enable", "Enable hotkeys", Some("w:16:1118")),

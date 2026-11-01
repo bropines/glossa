@@ -337,7 +337,10 @@ terminal, a game, a remote desktop window. Set in *Options → Exceptions*.
 A rule matches when both of its fields match. The defaults: the window
 classes `SysListView32`, `SysTreeView32`, `ListBox`, `ScrollBar`, `ComboBox`,
 `msctls_hotkey32` and `ConsoleWindowClass` in any program, and all of
-`mstsc.exe`.
+`mstsc.exe` (Windows and Linux). macOS names no window classes, only the app
+(`program` is its name, `Safari`), so there the list starts empty and
+`window_class` and `smart_detection` do nothing; a config still holding the
+untouched Windows list is given the empty one when it loads.
 
 ### `[advanced]`
 
