@@ -8,6 +8,7 @@
 mod about;
 mod actions;
 mod app;
+mod bidi;
 mod chrome;
 mod dictionary;
 mod dropdown;

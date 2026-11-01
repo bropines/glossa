@@ -210,9 +210,6 @@ pub fn lang_combo(
                 if native.is_empty() || native == name {
                     name.to_owned()
                 } else {
-                    // egui lays text out left to right: put a right-to-left
-                    // name (Arabic, Hebrew, Persian…) in visual order first.
-                    let native = glossa_core::text::for_display(native, true);
                     format!("{name}  ·  {native}")
                 }
             })
@@ -236,6 +233,14 @@ pub fn lang_combo(
                 ui.with_layout(egui::Layout::top_down_justified(egui::Align::Min), |ui| {
                     for (n, (l, text)) in items.iter().copied().zip(labels).enumerate() {
                         let behind = ui.painter().add(egui::Shape::Noop);
+                        // A right-to-left name (Arabic, Hebrew, Persian…) needs
+                        // the bidi layout; the others go as they are.
+                        let text = crate::bidi::rich(
+                            ui,
+                            RichText::new(text).text_style(egui::TextStyle::Button),
+                            egui::text::TextWrapping::no_max_width(),
+                            false,
+                        );
                         let resp = ui.selectable_label(l == current, text);
                         if n == mark && l != current {
                             ui.painter().set(behind, egui::Shape::rect_filled(resp.rect, radius, marked_fill));
