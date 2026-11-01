@@ -893,6 +893,17 @@ impl Engine {
         job
     }
 
+    /// Let the chosen OCR engine get ready for a recognition that is about to
+    /// come (the region overlay just opened), on a worker thread. Returns at
+    /// once; does nothing for engines without a slow first call.
+    pub fn warm_up_ocr(&self) {
+        let Some(provider) = self.registry().get(&self.config().ocr.provider) else { return };
+        let spawned = std::thread::Builder::new().name("glossa-ocr-warm-up".into()).spawn(move || provider.warm_up());
+        if let Err(e) = spawned {
+            tracing::debug!("OCR warm-up not started: {e}");
+        }
+    }
+
     /// Recognise text in an image, translating it when `translate_to` is set
     /// (by the OCR provider itself if it can and `ocr.translate_with` allows,
     /// else by the translation pipeline). Blocking.

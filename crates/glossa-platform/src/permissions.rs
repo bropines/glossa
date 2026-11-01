@@ -6,10 +6,13 @@
 //!   focused element's `AXSelectedText`) and to send the Cmd+C and Cmd+V that
 //!   copying and replacing the selection fall back to.
 //! - **Screen Recording** to capture a region for text recognition.
+//! - **Input Monitoring** for mouse mode's event tap, which watches the
+//!   mouse buttons in other programs. Accessibility covers it too, so it
+//!   matters only when Accessibility is withheld.
 //!
-//! Global hotkeys need neither (they are registered through Carbon). On
-//! Windows and Linux every function here reports [`Status::NotNeeded`] and
-//! does nothing.
+//! Global hotkeys need none of these (they are registered through Carbon).
+//! On Windows and Linux every function here reports [`Status::NotNeeded`]
+//! and does nothing.
 //!
 //! macOS ties a grant to the program's code signature, so a build signed
 //! ad hoc (every local build) has to be granted again after it is rebuilt.
@@ -19,6 +22,7 @@
 pub enum Permission {
     Accessibility,
     ScreenRecording,
+    InputMonitoring,
 }
 
 impl Permission {
@@ -26,7 +30,7 @@ impl Permission {
     /// matter.
     pub fn all() -> &'static [Permission] {
         if cfg!(target_os = "macos") {
-            &[Permission::Accessibility, Permission::ScreenRecording]
+            &[Permission::Accessibility, Permission::ScreenRecording, Permission::InputMonitoring]
         } else {
             &[]
         }
@@ -86,6 +90,8 @@ mod imp {
         // macOS 10.15 and later, which is also the oldest system Glossa runs on.
         fn CGPreflightScreenCaptureAccess() -> bool;
         fn CGRequestScreenCaptureAccess() -> bool;
+        fn CGPreflightListenEventAccess() -> bool;
+        fn CGRequestListenEventAccess() -> bool;
     }
 
     #[link(name = "CoreFoundation", kind = "framework")]
@@ -118,6 +124,7 @@ mod imp {
             match p {
                 Permission::Accessibility => AXIsProcessTrusted() != 0,
                 Permission::ScreenRecording => CGPreflightScreenCaptureAccess(),
+                Permission::InputMonitoring => CGPreflightListenEventAccess(),
             }
         })
     }
@@ -148,6 +155,8 @@ mod imp {
             }
             // SAFETY: no arguments; shows the prompt the first time only.
             Permission::ScreenRecording => granted(unsafe { CGRequestScreenCaptureAccess() }),
+            // SAFETY: as above.
+            Permission::InputMonitoring => granted(unsafe { CGRequestListenEventAccess() }),
         }
     }
 
@@ -155,6 +164,7 @@ mod imp {
         let pane = match p {
             Permission::Accessibility => "Privacy_Accessibility",
             Permission::ScreenRecording => "Privacy_ScreenCapture",
+            Permission::InputMonitoring => "Privacy_ListenEvent",
         };
         let url = format!("x-apple.systempreferences:com.apple.preference.security?{pane}");
         std::process::Command::new("open")
@@ -189,7 +199,7 @@ mod tests {
     #[test]
     fn only_macos_gates_anything() {
         if cfg!(target_os = "macos") {
-            assert_eq!(Permission::all().len(), 2);
+            assert_eq!(Permission::all().len(), 3);
         } else {
             assert!(Permission::all().is_empty());
             assert_eq!(status(Permission::Accessibility), Status::NotNeeded);

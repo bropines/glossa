@@ -188,8 +188,10 @@ jobs:
             cp -r modules/js modules/python "$root/examples/modules/"
             find "$root" -name __pycache__ -prune -exec rm -rf {} +
             # Not notarised: an ad-hoc signature keeps Apple silicon willing
-            # to run it; the first launch needs right-click > Open (or
-            # xattr -dr com.apple.quarantine Glossa.app).
+            # to run it; the first launch of a download needs System
+            # Settings > Privacy & Security > Open Anyway on macOS 15 and
+            # later (right-click > Open before), or
+            # xattr -dr com.apple.quarantine Glossa.app.
             codesign --force --deep --sign - "$app"
             codesign --force --sign - "$root/glossa-cli"
             codesign --verify --deep --strict "$app"
@@ -232,7 +234,22 @@ jobs:
           # The notes are this version's section of CHANGELOG.md; GitHub's
           # generated notes stand in when there is none.
           awk -v v="$VERSION" '/^## \[/ { p = index($0, "[" v "]") > 0; next } p' CHANGELOG.md > notes.md
-          if [ -s notes.md ]; then notes=(--notes-file notes.md); else notes=(--generate-notes); fi
+          if [ -s notes.md ]; then
+            # What to download, for every platform, under the changes.
+            cat >> notes.md <<'EOF'
+
+          ### Downloads
+
+          - **Windows** (x86-64): `glossa-*-x86_64-windows.zip`
+          - **macOS** (Apple silicon, or universal with Intel): `glossa-*-macos.zip` with `Glossa.app`, a menu-bar app. It is not notarised: on macOS 15 and later open it once, then *System Settings → Privacy & Security → Open Anyway* (or run `xattr -dr com.apple.quarantine Glossa.app`). See the README's macOS section for the permissions it asks for.
+          - **Linux** (x86-64): `glossa-*-x86_64-linux.tar.gz`
+
+          `SHA256SUMS` lists the archives' checksums.
+          EOF
+            notes=(--notes-file notes.md)
+          else
+            notes=(--generate-notes)
+          fi
           # v1.2.3-rc.1 and the like are pre-releases.
           case "$GITHUB_REF_NAME" in *-*) pre=(--prerelease) ;; *) pre=() ;; esac
           gh release create "$GITHUB_REF_NAME" dist/* \

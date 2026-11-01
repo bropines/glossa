@@ -46,8 +46,9 @@ xcap-linux = { package = "xcap", version = "0.9", optional = true }
 
 [target.'cfg(target_os = "macos")'.dependencies]
 enigo = { version = "0.6", default-features = false }
-# Vibrancy (NSVisualEffectView) and the accent colour; already in the tree
-# through the clipboard and file dialogs.
+# Vibrancy (NSVisualEffectView), the accent colour and the menu bar; already
+# in the tree (with these features) through the clipboard, the tray and the
+# file dialogs.
 objc2 = "0.6"
 objc2-foundation = { version = "0.3", default-features = false, features = ["std", "NSString", "NSUserDefaults", "NSArray", "NSGeometry"] }
 objc2-app-kit = { version = "0.3", default-features = false, features = [
@@ -57,11 +58,16 @@ objc2-app-kit = { version = "0.3", default-features = false, features = [
     "NSRunningApplication",
     "NSColor",
     "NSColorSpace",
+    "NSEvent",
     "NSGraphics",
+    "NSGraphicsContext",
+    "NSMenu",
+    "NSMenuItem",
     "NSResponder",
     "NSUserInterfaceItemIdentification",
     "NSView",
     "NSVisualEffectView",
+    "NSWindow",
     "objc2-core-foundation",
 ] }
 

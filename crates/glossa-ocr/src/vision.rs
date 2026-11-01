@@ -12,8 +12,19 @@
 //! top-left pixel quads the rest of the program uses, so rotated text keeps
 //! its angle.
 //!
+//! The first recognition by a program file can take 25 seconds while macOS
+//! prepares its text models for it (measured on an M4 with macOS 27: again
+//! for a copy of the same binary at another path, and again after the Mac
+//! restarts); later ones take a tenth of a second, in any process run from
+//! that file. [`Provider::warm_up`] reads a tiny built-in picture once per
+//! run, so that wait falls while the user is still choosing a region. It is
+//! not done at start-up: the models it loads stay resident (35 to 50 MB),
+//! which only a user of Vision should pay.
+//!
 //! The provider is compiled on every OS so its pure parts are tested
 //! everywhere, but it is only registered on macOS.
+
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use glossa_core::config::VisionConfig;
 use glossa_core::{Capabilities, Error, LangId, OcrRequest, OcrResult, ProviderInfo, Result};
@@ -24,9 +35,15 @@ use crate::layout::{Quad, RawLine, RawWord, Shape};
 pub const VISION_ID: &str = "macos-vision";
 const NAME: &str = "Apple Vision";
 
+/// "Glossa" in dark grey on white, 92×61 pixels: enough text for Vision to
+/// run its whole pipeline.
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+const WARM_UP_PNG: &[u8] = include_bytes!("../assets/vision-warm-up.png");
+
 pub struct MacVision {
     info: ProviderInfo,
     cfg: VisionConfig,
+    warmed_up: AtomicBool,
 }
 
 impl MacVision {
@@ -36,13 +53,37 @@ impl MacVision {
             "The text recognition built into macOS (Live Text). Offline; reads the languages your macOS version supports."
                 .into();
         info.homepage = "https://developer.apple.com/documentation/vision/vnrecognizetextrequest".into();
-        Self { info, cfg }
+        Self { info, cfg, warmed_up: AtomicBool::new(false) }
     }
 }
 
 impl Provider for MacVision {
     fn info(&self) -> &ProviderInfo {
         &self.info
+    }
+
+    fn warm_up(&self) {
+        let first = !self.warmed_up.swap(true, Ordering::Relaxed);
+        #[cfg(not(target_os = "macos"))]
+        let _ = first;
+        #[cfg(target_os = "macos")]
+        if first {
+            let started = std::time::Instant::now();
+            let settings = sys::Settings {
+                fast: self.cfg.level == glossa_core::config::VisionLevel::Fast,
+                language_correction: self.cfg.language_correction,
+                lang: LangId::AUTO,
+                auto_languages: split_list(&self.cfg.auto_languages),
+            };
+            match sys::recognize(WARM_UP_PNG, &settings) {
+                Ok(lines) => tracing::debug!(
+                    lines = lines.len(),
+                    elapsed_ms = started.elapsed().as_millis() as u64,
+                    "Vision warmed up"
+                ),
+                Err(e) => tracing::debug!("Vision warm-up failed: {e}"),
+            }
+        }
     }
 
     fn recognize(&self, host: &Host, req: &OcrRequest) -> Result<OcrResult> {
@@ -441,6 +482,18 @@ mod tests {
         assert_eq!(w, [(2, 6, "Привет"), (9, 8, "𝔘nicode"), (19, 3, "мир")]);
         assert!(word_ranges_utf16("   ").is_empty());
         assert_eq!(word_ranges_utf16("你好"), [(0, 2, "你好")]);
+    }
+
+    #[test]
+    fn the_warm_up_picture_is_a_small_png() {
+        assert_eq!(crate::imagesize::dimensions(WARM_UP_PNG), Some((92, 61)));
+        // Off macOS it only notes that it ran. (On a Mac every new test
+        // binary would wait out Vision's 25-second first call.)
+        if cfg!(not(target_os = "macos")) {
+            let p = MacVision::new(VisionConfig::default());
+            p.warm_up();
+            assert!(p.warmed_up.load(Ordering::Relaxed));
+        }
     }
 
     #[test]

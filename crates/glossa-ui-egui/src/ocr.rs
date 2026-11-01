@@ -111,6 +111,9 @@ pub fn begin(app: &mut GlossaApp, action: Action, image: image::RgbaImage, origi
         phase: Phase::Selecting,
         lang: app.cfg.ocr.language,
     });
+    // An engine with a slow first call (Apple Vision after the Mac starts)
+    // gets ready while the user drags.
+    app.engine.warm_up_ocr();
     app.ctx.request_repaint();
 }
 
