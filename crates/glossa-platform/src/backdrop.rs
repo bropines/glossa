@@ -165,7 +165,12 @@ pub fn apply_hwnd_with(hwnd: isize, kind: Backdrop, options: Options) -> Result<
     {
         win::apply(hwnd, kind, options)
     }
-    #[cfg(not(windows))]
+    // On macOS the "HWND" is the NSWindow that [`find_own_window`] found.
+    #[cfg(target_os = "macos")]
+    {
+        mac::apply_window(hwnd, kind, options.dark)
+    }
+    #[cfg(not(any(windows, target_os = "macos")))]
     {
         let _ = (hwnd, options);
         if kind.is_some() {
@@ -186,7 +191,11 @@ pub fn find_own_window(title: &str) -> Option<isize> {
     {
         win::find_own_window(title)
     }
-    #[cfg(not(windows))]
+    #[cfg(target_os = "macos")]
+    {
+        mac::find_own_window(title)
+    }
+    #[cfg(not(any(windows, target_os = "macos")))]
     {
         let _ = title;
         None
@@ -539,15 +548,44 @@ mod mac {
     use objc2::rc::Retained;
     use objc2::MainThreadMarker;
     use objc2_app_kit::{
-        NSAppearance, NSAppearanceCustomization, NSAppearanceNameAqua, NSAppearanceNameDarkAqua,
+        NSAppearance, NSAppearanceCustomization, NSAppearanceNameAqua, NSAppearanceNameDarkAqua, NSApplication,
         NSAutoresizingMaskOptions, NSUserInterfaceItemIdentification, NSView, NSVisualEffectBlendingMode,
-        NSVisualEffectMaterial, NSVisualEffectState, NSVisualEffectView, NSWindowOrderingMode,
+        NSVisualEffectMaterial, NSVisualEffectState, NSVisualEffectView, NSWindow, NSWindowOrderingMode,
     };
     use objc2_foundation::NSString;
 
     use super::{Applied, Backdrop};
 
     const IDENTIFIER: &str = "glossa.backdrop";
+
+    /// One of this program's windows by its title, as a pointer to its
+    /// NSWindow: for the windows egui makes (immediate viewports), whose
+    /// handles it does not hand out. The application keeps the window alive
+    /// while it is open. Main thread only.
+    pub fn find_own_window(title: &str) -> Option<isize> {
+        let mtm = MainThreadMarker::new()?;
+        let want = NSString::from_str(title);
+        NSApplication::sharedApplication(mtm)
+            .windows()
+            .iter()
+            .find(|w| w.title().isEqualToString(&want))
+            .map(|w| Retained::as_ptr(&w) as isize)
+    }
+
+    /// [`apply`] to the content of a window [`find_own_window`] found.
+    pub fn apply_window(window: isize, kind: Backdrop, dark: bool) -> Result<Applied, String> {
+        if MainThreadMarker::new().is_none() {
+            return Err("vibrancy must be applied on the main thread".into());
+        }
+        if window == 0 {
+            return Err("no window".into());
+        }
+        // SAFETY: a pointer `find_own_window` returned during this frame, on
+        // the main thread, to a window the application still holds.
+        let window: &NSWindow = unsafe { &*(window as *const NSWindow) };
+        let content = window.contentView().ok_or("the window has no content view")?;
+        apply(NonNull::from(&*content).cast(), kind, dark)
+    }
 
     /// The effect view sits in the content view's superview (the window's
     /// frame view), just below the content view: the GL or Metal surface is

@@ -466,7 +466,7 @@ impl GlossaApp {
     pub fn child_backdrop(&mut self, title: &str, popup: bool) {
         use glossa_core::config::Backdrop;
         use glossa_platform::backdrop;
-        if !cfg!(windows) {
+        if !cfg!(any(windows, target_os = "macos")) {
             return;
         }
         if !popup {
