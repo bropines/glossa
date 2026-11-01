@@ -9,6 +9,27 @@ running one to do something.
 Results go to stdout; status lines, timings and errors go to stderr. With
 `--json`, stdout carries one JSON document per command.
 
+```bash
+glossa-cli translate -t ru "Hello, world"     # translate
+glossa-cli ocr screenshot.png -t en           # recognise and translate a picture
+glossa-cli services                           # what is available
+glossa-cli doctor                             # what works on this machine
+```
+
+## Contents
+
+- [Synopsis](#synopsis): global flags, how arguments are read, languages and
+  services
+- [Exit codes](#exit-codes)
+- [Commands](#commands): [`translate`](#translate), [`detect`](#detect),
+  [`dict`](#dict), [`ocr`](#ocr), [`speak`](#speak),
+  [`services`](#services), [`modules`](#modules), [`history`](#history),
+  [`import-classic`](#import-classic), [`theme`](#theme),
+  [`locale`](#locale), [`config`](#config), [`serve`](#serve),
+  [`action`](#action), [`doctor`](#doctor)
+- [Environment variables](#environment-variables)
+- [The desktop program's own flags](#the-desktop-programs-own-flags)
+
 ## Synopsis
 
 ```
@@ -270,7 +291,7 @@ glossa-cli ocr IMAGE [-l LANG] [-t TO] [-e ENGINE] [-F FORMAT] [--in-place] [--j
 |---|---|---|
 | `-l`, `--lang LANG` | `auto` | Language of the text in the image. |
 | `-t`, `--to LANG` | none | Translate the recognised text into this language. |
-| `-e`, `--engine ID` (also `-s`, `--service`) | `[ocr] provider`, with fail-over | Use only this OCR provider: `lens`, `windows-ocr`, `oneocr`, `macos-vision`, `tesseract`, `command-ocr` or a module's id. An id that is not an OCR provider is a usage error (64). |
+| `-e`, `--engine ID` (also `-s`, `--service`) | `[ocr] provider`, with fail-over | Use only this OCR provider: `lens`, `windows-ocr`, `oneocr`, `macos-vision`, `tesseract`, `command-ocr`, an AI endpoint's id (`openai`, `ai-…`) or a module's id. An id that is not an OCR provider is a usage error (64). |
 | `-F`, `--format FORMAT` | none | Print the result as `text`, `json` (the full layout: blocks, lines, words with boxes), `hocr` or `alto` instead of the summary. |
 | `--in-place` | off | Translate block by block, each block with its place in the picture (what an in-place rendering paints). Translates into `-t`, else the first language. |
 | `--join-lines` | off | Join the lines of each paragraph into one, as *Join lines when copying text* does. |
@@ -313,7 +334,9 @@ glossa-cli speak [-l LANG] [--slow] -o OUT TEXT…
 
 The speech service is `[services] tts`, then any other service that can
 speak. The file holds what the service sends: MP3 (`audio/mpeg`) from
-Google, WAV (`audio/wav`) from the system voice (`system-tts`).
+Google, WAV (`audio/wav`) from the system voice (`system-tts`: the Windows
+voices, `say` on macOS, `espeak-ng` on Linux). `glossa-cli services -c tts`
+lists the speech services.
 
 ```console
 $ glossa-cli speak -l en -o hi.mp3 Hello there
@@ -358,7 +381,7 @@ or the kind of module a provider came from.
 [
   {
     "id": "lens",
-    "name": "Google Lens (chrome-lens)",
+    "name": "Google Lens",
     "origin": "Built-in",
     "enabled": false,
     "capabilities": ["ocr"],
@@ -377,9 +400,10 @@ Lists the modules found in the module folders: loaded (by provider id),
 failed (path and error) and skipped (path and reason). The modules compiled
 into the program are not listed here; `services` shows them as `Bundled`.
 
-The text output has a `loaded (N):` heading followed by one id per line,
-then `failed (N):` and `skipped (N):` sections with `path: reason` lines,
-each shown only when not empty. `--json`:
+The text output has a `loaded (N):` heading followed by one id per line
+(with the runtime in brackets, such as `[Python]`), then `failed (N):` and
+`skipped (N):` sections with `path: reason` lines, each shown only when not
+empty. `--json`:
 
 ```json
 {"loaded": ["my-translator"], "failed": [{"path": "…", "error": "…"}], "skipped": [{"path": "…", "reason": "…"}]}
@@ -473,6 +497,8 @@ Glossa Light             built-in
 Glossa Midnight          built-in
 Fluent Dark              built-in
 Fluent Light             built-in
+macOS Dark               built-in
+macOS Light              built-in
 ```
 
 Writing themes: [theming.md](theming.md).
@@ -513,9 +539,12 @@ $ glossa-cli config path
 data: /home/me/.config/glossa  (portable: false)
 ```
 
-Neither subcommand starts the engine, so neither writes anything. Every
-other command that uses the engine creates `config.toml` on first use, to
-store a newly generated control API token. The fields are described in
+Neither subcommand starts the engine, so neither writes anything; `show`
+reports a file that does not parse as an error. Every other command that
+uses the engine creates `config.toml` on first use, to store a newly
+generated control API token, and moves a file that does not parse to
+`config.toml.broken-<unix seconds>`, as the desktop program does
+([configuration.md](configuration.md#how-the-file-is-read-and-written)). The fields are described in
 [configuration.md](configuration.md).
 
 ### serve
@@ -616,21 +645,22 @@ glossa-cli [--json] doctor
 ```
 
 Looks at this machine and prints what works and what does not, for the
-user and for bug reports: the system and the session (Windows, macOS, X11,
-or Wayland with the compositor), which desktop features work there (global
-hotkeys, reading the selection, synthetic input, screen capture, mouse
-mode, the tray icon) and the session's limitations, the macOS permissions
-(Accessibility, Screen Recording), which OCR engines are installed (Lens,
-Windows OCR with its language packs, Apple Vision, Tesseract with its
-languages), which modules loaded or failed, the files and folders in use,
-the proxy requests go through and whether certificates are checked against
-the system's store, the control API (switched on, and whether a Glossa,
-another program or nothing answers at its address), on Linux and the BSDs
-the [D-Bus service](control-api.md#d-bus) (switched on, and whether its name
-is owned), on Wayland what the desktop portal offers (global shortcuts and
-screenshots, with their versions: this is asked live, so it tells whether
-hotkeys can work in this session), and whether the desktop program runs for
-this data folder.
+user and for bug reports. Attach its output to a bug report.
+
+| section | shows |
+|---|---|
+| System | The OS, the processor, and the session: Windows, macOS, X11, or Wayland with the compositor. |
+| Desktop features | Whether global hotkeys, reading the selection, synthetic input, screen capture, mouse mode and the tray icon work in this session, and its limitations. |
+| Permissions | macOS only: Accessibility and Screen Recording. |
+| OCR engines | Lens, Windows OCR with its language packs, Apple Vision, Tesseract with its languages. |
+| Modules | How many loaded, and which failed or were skipped, with the reason. |
+| Files | The settings file (and whether it parses), the data and cache folders, the log. |
+| Network | The proxy requests go through, the timeout, and whether certificates are checked against the system's store. |
+| Control API | Switched on or not, and whether a Glossa, another program or nothing answers at its address. |
+| D-Bus service | Linux and the BSDs: switched on or not, and whether its name is owned ([D-Bus](control-api.md#d-bus)). |
+| Desktop portal | Wayland only: the GlobalShortcuts and Screenshot portal versions, asked live, so it tells whether hotkeys can work in this session. `--json` also gives the RemoteDesktop version (`portal.remote_desktop`), which copy and paste into other programs need. |
+
+The last line says whether the desktop program runs for this data folder.
 
 Nothing is changed: a `config.toml` that does not parse is reported, not
 moved aside as the desktop program does. With `--json`, the same as one
@@ -677,10 +707,11 @@ Desktop portal
 | `GTK_THEME` | desktop program, Linux | A name containing `dark` means the system prefers dark. |
 | `XDG_SESSION_TYPE`, `WAYLAND_DISPLAY`, `DISPLAY`, `XDG_CURRENT_DESKTOP` | desktop program, Linux | How the session (Wayland or X11) and desktop are detected. |
 
-Glossa sets `GLOSSA_MODULE_ID` and `GLOSSA_PROTOCOL` for the Python module
-processes it starts. `GLOSSA_CRASH_TEST`, `GLOSSA_ICON_OUT`,
-`GLOSSA_OCR_SAMPLE`, `GLOSSA_CLASSIC_THEMES` and `GLOSSA_QT_SERVICES` are
-development aids used by tests.
+Glossa sets `GLOSSA_MODULE_ID` and `GLOSSA_PROTOCOL` for the module
+processes it starts (Python, Java and process modules). `GLOSSA_CRASH_TEST`,
+`GLOSSA_ICON_OUT`, `GLOSSA_TEMPLATE_OUT`, `GLOSSA_OCR_SAMPLE`,
+`GLOSSA_CLASSIC_THEMES` and `GLOSSA_QT_SERVICES` are development aids used
+by tests.
 
 ## The desktop program's own flags
 

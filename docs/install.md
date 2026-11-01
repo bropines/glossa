@@ -18,6 +18,22 @@ Every [release](https://github.com/bropines/glossa/releases) has these files
 `Bropines.Glossa*.yaml` and `glossa.json` are winget and Scoop manifests (see
 [below](#winget-and-scoop)).
 
+Not sure which file to take? This chart picks one by system, processor and
+installer or portable copy:
+
+<p align="center">
+  <img src="images/downloads.svg" alt="Which download to take: the system, then the processor, then an installer or a portable copy" width="760">
+</p>
+
+- [Windows](#windows): [the installer](#the-installer),
+  [the portable archive](#the-portable-archive),
+  [winget and Scoop](#winget-and-scoop)
+- [macOS](#macos)
+- [Linux](#linux): [Debian and Ubuntu](#debian-and-ubuntu),
+  [AppImage](#appimage), [the archive](#the-archive)
+- [Where Glossa keeps your files](#where-glossa-keeps-your-files)
+- [Building the packages](#building-the-packages)
+
 ## Windows
 
 ### The installer
@@ -36,6 +52,11 @@ time: *More info → Run anyway*. (The release workflow signs `glossa.exe`,
 `glossa-cli.exe` and the installer as soon as the repository has a code
 signing certificate in its secrets, `WINDOWS_SIGN_PFX` and
 `WINDOWS_SIGN_PASSWORD`.)
+
+Glossa runs without administrator rights. Windows does not let such a
+program read or replace the selection in a program running as
+administrator (an elevated terminal, say); start Glossa as administrator
+too if you need that.
 
 **Upgrading**: run the installer of the new version. It closes a running
 Glossa first; your settings stay.
@@ -155,6 +176,12 @@ your application menu. It needs the same libraries as the AppImage.
 A `portable` file or a `data` folder next to the executable, or the
 `GLOSSA_HOME` variable, moves both there; see
 [Configuration](configuration.md).
+
+API keys, the proxy password and the Lens token stay in the settings file
+unless *Options → Basics* (or the welcome guide) puts them in the system
+keychain: Windows Credential Manager, the macOS Keychain, or the Secret
+Service on Linux. The keychain stays on the computer, so a portable copy
+on a USB stick is better off with the file.
 
 ## Building the packages
 

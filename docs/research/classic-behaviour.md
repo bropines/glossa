@@ -122,7 +122,8 @@ page with no results) and Google Search.
   synthetic input from normal programs into its windows (UIPI), which is also
   why selection capture had to be elevated to reach elevated apps. Glossa runs
   unelevated by default; capturing a selection inside an elevated window needs
-  Glossa elevated too, and the docs say so.
+  Glossa elevated too, and [install.md](../install.md#the-installer) says
+  so.
 - Several community service scripts in the classic `Services` folder carry
   hard-coded API keys. Glossa never bundles those scripts; it loads them from
   the user's own installation, and per-service keys live in the user's
