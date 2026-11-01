@@ -75,6 +75,11 @@ pub fn look_of(engine: &glossa_engine::Engine) -> ([f32; 3], bool) {
 /// The tray icon for an accent colour; mouse mode turns the hue well away
 /// from it, so the state shows at a glance.
 fn tray_icon_image(accent: [f32; 3], mouse_mode: bool) -> Option<tray_icon::Icon> {
+    if cfg!(target_os = "macos") {
+        // A template image, 18 pt at 2x: macOS colours it for the menu bar.
+        let data = crate::template_icon(36);
+        return tray_icon::Icon::from_rgba(data.rgba, data.width, data.height).ok();
+    }
     let base = if mouse_mode {
         let hsva = egui::ecolor::Hsva::from_rgb(accent);
         let turned = egui::ecolor::Hsva::new((hsva.h + 0.42) % 1.0, hsva.s.max(0.6), hsva.v.max(0.75), 1.0);
@@ -177,9 +182,11 @@ impl Tray {
         let (menu, hotkeys_item, mouse_item) = build_menu(locale);
         let mut b = TrayIconBuilder::new()
             .with_tooltip("Glossa")
-            .with_menu(Box::new(menu)) // A menu bar item opens its menu on click on macOS; elsewhere a
+            .with_menu(Box::new(menu))
+            // A menu bar item opens its menu on click on macOS; elsewhere a
             // click toggles mouse mode or shows the window.
-            .with_menu_on_left_click(cfg!(target_os = "macos"));
+            .with_menu_on_left_click(cfg!(target_os = "macos"))
+            .with_icon_as_template(cfg!(target_os = "macos"));
         if let Some(i) = tray_icon_image([0.16, 0.55, 0.89], false) {
             b = b.with_icon(i);
         }
@@ -244,7 +251,10 @@ impl Tray {
         let Some(image) = tray_icon_image(accent, mouse_mode) else { return };
         #[cfg(not(target_os = "linux"))]
         {
-            let _ = self.icon.set_icon(Some(image));
+            // The macOS template icon has no colour to change.
+            if !cfg!(target_os = "macos") {
+                let _ = self.icon.set_icon(Some(image));
+            }
             self.mouse_item.set_checked(mouse_mode);
         }
         #[cfg(target_os = "linux")]

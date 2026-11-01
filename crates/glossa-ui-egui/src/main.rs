@@ -154,12 +154,24 @@ fn main() -> eframe::Result<()> {
     };
 
     // macOS: reading and replacing the selection need Accessibility; show
-    // the system's prompt once at start rather than failing silently later.
+    // the system's prompt rather than failing silently later. Once per
+    // build: after a refusal the prompt at every start would only nag, and
+    // Options → Permissions can ask again.
     {
         use glossa_platform::permissions::{request, status, Permission, Status};
         if status(Permission::Accessibility) == Status::Missing {
-            tracing::info!("asking for the Accessibility permission");
-            request(Permission::Accessibility);
+            let marker = paths.cache_dir.join("asked-accessibility");
+            let build = std::env::current_exe()
+                .and_then(std::fs::metadata)
+                .and_then(|m| m.modified())
+                .map(|t| format!("{t:?}"))
+                .unwrap_or_default();
+            if std::fs::read_to_string(&marker).ok().as_deref() != Some(build.as_str()) {
+                tracing::info!("asking for the Accessibility permission");
+                request(Permission::Accessibility);
+                let _ = std::fs::create_dir_all(&paths.cache_dir);
+                let _ = std::fs::write(&marker, &build);
+            }
         }
     }
 
@@ -643,6 +655,53 @@ pub fn tinted_icon(size: u32, base: [f32; 3]) -> egui::IconData {
     egui::IconData { rgba, width: size, height: size }
 }
 
+/// The menu-bar icon on macOS: the two bubbles as a black mask (the text
+/// bars cut out), which macOS paints to suit a light or dark menu bar.
+pub fn template_icon(size: u32) -> egui::IconData {
+    let n = size as f32;
+    let rounded = |x: f32, y: f32, x0: f32, y0: f32, x1: f32, y1: f32, r: f32| -> f32 {
+        let cx = x.clamp(x0 + r, x1 - r);
+        let cy = y.clamp(y0 + r, y1 - r);
+        ((x - cx).powi(2) + (y - cy).powi(2)).sqrt() - r
+    };
+    let mut rgba = vec![0u8; (size * size * 4) as usize];
+    for py in 0..size {
+        for px in 0..size {
+            let (x, y) = (px as f32 + 0.5, py as f32 + 0.5);
+            // The same layout as the app icon, spread over the whole square.
+            let back = rounded(x, y, n * 0.02, n * 0.06, n * 0.64, n * 0.52, n * 0.1).min(tail(
+                x,
+                y,
+                n * 0.12,
+                n * 0.50,
+                n * 0.26,
+                n * 0.50,
+                n * 0.10,
+                n * 0.66,
+            ));
+            let front = rounded(x, y, n * 0.34, n * 0.38, n * 0.98, n * 0.84, n * 0.1).min(tail(
+                x,
+                y,
+                n * 0.74,
+                n * 0.82,
+                n * 0.88,
+                n * 0.82,
+                n * 0.90,
+                n * 0.98,
+            ));
+            let mut a = (0.5 - front).clamp(0.0, 1.0);
+            // The back bubble shows only outside the front one, a little lighter.
+            a = a.max((0.5 - back).clamp(0.0, 1.0) * 0.6 * (1.0 - (0.5 - front + 1.5).clamp(0.0, 1.0)));
+            for (bx0, by, bx1) in [(0.44, 0.55, 0.86), (0.44, 0.67, 0.72)] {
+                let bar = rounded(x, y, n * bx0, n * by - n * 0.035, n * bx1, n * by + n * 0.035, n * 0.035);
+                a *= 1.0 - (0.5 - bar).clamp(0.0, 1.0);
+            }
+            rgba[((py * size + px) * 4 + 3) as usize] = (a * 255.0) as u8;
+        }
+    }
+    egui::IconData { rgba, width: size, height: size }
+}
+
 /// Signed distance to a triangle (a bubble's tail), approximately.
 #[allow(clippy::too_many_arguments)] // three points, spelled out
 fn tail(x: f32, y: f32, ax: f32, ay: f32, bx: f32, by: f32, cx: f32, cy: f32) -> f32 {
@@ -666,6 +725,21 @@ mod tests {
     /// Writes the application icon as a PNG when `GLOSSA_ICON_OUT` names a
     /// file, for the README and installers:
     /// `GLOSSA_ICON_OUT=assets/icons/glossa.png cargo test -p glossa-ui-egui export_icon -- --ignored`
+    #[test]
+    fn template_icon_is_a_mask_with_the_bars_cut_out() {
+        let icon = super::template_icon(36);
+        let alpha = |x: u32, y: u32| icon.rgba[((y * 36 + x) * 4 + 3) as usize];
+        assert!(icon.rgba.chunks(4).all(|p| p[0] == 0 && p[1] == 0 && p[2] == 0), "black only");
+        assert_eq!(alpha(0, 35), 0, "corner is clear");
+        assert!(alpha(16, 16) > 200, "front bubble is solid");
+        assert!(alpha(25, 20) < 60, "text bar is cut out");
+        // Written out for a look when GLOSSA_TEMPLATE_OUT names a file.
+        if let Some(out) = std::env::var_os("GLOSSA_TEMPLATE_OUT") {
+            let big = super::template_icon(256);
+            image::RgbaImage::from_raw(256, 256, big.rgba).unwrap().save(out).unwrap();
+        }
+    }
+
     #[test]
     #[ignore]
     fn export_icon() {
