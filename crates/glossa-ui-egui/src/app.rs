@@ -164,7 +164,7 @@ impl GlossaApp {
         // the whole interface as egui would by default.
         ctx.options_mut(|o| o.zoom_with_keyboard = false);
         let mut fonts = Fonts::default();
-        fonts.install_base(&ctx, &cfg.appearance.font_family);
+        fonts.install_base(&ctx, &crate::fonts::base_families(&cfg.appearance.font_family, &look.theme));
         *shell.wake.ctx.lock() = Some(ctx.clone());
 
         let events = engine.subscribe();
@@ -572,6 +572,8 @@ impl GlossaApp {
         }
         self.look = Look::new(self.engine.current_theme(), &self.cfg);
         self.look.apply(&self.ctx, self.cfg.appearance.ui_scale);
+        let families = crate::fonts::base_families(&self.cfg.appearance.font_family, &self.look.theme);
+        self.fonts.install_base(&self.ctx, &families);
         self.backdrop_dirty = true;
         self.backdrop_generation += 1;
         if let Some(m) = self.mouse.as_mut() {
@@ -579,7 +581,8 @@ impl GlossaApp {
         }
         if let Some(t) = &self.tray {
             let c = self.look.theme.accent;
-            t.set_look([c.r as f32 / 255.0, c.g as f32 / 255.0, c.b as f32 / 255.0], self.cfg.mouse_mode.enabled);
+            let accent = [c.r as f32 / 255.0, c.g as f32 / 255.0, c.b as f32 / 255.0];
+            t.set_look(accent, self.look.theme.dark, self.cfg.mouse_mode.enabled);
         }
         if before_hotkeys != self.cfg.hotkeys {
             self.register_hotkeys();

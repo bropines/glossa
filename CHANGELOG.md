@@ -111,9 +111,14 @@ for Windows and Linux.
   below a line in the middle of a fixed-size popup; border optional; a shade
   when nothing blurs behind it.
 - **Look**: Fluent Dark and Fluent Light (WinUI 3) themes following the
-  system accent colour; Mica, Mica Alt, Acrylic and blur backdrops for the
-  windows and the popup (Windows 11, vibrancy on macOS; OpenGL engine);
-  an icon size setting; changing the graphics engine offers to restart.
+  system accent colour, sized and spaced to Microsoft's WinUI 3 numbers
+  (32 px controls, 4 / 8 px corners, Segoe UI Variable on the type ramp,
+  thin scroll bars, flyout shadows; `docs/research/fluent.md`), with new
+  theme metrics `control_height`, `overlay_radius` and `controls`; Mica,
+  Mica Alt, Acrylic and blur backdrops for the windows and the popup
+  (Windows 11 with any graphics engine, the GPU one presenting through
+  DirectComposition; vibrancy on macOS with OpenGL); the tray menu dark or
+  light with the theme (Windows 10 1809+); an icon size setting; changing the graphics engine offers to restart.
 - **Text zoom**: Ctrl+wheel over a text area (the main window's panes, the
   popup, the dictionary article) and Ctrl+plus / minus / 0 zoom the text
   alone (`appearance.text_scale`); the interface scale is set in Options
@@ -161,6 +166,11 @@ for Windows and Linux.
 - Windows opened while the main window was hidden (popup, OCR overlay,
   options from a hotkey or the tray) made egui panic; eframe is vendored with
   a fix (`third_party/README.md`).
+- A theme's own font (`[fonts] family` / `fallbacks`) was never loaded, so
+  the Fluent themes drew in Segoe UI rather than Segoe UI Variable; it is
+  now, and again after a theme change.
+- Windows that egui resolved to the other system theme (Options with a
+  light theme on a dark system) drew with egui's default colours.
 - Python installed through pyenv-win, or behind another `.bat`/`.cmd` shim,
   is found.
 - The control API token generated on first run is saved, so `glossa-cli

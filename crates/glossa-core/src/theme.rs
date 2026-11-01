@@ -302,6 +302,29 @@ pub struct Metrics {
     /// Height of the service tab strip under the output pane.
     pub service_tab_height: f32,
     pub icon_size: f32,
+    /// Height of buttons, combo boxes and text fields; `0` derives it from
+    /// the font size, as classic themes always did. WinUI's standard is 32.
+    pub control_height: f32,
+    /// Corner radius of menus, drop-down lists and tooltips; `0` uses
+    /// `button_radius`. WinUI rounds overlays by 8.
+    pub overlay_radius: f32,
+    /// The drawing conventions beyond the numbers above.
+    pub controls: ControlStyle,
+}
+
+/// How controls are shaped, beyond what the colours and sizes say.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ControlStyle {
+    /// The classic look: widgets grow a little under the pointer, scroll
+    /// bars are always there, sizes follow the font.
+    #[default]
+    Classic,
+    /// WinUI 3 (Fluent 2): controls keep their size in every state, thin
+    /// scroll bars that widen under the pointer, 20 px check boxes, a 4 px
+    /// slider track filled with the accent, flyout shadows, the type ramp
+    /// (caption 12, body 14, subtitle 20 at a 14 px body).
+    Fluent,
 }
 
 impl Default for Metrics {
@@ -315,6 +338,9 @@ impl Default for Metrics {
             border_width: 1.0,
             service_tab_height: 28.0,
             icon_size: 16.0,
+            control_height: 0.0,
+            overlay_radius: 0.0,
+            controls: ControlStyle::Classic,
         }
     }
 }
@@ -1240,6 +1266,9 @@ pub mod builtin {
             border_width: 1.0,
             service_tab_height: 32.0,
             icon_size: 16.0,
+            control_height: 32.0,
+            overlay_radius: 8.0,
+            controls: ControlStyle::Fluent,
         };
         t.fonts = Fonts {
             family: "Segoe UI Variable".into(),
@@ -1268,7 +1297,7 @@ pub mod builtin {
         let control_hover = Color::grey(0x32); // ControlFillColorSecondary #15FFFFFF
         let control_pressed = Color::grey(0x27); // ControlFillColorTertiary #08FFFFFF
         let control_disabled = Color::grey(0x2a); // ControlFillColorDisabled #0BFFFFFF
-        let stroke = Color::grey(0x3a); // ControlStrokeColorDefault #12FFFFFF, over a control
+        let stroke = Color::grey(0x3c); // ControlStrokeColorDefault #12FFFFFF (its bottom edge, #18FFFFFF, is #41)
         let surface_stroke = Color::grey(0x42); // SurfaceStrokeColorDefault #66757575
         let accent = WINDOWS_BLUE.fill(true);
         let button = |back: Color, text: Color| ButtonStyle {
@@ -1357,7 +1386,7 @@ pub mod builtin {
         let control = Color::grey(0xfb); // ControlFillColorDefault #B3FFFFFF
         let control_hover = Color::grey(0xf6); // ControlFillColorSecondary #80F9F9F9
         let control_pressed = Color::grey(0xf5); // ControlFillColorTertiary #4DF9F9F9
-        let stroke = Color::grey(0xe0); // ControlStrokeColorDefault, with a little of the bottom stroke
+        let stroke = Color::grey(0xe5); // ControlStrokeColorDefault #0F000000 (#EC) and its bottom edge (#D3) as one
         let surface_stroke = Color::grey(0xc1); // SurfaceStrokeColorDefault #66757575
         let accent = WINDOWS_BLUE.fill(false);
         let button = |back: Color, text: Color| ButtonStyle {
@@ -1576,6 +1605,8 @@ mod tests {
             assert!(t.accent_system, "{name}");
             assert_eq!(t.metrics.button_radius, 4.0);
             assert_eq!(t.metrics.window_radius, 8.0);
+            assert_eq!((t.metrics.control_height, t.metrics.overlay_radius), (32.0, 8.0));
+            assert_eq!(t.metrics.controls, ControlStyle::Fluent);
             assert_eq!(t.fonts.candidates().collect::<Vec<_>>(), ["Segoe UI Variable", "SegUIVar", "Segoe UI"]);
         }
         let dark = builtin::fluent_dark();
@@ -1583,6 +1614,11 @@ mod tests {
         assert_eq!(dark.accent, builtin::WINDOWS_BLUE.light2);
         assert_eq!(builtin::fluent_light().accent, builtin::WINDOWS_BLUE.dark1);
         assert!(builtin::NAMES.iter().all(|n| builtin::by_name(n).is_some_and(|t| t.name == *n)));
+        // Every other theme keeps the classic shapes and sizes.
+        for t in [builtin::glossa_dark(), builtin::glossa_light(), builtin::glossa_midnight()] {
+            assert_eq!(t.metrics.controls, ControlStyle::Classic, "{}", t.name);
+            assert_eq!((t.metrics.control_height, t.metrics.overlay_radius), (0.0, 0.0), "{}", t.name);
+        }
     }
 
     #[test]

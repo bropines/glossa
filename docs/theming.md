@@ -6,10 +6,12 @@ file. Pick one in *Options → Appearance*; after editing a theme file, press
 
 Five themes are built in: **Glossa Dark**, **Glossa Light**, **Glossa
 Midnight**, and **Fluent Dark** and **Fluent Light**, which look like
-Windows 11 (WinUI 3) apps: Segoe UI Variable, 4 px control and 8 px window
-corners, hairline strokes, the Fluent neutral palette and the system accent
-colour. Themes from a classic QTranslate installation appear alongside
-them (see [modules/classic-scripts.md](modules/classic-scripts.md)).
+Windows 11 (WinUI 3) apps: Segoe UI Variable on the Windows type ramp,
+32 px controls, 4 px control and 8 px window and menu corners, hairline
+strokes, thin scroll bars, the Fluent neutral palette and the system accent
+colour ([research/fluent.md](research/fluent.md) lists every number and
+where it comes from). Themes from a classic QTranslate installation appear
+alongside them (see [modules/classic-scripts.md](modules/classic-scripts.md)).
 
 ## Where theme files go
 
@@ -66,11 +68,19 @@ The classic shorthand is accepted too: `"b"` is `#bbbbbb`, `"57"` is
 | `[window_button.*]` | minimise / maximise / close in the title bar of every window: `main` (the glyph), `back` (without one, WinUI's subtle hover fills; close always turns red on hover) |
 | `[icon.*]` | toolbar and pane icons |
 | `[popup]` | the selection popup: `back`, `text`, `frame`, `frame_thickness`, `opacity` |
-| `[metrics]` | `button_radius`, `window_radius`, `spacing`, `padding`, `border_width`, `service_tab_height`, `icon_size` |
+| `[metrics]` | `button_radius`, `window_radius`, `spacing`, `padding`, `border_width`, `service_tab_height`, `icon_size`, `control_height` (0 = from the font), `overlay_radius` (menus and drop-downs; 0 = `button_radius`), `controls` (see below) |
 | `[fonts]` | `family`, `size`, `fallbacks` (see below) |
 | `[backdrop]` | fills used while a window backdrop is active (see *Backdrops*) |
 
 A state that is not given falls back to `normal`.
+
+`metrics.controls` is `"classic"` (the default) or `"fluent"`. Fluent
+keeps every control the same size in every state (classic ones grow a
+pixel under the pointer), uses thin scroll bars that widen under the
+pointer, fills a slider's track up to the thumb with the accent, gives
+menus WinUI's flyout shadow, a 1 px caret and secondary-coloured hint text,
+and sizes captions 12 and headings 20 for a 14 px body. A theme extending
+a Fluent theme inherits it.
 
 ### Fonts
 
@@ -123,6 +133,19 @@ The popup never takes focus, so there Mica and Acrylic both become the
 older acrylic blur, which does not depend on activation. Windows 10 before
 1803 gets plain blur for every kind. On other Linux desktops and on Wayland
 there is no backdrop; the popup's *shade* is the fallback.
+
+**Graphics engines.** On Windows backdrops and window transparency work
+with every engine. With OpenGL the window's redirection surface carries
+per-pixel alpha (winit's blur-behind trick). wgpu's usual swapchains, a
+Vulkan one or DX12 made for the window handle, are opaque: DWM composes
+nothing behind them. So while a backdrop or transparency is on, the GPU and
+software engines use Direct3D 12 presenting to a DirectComposition visual
+(wgpu's `Dx12SwapchainKind::DxgiFromVisual`, premultiplied alpha), and the
+transparent windows are created without a redirection surface
+(`WS_EX_NOREDIRECTIONBITMAP`, the eframe patch in `third_party/`), which is
+how WinUI 3 windows are built. With neither on, wgpu keeps its default
+backends. Turning backdrops or transparency on or off, like changing the
+engine, takes a restart (switching between materials does not). On macOS backdrops need OpenGL: wgpu's Metal layer is opaque.
 
 A material only shows where the window paints nothing or something
 translucent, so while one is active the window draws its surfaces with the

@@ -4,8 +4,11 @@
 //! window, if so configured); a double click shows the main window; right
 //! click opens the classic menu (text recognition, dictionary, history,
 //! mouse mode and global hotkeys on/off, options, about, exit). The icon is
-//! drawn in the theme's accent colour, another hue while mouse mode is on. Events reach the app through channels and wake its loop, so they
-//! work while every window is hidden.
+//! drawn in the theme's accent colour, another hue while mouse mode is on,
+//! and on Windows the menu is dark or light with the theme
+//! (`glossa_platform::appearance::set_menu_theme`). Events reach the app
+//! through channels and wake its loop, so they work while every window is
+//! hidden.
 //!
 //! On Linux the indicator needs GTK running on the thread that owns it, so
 //! the icon lives on a thread of its own there.
@@ -59,12 +62,13 @@ pub struct Tray {
     looks: mpsc::Sender<tray_icon::Icon>,
 }
 
-/// The accent of the current theme, as the icon's base colour.
-pub fn accent_of(engine: &glossa_engine::Engine) -> [f32; 3] {
+/// The accent of the current theme, as the icon's base colour, and whether
+/// the theme is dark, for the menu.
+pub fn look_of(engine: &glossa_engine::Engine) -> ([f32; 3], bool) {
     let mut theme = engine.current_theme();
     theme.resolve_system_accent(glossa_platform::appearance::system_accent().as_ref());
     let c = theme.accent;
-    [c.r as f32 / 255.0, c.g as f32 / 255.0, c.b as f32 / 255.0]
+    ([c.r as f32 / 255.0, c.g as f32 / 255.0, c.b as f32 / 255.0], theme.dark)
 }
 
 /// The tray icon for an accent colour; mouse mode turns the hue well away
@@ -204,8 +208,12 @@ impl Tray {
         self.events.try_iter().collect()
     }
 
-    /// Recolour the icon for the theme's accent and mouse mode's state.
-    pub fn set_look(&self, accent: [f32; 3], mouse_mode: bool) {
+    /// Recolour the icon for the theme's accent and mouse mode's state, and
+    /// make the menu dark or light to match the theme.
+    pub fn set_look(&self, accent: [f32; 3], dark: bool, mouse_mode: bool) {
+        // The menu is drawn by the system (TrackPopupMenu on Windows), which
+        // follows the process-wide menu theme rather than any window's.
+        glossa_platform::appearance::set_menu_theme(Some(dark));
         let Some(image) = tray_icon_image(accent, mouse_mode) else { return };
         #[cfg(not(target_os = "linux"))]
         {

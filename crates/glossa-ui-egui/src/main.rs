@@ -213,7 +213,7 @@ fn main() -> eframe::Result<()> {
         }
         let mut options =
             eframe::NativeOptions { viewport, run_and_return: can_unload, persist_window: false, ..Default::default() };
-        choose_renderer(&mut options, cfg.appearance.renderer);
+        choose_renderer(&mut options, cfg.appearance.renderer, style::needs_transparent_root(&cfg));
         let mut this_launch = launch.clone();
         this_launch.hidden = !start_visible;
         let app_slot = slot.clone();
@@ -260,11 +260,12 @@ fn launch_once_only(start_visible: &mut bool) {
 
 /// The parts that live as long as the process.
 /// The tray icon in the theme's accent colour, changed while mouse mode is
-/// on, with the menu's check marks.
+/// on, with the menu's check marks, and the menus dark or light as the theme.
 pub fn refresh_tray_look(shell: &Shell) {
     let Some(t) = &shell.tray else { return };
     let cfg = shell.engine.config();
-    t.set_look(tray::accent_of(&shell.engine), cfg.mouse_mode.enabled);
+    let (accent, dark) = tray::look_of(&shell.engine);
+    t.set_look(accent, dark, cfg.mouse_mode.enabled);
 }
 
 /// Mouse mode on or off from the tray, with no GUI needed.
@@ -436,12 +437,31 @@ fn collect_wake_events(shell: &mut Shell, events: &std::sync::mpsc::Receiver<glo
 /// (~385 MB), and WARP software rendering in between in working set but
 /// worse in commit (~340 MB) — which is why OpenGL is the default, and why the
 /// GUI unloads entirely while it sits in the tray.
-fn choose_renderer(options: &mut eframe::NativeOptions, configured: glossa_core::config::Renderer) {
+///
+/// `transparent` (a backdrop or window transparency is on) matters to wgpu
+/// on Windows: a swapchain made for the window's HWND, which Vulkan and
+/// wgpu's DX12 default both use, is opaque, so DWM can show nothing behind
+/// it. DX12 can instead present to a DirectComposition visual over the
+/// window, which supports premultiplied alpha, and that is what lets Mica,
+/// Acrylic and the transparency slider through.
+fn choose_renderer(options: &mut eframe::NativeOptions, configured: glossa_core::config::Renderer, transparent: bool) {
     use eframe::{egui_wgpu, wgpu};
+    let composited = |setup: &mut egui_wgpu::WgpuSetupCreateNew| {
+        if cfg!(windows) && transparent {
+            setup.instance_descriptor.backends = wgpu::Backends::DX12;
+            setup.instance_descriptor.backend_options.dx12.presentation_system =
+                wgpu::Dx12SwapchainKind::DxgiFromVisual;
+        }
+    };
     let choice = std::env::var("GLOSSA_RENDERER").unwrap_or_else(|_| configured.as_str().into());
     match choice.as_str() {
         "glow" | "opengl" | "gl" => options.renderer = eframe::Renderer::Glow,
-        "gpu" | "wgpu" => options.renderer = eframe::Renderer::Wgpu,
+        "gpu" | "wgpu" => {
+            options.renderer = eframe::Renderer::Wgpu;
+            if let egui_wgpu::WgpuSetup::CreateNew(setup) = &mut options.wgpu_options.wgpu_setup {
+                composited(setup);
+            }
+        }
         _ => {
             options.renderer = eframe::Renderer::Wgpu;
             let mut setup = egui_wgpu::WgpuSetupCreateNew::without_display_handle();
@@ -460,6 +480,7 @@ fn choose_renderer(options: &mut eframe::NativeOptions, configured: glossa_core:
                         .cloned()
                         .ok_or_else(|| "no graphics adapter".to_owned())
                 }));
+            composited(&mut setup);
             options.wgpu_options.wgpu_setup = egui_wgpu::WgpuSetup::CreateNew(setup);
         }
     }

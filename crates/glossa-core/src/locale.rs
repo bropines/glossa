@@ -392,7 +392,7 @@ pub static STRINGS: &[(&str, &str, Option<&str>)] = &[
     ("options.appearance.popup_shade", "Shade when not blurred (0 - 90):", None),
     ("options.backdrop.none", "None", None),
     ("options.backdrop.blur", "Blur", None),
-    ("options.backdrop.needs_opengl", "Backdrops need Windows or macOS and the OpenGL engine.", None),
+    ("options.backdrop.needs_opengl", "Backdrops need Windows, or macOS with the OpenGL engine.", None),
     ("popup.close", "Close", None),
     ("popup.pin", "Keep it open", None),
     ("popup.unpin", "Let it hide again", None),
