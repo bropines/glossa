@@ -14,6 +14,7 @@
 mod codepage;
 mod form;
 
+use std::sync::{Mutex, RwLock};
 use std::time::{Duration, Instant};
 
 use glossa_core::config::{Network, ProxyMode};
@@ -210,11 +211,19 @@ pub trait Http: Send + Sync {
 
 /// The real client.
 pub struct HttpClient {
-    agent: ureq::Agent,
+    agent: RwLock<ureq::Agent>,
+    settings: Network,
+    /// With the system proxy: the one the agent was built with, and when the
+    /// system was last asked. `None` when the settings fix the proxy.
+    system: Option<Mutex<(Option<ProxySpec>, Instant)>>,
     timeout: Duration,
     max_retries: u32,
     user_agent: String,
 }
+
+/// How often the system proxy is looked up again (a registry read on
+/// Windows, environment variables elsewhere).
+const PROXY_RECHECK: Duration = Duration::from_secs(5);
 
 /// What we send when nobody asks for anything else: a current desktop
 /// browser, because several free endpoints refuse obvious bots.
@@ -231,24 +240,46 @@ const SLOW: Duration = Duration::from_secs(2);
 
 impl HttpClient {
     pub fn new(settings: &Network) -> Result<HttpClient, Error> {
-        let timeout = Duration::from_secs(settings.timeout_secs.max(1));
-        let proxy = resolve_proxy(settings)?;
-        let mut cfg = ureq::Agent::config_builder()
-            .http_status_as_error(false)
-            .timeout_global(Some(timeout))
-            .max_redirects(8)
-            .user_agent(if settings.user_agent.is_empty() {
-                DEFAULT_USER_AGENT.to_owned()
-            } else {
-                settings.user_agent.clone()
-            });
-        cfg = cfg.proxy(proxy).tls_config(tls_config());
+        let spec = proxy_spec(settings);
+        let agent = build_agent(settings, spec.clone())?;
         Ok(HttpClient {
-            agent: cfg.build().into(),
-            timeout,
+            agent: RwLock::new(agent),
+            settings: settings.clone(),
+            system: follows_system(settings).then(|| Mutex::new((spec, Instant::now()))),
+            timeout: Duration::from_secs(settings.timeout_secs.max(1)),
             max_retries: settings.max_retries,
             user_agent: settings.user_agent.clone(),
         })
+    }
+
+    /// The agent to use now. Following the system proxy, it is rebuilt when
+    /// the system's proxy has changed since it was built: a proxy that was
+    /// switched off would otherwise fail every request (or one switched on
+    /// be ignored) until the program restarts.
+    fn agent(&self) -> ureq::Agent {
+        if let Some(system) = &self.system {
+            let mut guard = system.lock().unwrap_or_else(|e| e.into_inner());
+            let (seen, checked) = &mut *guard;
+            if checked.elapsed() >= PROXY_RECHECK {
+                *checked = Instant::now();
+                let now = proxy_spec(&self.settings);
+                if now != *seen {
+                    match build_agent(&self.settings, now.clone()) {
+                        Ok(agent) => {
+                            tracing::info!(
+                                from = %describe_proxy(seen.as_ref()),
+                                to = %describe_proxy(now.as_ref()),
+                                "the system proxy changed"
+                            );
+                            *self.agent.write().unwrap_or_else(|e| e.into_inner()) = agent;
+                            *seen = now;
+                        }
+                        Err(e) => tracing::warn!("the system proxy changed to one that cannot be used: {e}"),
+                    }
+                }
+            }
+        }
+        self.agent.read().unwrap_or_else(|e| e.into_inner()).clone()
     }
 
     /// A client with default settings and no proxy, for tools and tests.
@@ -341,14 +372,31 @@ impl HttpClient {
         req: ureq::http::Request<S>,
         timeout: Option<Duration>,
     ) -> Result<ureq::http::Response<ureq::Body>, ureq::Error> {
+        let agent = self.agent();
         match timeout {
             Some(t) => {
-                let req = self.agent.configure_request(req).timeout_global(Some(t)).build();
-                self.agent.run(req)
+                let req = agent.configure_request(req).timeout_global(Some(t)).build();
+                agent.run(req)
             }
-            None => self.agent.run(req),
+            None => agent.run(req),
         }
     }
+}
+
+fn build_agent(settings: &Network, proxy: Option<ProxySpec>) -> Result<ureq::Agent, Error> {
+    let timeout = Duration::from_secs(settings.timeout_secs.max(1));
+    let cfg = ureq::Agent::config_builder()
+        .http_status_as_error(false)
+        .timeout_global(Some(timeout))
+        .max_redirects(8)
+        .user_agent(if settings.user_agent.is_empty() {
+            DEFAULT_USER_AGENT.to_owned()
+        } else {
+            settings.user_agent.clone()
+        })
+        .proxy(make_proxy(proxy)?)
+        .tls_config(tls_config());
+    Ok(cfg.build().into())
 }
 
 fn status_and_headers(response: &ureq::http::Response<ureq::Body>) -> (u16, Vec<(String, String)>) {
@@ -471,16 +519,42 @@ pub fn redact(url: &str) -> &str {
 /// or LibreTranslate, say) is unreachable from the proxy's side.
 const LOOPBACK: &[&str] = &["localhost", "127.0.0.1", "::1", "[::1]"];
 
-fn resolve_proxy(settings: &Network) -> Result<Option<ureq::Proxy>, Error> {
-    let (url, bypass) = match settings.proxy.mode {
-        ProxyMode::None => return Ok(None),
-        ProxyMode::Manual => (settings.proxy.url(), Vec::new()),
-        ProxyMode::System | ProxyMode::Auto => match system_proxy() {
-            Some((url, bypass)) => (Some(url), bypass),
-            None => (None, Vec::new()),
+/// A proxy URL and the hosts that bypass it.
+type ProxySpec = (String, Vec<String>);
+
+/// Whether the proxy comes from the system, and so can change while Glossa
+/// runs (a VPN client switching the system proxy on and off).
+fn follows_system(settings: &Network) -> bool {
+    matches!(settings.proxy.mode, ProxyMode::System | ProxyMode::Auto)
+}
+
+/// The proxy the settings call for right now.
+fn proxy_spec(settings: &Network) -> Option<ProxySpec> {
+    match settings.proxy.mode {
+        ProxyMode::None => None,
+        ProxyMode::Manual => settings.proxy.url().map(|u| (u, Vec::new())),
+        ProxyMode::System | ProxyMode::Auto => system_proxy(),
+    }
+}
+
+/// A proxy's address without any credentials in it, for the log.
+fn describe_proxy(spec: Option<&ProxySpec>) -> String {
+    match spec {
+        None => "none".to_owned(),
+        Some((url, _)) => match url.split_once("://") {
+            Some((scheme, rest)) => format!("{scheme}://{}", rest.rsplit('@').next().unwrap_or(rest)),
+            None => url.rsplit('@').next().unwrap_or(url).to_owned(),
         },
-    };
-    let Some(u) = url else { return Ok(None) };
+    }
+}
+
+#[cfg(test)]
+fn resolve_proxy(settings: &Network) -> Result<Option<ureq::Proxy>, Error> {
+    make_proxy(proxy_spec(settings))
+}
+
+fn make_proxy(spec: Option<ProxySpec>) -> Result<Option<ureq::Proxy>, Error> {
+    let Some((u, bypass)) = spec else { return Ok(None) };
     let bad = |e: ureq::Error| Error::Config(format!("proxy {u:?}: {e}"));
     // Parsed once for its parts, then rebuilt with the bypass list, which
     // only the builder takes.
@@ -739,6 +813,37 @@ mod tests {
             };
             assert!(HttpClient::new(&settings).is_ok(), "{mode:?}");
         }
+    }
+
+    #[test]
+    fn proxies_are_logged_without_credentials() {
+        let spec = |u: &str| Some((u.to_owned(), Vec::new()));
+        assert_eq!(describe_proxy(None), "none");
+        assert_eq!(describe_proxy(spec("http://user:secret@proxy.test:3128").as_ref()), "http://proxy.test:3128");
+        assert_eq!(describe_proxy(spec("127.0.0.1:2080").as_ref()), "127.0.0.1:2080");
+    }
+
+    #[test]
+    fn a_changed_system_proxy_rebuilds_the_agent() {
+        let settings = Network {
+            proxy: glossa_core::config::Proxy { mode: ProxyMode::System, ..Default::default() },
+            ..Default::default()
+        };
+        let http = HttpClient::new(&settings).unwrap();
+        let system = http.system.as_ref().expect("the system proxy is followed");
+        // Pretend the agent was built for another proxy, a while ago.
+        *system.lock().unwrap() =
+            (Some(("http://gone.test:1".to_owned(), Vec::new())), Instant::now() - PROXY_RECHECK * 2);
+        let _ = http.agent();
+        let (seen, checked) = &*system.lock().unwrap();
+        assert_eq!(*seen, proxy_spec(&settings), "rebuilt for the proxy the system names now");
+        assert!(checked.elapsed() < PROXY_RECHECK);
+
+        let fixed = Network {
+            proxy: glossa_core::config::Proxy { mode: ProxyMode::None, ..Default::default() },
+            ..Default::default()
+        };
+        assert!(HttpClient::new(&fixed).unwrap().system.is_none(), "a fixed proxy is never looked up again");
     }
 
     /// A local server that accepts connections and does whatever `serve`
