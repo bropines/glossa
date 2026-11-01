@@ -112,10 +112,30 @@ for Windows and Linux.
   graphics engine offers to restart.
 - **Options**: the Services page uses the whole window, the list in a
   resizable pane beside the settings.
+- **One frame for every window**: with window style on, the options,
+  dictionary, history, keyboard and About windows draw the same themed
+  title bar as the main window (Windows 11 caption buttons, double-click to
+  maximise, resizing from every edge and corner, rounded corners and a
+  theme-coloured border from DWM on Windows 11); macOS keeps its system
+  decorations.
+- Opening a window that is already open (toolbar, menu, tray, hotkey)
+  brings it to the front and focuses it.
 - Licenses (MIT or Apache-2.0), NOTICE, CI on Linux and Windows, release
   builds, issue templates, contributing and security guides.
 
 ### Fixed
+
+- Classic themes such as Metro left the options window without visible
+  labels: their `Window.Text` is the caption's (white on a blue caption)
+  and was used on the white body. Labels now take the theme's other text
+  colour, text fields without an `Edit` section use the body colours, and
+  every loaded theme has unreadable text-on-background pairs repaired.
+- The theme reaches every window: egui's light and dark styles both carry
+  it, so a window whose system theme differs no longer falls back to egui's
+  defaults.
+- Window transparency works under the GPU and software engines (a
+  DirectComposition swap chain on Windows) and in the other windows, not
+  only the main one.
 
 - Windows opened while the main window was hidden (popup, OCR overlay,
   options from a hotkey or the tray) made egui panic; eframe is vendored with
