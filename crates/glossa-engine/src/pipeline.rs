@@ -68,6 +68,51 @@ pub struct TranslationOutcome {
     pub failed: Vec<(String, String)>,
 }
 
+impl TranslationOutcome {
+    /// The result as the command line (`--json`) and the control API give
+    /// it, so the two cannot drift apart.
+    pub fn report(&self) -> TranslateReport {
+        TranslateReport {
+            text: self.translation.text.clone(),
+            from: self.pair.from.bcp47().to_owned(),
+            to: self.pair.to.bcp47().to_owned(),
+            service: self.translation.provider_id.clone(),
+            romanization: self.translation.romanisation.clone(),
+            source_romanization: self.translation.source_romanisation.clone(),
+            alternatives: self.translation.alternatives.clone(),
+            back: self.back.as_ref().map(|b| b.text.clone()),
+            failed: self.failed.clone(),
+            elapsed_ms: self.translation.elapsed_ms,
+        }
+    }
+}
+
+/// A translation as JSON: the shape `glossa-cli --json translate` prints
+/// and `/v1/translate` answers. Every field is always present.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+pub struct TranslateReport {
+    /// The translation.
+    pub text: String,
+    /// The direction used, as codes, after detection and smart direction.
+    pub from: String,
+    pub to: String,
+    /// The provider that answered.
+    pub service: String,
+    /// The translation's romanisation, when the service gives one.
+    pub romanization: Option<String>,
+    /// The source's transliteration or pronunciation, when the service gives
+    /// one.
+    pub source_romanization: Option<String>,
+    /// Other translations, from services that offer them.
+    pub alternatives: Vec<String>,
+    /// The back translation, when one was asked for.
+    pub back: Option<String>,
+    /// Services tried before this one that failed: `[id, message]` pairs.
+    pub failed: Vec<(String, String)>,
+    /// How long the answering service took.
+    pub elapsed_ms: u64,
+}
+
 /// One pass through the pipeline. Borrowed state only: build one per call.
 pub struct Pipeline<'a> {
     pub registry: &'a Registry,

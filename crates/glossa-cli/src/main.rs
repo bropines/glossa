@@ -52,7 +52,9 @@ USAGE
     glossa-cli [--json] [--home DIR] [-v] <command> [options] [text…]
 
 COMMANDS
-    translate  [-f FROM] [-t TO] [-s SERVICE] [--back] [TEXT…]   (stdin if no text)
+    translate  [-f FROM] [-t TO] [-s SERVICE] [--back] [--save-history] [--full] [TEXT…]
+                                      stdin if no text; piped output is the translation alone
+                                      unless --full
     detect     [TEXT…]
     dict       [-f FROM] [-t TO] [-s SERVICE] WORD
     ocr        IMAGE [-l LANG] [-t TO] [-e ENGINE] [-F text|json|hocr|alto]
@@ -114,6 +116,30 @@ const VALUED: &[&str] = &[
     "--format",
 ];
 
+/// Flags that take no value.
+const SWITCHES: &[&str] =
+    &["--json", "-v", "--verbose", "-h", "--help", "--back", "--slow", "--favorites", "--save-history", "--full"];
+
+/// Flags every command takes.
+const GLOBAL: &[&str] = &["--json", "-v", "--verbose", "-h", "--help", "--home"];
+
+/// The flags each command takes besides the global ones, or `None` for a
+/// command that does not exist (that error is reported instead).
+fn command_flags(command: &str) -> Option<&'static [&'static str]> {
+    Some(match command {
+        "translate" | "tr" => &["-f", "--from", "-t", "--to", "-s", "--service", "--back", "--save-history", "--full"],
+        "dict" | "dictionary" => &["-f", "--from", "-t", "--to", "-s", "--service"],
+        "ocr" => &["-l", "--lang", "-t", "--to", "-e", "--engine", "-s", "--service", "-F", "--format"],
+        "speak" => &["-o", "--out", "-l", "--lang", "--slow"],
+        "services" => &["-c", "--capability"],
+        "history" => &["--search", "--favorites", "--export"],
+        "detect" | "modules" | "import-classic" | "theme" | "locale" | "config" | "serve" | "action" | "" | "help" => {
+            &[]
+        }
+        _ => return None,
+    })
+}
+
 fn parse(argv: Vec<String>) -> Result<Args, String> {
     let mut a = Args { json: false, home: None, verbose: false, command: String::new(), flags: vec![], rest: vec![] };
     let mut it = argv.into_iter().peekable();
@@ -125,10 +151,6 @@ fn parse(argv: Vec<String>) -> Result<Args, String> {
         }
         match arg.as_str() {
             "--" => only_text = true,
-            "--json" => a.json = true,
-            "-v" | "--verbose" => a.verbose = true,
-            "-h" | "--help" => a.command = "help".into(),
-            "--home" => a.home = Some(it.next().ok_or("--home needs a directory")?.into()),
             flag if flag.starts_with('-')
                 && flag.len() > 1
                 && !flag.chars().nth(1).is_some_and(|c| c.is_ascii_digit()) =>
@@ -142,20 +164,68 @@ fn parse(argv: Vec<String>) -> Result<Args, String> {
                         Some(v) => v,
                         None => it.next().ok_or_else(|| format!("{name} needs a value"))?,
                     })
+                } else if SWITCHES.contains(&name.as_str()) {
+                    if inline.is_some() {
+                        return Err(format!("{name} takes no value"));
+                    }
+                    None
                 } else {
+                    // Unknown: kept so the check after parsing can name it
+                    // with the closest real flag for the command.
                     inline
                 };
+                match name.as_str() {
+                    "--json" => a.json = true,
+                    "-v" | "--verbose" => a.verbose = true,
+                    "-h" | "--help" => a.command = "help".into(),
+                    _ => {}
+                }
                 a.flags.push((name, value));
             }
             _ if a.command.is_empty() => a.command = arg,
             _ => a.rest.push(arg),
         }
     }
+    if let Some(home) = a.flag(&["--home"]) {
+        if home.trim().is_empty() {
+            return Err("--home needs a directory".into());
+        }
+        a.home = Some(home.into());
+    }
     Ok(a)
 }
 
+/// Refuse flags the command does not take, naming the closest one it does:
+/// a misspelt `--slwo` must not quietly do nothing.
+fn check_flags(a: &Args) -> Result<(), String> {
+    if a.command == "help" {
+        return Ok(());
+    }
+    let Some(own) = command_flags(&a.command) else { return Ok(()) };
+    let takes = |name: &str| GLOBAL.contains(&name) || own.contains(&name);
+    for (name, _) in &a.flags {
+        if takes(name) {
+            continue;
+        }
+        let shown = if a.command.is_empty() { "glossa-cli".to_owned() } else { a.command.clone() };
+        let known = VALUED.contains(&name.as_str()) || SWITCHES.contains(&name.as_str());
+        let near = glossa_core::text::closest(name, GLOBAL.iter().chain(own).copied(), 2);
+        let hint = match near.as_slice() {
+            [] => String::new(),
+            [one] => format!("; did you mean {one}?"),
+            [first, second, ..] => format!("; did you mean {first} or {second}?"),
+        };
+        return Err(if known {
+            format!("{shown} does not take {name}{hint}")
+        } else {
+            format!("unknown flag {name}{hint}")
+        });
+    }
+    Ok(())
+}
+
 fn main() -> ExitCode {
-    let args = match parse(std::env::args().skip(1).collect()) {
+    let args = match parse(std::env::args().skip(1).collect()).and_then(|a| check_flags(&a).map(|()| a)) {
         Ok(a) => a,
         Err(e) => {
             eprintln!("glossa-cli: {e}\n\n{USAGE}");
@@ -223,6 +293,19 @@ fn lang(code: Option<&str>, default: LangId) -> Result<LangId, Fail> {
     }
 }
 
+/// The provider id given with one of `names`, checked: an id that does not
+/// exist (or cannot do `cap`) is a usage error naming similar ids, instead
+/// of being skipped while another service answers.
+fn service(e: &Engine, args: &Args, names: &[&str], cap: Capabilities) -> Result<Option<String>, Fail> {
+    match args.flag(names) {
+        None => Ok(None),
+        Some(id) => {
+            e.require_provider(id, cap).map_err(Fail::Usage)?;
+            Ok(Some(id.to_owned()))
+        }
+    }
+}
+
 /// The text argument, or stdin when there is none and stdin is not a terminal.
 fn text(args: &Args) -> Result<String, Fail> {
     if !args.rest.is_empty() {
@@ -265,30 +348,24 @@ fn run(args: &Args) -> Result<(), Fail> {
                     *done = text.to_owned();
                 })
             });
-            let opts = TranslateOptions {
-                provider: args.flag(&["-s", "--service"]).map(str::to_owned),
-                back_translate: args.has(&["--back"]),
-                progress,
-                ..Default::default()
-            };
+            let provider = service(&e, args, &["-s", "--service"], Capabilities::TRANSLATE)?;
+            let opts =
+                TranslateOptions { provider, back_translate: args.has(&["--back"]), progress, ..Default::default() };
             let out = e.translate(&text(args)?, pair, &opts)?;
+            if args.has(&["--save-history"]) && e.record_translation(&out) {
+                if let Err(err) = e.save_history() {
+                    eprintln!("glossa-cli: history not saved: {err}");
+                }
+            }
             let streamed = std::mem::take(&mut *printed.lock().unwrap_or_else(|e| e.into_inner()));
             if args.json {
-                out!(
-                    "{}",
-                    json!({
-                        "text": out.translation.text,
-                        "from": out.pair.from.bcp47(),
-                        "to": out.pair.to.bcp47(),
-                        "service": out.translation.provider_id,
-                        "romanization": out.translation.romanisation,
-                        "back": out.back.as_ref().map(|b| &b.text),
-                        "failed": out.failed,
-                        "elapsed_ms": out.translation.elapsed_ms,
-                    })
-                );
+                out!("{}", serde_json::to_string(&out.report()).unwrap_or_default());
             } else {
-                let block = out.translation.as_display_block();
+                // Piped, stdout is the translation and nothing else, so
+                // `< in.txt > out.txt` works; on a terminal (or with
+                // --full) the romanisation and dictionary senses follow.
+                let rich = std::io::stdout().is_terminal() || args.has(&["--full"]);
+                let block = if rich { out.translation.as_display_block() } else { out.translation.text.clone() };
                 match block.strip_prefix(streamed.as_str()) {
                     Some(rest) if !streamed.is_empty() => out!("{rest}"),
                     _ if !streamed.is_empty() => out!("\n{block}"),
@@ -326,7 +403,8 @@ fn run(args: &Args) -> Result<(), Fail> {
                 lang(args.flag(&["-f", "--from"]), LangId::AUTO)?,
                 lang(args.flag(&["-t", "--to"]), LangId::AUTO)?,
             );
-            let a = e.dictionary(&text(args)?, pair, args.flag(&["-s", "--service"]))?;
+            let provider = service(&e, args, &["-s", "--service"], Capabilities::DICTIONARY)?;
+            let a = e.dictionary(&text(args)?, pair, provider.as_deref())?;
             if args.json {
                 out!("{}", serde_json::to_string_pretty(&a).unwrap_or_default());
             } else if !a.explanations.is_empty() || !a.examples.is_empty() {
@@ -348,7 +426,8 @@ fn run(args: &Args) -> Result<(), Fail> {
             let e = engine(args)?;
             let to = args.flag(&["-t", "--to"]).map(|c| lang(Some(c), LangId::ENGLISH)).transpose()?;
             let from = lang(args.flag(&["-l", "--lang"]), LangId::AUTO)?;
-            let engine_id = args.flag(&["-e", "--engine", "-s", "--service"]);
+            let engine_id = service(&e, args, &["-e", "--engine", "-s", "--service"], Capabilities::OCR)?;
+            let engine_id = engine_id.as_deref();
             if let Some(name) = args.flag(&["-F", "--format"]) {
                 use glossa_core::ocr::export::{self, OcrFormat};
                 use glossa_core::ocr::OcrGranularity;
@@ -373,12 +452,7 @@ fn run(args: &Args) -> Result<(), Fail> {
                 None => e.recognize(image, from, to)?,
             };
             if args.json {
-                out!(
-                    "{}",
-                    json!({ "text": out.ocr.text, "translation": out.translated_text(),
-                            "detected": out.ocr.detected_lang.map(|l| l.bcp47()), "service": out.ocr.provider_id,
-                            "elapsed_ms": out.ocr.elapsed_ms })
-                );
+                out!("{}", glossa_engine::server::ocr_summary(&out));
             } else {
                 out!("{}", out.translated_text().unwrap_or(&out.ocr.text));
                 eprintln!("[{} · {} ms]", out.ocr.provider_id, out.ocr.elapsed_ms);
@@ -574,6 +648,14 @@ fn run(args: &Args) -> Result<(), Fail> {
         }
         "serve" => {
             let e = engine(args)?;
+            if !e.config().server.enabled {
+                // The command is an explicit request to run the API, so the
+                // setting (which governs the desktop program) does not stop it.
+                eprintln!(
+                    "note: [server] enabled is false; that switches the API off in the desktop program, \
+                     serve runs it anyway"
+                );
+            }
             let handle = glossa_engine::server::start(e.clone())?;
             let token = e.config().server.token;
             eprintln!("control API on http://{}  (token: {token})", handle.addr);
@@ -597,7 +679,8 @@ fn run(args: &Args) -> Result<(), Fail> {
         "action" => {
             let id = args.rest.first().ok_or_else(|| Fail::Usage("action needs an action id".into()))?;
             let cfg = glossa_core::Config::load(&paths(args).config_file())?;
-            let mut url = format!("http://{}/v1/action/{id}?token={}", cfg.server.bind, cfg.server.token);
+            let addr = glossa_engine::server::connect_addr(&cfg.server.bind);
+            let mut url = format!("http://{addr}/v1/action/{id}?token={}", cfg.server.token);
             if let Some(t) = args.rest.get(1..).filter(|r| !r.is_empty()) {
                 url.push_str("&text=");
                 url.push_str(&glossa_net::url_encode(&t.join(" ")));
@@ -656,6 +739,58 @@ mod tests {
     #[test]
     fn a_valued_flag_without_a_value_is_an_error() {
         assert!(parse(vec!["translate".into(), "-t".into()]).is_err());
+    }
+
+    fn check(args: &[&str]) -> Result<Args, String> {
+        parse(args.iter().map(|s| s.to_string()).collect()).and_then(|a| check_flags(&a).map(|()| a))
+    }
+
+    #[test]
+    fn every_valued_flag_takes_an_equals_sign_home_included() {
+        let a = check(&["--home=/tmp/g", "translate", "--to=ru", "-s=google", "hi"]).unwrap();
+        assert_eq!(a.home.as_deref(), Some(std::path::Path::new("/tmp/g")));
+        assert_eq!(a.flag(&["-t", "--to"]), Some("ru"));
+        assert_eq!(a.flag(&["-s", "--service"]), Some("google"));
+        let a = check(&["translate", "--home", "/tmp/h", "hi"]).unwrap();
+        assert_eq!(a.home.as_deref(), Some(std::path::Path::new("/tmp/h")));
+        assert_eq!(a.rest, ["hi"]);
+        assert!(check(&["--home=", "translate"]).is_err());
+        let a = check(&["--json", "-v", "history", "--export=out.csv"]).unwrap();
+        assert!(a.json && a.verbose);
+        assert_eq!(a.flag(&["--export"]), Some("out.csv"));
+    }
+
+    #[test]
+    fn unknown_flags_are_errors_with_a_suggestion() {
+        let err = check(&["speak", "--slwo", "-o", "x.mp3", "hi"]).err().unwrap();
+        assert!(err.contains("unknown flag --slwo") && err.contains("did you mean --slow"), "{err}");
+        let err = check(&["translate", "--form", "en", "hi"]).err().unwrap();
+        assert!(err.contains("--from"), "{err}");
+        // A real flag on the wrong command says so.
+        let err = check(&["detect", "--back", "hi"]).err().unwrap();
+        assert!(err.contains("detect does not take --back"), "{err}");
+        // Switches take no value.
+        assert!(check(&["translate", "--back=yes", "hi"]).is_err());
+        assert!(check(&["--json=1", "detect", "hi"]).is_err());
+        // Help anywhere still wins, and an unknown command is reported as such.
+        assert!(check(&["translate", "--nonsense", "--help"]).is_ok());
+        assert!(check(&["frobnicate", "--nonsense"]).is_ok(), "run() reports the unknown command");
+        assert!(check(&["--nope"]).is_err());
+    }
+
+    #[test]
+    fn each_command_accepts_its_own_flags() {
+        for argv in [
+            &["translate", "-f", "en", "-t", "ru", "-s", "google", "--back", "--save-history", "--full", "hi"][..],
+            &["dict", "--from", "en", "--to", "ru", "--service", "wiktionary", "word"],
+            &["ocr", "x.png", "-l", "ja", "-t", "en", "-e", "lens", "-F", "hocr"],
+            &["speak", "-l", "en", "--slow", "-o", "x.mp3", "hi"],
+            &["services", "-c", "ocr"],
+            &["history", "--search", "x", "--favorites", "--export", "x.csv"],
+            &["--json", "--home", "/tmp/x", "-v", "modules"],
+        ] {
+            assert!(check(argv).is_ok(), "{argv:?}: {:?}", check(argv).err());
+        }
     }
 
     #[test]

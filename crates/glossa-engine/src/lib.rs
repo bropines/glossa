@@ -20,7 +20,7 @@ pub mod server;
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::mpsc::{self, Receiver, Sender};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -38,7 +38,7 @@ use parking_lot::{Mutex, RwLock};
 
 pub use catalog::{LocaleCatalog, LocaleEntry, ThemeCatalog, ThemeEntry};
 pub use export::ExportFormat;
-pub use pipeline::{Pipeline, Progress, TranslateOptions, TranslationOutcome};
+pub use pipeline::{Pipeline, Progress, TranslateOptions, TranslateReport, TranslationOutcome};
 
 /// The presets an AI endpoint can start from, for front ends.
 pub mod ai {
@@ -155,6 +155,9 @@ struct Inner {
     registry: RwLock<Arc<Registry>>,
     http: RwLock<Arc<HttpClient>>,
     history: Mutex<History>,
+    /// False when `history.json` exists but could be neither read nor copied
+    /// aside: saving would destroy the only copy of the user's entries.
+    history_writable: AtomicBool,
     dictionary_history: Mutex<Vec<String>>,
     themes: RwLock<ThemeCatalog>,
     locales: RwLock<LocaleCatalog>,
@@ -191,8 +194,7 @@ impl Engine {
     /// Start with explicit settings (tests, `--config`).
     pub fn with_config(paths: Paths, mut config: Config) -> Result<Engine> {
         config.sanitise();
-        if config.server.token.is_empty() {
-            config.server.token = random_token();
+        if ensure_token(&mut config) {
             // Other programs (glossa-cli among them) read the token from the
             // file, so it has to be there from the first run.
             if let Err(e) = config.save(&paths.config_file()) {
@@ -200,13 +202,10 @@ impl Engine {
             }
         }
         let http = Arc::new(HttpClient::new(&config.network)?);
-        let history = if config.history.enabled {
-            History::load(&paths.history_file(), config.history.max_entries).unwrap_or_else(|e| {
-                tracing::warn!("history could not be read ({e}); starting a new one");
-                History::new(config.history.max_entries)
-            })
+        let (history, history_writable) = if config.history.enabled {
+            load_history(&paths.history_file(), config.history.max_entries)
         } else {
-            History::new(config.history.max_entries)
+            (History::new(config.history.max_entries), true)
         };
         let dictionary_history = std::fs::read_to_string(paths.dictionary_history_file())
             .ok()
@@ -228,6 +227,7 @@ impl Engine {
             registry: RwLock::new(Arc::new(Registry::new())),
             http: RwLock::new(http),
             history: Mutex::new(history),
+            history_writable: AtomicBool::new(history_writable),
             dictionary_history: Mutex::new(dictionary_history),
             themes: RwLock::new(ThemeCatalog::default()),
             locales: RwLock::new(LocaleCatalog::default()),
@@ -266,6 +266,9 @@ impl Engine {
             let before = cfg.clone();
             change(&mut cfg);
             cfg.sanitise();
+            // The token is always required, so clearing it (an emptied
+            // field in the options) means "make a new one", saved below.
+            ensure_token(&mut cfg);
             (before, cfg.clone())
         };
         after.save(&self.inner.paths.config_file())?;
@@ -285,6 +288,16 @@ impl Engine {
             || before.general.ui_language != after.general.ui_language
         {
             self.reload_catalogs();
+        }
+        if !before.history.enabled && after.history.enabled {
+            // Switched on after a start with it off: the file was never read,
+            // and saving the empty list would replace it.
+            let mut history = self.inner.history.lock();
+            if history.is_empty() {
+                let (loaded, writable) = load_history(&self.inner.paths.history_file(), after.history.max_entries);
+                *history = loaded;
+                self.inner.history_writable.store(writable, Ordering::SeqCst);
+            }
         }
         if before.history.max_entries != after.history.max_entries {
             self.inner.history.lock().set_max_entries(after.history.max_entries);
@@ -485,6 +498,31 @@ impl Engine {
         let rank = |id: &str| order.iter().position(|o| o == id).unwrap_or(usize::MAX);
         out.sort_by_key(|p| (rank(&p.info.id), !p.enabled));
         out
+    }
+
+    /// Check a provider id a user typed (`glossa-cli -s`, the API's
+    /// `service`) before using it: the pipeline would quietly skip an id
+    /// that does not exist and let another service answer, which hides a
+    /// typo. The error names a few existing ids that look like it.
+    pub fn require_provider(&self, id: &str, cap: Capabilities) -> std::result::Result<(), String> {
+        let registry = self.registry();
+        let what = cap.names().first().copied().unwrap_or("this");
+        if let Some(p) = registry.get(id) {
+            return if p.info().capabilities.contains(cap) {
+                Ok(())
+            } else {
+                Err(format!("service {id:?} cannot do {what}"))
+            };
+        }
+        let capable: Vec<String> = registry.with_capability(cap).iter().map(|p| p.info().id.clone()).collect();
+        let near = glossa_core::text::closest(id, capable.iter().map(String::as_str), 3);
+        let hint = if near.is_empty() {
+            let some: Vec<&str> = capable.iter().take(5).map(String::as_str).collect();
+            format!(" (services that can do {what} include: {})", some.join(", "))
+        } else {
+            format!("; did you mean {}?", near.join(", "))
+        };
+        Err(format!("unknown service {id:?}{hint}"))
     }
 
     /// The service's own page for this query, for "open in browser".
@@ -1022,9 +1060,29 @@ impl Engine {
 
     // -- history -------------------------------------------------------------------
 
-    fn record_history(&self, out: &TranslationOutcome) {
+    /// Add a translation made outside the windows to the history, as the
+    /// desktop program does for its own (the command line's
+    /// `--save-history`, the control API's `"history": true`). Does nothing
+    /// when the history is switched off. Returns whether it was recorded.
+    pub fn record_translation(&self, out: &TranslationOutcome) -> bool {
+        self.record_history(out)
+    }
+
+    /// Write the history to `history.json` now, rather than at
+    /// [`Engine::shutdown`]: for front ends that may be killed instead of
+    /// shut down (`glossa-cli`, `glossa-cli serve`). Nothing is written when
+    /// the history is off, or when the file could not be read at start and
+    /// could not be copied aside.
+    pub fn save_history(&self) -> Result<()> {
+        if !self.config().history.enabled || !self.inner.history_writable.load(Ordering::SeqCst) {
+            return Ok(());
+        }
+        self.inner.history.lock().save(&self.inner.paths.history_file())
+    }
+
+    fn record_history(&self, out: &TranslationOutcome) -> bool {
         if !self.inner.config.read().history.enabled {
-            return;
+            return false;
         }
         let t = &out.translation;
         let id = self.inner.history.lock().record(
@@ -1040,6 +1098,7 @@ impl Engine {
         if id != 0 {
             self.emit(Event::HistoryChanged);
         }
+        id != 0
     }
 
     pub fn history(&self) -> Vec<HistoryEntry> {
@@ -1149,10 +1208,8 @@ impl Engine {
         if cfg.history.clear_on_exit {
             self.inner.history.lock().clear(false);
         }
-        if cfg.history.enabled {
-            if let Err(e) = self.inner.history.lock().save(&self.inner.paths.history_file()) {
-                tracing::warn!("history not saved: {e}");
-            }
+        if let Err(e) = self.save_history() {
+            tracing::warn!("history not saved: {e}");
         }
         let words = self.dictionary_history();
         if let Ok(json) = serde_json::to_string(&words) {
@@ -1171,6 +1228,37 @@ impl Pipeline<'_> {
             Err(Error::Cancelled)
         } else {
             Ok(())
+        }
+    }
+}
+
+/// Give the control API a token if it has none. The token is always
+/// required, so an empty one (a first run, a cleared field, a hand edit)
+/// is replaced rather than switching the check off. Returns whether it was.
+fn ensure_token(config: &mut Config) -> bool {
+    if !config.server.token.trim().is_empty() {
+        return false;
+    }
+    config.server.token = random_token();
+    true
+}
+
+/// Read `history.json`, keeping a copy of a file that cannot be parsed.
+/// The flag says whether saving over the file later is safe.
+fn load_history(path: &Path, max_entries: usize) -> (History, bool) {
+    match History::load_recovering(path, max_entries) {
+        Ok((history, None)) => (history, true),
+        Ok((history, Some(copy))) => {
+            tracing::warn!(
+                "{} could not be read; it was copied to {} and a new history started",
+                path.display(),
+                copy.display()
+            );
+            (history, true)
+        }
+        Err(e) => {
+            tracing::warn!("{e}; the history will not be saved this session");
+            (History::new(max_entries), false)
         }
     }
 }
@@ -1595,6 +1683,102 @@ mod tests {
         assert_eq!(again.export_history(&path, ExportFormat::Csv, false).unwrap(), 1);
         assert!(std::fs::read_to_string(&path).unwrap().contains("мир"));
         std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn a_cleared_token_is_replaced_and_saved_at_once() {
+        let (e, dir) = engine("token-clear");
+        let first = e.config().server.token;
+        e.update_config(|c| c.server.token.clear()).unwrap();
+        let second = e.config().server.token;
+        assert_eq!(second.len(), 64, "never empty");
+        assert_ne!(second, first);
+        assert_eq!(Config::load(&e.paths().config_file()).unwrap().server.token, second, "saved");
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn a_corrupt_history_is_kept_aside_not_overwritten() {
+        let dir = std::env::temp_dir().join(format!("glossa-engine-{}-history-corrupt", std::process::id()));
+        std::fs::remove_dir_all(&dir).ok();
+        let paths = Paths::for_exe_dir(dir.clone(), Some(dir.join("home")));
+        std::fs::create_dir_all(&paths.data_dir).unwrap();
+        let broken = b"{\"entries\": [ {\"id\": 1, \"source\": \"precious\"";
+        std::fs::write(paths.history_file(), broken).unwrap();
+        let e = Engine::with_config(paths.clone(), Config::default()).unwrap();
+        assert!(e.history().is_empty());
+        let copies: Vec<_> = std::fs::read_dir(&paths.data_dir)
+            .unwrap()
+            .filter_map(|f| f.ok())
+            .filter(|f| f.file_name().to_string_lossy().starts_with("history.json.corrupt-"))
+            .collect();
+        assert_eq!(copies.len(), 1);
+        assert_eq!(std::fs::read(copies[0].path()).unwrap(), broken);
+        e.shutdown();
+        assert_eq!(std::fs::read(copies[0].path()).unwrap(), broken, "the copy survives the next save");
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn switching_the_history_on_reads_the_file_before_anything_saves() {
+        let (e, dir) = engine("history-on");
+        let mut saved = History::new(100);
+        saved.record(
+            "kept",
+            HistoryResult { provider_id: "g".into(), from: LangId::ENGLISH, to: LangId::RUSSIAN, text: "x".into() },
+            1,
+        );
+        saved.save(&e.paths().history_file()).unwrap();
+        let paths = e.paths().clone();
+        drop(e);
+        let mut cfg = Config::load(&paths.config_file()).unwrap();
+        cfg.history.enabled = false;
+        let e = Engine::with_config(paths.clone(), cfg).unwrap();
+        e.update_config(|c| c.history.enabled = true).unwrap();
+        e.shutdown();
+        assert_eq!(History::load(&paths.history_file(), 100).unwrap().len(), 1);
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn unknown_services_are_named_with_suggestions() {
+        let (e, dir) = engine("require-provider");
+        assert!(e.require_provider("google", Capabilities::TRANSLATE).is_ok());
+        let err = e.require_provider("gogle", Capabilities::TRANSLATE).unwrap_err();
+        assert!(err.contains("unknown service \"gogle\"") && err.contains("google"), "{err}");
+        let err = e.require_provider("lens", Capabilities::TRANSLATE).unwrap_err();
+        assert!(err.contains("cannot do translate"), "{err}");
+        let err = e.require_provider("zzzzzzzzzz", Capabilities::OCR).unwrap_err();
+        assert!(err.contains("include: ") && err.contains("lens"), "{err}");
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn cli_and_api_share_one_translate_shape() {
+        let out = TranslationOutcome {
+            translation: glossa_core::Translation {
+                text: "Привет".into(),
+                provider_id: "google".into(),
+                romanisation: Some("Privet".into()),
+                source_romanisation: Some("həˈlō".into()),
+                elapsed_ms: 12,
+                ..Default::default()
+            },
+            pair: LangPair::new(LangId::ENGLISH, LangId::RUSSIAN),
+            source: "hello".into(),
+            detected: None,
+            back: None,
+            failed: vec![("bing".into(), "timed out".into())],
+        };
+        let v = serde_json::to_value(out.report()).unwrap();
+        assert_eq!(
+            v,
+            serde_json::json!({
+                "text": "Привет", "from": "en", "to": "ru", "service": "google",
+                "romanization": "Privet", "source_romanization": "həˈlō", "alternatives": [],
+                "back": null, "failed": [["bing", "timed out"]], "elapsed_ms": 12
+            })
+        );
     }
 
     #[test]

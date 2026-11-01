@@ -38,8 +38,9 @@ program, for scripts and for trying it out; there, actions are only printed.
 
 ## The token
 
-Every request except `/health` must carry the token, either as a header or
-in the query string:
+Every request except `/health` (and, from this machine, pot-app's routes;
+see [pot-app compatibility](#pot-app-compatibility)) must carry the token,
+either as a header or in the query string:
 
 ```
 Authorization: Bearer 0123456789abcdef…
@@ -53,8 +54,10 @@ in `config.toml` under `[server] token`, so other programs can read it.
 *Options → Control API → Regenerate* makes a new one; *Show token* reveals
 it.
 
-An empty token is replaced by a new one at the next start, so the check
-cannot be switched off for good.
+The token is always required; there is no way to switch the check off. An
+empty token (a cleared field, a hand edit) is replaced with a new random
+one and saved straight away: at the next start, or as soon as the settings
+are applied with the field empty.
 
 To read the token in a script:
 
@@ -79,18 +82,28 @@ Match the `[server]` section: `[ocr.lens]` has a `token` key of its own.
   `/v1/speak`, which returns audio.
 - Request bodies are JSON, whatever the `Content-Type` says (except for
   `/v1/ocr` with an image, below). An empty body counts as `{}`.
-- String parameters (`text`, `from`, `to`, `service`, `lang`,
-  `translate_to`) may be given in the JSON body or in the query string; the
-  body wins. The query string is percent-decoded, and `+` is a space.
-  Boolean parameters (`back`, `slow`) are read from the JSON body only.
-- Languages are codes: `en`, `ru`, `zh-CN`, `auto`. Unlike the command line,
-  the API does not reject an unknown code: it is treated as `auto`.
-- A service is a provider id from `/v1/services`. An unknown id is skipped
-  and the active service answers instead, as in the command line.
+- Parameters (`text`, `from`, `to`, `service`, `engine`, `lang`,
+  `translate_to`, `back`, `slow`, `history`) may be given in the JSON body
+  or in the query string; the body wins. The query string is
+  percent-decoded, and `+` is a space. A boolean is `true`/`false` in JSON;
+  in the query string (or as a JSON string) `1`, `true`, `yes`, `on` and
+  `0`, `false`, `no`, `off` are understood, and a bare `?back` means true.
+  Anything else is a 400.
+- Languages are codes: `en`, `ru`, `zh-CN`, `auto`. An unknown code is a
+  400, as it is a usage error on the command line. An empty value counts as
+  not given.
+- A service is a provider id from `/v1/services`. An id that does not exist,
+  or a provider without the capability the endpoint needs, is a 400 whose
+  message names a few similar ids
+  (`unknown service "gogle"; did you mean google, google-dictionary?`).
+  With a valid id, fail-over to the other enabled services still applies.
+- A known path asked with the wrong method is a 405 with an `Allow` header
+  listing the methods it answers.
 - A trailing `/` in the path is ignored. Bodies are limited to 32 MiB.
 - Each request runs on its own thread: a slow translation does not hold up
   an action.
-- Translations made through the API are not added to the history.
+- Translations made through the API are added to the history only with
+  `"history": true` (see [/v1/translate](#v1translate)).
 
 ### Errors
 
@@ -102,15 +115,17 @@ Errors have a status code and a body of the form:
 
 | status | when |
 |---|---|
-| 400 | Invalid JSON, a missing `text`, empty text, the same source and target language, a configuration problem (a service or OCR engine not set up). |
+| 400 | Invalid JSON, a missing `text`, empty text, an unknown language, capability, service or OCR engine id, a boolean that is not one, an unknown OCR `format`, the same source and target language, a configuration problem with a translation service. |
 | 401 | The token is missing or wrong. |
-| 403 | The request carries a browser `Origin` header. |
-| 404 | No such route (a wrong method included) or action; no service can do what was asked (no OCR engine, no speech service). |
+| 403 | The request carries an `Origin` header (any value, `null` included). |
+| 404 | No such route or action; no service can do what was asked (no speech service). |
+| 405 | The path exists but not for this method; the `Allow` header lists the methods it answers. |
 | 412 | The service needs a key that is not set. |
 | 413 | The body is larger than 32 MiB. |
 | 422 | No text was found in the image, or the language could not be detected. |
 | 429 | The service is rate-limiting. |
 | 502 | The service failed otherwise (network error, unexpected answer). |
+| 503 | `/v1/ocr` only: the OCR engine is not installed or not set up (Lens without chrome-lens-py, Tesseract missing, no engine at all). The request was fine; the machine needs setting up. |
 | 504 | The service timed out. |
 
 ## Endpoints
@@ -143,15 +158,17 @@ Glossa is running before it does anything else.
 
 | parameter | default | meaning |
 |---|---|---|
-| `capability` | `translate` | `translate`, `dictionary`, `listen`, `ocr`, `detect_language`, `speech_input`, `batch`, `alternatives`, `promptable`, `offline` (aliases: `dict`, `tts`, `detect`, `stt`). An unknown value means `translate`. |
+| `capability` | `translate` | `translate`, `dictionary`, `listen`, `ocr`, `detect_language`, `speech_input`, `batch`, `alternatives`, `promptable`, `offline` (aliases: `dict`, `tts`, `detect`, `stt`). An unknown value is a 400. |
 
 ```console
 $ curl -s "http://127.0.0.1:60828/v1/services?capability=listen&token=$T"
-[{"capabilities":["translate","detect_language","listen"],"enabled":true,"id":"google","name":"Google Translate","origin":"Built-in"}]
+[{"capabilities":["translate","detect_language","listen"],"enabled":true,"id":"google","name":"Google Translate","needs_credentials":false,"origin":"Built-in"}]
 ```
 
 Each item has `id`, `name`, `origin` (`Built-in`, `Bundled`, or the kind of
-module), `enabled` (shown in the service strip) and `capabilities`.
+module), `enabled` (shown in the service strip), `capabilities` and
+`needs_credentials` (it wants a key or a login before it works), the same
+fields as [`glossa-cli --json services`](cli.md#services).
 
 ### /v1/translate
 
@@ -163,26 +180,32 @@ GET or POST.
 | `from` | language | `auto` | Source language. |
 | `to` | language | `auto` | Target language; `auto` lets smart direction choose (first language ↔ second, see [`[general]`](configuration.md#general)). |
 | `service` | provider id | the active service | Ask this service first; fail-over still applies when it is on. |
-| `back` | boolean, body only | `false` | Also translate the result back. |
+| `back` | boolean | `false` | Also translate the result back. |
+| `history` | boolean | `false` | Add the translation to the history of the program serving the API (when `[history] enabled` is on), and write `history.json` at once. |
 
 ```console
 $ curl -s "http://127.0.0.1:60828/v1/translate?text=Hello%20world&to=ru&token=$T"
-{"alternatives":[],"back":null,"elapsed_ms":155,"from":"en","romanization":"Privet, mir","service":"google","text":"Привет, мир","to":"ru"}
+{"text":"Привет, мир","from":"en","to":"ru","service":"google","romanization":"Privet, mir","source_romanization":"həˈlō wərld","alternatives":[],"back":null,"failed":[],"elapsed_ms":155}
 
 $ curl -s -H "Authorization: Bearer $T" \
     -d '{"text":"Good morning","from":"en","to":"de","service":"yandex-web","back":true}' \
     http://127.0.0.1:60828/v1/translate
-{"alternatives":[],"back":"Good morning","elapsed_ms":618,"from":"en","romanization":null,"service":"yandex-web","text":"Guten Morgen","to":"de"}
+{"text":"Guten Morgen","from":"en","to":"de","service":"yandex-web","romanization":null,"source_romanization":null,"alternatives":[],"back":"Good morning","failed":[],"elapsed_ms":618}
 ```
+
+The answer is the same object `glossa-cli --json translate` prints; every
+field is always present:
 
 | field | type | meaning |
 |---|---|---|
 | `text` | string | The translation. |
 | `from`, `to` | string | The direction actually used. |
 | `service` | string | The provider that answered. |
-| `romanization` | string or null | A Latin transcription, when the service gives one. |
+| `romanization` | string or null | The translation in Latin letters, when the service gives it. |
+| `source_romanization` | string or null | The source's transliteration or pronunciation, when the service gives it (`Kon'nichiwa` for Japanese input). |
 | `alternatives` | array of strings | Other translations, from services that offer them. |
 | `back` | string or null | The back translation, when `back` was set. |
+| `failed` | array | Services tried before this one that failed, as `[id, message]` pairs. |
 | `elapsed_ms` | number | Time the answering service took. |
 
 ### POST /v1/detect
@@ -233,17 +256,20 @@ Two ways to send the image:
 |---|---|---|
 | `lang` | `auto` | Language of the text in the image. |
 | `translate_to` | none | Translate the recognised text into this language. |
+| `engine` | `[ocr] provider`, with fail-over | Use only this OCR engine (`lens`, `windows-ocr`, `oneocr`, `macos-vision`, `tesseract`, `command-ocr`, a module's id), as `glossa-cli ocr -e` does. `service` is accepted as another name. An id that is not an OCR engine is a 400. |
+| `format` | none | `text`, `json` (the full layout: blocks, lines, words with boxes), `hocr` or `alto`: answer with that document instead of the summary below. |
 
 ```console
 $ curl -s -H "Authorization: Bearer $T" -H "Content-Type: image/png" \
     --data-binary @shot.png "http://127.0.0.1:60828/v1/ocr?translate_to=en"
-{"detected":"ja","service":"lens","text":"…recognised text…","translation":"…"}
+{"detected":"ja","elapsed_ms":412,"service":"lens","text":"…recognised text…","translation":"…"}
 ```
 
+The summary is the same object `glossa-cli --json ocr` prints.
 `translation` is null without `translate_to`; `detected` is the language the
-engine reported, or null. The engine is the one set in `[ocr] provider`,
-with fail-over to the others; the API cannot pick one per request (the
-command line can, with `-e`). Engines and their setup:
+engine reported, or null; `service` is the engine that read the image and
+`elapsed_ms` how long it took. An engine that is not installed or not set
+up answers 503 (see [Errors](#errors)). Engines and their setup:
 [ocr.md](ocr.md).
 
 ### POST /v1/speak
@@ -322,9 +348,32 @@ tools made for pot-app can drive it:
 | `/ocr_translate` | any | `recognize_and_translate` |
 | `/translate` | POST | `show_popup` with the request body as the text |
 
-They answer `202 {"accepted": "<action>"}` like `/v1/action/…`. They need
-the token too, which pot-app's bindings do not send: add `?token=…` to the
-URL.
+They answer `202 {"accepted": "<action>"}` like `/v1/action/…`. `/translate`
+with another method is a 405.
+
+pot-app's bindings send no token, so these five routes accept requests
+without one when all of these hold:
+
+- `[server] pot_compat_without_token` is on (the default);
+- the request comes from a loopback address (this machine);
+- it has no `Origin` header (no request with one gets anywhere, as below).
+
+A token, when sent, is still accepted. Every other route needs the token
+regardless.
+
+What this opens up: any program running on this machine, as any user, can
+show the popup or the main window, start a screen recognition, or put text
+of its choosing into the popup. It cannot read anything back (the answer is
+only `{"accepted": …}`), cannot reach the translation, OCR or speech
+endpoints that use your service keys, and cannot type into other programs
+(`replace_selection` and `convert_layout` are not among these routes). A
+web page's scripts cannot use it, since `fetch` and form posts carry an
+`Origin`; but an image or a link on a page is a plain `GET` without one, so
+a page you visit could open the popup on your selection, the main window
+or a screen recognition. That is a nuisance, not a leak: the results show
+on your screen, never in the page. If even that is too much, set
+`pot_compat_without_token = false` and add `?token=…` to the bindings'
+URLs.
 
 ## Binding hotkeys to it
 
@@ -445,15 +494,18 @@ In Windows PowerShell 5.1, `curl` is an alias of `Invoke-WebRequest`; call
   SSH tunnel instead.
 - **The token is the main defence.** Any program running as any user on the
   machine can connect to a loopback port; without the token it gets only
-  `/health`. Keep the data folder private: the token is stored there in
+  `/health` and, unless `[server] pot_compat_without_token` is off, the
+  window-opening [pot-app routes](#pot-app-compatibility). The token is
+  never empty. Keep the data folder private: the token is stored there in
   plain text, as are service keys.
 - **Prefer the header.** A token in the query string ends up in shell
   history and in the process list while `curl` runs.
-- **Browsers are refused.** A request with an `Origin` header (other than
-  `null`) gets 403, so a web page's scripts cannot use the API, even with
-  the token. Requests a page can make without an `Origin` header (a link,
-  an image) still need the token, which a page has no way to learn. The
-  `Host` header is not checked.
+- **Browsers are refused.** A request with an `Origin` header, whatever its
+  value (`null` included: sandboxed frames and `file:` pages send that),
+  gets 403, so a web page's scripts cannot use the API, even with the
+  token. Requests a page can make without an `Origin` header (a link, an
+  image) still need the token, which a page has no way to learn, except on
+  the pot-app routes described above. The `Host` header is not checked.
 - **What the token allows.** Translating text through your configured
   services (with your keys), typing into the foreground program
   (`replace_selection`, `convert_layout`), showing the clipboard

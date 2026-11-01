@@ -108,11 +108,17 @@ fn non_empty(v: &Value) -> Option<String> {
     v.as_str().map(str::trim).filter(|s| !s.is_empty()).map(str::to_owned)
 }
 
-/// Romanisation for the result pane: the source's (Japanese, Russian input)
-/// when there is one, else the translation's.
+/// The translation's romanisation: slot 2 of the `rm` segment. Slot 3 is
+/// the source's, which for English input is a phonetic spelling
+/// (`həˈlō`), not something to show under a Russian translation.
 pub(crate) fn romanisation(v: &Value) -> Option<String> {
-    let seg = translit_segment(v)?;
-    non_empty(&seg[3]).or_else(|| non_empty(&seg[2]))
+    non_empty(&translit_segment(v)?[2])
+}
+
+/// The source's transliteration or pronunciation: slot 3 of the `rm`
+/// segment (`Kon'nichiwa` for Japanese input).
+pub(crate) fn source_romanisation(v: &Value) -> Option<String> {
+    non_empty(&translit_segment(v)?[3])
 }
 
 /// The `bd` block as part-of-speech entries.
@@ -161,6 +167,7 @@ fn parse_translation(v: &Value, provider: &str) -> Result<Translation> {
         text,
         detected_from: detected_source(v),
         romanisation: romanisation(v),
+        source_romanisation: source_romanisation(v),
         parts_of_speech: parts_of_speech(v),
         ..Default::default()
     })
@@ -494,15 +501,30 @@ mod tests {
     }
 
     #[test]
-    fn source_romanisation_wins_over_target() {
+    fn source_and_target_romanisations_land_in_their_own_fields() {
         let v: Value = serde_json::from_str(
             r#"[[["Hello","こんにちは",null,null,10],[null,null,"Harō","Kon'nichiwa"]],null,"ja"]"#,
         )
         .unwrap();
-        assert_eq!(romanisation(&v).as_deref(), Some("Kon'nichiwa"));
+        assert_eq!(romanisation(&v).as_deref(), Some("Harō"));
+        assert_eq!(source_romanisation(&v).as_deref(), Some("Kon'nichiwa"));
+        // English into Russian: the source slot holds a phonetic spelling,
+        // which must not become the translation's romanisation.
+        let v: Value =
+            serde_json::from_str(r#"[[["Привет","hello",null,null,10],[null,null,"Privet","həˈlō"]],null,"en"]"#)
+                .unwrap();
+        let t = parse_translation(&v, "Google").unwrap();
+        assert_eq!(t.romanisation.as_deref(), Some("Privet"));
+        assert_eq!(t.source_romanisation.as_deref(), Some("həˈlō"));
+        // Only a source transliteration: no romanisation of the translation.
+        let v: Value =
+            serde_json::from_str(r#"[[["Hello","こんにちは",null,null,10],[null,null,null,"Kon'nichiwa"]],null,"ja"]"#)
+                .unwrap();
+        assert_eq!(romanisation(&v), None);
         // No rm segment: a translation segment is never mistaken for one.
         let v: Value = serde_json::from_str(r#"[[["Hello","Hallo",null,null,10]],null,"de"]"#).unwrap();
         assert_eq!(romanisation(&v), None);
+        assert_eq!(source_romanisation(&v), None);
     }
 
     #[test]

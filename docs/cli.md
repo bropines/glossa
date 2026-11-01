@@ -23,7 +23,7 @@ command list and exits with 0.
 | flag | does |
 |---|---|
 | `--json` | Machine-readable output on stdout (shapes are given per command below). Errors become `{"error": "…"}` on stdout. |
-| `--home DIR` | Use `DIR` as the data folder, as `GLOSSA_HOME` does. Must be written as two words: `--home=DIR` is accepted but ignored. |
+| `--home DIR` | Use `DIR` as the data folder, as `GLOSSA_HOME` does. `--home=DIR` works too. |
 | `-v`, `--verbose` | Log at `debug` level to stderr. `GLOSSA_LOG`, when set, takes precedence. |
 | `--` | Everything after it is text, even if it starts with `-`. |
 
@@ -34,11 +34,20 @@ Global flags may stand anywhere on the line, before or after the command.
 - The first word that is not a flag is the command; the remaining words are
   its arguments. For `translate`, `detect`, `dict` and `speak` they are
   joined with single spaces into the text.
-- Flags that take a value accept `-t ru`, `--to ru` and `--to=ru`.
+- Every flag that takes a value accepts `-t ru`, `--to ru`, `--to=ru` and
+  `-t=ru` (`--home` included). Flags without a value (`--back`, `--json`)
+  refuse one: `--back=yes` is a usage error.
 - A word that starts with `-` followed by a digit (`-5`) is text, not a flag.
 - If the same flag is given twice, the last one wins.
-- Unknown flags are ignored without a warning, so a misspelt flag
-  (`--slwo`) silently does nothing.
+- A flag the command does not take is a usage error (exit 64) naming the
+  closest flag it does take:
+
+  ```console
+  $ glossa-cli speak --slwo -o hi.mp3 Hello
+  glossa-cli: unknown flag --slwo; did you mean --slow?
+  $ glossa-cli detect --back hello
+  glossa-cli: detect does not take --back
+  ```
 
 ### Languages and services
 
@@ -50,10 +59,18 @@ default) lets smart direction choose: text in the first language of
 
 A service is a provider id as `glossa-cli services` lists it (`google`,
 `yandex-web`, `deepl`, an AI endpoint's `ai-…` id, a module's id). An id that
-does not exist is skipped without an error: the active service and, with
-fail-over on, the other enabled services answer instead. Check the
-`service` field of the output, or the `[service · …]` line on stderr, to see
-who answered.
+does not exist, or names a provider without the capability the command
+needs (a translator given to `dict`), is a usage error (exit 64) that names
+a few similar ids:
+
+```console
+$ glossa-cli translate -s gogle hello
+glossa-cli: unknown service "gogle"; did you mean google, google-dictionary?
+```
+
+With a valid id, fail-over to the other enabled services still applies when
+`[services] fail_over` is on: check the `service` field of the output, or
+the `[service · …]` line on stderr, to see who answered.
 
 ## Exit codes
 
@@ -61,7 +78,7 @@ who answered.
 |---|---|
 | 0 | Success. |
 | 1 | The operation failed: a network error, no service could answer, a file could not be read, the running app refused an action. The message is on stderr (or on stdout as `{"error": …}` with `--json`). |
-| 64 | Bad command line: unknown command or subcommand, unknown language or capability, a missing argument or flag value. The message and the command list go to stderr, as text even with `--json`. |
+| 64 | Bad command line: unknown command, subcommand or flag, a flag the command does not take, an unknown language, capability or service id, a missing argument or flag value. The message and the command list go to stderr, as text even with `--json`. |
 
 ## Commands
 
@@ -85,7 +102,7 @@ who answered.
 ### translate
 
 ```
-glossa-cli translate [-f FROM] [-t TO] [-s SERVICE] [--back] [TEXT…]
+glossa-cli translate [-f FROM] [-t TO] [-s SERVICE] [--back] [--save-history] [--full] [TEXT…]
 ```
 
 | option | default | meaning |
@@ -94,6 +111,8 @@ glossa-cli translate [-f FROM] [-t TO] [-s SERVICE] [--back] [TEXT…]
 | `-t`, `--to LANG` | `auto` | Target language. |
 | `-s`, `--service ID` | the active service | Ask this service first. Fail-over to the other enabled services still applies when `[services] fail_over` is on. |
 | `--back` | off | Also translate the result back into the source language. |
+| `--save-history` | off | Add the translation to the history (when `[history] enabled` is on) and write `history.json` at once. |
+| `--full` | off | Print the romanisation and dictionary senses even when stdout is not a terminal. |
 
 With no text arguments the text is read from stdin. If stdin is a terminal
 and no text was given, that is a usage error (64). Empty or blank text fails
@@ -115,23 +134,26 @@ Guten Morgen
 [yandex-web · English → German · 228 ms]
 ```
 
-The text block on stdout is what the main window shows: the translation,
-then, after a blank line each, the romanisation and the dictionary senses if
-the service sent them. For the translation alone, use `--json` and read
-`text`. The last line, on stderr, names the service, the direction and the
-time taken; with `--back`, the back translation is printed to stderr above
-it, after `↩`.
+On a terminal, stdout shows what the main window shows: the translation,
+then, after a blank line each, the romanisation of the translation and the
+dictionary senses if the service sent them. When stdout is not a terminal
+(a pipe, a file), it holds the translation alone, so
+`glossa-cli translate -t ru < in.txt > out.txt` writes just the translated
+text; `--full` asks for the whole block there too. The last line, on
+stderr, names the service, the direction and the time taken; with `--back`,
+the back translation is printed to stderr above it, after `↩`.
 
 When stdout is a terminal and the service streams (AI endpoints with
 streaming on), the answer is printed as it is written. If a service fails
 part-way and another takes over, its answer starts on a new line. Piped
 output, and `--json`, get the finished text only.
 
-`--json`:
+`--json` prints the same object as the control API's
+[`/v1/translate`](control-api.md#v1translate), every field always present:
 
 ```console
 $ glossa-cli --json translate -s google -t ru --back "The quick brown fox"
-{"back":"Quick brown fox","elapsed_ms":139,"failed":[],"from":"en","romanization":"Bystraya korichnevaya lisa","service":"google","text":"Быстрая коричневая лиса","to":"ru"}
+{"text":"Быстрая коричневая лиса","from":"en","to":"ru","service":"google","romanization":"Bystraya korichnevaya lisa","source_romanization":null,"alternatives":[],"back":"Quick brown fox","failed":[],"elapsed_ms":139}
 ```
 
 | field | type | meaning |
@@ -139,13 +161,19 @@ $ glossa-cli --json translate -s google -t ru --back "The quick brown fox"
 | `text` | string | The translation. |
 | `from`, `to` | string | The direction actually used, as codes (detection and smart direction resolved). |
 | `service` | string | The provider that answered. |
-| `romanization` | string or null | A Latin transcription, when the service gives one. |
+| `romanization` | string or null | The translation in Latin letters, when the service gives it (`Privet` for `Привет`). |
+| `source_romanization` | string or null | The source's transliteration or pronunciation, when the service gives it (`Kon'nichiwa` for Japanese input, `həˈlō` for "hello"). |
+| `alternatives` | array of strings | Other translations, from services that offer them. |
 | `back` | string or null | The back translation, with `--back`. |
 | `failed` | array | Services tried before this one that failed, as `[id, message]` pairs. |
 | `elapsed_ms` | number | Time the answering service took. |
 
-`glossa-cli translate` does not add to the history; translations made in the
-desktop program do.
+`glossa-cli translate` adds to the history only with `--save-history` (and
+when `[history] enabled` is on); translations made in the desktop program
+are always added. The entry is written to `history.json` straight away. If
+the desktop program is running at the same time, it does not see the entry
+and replaces the file with its own history when it exits; to record into a
+running Glossa, use the control API's `"history": true` instead.
 
 ### detect
 
@@ -233,20 +261,22 @@ dictionaries) are converted to plain text.
 ### ocr
 
 ```
-glossa-cli ocr IMAGE [-l LANG] [-t TO] [-e ENGINE]
+glossa-cli ocr IMAGE [-l LANG] [-t TO] [-e ENGINE] [-F FORMAT]
 ```
 
 | option | default | meaning |
 |---|---|---|
 | `-l`, `--lang LANG` | `auto` | Language of the text in the image. |
 | `-t`, `--to LANG` | none | Translate the recognised text into this language. |
-| `-e`, `--engine ID` (also `-s`, `--service`) | `[ocr] provider`, with fail-over | Use only this OCR provider: `lens`, `windows-ocr`, `oneocr`, `command-ocr` or a module's id. |
+| `-e`, `--engine ID` (also `-s`, `--service`) | `[ocr] provider`, with fail-over | Use only this OCR provider: `lens`, `windows-ocr`, `oneocr`, `macos-vision`, `tesseract`, `command-ocr` or a module's id. An id that is not an OCR provider is a usage error (64). |
+| `-F`, `--format FORMAT` | none | Print the result as `text`, `json` (the full layout: blocks, lines, words with boxes), `hocr` or `alto` instead of the summary. |
 
 `IMAGE` is a file path (PNG, JPEG, whatever the engine reads). Without `-t`,
 stdout is the recognised text; with it, the translation. The timing line goes
 to stderr.
 
-`--json`:
+`--json` prints the same object as the control API's
+[`/v1/ocr`](control-api.md#post-v1ocr):
 
 ```json
 {"text": "…recognised text…", "translation": "…or null…", "detected": "ja", "service": "lens", "elapsed_ms": 412}
@@ -481,7 +511,9 @@ glossa-cli serve
 
 Runs the [control API](control-api.md) in the foreground until Ctrl+C, with
 the address and token from `[server]`. It starts even when `[server] enabled`
-is false. Requests for actions are printed, since there is no window to
+is false, printing a note to stderr: that setting decides whether the
+desktop program starts the API, and running `serve` is itself the request
+to start it. Requests for actions are printed, since there is no window to
 perform them:
 
 ```console
@@ -506,7 +538,9 @@ Asks a running Glossa to perform an action, as if its hotkey had been
 pressed. It sends `GET /v1/action/ACTION?token=…&text=…` to the address in
 `[server] bind`, with the token from `[server] token`, both read from
 `config.toml` (so `--home` or `GLOSSA_HOME` must point at the same data
-folder as the running program). Nothing is printed on success.
+folder as the running program). When `bind` listens on every address
+(`0.0.0.0:PORT` or `[::]:PORT`), the request goes to `127.0.0.1:PORT` or
+`[::1]:PORT`. Nothing is printed on success.
 
 ```console
 $ glossa-cli action show_popup "text to translate"
@@ -560,7 +594,7 @@ The same ids name the actions in `[hotkeys.bindings]`.
 | `GLOSSA_LANG` | desktop program | The interface language when `[general] ui_language` is empty (`ru`, `de-DE`). Overrides the system language. |
 | `LC_ALL`, `LC_MESSAGES`, `LANG` | desktop program | The system language, when `GLOSSA_LANG` is not set (on Windows, the display language comes first). |
 | `HTTPS_PROXY`, `ALL_PROXY`, `HTTP_PROXY` (and lower-case), `NO_PROXY` | both programs | With `[network.proxy] mode = "system"`, the first one set is the proxy, and `NO_PROXY` lists hosts that bypass it. On Windows, if none is set, the system (WinINet) proxy is used. |
-| `GLOSSA_RENDERER` | desktop program | Overrides `[appearance] renderer` for one run: `glow` (or `opengl`, `gl`), `gpu` (or `wgpu`); any other value means software rendering. |
+| `GLOSSA_RENDERER` | desktop program | Overrides `[appearance] renderer` for one run: `glow` (or `opengl`, `gl`), `gpu` (or `wgpu`); any other value means software rendering. `config.toml` accepts these names too (it writes `open_gl`). |
 | `GLOSSA_PYTHON_SDK` | both programs | A folder holding `glossa_module.py`, searched first when starting Python modules. |
 | `GTK_THEME` | desktop program, Linux | A name containing `dark` means the system prefers dark. |
 | `XDG_SESSION_TYPE`, `WAYLAND_DISPLAY`, `DISPLAY`, `XDG_CURRENT_DESKTOP` | desktop program, Linux | How the session (Wayland or X11) and desktop are detected. |

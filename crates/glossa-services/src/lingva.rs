@@ -126,15 +126,15 @@ impl Provider for Lingva {
                  so try another one in the service's options",
             ));
         }
+        // Lingva relays Google's two transliterations: `translation` is the
+        // result's, `query` the source's.
         let pron = &info["pronunciation"];
-        let romanisation = [&pron["query"], &pron["translation"]]
-            .into_iter()
-            .find_map(|p| p.as_str().map(str::trim).filter(|s| !s.is_empty()))
-            .map(str::to_owned);
+        let field = |v: &serde_json::Value| v.as_str().map(str::trim).filter(|s| !s.is_empty()).map(str::to_owned);
         Ok(Translation {
             text: text.to_owned(),
             detected_from,
-            romanisation,
+            romanisation: field(&pron["translation"]),
+            source_romanisation: field(&pron["query"]),
             parts_of_speech: extra_translations(&info["extraTranslations"]),
             ..Default::default()
         })
@@ -165,6 +165,7 @@ mod tests {
         assert_eq!(out.text, "こんにちは");
         assert_eq!(out.detected_from, Some(LangId::ENGLISH));
         assert_eq!(out.romanisation.as_deref(), Some("Kon'nichiwa"));
+        assert_eq!(out.source_romanisation, None);
         assert_eq!(out.parts_of_speech[0].part_of_speech, "interjection");
         assert_eq!(out.parts_of_speech[0].senses.len(), 2);
         assert_eq!(out.parts_of_speech[0].senses[0].back_translations[2], "Good afternoon!");

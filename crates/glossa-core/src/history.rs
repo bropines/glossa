@@ -1,7 +1,7 @@
 //! Translation history and favourites.
 
 use std::collections::VecDeque;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 
@@ -178,6 +178,43 @@ impl History {
         }
     }
 
+    /// [`History::load`] for a program that will save the history again: a
+    /// file that exists but cannot be parsed is first copied to
+    /// `history.json.corrupt-<unix seconds>` beside it, and an empty history
+    /// is returned with the copy's path, so the next save cannot destroy the
+    /// only copy of the user's entries. When the file cannot be read or
+    /// copied, this is an error and the caller must not save over it.
+    pub fn load_recovering(path: &Path, max_entries: usize) -> crate::Result<(History, Option<PathBuf>)> {
+        let bytes = match std::fs::read(path) {
+            Ok(b) => b,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok((History::new(max_entries), None)),
+            Err(e) => return Err(e.into()),
+        };
+        match serde_json::from_slice::<History>(&bytes) {
+            Ok(mut h) => {
+                h.next_id = h.next_id.max(h.entries.iter().map(|e| e.id).max().unwrap_or(0) + 1);
+                h.set_max_entries(max_entries);
+                Ok((h, None))
+            }
+            Err(parse) => {
+                let name = path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+                let mut backup = path.with_file_name(format!("{name}.corrupt-{}", crate::now_unix()));
+                let mut n = 1;
+                while backup.exists() {
+                    backup = path.with_file_name(format!("{name}.corrupt-{}-{n}", crate::now_unix()));
+                    n += 1;
+                }
+                std::fs::write(&backup, &bytes).map_err(|e| {
+                    crate::Error::Config(format!(
+                        "{} cannot be read ({parse}) and could not be copied aside ({e})",
+                        path.display()
+                    ))
+                })?;
+                Ok((History::new(max_entries), Some(backup)))
+            }
+        }
+    }
+
     pub fn save(&self, path: &Path) -> crate::Result<()> {
         if let Some(dir) = path.parent() {
             std::fs::create_dir_all(dir)?;
@@ -292,6 +329,37 @@ mod tests {
         assert_eq!(back.len(), 2);
         let c = back.record("c", res("g", "c"), 3);
         assert!(c > b, "new ids must not collide with loaded ones");
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn a_corrupt_file_is_copied_aside_before_anything_can_replace_it() {
+        let dir = std::env::temp_dir().join(format!("glossa-hist-corrupt-{}", std::process::id()));
+        std::fs::remove_dir_all(&dir).ok();
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("history.json");
+
+        // Missing: empty, nothing copied.
+        let (h, backup) = History::load_recovering(&path, 100).unwrap();
+        assert!(h.is_empty() && backup.is_none());
+
+        std::fs::write(&path, b"{\"entries\": [ {\"id\": 1, \"source\": \"hand-edited\",").unwrap();
+        let (h, backup) = History::load_recovering(&path, 100).unwrap();
+        assert!(h.is_empty());
+        let backup = backup.expect("a copy was made");
+        assert!(backup.file_name().unwrap().to_string_lossy().starts_with("history.json.corrupt-"));
+        assert_eq!(std::fs::read(&backup).unwrap(), std::fs::read(&path).unwrap());
+        // A second failed load keeps the first copy and makes another.
+        let (_, again) = History::load_recovering(&path, 100).unwrap();
+        assert_ne!(again.unwrap(), backup);
+
+        // A good file loads as before.
+        let mut good = History::new(100);
+        good.record("a", res("g", "a"), 1);
+        good.save(&path).unwrap();
+        let (h, backup) = History::load_recovering(&path, 100).unwrap();
+        assert_eq!(h.len(), 1);
+        assert!(backup.is_none());
         std::fs::remove_dir_all(&dir).ok();
     }
 }

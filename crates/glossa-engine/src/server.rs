@@ -10,25 +10,34 @@
 //! ```text
 //! GET  /health                         {"name":"glossa","version":"…"}
 //! GET  /v1/services?capability=translate
-//! POST /v1/translate   {"text","from"?,"to"?,"service"?,"back"?}
+//! POST /v1/translate   {"text","from"?,"to"?,"service"?,"back"?,"history"?}
 //! GET  /v1/translate?text=…&to=…
 //! POST /v1/detect      {"text"}
 //! POST /v1/dictionary  {"text","from"?,"to"?,"service"?}
 //! POST /v1/ocr         image bytes (image/*), or {"image_base64","lang"?,"translate_to"?,
-//!                      "service"?,"format"?}; format text|json|hocr|alto returns
+//!                      "engine"?,"format"?}; format text|json|hocr|alto returns
 //!                      that document (json: the full layout) instead of the summary
 //! POST /v1/speak       {"text","lang"?,"slow"?}            -> audio bytes
 //! GET|POST /v1/action/<action>?text=…   ask the UI to act (show_popup, text_recognition…)
 //! ```
+//!
+//! Parameters are checked as strictly as the command line checks them: an
+//! unknown language, capability or service id is a 400, never quietly
+//! replaced by a default. A known path asked with the wrong method is a 405
+//! with an `Allow` header.
 //!
 //! pot-app's endpoints are answered too (`/selection_translate`,
 //! `/input_translate`, `/ocr_recognize`, `/ocr_translate`, `POST /translate`
 //! with a text body), so key bindings made for it keep working.
 //!
 //! Security: loopback by default; every request must carry the token
-//! (`Authorization: Bearer …` or `?token=…`) unless the user cleared it; and a
-//! request carrying a browser `Origin` header is refused, so a web page
-//! cannot reach the API from the user's browser.
+//! (`Authorization: Bearer …` or `?token=…`), which is never empty (the
+//! engine replaces an empty one). The one exception is pot-app's routes,
+//! which pot-app's bindings call without a token: with
+//! `[server] pot_compat_without_token` on, they are let through from a
+//! loopback peer only. They can only open windows, never return data. Any
+//! request carrying an `Origin` header (`null` included) is refused, so a web
+//! page cannot reach the API from the user's browser.
 
 use std::io::Read;
 use std::net::SocketAddr;
@@ -77,10 +86,7 @@ const MAX_BODY: u64 = 32 * 1024 * 1024;
 /// without a token.
 pub fn start(engine: Engine) -> Result<ServerHandle, Error> {
     let cfg = engine.config().server;
-    let addr: SocketAddr = cfg.bind.parse().map_err(|e| Error::Config(format!("server.bind {:?}: {e}", cfg.bind)))?;
-    if !addr.ip().is_loopback() && cfg.token.is_empty() {
-        return Err(Error::Config("the control API may listen beyond loopback only with a token".into()));
-    }
+    let addr = checked_bind(&cfg.bind, &cfg.token)?;
     let server = Arc::new(Server::http(addr).map_err(|e| Error::Platform(format!("control API on {addr}: {e}")))?);
     let bound = server.server_addr().to_ip().unwrap_or(addr);
     let stop = Arc::new(AtomicBool::new(false));
@@ -108,15 +114,44 @@ pub fn start(engine: Engine) -> Result<ServerHandle, Error> {
     Ok(ServerHandle { addr: bound, stop, server, thread: Some(thread) })
 }
 
+/// The address to listen on. The engine never leaves the token empty, but
+/// listening beyond loopback without one is refused here too, so no
+/// mistake elsewhere can expose an open API to the network.
+fn checked_bind(bind: &str, token: &str) -> Result<SocketAddr, Error> {
+    let addr: SocketAddr = bind.parse().map_err(|e| Error::Config(format!("server.bind {bind:?}: {e}")))?;
+    if !addr.ip().is_loopback() && token.is_empty() {
+        return Err(Error::Config("the control API may listen beyond loopback only with a token".into()));
+    }
+    Ok(addr)
+}
+
+/// Where `glossa-cli action` (or anything else on this machine) should
+/// connect to reach a server listening on `bind`: the same port, but on
+/// loopback when the server listens on every address (`0.0.0.0`, `::`),
+/// which is not an address one can connect to everywhere.
+pub fn connect_addr(bind: &str) -> String {
+    match bind.parse::<SocketAddr>() {
+        Ok(SocketAddr::V4(a)) if a.ip().is_unspecified() => format!("127.0.0.1:{}", a.port()),
+        Ok(SocketAddr::V6(a)) if a.ip().is_unspecified() => format!("[::1]:{}", a.port()),
+        _ => bind.to_owned(),
+    }
+}
+
 struct Reply {
     status: u16,
     body: Vec<u8>,
     content_type: &'static str,
+    /// The `Allow` header of a 405.
+    allow: Option<&'static str>,
 }
 
 impl Reply {
     fn json(status: u16, v: Value) -> Reply {
-        Reply { status, body: v.to_string().into_bytes(), content_type: "application/json; charset=utf-8" }
+        Reply { status, body: v.to_string().into_bytes(), content_type: "application/json; charset=utf-8", allow: None }
+    }
+
+    fn bytes(status: u16, body: Vec<u8>, content_type: &'static str) -> Reply {
+        Reply { status, body, content_type, allow: None }
     }
 
     fn error(status: u16, message: impl std::fmt::Display) -> Reply {
@@ -135,6 +170,17 @@ impl Reply {
         };
         Reply::error(status, e)
     }
+
+    /// OCR errors: an engine that is not installed or not set up (Lens
+    /// without chrome-lens-py, no engine at all) is the server's problem,
+    /// not the request's, so it is a 503 rather than a 400 or 404.
+    fn from_ocr_error(e: &Error) -> Reply {
+        if e.is_configuration_fault() || matches!(e, Error::NoProvider(_)) {
+            Reply::error(503, e)
+        } else {
+            Reply::from_error(e)
+        }
+    }
 }
 
 fn handle(engine: &Engine, mut req: Request) {
@@ -142,6 +188,11 @@ fn handle(engine: &Engine, mut req: Request) {
     let mut resp = Response::from_data(reply.body).with_status_code(reply.status);
     if let Ok(h) = Header::from_bytes("Content-Type", reply.content_type) {
         resp = resp.with_header(h);
+    }
+    if let Some(allow) = reply.allow {
+        if let Ok(h) = Header::from_bytes("Allow", allow) {
+            resp = resp.with_header(h);
+        }
     }
     let _ = req.respond(resp);
 }
@@ -191,8 +242,10 @@ fn percent_decode(s: &str) -> String {
 
 fn authorised(engine: &Engine, req: &Request) -> bool {
     let token = engine.config().server.token;
+    // The engine never leaves the token empty; if it somehow is, nothing
+    // gets in rather than everything.
     if token.is_empty() {
-        return true;
+        return false;
     }
     let bearer = header(req, "Authorization").and_then(|v| v.strip_prefix("Bearer ")).map(str::trim);
     let query = query_param(req.url(), "token");
@@ -204,6 +257,34 @@ fn constant_time_eq(a: &str, b: &str) -> bool {
         return false;
     }
     a.bytes().zip(b.bytes()).fold(0u8, |acc, (x, y)| acc | (x ^ y)) == 0
+}
+
+/// pot-app's routes, which its key bindings call without a token.
+const POT_ROUTES: &[&str] =
+    &["/selection_translate", "/input_translate", "/ocr_recognize", "/ocr_translate", "/translate"];
+
+/// Whether a pot-app route may skip the token: the setting is on and the
+/// peer is on this machine. (A request with an `Origin` header never gets
+/// this far.)
+fn pot_route_open(engine: &Engine, req: &Request, path: &str) -> bool {
+    POT_ROUTES.contains(&path)
+        && engine.config().server.pot_compat_without_token
+        && req.remote_addr().is_some_and(|a| a.ip().is_loopback())
+}
+
+/// The methods a known path answers, for a 405 and its `Allow` header.
+fn allowed_methods(path: &str) -> Option<&'static str> {
+    match path {
+        "/v1/services" => Some("GET"),
+        "/v1/translate" | "/v1/dictionary" => Some("GET, POST"),
+        "/v1/detect" | "/v1/ocr" | "/v1/speak" | "/translate" => Some("POST"),
+        p if p.starts_with("/v1/action/") => Some("GET, POST"),
+        _ => None,
+    }
+}
+
+fn method_allowed(method: &Method, allow: &str) -> bool {
+    allow.split(", ").any(|m| m == method.as_str())
 }
 
 fn read_body(req: &mut Request) -> Result<Vec<u8>, Reply> {
@@ -228,12 +309,64 @@ fn field(body: &Value, url: &str, key: &str) -> Option<String> {
     body.get(key).and_then(|v| v.as_str()).map(str::to_owned).or_else(|| query_param(url, key))
 }
 
-fn lang(s: Option<String>, default: LangId) -> LangId {
-    s.as_deref().and_then(LangId::from_code).unwrap_or(default)
+/// A language parameter: absent or empty is `default`, an unknown code is a
+/// 400, as on the command line.
+fn lang_param(body: &Value, url: &str, key: &str, default: LangId) -> Result<LangId, Reply> {
+    match field(body, url, key).filter(|c| !c.trim().is_empty()) {
+        None => Ok(default),
+        Some(code) => LangId::from_code(code.trim()).ok_or_else(|| {
+            Reply::error(400, format!("unknown language {code:?} for {key} (codes like en, ru, zh-CN, auto)"))
+        }),
+    }
+}
+
+/// A boolean parameter, from the JSON body (`true`, or a string) or the
+/// query string (`back=1`, `slow=true`).
+fn bool_param(body: &Value, url: &str, key: &str) -> Result<Option<bool>, Reply> {
+    let text = match body.get(key) {
+        Some(Value::Bool(b)) => return Ok(Some(*b)),
+        Some(Value::Null) | None => query_param(url, key),
+        Some(Value::String(s)) => Some(s.clone()),
+        Some(other) => Some(other.to_string()),
+    };
+    match text.as_deref().map(|s| s.trim().to_ascii_lowercase()) {
+        None => Ok(None),
+        // `?back` alone means yes, as a flag would.
+        Some(s) if matches!(s.as_str(), "" | "1" | "true" | "yes" | "on") => Ok(Some(true)),
+        Some(s) if matches!(s.as_str(), "0" | "false" | "no" | "off") => Ok(Some(false)),
+        Some(s) => Err(Reply::error(400, format!("{key} must be true or false, not {s:?}"))),
+    }
+}
+
+/// A service id the request names, checked like the command line's `-s`.
+fn service_param(
+    engine: &Engine,
+    body: &Value,
+    url: &str,
+    keys: &[&str],
+    cap: Capabilities,
+) -> Result<Option<String>, Reply> {
+    let Some(id) = keys.iter().find_map(|k| field(body, url, k)).filter(|s| !s.trim().is_empty()) else {
+        return Ok(None);
+    };
+    engine.require_provider(id.trim(), cap).map_err(|msg| Reply::error(400, msg))?;
+    Ok(Some(id.trim().to_owned()))
+}
+
+/// `?` for handlers that build a [`Reply`] either way.
+macro_rules! tri {
+    ($e:expr) => {
+        match $e {
+            Ok(v) => v,
+            Err(reply) => return reply,
+        }
+    };
 }
 
 fn route(engine: &Engine, req: &mut Request) -> Reply {
-    if header(req, "Origin").is_some_and(|o| o != "null") {
+    // Browsers send `Origin: null` from sandboxed frames and `file:` pages,
+    // so `null` is no less a browser than any other origin.
+    if header(req, "Origin").is_some() {
         return Reply::error(403, "browser requests are not accepted");
     }
     let url = req.url().to_owned();
@@ -243,62 +376,72 @@ fn route(engine: &Engine, req: &mut Request) -> Reply {
     if path.is_empty() || path == "/health" {
         return Reply::json(200, json!({ "name": "glossa", "version": glossa_core::VERSION }));
     }
-    if !authorised(engine, req) {
+    if !authorised(engine, req) && !pot_route_open(engine, req, &path) {
         return Reply::error(401, "missing or wrong token");
     }
+    if let Some(allow) = allowed_methods(&path) {
+        if !method_allowed(&method, allow) {
+            let mut reply = Reply::error(405, format!("{path} answers {allow}, not {}", method.as_str()));
+            reply.allow = Some(allow);
+            return reply;
+        }
+    }
 
-    match (method, path.as_str()) {
-        (Method::Get, "/v1/services") => {
-            let cap = query_param(&url, "capability")
-                .and_then(|c| Capabilities::from_name(&c))
-                .unwrap_or(Capabilities::TRANSLATE);
+    match path.as_str() {
+        "/v1/services" => {
+            let cap = match query_param(&url, "capability").filter(|c| !c.trim().is_empty()) {
+                None => Capabilities::TRANSLATE,
+                Some(c) => match Capabilities::from_name(c.trim()) {
+                    Some(cap) => cap,
+                    None => {
+                        return Reply::error(
+                            400,
+                            format!(
+                                "unknown capability {c:?}: translate, dictionary, listen, ocr, detect_language, \
+                                 speech_input, batch, alternatives, promptable, offline"
+                            ),
+                        )
+                    }
+                },
+            };
             let list: Vec<Value> = engine
                 .providers(cap)
                 .into_iter()
                 .map(|p| {
                     json!({ "id": p.info.id, "name": p.info.name, "origin": p.origin, "enabled": p.enabled,
-                            "capabilities": p.info.capabilities.names() })
+                            "capabilities": p.info.capabilities.names(),
+                            "needs_credentials": p.info.needs_credentials })
                 })
                 .collect();
             Reply::json(200, Value::Array(list))
         }
-        (Method::Get | Method::Post, "/v1/translate") => {
-            let body = match json_body(req) {
-                Ok(b) => b,
-                Err(r) => return r,
-            };
+        "/v1/translate" => {
+            let body = tri!(json_body(req));
             let Some(text) = field(&body, &url, "text") else { return Reply::error(400, "text is required") };
             let pair = LangPair::new(
-                lang(field(&body, &url, "from"), LangId::AUTO),
-                lang(field(&body, &url, "to"), LangId::AUTO),
+                tri!(lang_param(&body, &url, "from", LangId::AUTO)),
+                tri!(lang_param(&body, &url, "to", LangId::AUTO)),
             );
             let opts = TranslateOptions {
-                provider: field(&body, &url, "service"),
-                back_translate: body.get("back").and_then(|v| v.as_bool()).unwrap_or(false),
+                provider: tri!(service_param(engine, &body, &url, &["service"], Capabilities::TRANSLATE)),
+                back_translate: tri!(bool_param(&body, &url, "back")).unwrap_or(false),
                 ..Default::default()
             };
+            let save = tri!(bool_param(&body, &url, "history")).unwrap_or(false);
             match engine.translate(&text, pair, &opts) {
-                Ok(out) => Reply::json(
-                    200,
-                    json!({
-                        "text": out.translation.text,
-                        "from": out.pair.from.bcp47(),
-                        "to": out.pair.to.bcp47(),
-                        "service": out.translation.provider_id,
-                        "romanization": out.translation.romanisation,
-                        "alternatives": out.translation.alternatives,
-                        "back": out.back.map(|b| b.text),
-                        "elapsed_ms": out.translation.elapsed_ms,
-                    }),
-                ),
+                Ok(out) => {
+                    if save && engine.record_translation(&out) {
+                        if let Err(e) = engine.save_history() {
+                            tracing::warn!("history not saved: {e}");
+                        }
+                    }
+                    Reply::json(200, serde_json::to_value(out.report()).unwrap_or_default())
+                }
                 Err(e) => Reply::from_error(&e),
             }
         }
-        (Method::Post, "/v1/detect") => {
-            let body = match json_body(req) {
-                Ok(b) => b,
-                Err(r) => return r,
-            };
+        "/v1/detect" => {
+            let body = tri!(json_body(req));
             let Some(text) = field(&body, &url, "text") else { return Reply::error(400, "text is required") };
             match engine.detect(&text) {
                 Ok(d) => Reply::json(
@@ -308,37 +451,25 @@ fn route(engine: &Engine, req: &mut Request) -> Reply {
                 Err(e) => Reply::from_error(&e),
             }
         }
-        (Method::Post | Method::Get, "/v1/dictionary") => {
-            let body = match json_body(req) {
-                Ok(b) => b,
-                Err(r) => return r,
-            };
+        "/v1/dictionary" => {
+            let body = tri!(json_body(req));
             let Some(text) = field(&body, &url, "text") else { return Reply::error(400, "text is required") };
             let pair = LangPair::new(
-                lang(field(&body, &url, "from"), LangId::AUTO),
-                lang(field(&body, &url, "to"), LangId::AUTO),
+                tri!(lang_param(&body, &url, "from", LangId::AUTO)),
+                tri!(lang_param(&body, &url, "to", LangId::AUTO)),
             );
-            match engine.dictionary(&text, pair, field(&body, &url, "service").as_deref()) {
+            let service = tri!(service_param(engine, &body, &url, &["service"], Capabilities::DICTIONARY));
+            match engine.dictionary(&text, pair, service.as_deref()) {
                 Ok(a) => Reply::json(200, serde_json::to_value(&a).unwrap_or_default()),
                 Err(e) => Reply::from_error(&e),
             }
         }
-        (Method::Post, "/v1/ocr") => {
+        "/v1/ocr" => {
             let is_image = header(req, "Content-Type")
                 .is_some_and(|c| c.starts_with("image/") || c.starts_with("application/octet-stream"));
-            let body = if is_image {
-                json!({})
-            } else {
-                match json_body(req) {
-                    Ok(b) => b,
-                    Err(r) => return r,
-                }
-            };
+            let body = if is_image { json!({}) } else { tri!(json_body(req)) };
             let image = if is_image {
-                match read_body(req) {
-                    Ok(b) => b,
-                    Err(r) => return r,
-                }
+                tri!(read_body(req))
             } else {
                 let Some(b64) = body.get("image_base64").and_then(|v| v.as_str()) else {
                     return Reply::error(400, "send image bytes or {\"image_base64\": …}");
@@ -348,9 +479,13 @@ fn route(engine: &Engine, req: &mut Request) -> Reply {
                     Err(e) => return Reply::error(400, format!("image_base64: {e}")),
                 }
             };
-            let (lang_code, to) = (field(&body, &url, "lang"), field(&body, &url, "translate_to"));
-            let to = to.as_deref().and_then(LangId::from_code);
-            let service = field(&body, &url, "service");
+            let lang = tri!(lang_param(&body, &url, "lang", LangId::AUTO));
+            let to = match field(&body, &url, "translate_to").filter(|c| !c.trim().is_empty()) {
+                None => None,
+                Some(_) => Some(tri!(lang_param(&body, &url, "translate_to", LangId::AUTO))),
+            };
+            // `engine` as on the command line; `service` is the older name.
+            let service = tri!(service_param(engine, &body, &url, &["engine", "service"], Capabilities::OCR));
             if let Some(name) = field(&body, &url, "format") {
                 use glossa_core::ocr::export::{self, OcrFormat};
                 let Some(format) = OcrFormat::from_name(&name) else {
@@ -361,13 +496,7 @@ fn route(engine: &Engine, req: &mut Request) -> Reply {
                 } else {
                     glossa_core::ocr::OcrGranularity::FullText
                 };
-                return match engine.recognize_detailed(
-                    image,
-                    lang(lang_code, LangId::AUTO),
-                    to,
-                    service.as_deref(),
-                    granularity,
-                ) {
+                return match engine.recognize_detailed(image, lang, to, service.as_deref(), granularity) {
                     Ok(out) => {
                         let mut ocr = out.ocr.clone();
                         if let Some(t) = out.translated_text() {
@@ -378,45 +507,33 @@ fn route(engine: &Engine, req: &mut Request) -> Reply {
                             OcrFormat::Json => export::json(&ocr).to_string(),
                             other => export::render(&ocr, other),
                         };
-                        Reply { status: 200, body: body.into_bytes(), content_type: format.mime() }
+                        Reply::bytes(200, body.into_bytes(), format.mime())
                     }
-                    Err(e) => Reply::from_error(&e),
+                    Err(e) => Reply::from_ocr_error(&e),
                 };
             }
             let result = match service.as_deref() {
-                Some(id) => engine.recognize_using(id, image, lang(lang_code, LangId::AUTO), to),
-                None => engine.recognize(image, lang(lang_code, LangId::AUTO), to),
+                Some(id) => engine.recognize_using(id, image, lang, to),
+                None => engine.recognize(image, lang, to),
             };
             match result {
-                Ok(out) => Reply::json(
-                    200,
-                    json!({
-                        "text": out.ocr.text,
-                        "translation": out.translated_text(),
-                        "detected": out.ocr.detected_lang.map(|l| l.bcp47()),
-                        "service": out.ocr.provider_id,
-                    }),
-                ),
-                Err(e) => Reply::from_error(&e),
+                Ok(out) => Reply::json(200, ocr_summary(&out)),
+                Err(e) => Reply::from_ocr_error(&e),
             }
         }
-        (Method::Post, "/v1/speak") => {
-            let body = match json_body(req) {
-                Ok(b) => b,
-                Err(r) => return r,
-            };
+        "/v1/speak" => {
+            let body = tri!(json_body(req));
             let Some(text) = field(&body, &url, "text") else { return Reply::error(400, "text is required") };
-            let slow = body.get("slow").and_then(|v| v.as_bool());
-            match engine.speak(&text, lang(field(&body, &url, "lang"), LangId::AUTO), slow) {
-                Ok(audio) => Reply {
-                    status: 200,
-                    body: audio.bytes,
-                    content_type: if audio.mime == "audio/wav" { "audio/wav" } else { "audio/mpeg" },
-                },
+            let slow = tri!(bool_param(&body, &url, "slow"));
+            let lang = tri!(lang_param(&body, &url, "lang", LangId::AUTO));
+            match engine.speak(&text, lang, slow) {
+                Ok(audio) => {
+                    Reply::bytes(200, audio.bytes, if audio.mime == "audio/wav" { "audio/wav" } else { "audio/mpeg" })
+                }
                 Err(e) => Reply::from_error(&e),
             }
         }
-        (Method::Get | Method::Post, p) if p.starts_with("/v1/action/") => {
+        p if p.starts_with("/v1/action/") => {
             let id = &p["/v1/action/".len()..];
             let Some(action) = Action::from_id(id) else {
                 return Reply::error(404, format!("no action {id:?}"));
@@ -428,16 +545,27 @@ fn route(engine: &Engine, req: &mut Request) -> Reply {
             Reply::json(202, json!({ "accepted": action.id() }))
         }
         // pot-app's control endpoints, for key bindings carried over from it.
-        (_, "/selection_translate") => pot_action(engine, Action::ShowPopup, None),
-        (_, "/input_translate") => pot_action(engine, Action::ShowMainWindow, None),
-        (_, "/ocr_recognize") => pot_action(engine, Action::TextRecognition, None),
-        (_, "/ocr_translate") => pot_action(engine, Action::RecognizeAndTranslate, None),
-        (Method::Post, "/translate") => match read_body(req) {
+        "/selection_translate" => pot_action(engine, Action::ShowPopup, None),
+        "/input_translate" => pot_action(engine, Action::ShowMainWindow, None),
+        "/ocr_recognize" => pot_action(engine, Action::TextRecognition, None),
+        "/ocr_translate" => pot_action(engine, Action::RecognizeAndTranslate, None),
+        "/translate" => match read_body(req) {
             Ok(b) => pot_action(engine, Action::ShowPopup, Some(String::from_utf8_lossy(&b).into_owned())),
             Err(r) => r,
         },
         _ => Reply::error(404, format!("no route {path}")),
     }
+}
+
+/// `/v1/ocr`'s JSON answer, the same shape as `glossa-cli --json ocr`.
+pub fn ocr_summary(out: &crate::OcrOutcome) -> Value {
+    json!({
+        "text": out.ocr.text,
+        "translation": out.translated_text(),
+        "detected": out.ocr.detected_lang.map(|l| l.bcp47()),
+        "service": out.ocr.provider_id,
+        "elapsed_ms": out.ocr.elapsed_ms,
+    })
 }
 
 fn pot_action(engine: &Engine, action: Action, text: Option<String>) -> Reply {
@@ -449,7 +577,7 @@ fn pot_action(engine: &Engine, action: Action, text: Option<String>) -> Reply {
 mod tests {
     use super::*;
     use crate::Event;
-    use glossa_core::{Config, Paths};
+    use glossa_core::{Config, History, Paths};
     use std::io::Write;
     use std::net::TcpStream;
 
@@ -568,16 +696,207 @@ mod tests {
         std::fs::remove_dir_all(&dir).ok();
     }
 
+    /// The whole answer, headers included.
+    fn raw(addr: SocketAddr, raw: &str) -> String {
+        let mut s = TcpStream::connect(addr).unwrap();
+        s.set_read_timeout(Some(Duration::from_secs(10))).unwrap();
+        s.write_all(raw.as_bytes()).unwrap();
+        let mut out = String::new();
+        let _ = s.read_to_string(&mut out);
+        out
+    }
+
+    /// A request with a JSON body (or none).
+    fn call(addr: SocketAddr, method: &str, path: &str, body: &str) -> (u16, String) {
+        request(
+            addr,
+            &format!(
+                "{method} {path} HTTP/1.1\r\nHost: x\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                body.len()
+            ),
+        )
+    }
+
     #[test]
     fn exposing_beyond_loopback_needs_a_token() {
-        let dir = std::env::temp_dir().join(format!("glossa-api-open-{}", std::process::id()));
-        let paths = Paths::for_exe_dir(dir.clone(), Some(dir.join("home")));
-        let mut cfg = Config::default();
-        cfg.server.bind = "0.0.0.0:0".into();
-        let e = Engine::with_config(paths, cfg).unwrap();
-        e.update_config(|c| c.server.token.clear()).unwrap();
-        assert!(matches!(start(e), Err(Error::Config(_))));
+        assert!(matches!(checked_bind("0.0.0.0:60828", ""), Err(Error::Config(_))));
+        assert!(checked_bind("0.0.0.0:60828", "t").is_ok());
+        assert!(checked_bind("127.0.0.1:60828", "").is_ok());
+        assert!(matches!(checked_bind("localhost", "t"), Err(Error::Config(_))));
+    }
+
+    #[test]
+    fn clients_connect_to_loopback_when_the_server_listens_everywhere() {
+        assert_eq!(connect_addr("0.0.0.0:60828"), "127.0.0.1:60828");
+        assert_eq!(connect_addr("[::]:60828"), "[::1]:60828");
+        assert_eq!(connect_addr("127.0.0.1:60828"), "127.0.0.1:60828");
+        assert_eq!(connect_addr("192.168.1.5:9000"), "192.168.1.5:9000");
+    }
+
+    #[test]
+    fn null_origins_are_browsers_too() {
+        let (e, dir) = engine();
+        let server = start(e).unwrap();
+        let (status, _) = request(
+            server.addr,
+            "GET /v1/services?token=secret HTTP/1.1\r\nHost: x\r\nOrigin: null\r\nConnection: close\r\n\r\n",
+        );
+        assert_eq!(status, 403);
+        // Not even pot-app's open routes take a browser request.
+        let (status, _) = request(
+            server.addr,
+            "GET /selection_translate HTTP/1.1\r\nHost: x\r\nOrigin: null\r\nConnection: close\r\n\r\n",
+        );
+        assert_eq!(status, 403);
         std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn pot_app_routes_work_without_the_token_from_this_machine_only_when_allowed() {
+        let (e, dir) = engine();
+        let server = start(e.clone()).unwrap();
+        for path in ["/selection_translate", "/input_translate", "/ocr_recognize", "/ocr_translate"] {
+            assert_eq!(call(server.addr, "GET", path, "").0, 202, "{path}");
+        }
+        assert_eq!(call(server.addr, "POST", "/translate", "hello").0, 202);
+        // Only those routes.
+        assert_eq!(call(server.addr, "GET", "/v1/action/show_popup", "").0, 401);
+        assert_eq!(call(server.addr, "GET", "/v1/services", "").0, 401);
+
+        e.update_config(|c| c.server.pot_compat_without_token = false).unwrap();
+        assert_eq!(call(server.addr, "GET", "/selection_translate", "").0, 401);
+        assert_eq!(call(server.addr, "GET", "/selection_translate?token=secret", "").0, 202);
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn a_wrong_method_is_405_with_allow() {
+        let (e, dir) = engine();
+        let server = start(e).unwrap();
+        let out =
+            raw(server.addr, "DELETE /v1/translate?token=secret HTTP/1.1\r\nHost: x\r\nConnection: close\r\n\r\n");
+        assert!(out.starts_with("HTTP/1.1 405"), "{out}");
+        assert!(out.lines().any(|l| l.eq_ignore_ascii_case("allow: GET, POST")), "{out}");
+        let out = raw(server.addr, "GET /v1/speak?token=secret HTTP/1.1\r\nHost: x\r\nConnection: close\r\n\r\n");
+        assert!(out.starts_with("HTTP/1.1 405") && out.contains("Allow: POST"), "{out}");
+        let out = raw(server.addr, "GET /translate?token=secret HTTP/1.1\r\nHost: x\r\nConnection: close\r\n\r\n");
+        assert!(out.starts_with("HTTP/1.1 405"), "{out}");
+        assert_eq!(call(server.addr, "GET", "/v1/nothing?token=secret", "").0, 404);
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn unknown_languages_capabilities_and_services_are_refused() {
+        let (e, dir) = engine();
+        let server = start(e).unwrap();
+        let (status, body) = call(server.addr, "GET", "/v1/translate?token=secret&text=hi&to=klingon", "");
+        assert_eq!(status, 400);
+        assert!(body.contains("unknown language") && body.contains("klingon"), "{body}");
+        let (status, _) = call(server.addr, "POST", "/v1/translate?token=secret", r#"{"text":"hi","from":"xx-YY"}"#);
+        assert_eq!(status, 400);
+        let (status, body) = call(server.addr, "GET", "/v1/services?token=secret&capability=teleport", "");
+        assert_eq!(status, 400);
+        assert!(body.contains("unknown capability"), "{body}");
+        let (status, body) =
+            call(server.addr, "POST", "/v1/translate?token=secret", r#"{"text":"hi","service":"gogle"}"#);
+        assert_eq!(status, 400);
+        assert!(body.contains("unknown service") && body.contains("google"), "{body}");
+        let (status, _) = call(server.addr, "GET", "/v1/dictionary?token=secret&text=hi&service=google", "");
+        assert_eq!(status, 400, "google is a translator, not a dictionary");
+        let (status, body) = call(server.addr, "POST", "/v1/translate?token=secret&back=maybe", r#"{"text":"hi"}"#);
+        assert_eq!(status, 400);
+        assert!(body.contains("back must be true or false"), "{body}");
+        let body = r#"{"image_base64":"iVBORw0KGgo=","engine":"nope"}"#;
+        assert_eq!(call(server.addr, "POST", "/v1/ocr?token=secret", body).0, 400);
+        let body = r#"{"image_base64":"iVBORw0KGgo=","translate_to":"elvish"}"#;
+        assert_eq!(call(server.addr, "POST", "/v1/ocr?token=secret", body).0, 400);
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn services_say_which_need_credentials() {
+        let (e, dir) = engine();
+        let server = start(e).unwrap();
+        let (status, body) = call(server.addr, "GET", "/v1/services?token=secret", "");
+        assert_eq!(status, 200);
+        let list: Value = serde_json::from_str(&body).unwrap();
+        let deepl = list.as_array().unwrap().iter().find(|p| p["id"] == "deepl").unwrap();
+        assert_eq!(deepl["needs_credentials"], true);
+        let google = list.as_array().unwrap().iter().find(|p| p["id"] == "google").unwrap();
+        assert_eq!(google["needs_credentials"], false);
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn an_ocr_engine_that_is_not_set_up_is_a_503() {
+        let (e, dir) = engine();
+        e.update_config(|c| c.ocr.tesseract.path = dir.join("no-tesseract").to_string_lossy().into_owned()).unwrap();
+        let server = start(e).unwrap();
+        let body = r#"{"image_base64":"iVBORw0KGgo=","engine":"tesseract"}"#;
+        let (status, resp) = call(server.addr, "POST", "/v1/ocr?token=secret", body);
+        assert_eq!(status, 503, "{resp}");
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn translations_have_the_shared_shape_and_can_be_recorded() {
+        let (e, dir) = engine();
+        // A translator that needs no network: echoes its input.
+        let m = e.paths().user_module_dir().join("echo");
+        std::fs::create_dir_all(&m).unwrap();
+        std::fs::write(
+            m.join("module.toml"),
+            "capabilities = [\"translate\"]\n[module]\nid = \"echo\"\nname = \"Echo\"\nruntime = \"js\"\n",
+        )
+        .unwrap();
+        std::fs::write(m.join("main.js"), "function translate(req) { return 'echo: ' + req.text; }").unwrap();
+        e.reload_modules();
+        let server = start(e.clone()).unwrap();
+
+        let (status, body) =
+            call(server.addr, "GET", "/v1/translate?token=secret&text=hi&from=en&to=ru&service=echo&back=1", "");
+        assert_eq!(status, 200, "{body}");
+        let v: Value = serde_json::from_str(&body).unwrap();
+        for key in [
+            "text",
+            "from",
+            "to",
+            "service",
+            "romanization",
+            "source_romanization",
+            "alternatives",
+            "back",
+            "failed",
+            "elapsed_ms",
+        ] {
+            assert!(v.get(key).is_some(), "{key} missing from {body}");
+        }
+        assert_eq!(v["text"], "echo: hi");
+        assert_eq!(v["back"], "echo: echo: hi", "back accepted from the query string");
+        assert!(e.history().is_empty(), "not recorded unless asked");
+
+        let (status, _) = call(
+            server.addr,
+            "POST",
+            "/v1/translate?token=secret",
+            r#"{"text":"hi","from":"en","to":"ru","service":"echo","history":true}"#,
+        );
+        assert_eq!(status, 200);
+        assert_eq!(e.history().len(), 1);
+        assert_eq!(History::load(&e.paths().history_file(), 100).unwrap().len(), 1, "saved at once");
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn booleans_read_from_body_or_query() {
+        let body = json!({ "back": true, "slow": "no" });
+        assert_eq!(bool_param(&body, "/x", "back").ok().flatten(), Some(true));
+        assert_eq!(bool_param(&body, "/x", "slow").ok().flatten(), Some(false));
+        assert_eq!(bool_param(&json!({}), "/x?slow=1", "slow").ok().flatten(), Some(true));
+        assert_eq!(bool_param(&json!({}), "/x?slow=false", "slow").ok().flatten(), Some(false));
+        assert_eq!(bool_param(&json!({}), "/x?back", "back").ok().flatten(), Some(true));
+        assert_eq!(bool_param(&json!({}), "/x", "back").ok().flatten(), None);
+        assert!(bool_param(&json!({}), "/x?back=perhaps", "back").is_err());
     }
 
     #[test]
