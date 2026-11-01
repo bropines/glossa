@@ -165,11 +165,28 @@ jobs:
       # without the Visual C++ redistributable installed. With an explicit
       # --target, RUSTFLAGS leave build scripts and proc macros alone.
       RUSTFLAGS: -C target-feature=+crt-static
+      # Code signing, when the repository has a certificate in its secrets:
+      # WINDOWS_SIGN_PFX (the .pfx, base64) and WINDOWS_SIGN_PASSWORD.
+      # Without them the release is built unsigned, as before.
+      WINDOWS_SIGN_PFX: ${{ secrets.WINDOWS_SIGN_PFX }}
+      WINDOWS_SIGN_PASSWORD: ${{ secrets.WINDOWS_SIGN_PASSWORD }}
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
       - name: Build
         run: cargo build --release --locked --target "$TARGET" -p glossa-ui-egui -p glossa-cli
+      - name: Sign the executables
+        if: env.WINDOWS_SIGN_PFX != ''
+        shell: pwsh
+        run: |
+          $pfx = "$env:RUNNER_TEMP\sign.pfx"
+          [IO.File]::WriteAllBytes($pfx, [Convert]::FromBase64String($env:WINDOWS_SIGN_PFX))
+          $signtool = Get-ChildItem "${env:ProgramFiles(x86)}\Windows Kits\10\bin\*\x64\signtool.exe" | Sort-Object FullName | Select-Object -Last 1
+          "SIGNTOOL=$($signtool.FullName)" | Out-File -Append $env:GITHUB_ENV
+          "SIGN_PFX=$pfx" | Out-File -Append $env:GITHUB_ENV
+          & $signtool.FullName sign /fd SHA256 /f $pfx /p $env:WINDOWS_SIGN_PASSWORD /tr http://timestamp.digicert.com /td SHA256 `
+            "target\$env:TARGET\release\glossa.exe" "target\$env:TARGET\release\glossa-cli.exe"
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
       - name: Package
         run: |
           mkdir -p "dist/$NAME/examples/modules" "dist/$NAME/sdk"
@@ -188,6 +205,14 @@ jobs:
           if (-not $iscc) { $iscc = "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe" }
           & $iscc "/DMyAppVersion=$env:VERSION" "/DStageDir=$PWD\dist\$env:NAME" "/O$PWD\dist" packaging\windows\glossa.iss
           if ($LASTEXITCODE) { exit $LASTEXITCODE }
+      - name: Sign the installer
+        if: env.WINDOWS_SIGN_PFX != ''
+        shell: pwsh
+        run: |
+          & $env:SIGNTOOL sign /fd SHA256 /f $env:SIGN_PFX /p $env:WINDOWS_SIGN_PASSWORD /tr http://timestamp.digicert.com /td SHA256 `
+            "dist\$env:NAME-setup.exe"
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          Remove-Item $env:SIGN_PFX
       # Install silently for this user, run the installed CLI, uninstall, and
       # check that nothing is left in the folder.
       - name: Installer smoke test

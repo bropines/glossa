@@ -19,7 +19,7 @@ version=$2
 out=${3:-dist}
 here=$(cd "$(dirname "$0")" && pwd)
 arch=${DEB_ARCH:-$(dpkg --print-architecture)}
-maintainer=${DEB_MAINTAINER:-"Bropines <bropines@users.noreply.github.com>"}
+maintainer=${DEB_MAINTAINER:-"Bropines <bropines@gmail.com>"}
 
 # 1.2.3-rc.1 -> 1.2.3~rc.1, so a pre-release sorts before its release.
 deb_version=$(printf '%s' "$version" | sed 's/-/~/')

@@ -31,8 +31,11 @@ It puts Glossa in the Start menu, and on request on the desktop. *Start
 Glossa when I sign in to Windows* is the same switch as *Options → Basics →
 Start with Windows*: either one can turn it on or off later.
 
-The installer is not signed yet, so SmartScreen may stop it the first time:
-*More info → Run anyway*.
+Until the releases are signed, SmartScreen may stop the installer the first
+time: *More info → Run anyway*. (The release workflow signs `glossa.exe`,
+`glossa-cli.exe` and the installer as soon as the repository has a code
+signing certificate in its secrets, `WINDOWS_SIGN_PFX` and
+`WINDOWS_SIGN_PASSWORD`.)
 
 **Upgrading**: run the installer of the new version. It closes a running
 Glossa first; your settings stay.
