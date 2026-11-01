@@ -835,6 +835,52 @@ mod.run()
         crate::provider::Provider::suspend(&provider);
     }
 
+    /// The OCR.space example against a canned reply, through the real host
+    /// API: the upload goes through host.http, the words come back as lines.
+    #[cfg(feature = "image")]
+    #[test]
+    fn the_ocr_space_example_maps_lines_and_words() {
+        if !have_python() {
+            return;
+        }
+        let dir = repo().join("modules").join("python").join("ocr-space");
+        let manifest = Manifest::load(&dir.join("module.toml")).unwrap();
+        let provider = load(&dir, manifest, &ctx(Duration::from_secs(20))).unwrap();
+        let reply = serde_json::json!({
+            "ParsedResults": [{ "ParsedText": "Hello world\r\nBye\r\n", "TextOverlay": { "Lines": [
+                { "LineText": "Hello world", "Words": [
+                    { "WordText": "Hello", "Left": 2, "Top": 3, "Width": 20, "Height": 8 },
+                    { "WordText": "world", "Left": 26, "Top": 3, "Width": 18, "Height": 8 } ] },
+                { "LineText": "Bye", "Words": [{ "WordText": "Bye", "Left": 2, "Top": 14, "Width": 12, "Height": 8 }] }
+            ] } }],
+            "IsErroredOnProcessing": false
+        });
+        let http = MockHttp::new().on(glossa_net::Method::Post, "https://api.ocr.space/", 200, &reply.to_string());
+        let mut opts = OptionValues::new();
+        opts.insert("api_key".into(), serde_json::json!("fake"));
+        opts.insert("engine".into(), serde_json::json!("2"));
+        let mut bytes = Vec::new();
+        image::DynamicImage::ImageRgba8(image::RgbaImage::new(48, 24))
+            .write_to(&mut std::io::Cursor::new(&mut bytes), image::ImageFormat::Png)
+            .unwrap();
+        with_test_host(&http, &opts, |host| {
+            let mut req = glossa_core::OcrRequest::new(glossa_core::ocr::ImageSource::Bytes(bytes.clone()));
+            req.lang = LangId::RUSSIAN;
+            let r = provider.recognize(host, &req).unwrap();
+            assert_eq!(r.text, "Hello world\nBye");
+            assert_eq!(r.blocks.len(), 2);
+            assert_eq!(r.blocks[0].bounds, Some(glossa_core::ocr::Rect::new(2.0, 3.0, 42.0, 8.0)), "the words' union");
+            assert_eq!(r.blocks[0].children[1].bounds, Some(glossa_core::ocr::Rect::new(26.0, 3.0, 18.0, 8.0)));
+            assert_eq!(r.image_size, Some((48, 24)));
+        });
+        let sent = &http.requests()[0];
+        let body = String::from_utf8_lossy(sent.body.as_deref().unwrap_or_default()).into_owned();
+        assert!(body.contains("language=rus") && body.contains("OCREngine=2"), "{body}");
+        assert!(body.contains("base64Image=data%3Aimage%2Fpng%3Bbase64%2C"), "{}", &body[..80.min(body.len())]);
+        assert!(sent.headers.iter().any(|(k, v)| k == "apikey" && v == "fake"));
+        provider.suspend();
+    }
+
     #[test]
     fn a_hung_module_is_killed_and_the_next_call_starts_afresh() {
         if !have_python() {

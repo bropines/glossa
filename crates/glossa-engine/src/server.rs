@@ -14,7 +14,9 @@
 //! GET  /v1/translate?text=…&to=…
 //! POST /v1/detect      {"text"}
 //! POST /v1/dictionary  {"text","from"?,"to"?,"service"?}
-//! POST /v1/ocr         image bytes (image/*), or {"image_base64","lang"?,"translate_to"?}
+//! POST /v1/ocr         image bytes (image/*), or {"image_base64","lang"?,"translate_to"?,
+//!                      "service"?,"format"?}; format text|json|hocr|alto returns
+//!                      that document (json: the full layout) instead of the summary
 //! POST /v1/speak       {"text","lang"?,"slow"?}            -> audio bytes
 //! GET|POST /v1/action/<action>?text=…   ask the UI to act (show_popup, text_recognition…)
 //! ```
@@ -324,26 +326,68 @@ fn route(engine: &Engine, req: &mut Request) -> Reply {
         (Method::Post, "/v1/ocr") => {
             let is_image = header(req, "Content-Type")
                 .is_some_and(|c| c.starts_with("image/") || c.starts_with("application/octet-stream"));
-            let (image, lang_code, to) = if is_image {
+            let body = if is_image {
+                json!({})
+            } else {
+                match json_body(req) {
+                    Ok(b) => b,
+                    Err(r) => return r,
+                }
+            };
+            let image = if is_image {
                 match read_body(req) {
-                    Ok(b) => (b, query_param(&url, "lang"), query_param(&url, "translate_to")),
+                    Ok(b) => b,
                     Err(r) => return r,
                 }
             } else {
-                let body = match json_body(req) {
-                    Ok(b) => b,
-                    Err(r) => return r,
-                };
                 let Some(b64) = body.get("image_base64").and_then(|v| v.as_str()) else {
                     return Reply::error(400, "send image bytes or {\"image_base64\": …}");
                 };
                 match base64::engine::general_purpose::STANDARD.decode(b64) {
-                    Ok(bytes) => (bytes, field(&body, &url, "lang"), field(&body, &url, "translate_to")),
+                    Ok(bytes) => bytes,
                     Err(e) => return Reply::error(400, format!("image_base64: {e}")),
                 }
             };
+            let (lang_code, to) = (field(&body, &url, "lang"), field(&body, &url, "translate_to"));
             let to = to.as_deref().and_then(LangId::from_code);
-            match engine.recognize(image, lang(lang_code, LangId::AUTO), to) {
+            let service = field(&body, &url, "service");
+            if let Some(name) = field(&body, &url, "format") {
+                use glossa_core::ocr::export::{self, OcrFormat};
+                let Some(format) = OcrFormat::from_name(&name) else {
+                    return Reply::error(400, format!("unknown format {name:?}: text, json, hocr or alto"));
+                };
+                let granularity = if format.wants_structure() {
+                    glossa_core::ocr::OcrGranularity::Words
+                } else {
+                    glossa_core::ocr::OcrGranularity::FullText
+                };
+                return match engine.recognize_detailed(
+                    image,
+                    lang(lang_code, LangId::AUTO),
+                    to,
+                    service.as_deref(),
+                    granularity,
+                ) {
+                    Ok(out) => {
+                        let mut ocr = out.ocr.clone();
+                        if let Some(t) = out.translated_text() {
+                            ocr.translation = Some(t.to_owned());
+                        }
+                        let body = match format {
+                            OcrFormat::Text => ocr.translation.clone().unwrap_or_else(|| export::text(&ocr)),
+                            OcrFormat::Json => export::json(&ocr).to_string(),
+                            other => export::render(&ocr, other),
+                        };
+                        Reply { status: 200, body: body.into_bytes(), content_type: format.mime() }
+                    }
+                    Err(e) => Reply::from_error(&e),
+                };
+            }
+            let result = match service.as_deref() {
+                Some(id) => engine.recognize_using(id, image, lang(lang_code, LangId::AUTO), to),
+                None => engine.recognize(image, lang(lang_code, LangId::AUTO), to),
+            };
+            match result {
                 Ok(out) => Reply::json(
                     200,
                     json!({
@@ -514,6 +558,13 @@ mod tests {
             "POST /v1/translate?token=secret HTTP/1.1\r\nHost: x\r\nContent-Length: 2\r\nConnection: close\r\n\r\n{}",
         );
         assert_eq!(status, 400, "text is required");
+        let body = r#"{"image_base64":"iVBORw0KGgo=","format":"pdf"}"#;
+        let (status, resp) = request(
+            server.addr,
+            &format!("POST /v1/ocr?token=secret HTTP/1.1\r\nHost: x\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}", body.len()),
+        );
+        assert_eq!(status, 400);
+        assert!(resp.contains("unknown format"), "{resp}");
         std::fs::remove_dir_all(&dir).ok();
     }
 

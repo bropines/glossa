@@ -614,7 +614,7 @@ mod tests {
         let v = export::json(&r);
         assert_eq!(v["detected_lang"], "en");
         assert_eq!(v["blocks"][0]["level"], "block");
-        assert_eq!(v["blocks"][0]["children"][0]["children"][0]["confidence"], serde_json::json!(0.96f32));
+        assert_eq!(v["blocks"][0]["children"][0]["children"][0]["confidence"], serde_json::json!(0.96), "as written");
         assert_eq!(v["image_size"], serde_json::json!([400, 300]));
         let back: OcrResult = serde_json::from_value(v).unwrap_or_default();
         assert!(back.blocks.is_empty() || back.blocks[0].children.len() == 3);

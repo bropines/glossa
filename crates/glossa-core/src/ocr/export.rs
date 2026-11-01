@@ -100,7 +100,10 @@ pub fn json(result: &OcrResult) -> serde_json::Value {
         r.text = r.text_from_blocks();
     }
     let lang = r.detected_lang.filter(|l| l.is_language()).map(|l| l.bcp47());
-    let mut v = serde_json::to_value(&r).unwrap_or_default();
+    // Through text rather than `to_value`, so `f32`s print as written
+    // (0.97, not 0.9700000286102295).
+    let mut v: serde_json::Value =
+        serde_json::to_string(&r).ok().and_then(|s| serde_json::from_str(&s).ok()).unwrap_or_default();
     if let Some(obj) = v.as_object_mut() {
         match lang {
             Some(code) => obj.insert("detected_lang".into(), code.into()),

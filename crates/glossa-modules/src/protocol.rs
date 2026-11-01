@@ -257,13 +257,52 @@ pub fn ocr_from_wire(
         // The size given was the preprocessed copy's.
         out.image_size = None;
     }
+    for b in &mut out.blocks {
+        fill_bounds(b);
+    }
     out = out.with_levels();
+    for b in &mut out.blocks {
+        fill_text(b);
+    }
     out.text = if r.text.trim().is_empty() { out.text_from_blocks() } else { r.text };
     out.translation = r.translation.filter(|t| !t.trim().is_empty());
     if let Some(code) = r.detected_lang.as_deref() {
         out.detected_lang = lang_for(code);
     }
     Ok(out)
+}
+
+/// Give a node without a box the union of its children's, so a module may
+/// send boxes for words only.
+fn fill_bounds(b: &mut OcrBlock) {
+    for c in &mut b.children {
+        fill_bounds(c);
+    }
+    if b.bounds.is_none() && b.polygon.is_empty() {
+        let boxes: Vec<Rect> = b.children.iter().filter_map(OcrBlock::bbox).collect();
+        if let Some(first) = boxes.first() {
+            let (mut x0, mut y0, mut x1, mut y1) = (first.x, first.y, first.x + first.width, first.y + first.height);
+            for r in &boxes[1..] {
+                x0 = x0.min(r.x);
+                y0 = y0.min(r.y);
+                x1 = x1.max(r.x + r.width);
+                y1 = y1.max(r.y + r.height);
+            }
+            b.bounds = Some(Rect::from_corners(x0, y0, x1, y1));
+        }
+    }
+}
+
+/// Give a node without text its children's: a line's words joined by
+/// spaces, anything else's parts a line each.
+fn fill_text(b: &mut OcrBlock) {
+    for c in &mut b.children {
+        fill_text(c);
+    }
+    if b.text.trim().is_empty() && !b.children.is_empty() {
+        let sep = if b.level == Some(OcrLevel::Line) { " " } else { "\n" };
+        b.text = b.children.iter().map(|c| c.text.trim()).filter(|t| !t.is_empty()).collect::<Vec<_>>().join(sep);
+    }
 }
 
 /// Move a node (and its children) from a preprocessed copy's pixels onto
@@ -297,10 +336,23 @@ fn node_from_wire(n: wire::OcrNode, lang_for: &dyn Fn(&str) -> Option<LangId>) -
         .map(|r| Rect::new(r.x, r.y, r.width, r.height))
         .or_else(|| n.bbox.map(|[x0, y0, x1, y1]| Rect::from_corners(x0, y0, x1, y1)))
         .filter(|r| [r.x, r.y, r.width, r.height].into_iter().all(finite));
+    let polygon: Vec<[f32; 2]> = n.polygon.into_iter().filter(|p| p.iter().copied().all(finite)).collect();
+    let mut angle = if n.angle.is_finite() { n.angle } else { 0.0 };
+    // An outline alone (what Cloud Vision and PAGE-XML give) is enough: the
+    // box and rotation follow from it.
+    let bounds = match (bounds, polygon.as_slice()) {
+        (Some(b), _) => Some(b),
+        (None, [a, b, c, d]) => {
+            let (r, quad_angle) = glossa_core::ocr::quad_geometry(&[*a, *b, *c, *d]);
+            angle = quad_angle;
+            Some(r)
+        }
+        (None, _) => OcrBlock { polygon: polygon.clone(), ..Default::default() }.bbox(),
+    };
     OcrBlock {
         text: n.text,
         bounds,
-        angle: if n.angle.is_finite() { n.angle } else { 0.0 },
+        angle,
         level: n.level.as_deref().and_then(|l| match l.to_ascii_lowercase().as_str() {
             "block" | "carea" | "region" => Some(OcrLevel::Block),
             "paragraph" | "par" => Some(OcrLevel::Paragraph),
@@ -308,7 +360,7 @@ fn node_from_wire(n: wire::OcrNode, lang_for: &dyn Fn(&str) -> Option<LangId>) -
             "word" | "string" => Some(OcrLevel::Word),
             _ => None,
         }),
-        polygon: n.polygon.into_iter().filter(|p| p.iter().copied().all(finite)).collect(),
+        polygon,
         confidence: n.confidence.filter(|c| c.is_finite()).map(|c| c.clamp(0.0, 1.0)),
         baseline: n
             .baseline

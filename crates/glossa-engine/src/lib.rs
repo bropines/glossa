@@ -26,7 +26,7 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use glossa_core::history::{HistoryEntry, HistoryResult};
-use glossa_core::ocr::{ImageSource, OcrRequest};
+use glossa_core::ocr::{ImageSource, OcrGranularity, OcrRequest};
 use glossa_core::{
     Action, Article, Audio, Capabilities, Config, Detection, DictRequest, Error, History, LangId, LangPair, Locale,
     OcrResult, Paths, ProviderInfo, Result, SpeakRequest, Theme,
@@ -581,7 +581,10 @@ impl Engine {
     }
 
     fn spawn(&self, name: &str, f: impl FnOnce() + Send + 'static) {
-        if let Err(e) = std::thread::Builder::new().name(format!("glossa-{name}")).spawn(f) {
+        // 8 MB of address space, committed only as used: module scripts
+        // run here, and turning a deeply nested result (an OCR layout) into
+        // JSON recurses through the JavaScript engine.
+        if let Err(e) = std::thread::Builder::new().name(format!("glossa-{name}")).stack_size(8 << 20).spawn(f) {
             tracing::error!("could not start a worker thread: {e}");
         }
     }
@@ -815,12 +818,38 @@ impl Engine {
         self.recognize_with(image, lang, translate_to, Some(provider), &CancelToken::new())
     }
 
+    /// [`Engine::recognize`] asking the provider for `granularity` (words
+    /// for hOCR or ALTO export, lines for an overlay), with `provider` alone
+    /// when given. Blocking.
+    pub fn recognize_detailed(
+        &self,
+        image: Vec<u8>,
+        lang: LangId,
+        translate_to: Option<LangId>,
+        provider: Option<&str>,
+        granularity: OcrGranularity,
+    ) -> Result<OcrOutcome> {
+        self.recognize_granular(image, lang, translate_to, provider, granularity, &CancelToken::new())
+    }
+
     fn recognize_with(
         &self,
         image: Vec<u8>,
         lang: LangId,
         translate_to: Option<LangId>,
         only: Option<&str>,
+        cancel: &CancelToken,
+    ) -> Result<OcrOutcome> {
+        self.recognize_granular(image, lang, translate_to, only, OcrGranularity::FullText, cancel)
+    }
+
+    fn recognize_granular(
+        &self,
+        image: Vec<u8>,
+        lang: LangId,
+        translate_to: Option<LangId>,
+        only: Option<&str>,
+        granularity: OcrGranularity,
         cancel: &CancelToken,
     ) -> Result<OcrOutcome> {
         let cfg = self.config();
@@ -859,6 +888,7 @@ impl Engine {
         req.lang = lang;
         req.translate_to = translate_to;
         req.preserve_line_breaks = cfg.ocr.preserve_line_breaks;
+        req.granularity = granularity;
         let mut last = Error::NoProvider("text recognition");
         for provider in providers {
             if cancel.is_cancelled() {
