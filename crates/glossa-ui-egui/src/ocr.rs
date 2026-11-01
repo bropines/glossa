@@ -1,5 +1,6 @@
-//! Screen-region OCR: the overlay and its toolbar, the copy mode's notice,
-//! and watching a region. What was read is shown in [`crate::ocr_result`].
+//! Screen-region OCR: the overlay and its toolbar, the copy mode's notice
+//! (a [`crate::notice`]), and watching a region. What was read is shown in
+//! [`crate::ocr_result`].
 //!
 //! The overlay is a borderless window over the whole desktop showing a
 //! screenshot taken just before it opened, dimmed except for the rectangle
@@ -22,7 +23,7 @@
 
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use egui::{pos2, vec2, Color32, Rect, RichText, Sense};
 use glossa_core::config::OcrAfterSelect;
@@ -77,22 +78,7 @@ pub struct Background {
     crop: Option<image::RgbaImage>,
 }
 
-/// The small notice copy mode shows by the region: it takes no focus and
-/// goes away by itself.
-pub struct Notice {
-    text: String,
-    /// The start of what was copied, a line or two.
-    preview: Option<String>,
-    error: bool,
-    busy: bool,
-    /// The region it belongs to, in desktop pixels.
-    region: GRect,
-    shown: Instant,
-}
-
 const ID: &str = "glossa-ocr";
-const NOTICE_TITLE: &str = "Glossa notice";
-const NOTICE_LIFE: Duration = Duration::from_millis(3500);
 
 pub fn begin(app: &mut GlossaApp, action: Action, image: image::RgbaImage, origin: (i32, i32)) {
     let scale = glossa_platform::window::monitor_at(origin.0, origin.1)
@@ -202,7 +188,7 @@ fn background_done(
         copy_with_notice(app, &text, bg.region);
         return;
     }
-    app.ocr_notice = None;
+    app.notice = None;
     match bg.crop {
         Some(crop) if !o.blocks.is_empty() => crate::inplace::open(app, crop, bg.region, o),
         _ => {
@@ -234,7 +220,6 @@ fn copy_with_notice(app: &mut GlossaApp, text: &str, region: GRect) {
             let count = text.chars().count().to_string();
             let m = app.locale.fmt("ocr.copied_chars", &count);
             let preview: String = text.split_whitespace().collect::<Vec<_>>().join(" ").chars().take(160).collect();
-            app.fonts.ensure(&app.ctx, &preview);
             notice(app, region, m, Some(preview), false, false);
         }
         Err(e) => notice(app, region, e, None, true, false),
@@ -242,16 +227,10 @@ fn copy_with_notice(app: &mut GlossaApp, text: &str, region: GRect) {
 }
 
 fn notice(app: &mut GlossaApp, region: GRect, text: String, preview: Option<String>, error: bool, busy: bool) {
-    app.ocr_notice = Some(Notice { text, preview, error, busy, region, shown: Instant::now() });
-    app.ctx.request_repaint();
+    crate::notice::show(app, region, text, preview, error, busy);
 }
 
 pub fn tick(app: &mut GlossaApp) {
-    if let Some(n) = &app.ocr_notice {
-        if !n.busy && n.shown.elapsed() > NOTICE_LIFE {
-            app.ocr_notice = None;
-        }
-    }
     let Some(w) = &app.watch else { return };
     if w.stop.load(Ordering::SeqCst) {
         app.watch = None;
@@ -281,7 +260,6 @@ pub fn recognize_region(app: &mut GlossaApp, rect: GRect) {
 }
 
 pub fn show(app: &mut GlossaApp, ctx: &egui::Context) {
-    show_notice(app, ctx);
     let Some(mut st) = app.ocr.take() else { return };
     let (w, h) = (st.image.width() as f32 / st.scale, st.image.height() as f32 / st.scale);
     let builder = egui::ViewportBuilder::default()
@@ -600,72 +578,6 @@ fn toolbar(app: &mut GlossaApp, ui: &mut egui::Ui, sel: Rect, full: Rect) -> Opt
     chosen
 }
 
-/// Draw the copy-mode notice by its region. It never takes the focus, so
-/// the program the text came from keeps it; a click dismisses it.
-fn show_notice(app: &mut GlossaApp, ctx: &egui::Context) {
-    let Some(n) = app.ocr_notice.as_ref() else { return };
-    if !n.busy {
-        ctx.request_repaint_after(NOTICE_LIFE.saturating_sub(n.shown.elapsed()));
-    }
-    let (cx, cy) = n.region.centre();
-    let monitor = glossa_platform::window::monitor_at(cx as i32, cy as i32)
-        .or_else(|| glossa_platform::window::monitors().into_iter().find(|m| m.is_primary));
-    let scale = monitor.as_ref().map(|m| m.scale).filter(|s| *s > 0.0).unwrap_or(1.0);
-    let size = vec2(340.0, if n.preview.is_some() { 64.0 } else { 34.0 });
-    let pos = notice_pos(n.region, size * scale, monitor.map(|m| m.work_area)) / scale;
-    let builder = egui::ViewportBuilder::default()
-        .with_title(NOTICE_TITLE)
-        .with_decorations(false)
-        .with_resizable(false)
-        .with_taskbar(false)
-        .with_active(false)
-        .with_window_level(egui::WindowLevel::AlwaysOnTop)
-        .with_position(pos)
-        .with_inner_size(size);
-    let look = app.look.clone();
-    let mut dismissed = false;
-    let (text, preview, error, busy) = (n.text.clone(), n.preview.clone(), n.error, n.busy);
-    ctx.show_viewport_immediate(egui::ViewportId::from_hash_of(NOTICE_TITLE), builder, |ui, _| {
-        let frame = egui::Frame::new()
-            .fill(look.popup_back)
-            .stroke(egui::Stroke::new(1.0, if error { look.error() } else { look.accent() }))
-            .inner_margin(egui::Margin::symmetric(10, 6));
-        egui::CentralPanel::no_frame().frame(frame).show(ui, |ui| {
-            let resp = ui.interact(ui.max_rect(), egui::Id::unique("notice-click"), Sense::click());
-            ui.horizontal(|ui| {
-                if busy {
-                    ui.add(egui::Spinner::new().size(14.0));
-                }
-                let colour = if error { look.error() } else { look.popup_text };
-                ui.add(egui::Label::new(RichText::new(&text).strong().color(colour)).truncate());
-            });
-            if let Some(p) = &preview {
-                ui.add(egui::Label::new(RichText::new(p).small().color(look.weak_text())).truncate());
-            }
-            dismissed = resp.clicked();
-        });
-    });
-    if dismissed {
-        app.ocr_notice = None;
-    }
-}
-
-/// Where the notice goes, in desktop pixels: under the region's left edge,
-/// else above it, kept inside the work area.
-fn notice_pos(region: GRect, size: egui::Vec2, work: Option<GRect>) -> egui::Pos2 {
-    let work = work.unwrap_or(GRect::new(f32::MIN / 4.0, f32::MIN / 4.0, f32::MAX / 2.0, f32::MAX / 2.0));
-    let gap = 8.0;
-    let mut y = region.y + region.height + gap;
-    if y + size.y > work.y + work.height {
-        y = region.y - size.y - gap;
-    }
-    if y < work.y {
-        y = work.y + work.height - size.y - gap;
-    }
-    let x = region.x.min(work.x + work.width - size.x).max(work.x);
-    pos2(x, y)
-}
-
 /// A region being watched for changes.
 pub struct Watch {
     pub stop: Arc<AtomicBool>,
@@ -720,17 +632,6 @@ impl Watch {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn the_notice_sits_under_the_region_or_above_it_near_the_bottom() {
-        let work = Some(GRect::new(0.0, 0.0, 1920.0, 1040.0));
-        let size = vec2(340.0, 64.0);
-        assert_eq!(notice_pos(GRect::new(100.0, 100.0, 300.0, 50.0), size, work), pos2(100.0, 158.0));
-        // Too close to the taskbar: above.
-        assert_eq!(notice_pos(GRect::new(100.0, 950.0, 300.0, 50.0), size, work), pos2(100.0, 878.0));
-        // Too close to the right edge: pulled in.
-        assert_eq!(notice_pos(GRect::new(1800.0, 100.0, 100.0, 50.0), size, work).x, 1580.0);
-    }
 
     #[test]
     fn panels_go_under_the_selection_or_above_it() {

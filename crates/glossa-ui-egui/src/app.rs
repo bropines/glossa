@@ -111,8 +111,10 @@ pub struct GlossaApp {
     pub watch: Option<crate::ocr::Watch>,
     /// A copy-mode or in-place recognition running after its overlay closed.
     pub ocr_background: Option<crate::ocr::Background>,
-    /// The small notice by an OCR region ("Copied 120 characters").
-    pub ocr_notice: Option<crate::ocr::Notice>,
+    /// The small notice that takes no focus: by an OCR region ("Copied 120
+    /// characters"), or by the pointer for messages while the main window
+    /// is hidden.
+    pub notice: Option<crate::notice::Notice>,
     pub in_place: Option<crate::inplace::InPlace>,
     /// The window showing a recognised region's text and translation.
     pub ocr_result: Option<crate::ocr_result::ResultWindow>,
@@ -216,7 +218,7 @@ impl GlossaApp {
             ocr: None,
             watch: None,
             ocr_background: None,
-            ocr_notice: None,
+            notice: None,
             in_place: None,
             ocr_result: None,
             options: None,
@@ -265,9 +267,25 @@ impl GlossaApp {
         }
     }
 
+    /// Tell the user something: at the bottom of the main window while it
+    /// is on screen, else in a notice by the pointer (the main window is
+    /// usually hidden in the tray when a hotkey's action has news).
     pub fn notify(&mut self, text: impl Into<String>, error: bool) {
-        self.toast = Some(Toast { text: text.into(), error, at: Instant::now() });
-        self.ctx.request_repaint();
+        let text = text.into();
+        if error {
+            tracing::info!("message for the user: {text}");
+        }
+        if self.main_on_screen() {
+            self.toast = Some(Toast { text, error, at: Instant::now() });
+            self.ctx.request_repaint();
+        } else {
+            crate::notice::at_cursor(self, text, error);
+        }
+    }
+
+    /// Whether the main window is showing (not hidden, not minimised).
+    pub fn main_on_screen(&self) -> bool {
+        self.main_visible && !self.ctx.input_for(egui::ViewportId::ROOT, |i| i.viewport().minimized.unwrap_or(false))
     }
 
     pub fn copy_text(&mut self, text: &str) {
@@ -849,6 +867,7 @@ impl eframe::App for GlossaApp {
 
         crate::popup::tick(self);
         crate::ocr::tick(self);
+        crate::notice::tick(self);
 
         // Closing the main window hides it to the tray, when so configured.
         let close = ctx.input(|i| i.viewport().close_requested());
@@ -873,7 +892,7 @@ impl eframe::App for GlossaApp {
         let needs_ui = self.popup.is_some()
             || self.mouse_icon.is_some()
             || self.ocr.is_some()
-            || self.ocr_notice.is_some()
+            || self.notice.is_some()
             || self.in_place.is_some()
             || self.ocr_result.is_some()
             || self.options.is_some()
@@ -946,6 +965,7 @@ impl eframe::App for GlossaApp {
         phase("mouse icon");
         crate::mouse::show_icon(self, &ctx);
         phase("ocr");
+        crate::notice::draw(self, &ctx);
         crate::ocr::show(self, &ctx);
         crate::inplace::show(self, &ctx);
         crate::ocr_result::show(self, &ctx);

@@ -19,6 +19,7 @@ mod inplace;
 mod keyboard;
 mod main_window;
 mod mouse;
+mod notice;
 mod ocr;
 mod ocr_result;
 mod options;
