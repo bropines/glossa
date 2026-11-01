@@ -13,7 +13,7 @@ use windows::Win32::System::Com::{
     CoCreateInstance, CoInitializeEx, CoUninitialize, CLSCTX_INPROC_SERVER, COINIT_MULTITHREADED,
 };
 use windows::Win32::UI::Accessibility::{
-    CUIAutomation, IUIAutomation, IUIAutomation2, IUIAutomationTextPattern, UIA_TextPatternId,
+    CUIAutomation, IUIAutomation, IUIAutomation2, IUIAutomationElement, IUIAutomationTextPattern, UIA_TextPatternId,
 };
 
 /// UIA's own default timeout is 20 s for an unresponsive target; a hotkey
@@ -45,9 +45,20 @@ impl Drop for Com {
     }
 }
 
-/// The text selected in the focused element, if it exposes one. `None` for
-/// no selection, an empty one, or an element without a text pattern.
-pub fn selected_text() -> Option<String> {
+/// What UI Automation says about the focused element: its class (a Win32
+/// class, or in Chromium and Electron the HTML `class` attribute, such as
+/// xterm.js's `xterm-helper-textarea`) and its selected text.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct Focused {
+    pub class: String,
+    /// `None` for no selection, an empty one, or an element without a text
+    /// pattern.
+    pub selection: Option<String>,
+}
+
+/// The focused element's class and selection, in one round of UI
+/// Automation calls. `None` when there is no focused element at all.
+pub fn focused() -> Option<Focused> {
     let _com = Com::init();
     // SAFETY: COM is initialised on this thread for the duration; every
     // interface pointer is reference-counted by the windows crate.
@@ -58,6 +69,18 @@ pub fn selected_text() -> Option<String> {
             let _ = a2.SetTransactionTimeout(TIMEOUT_MS);
         }
         let element = automation.GetFocusedElement().ok()?;
+        let class = element.CurrentClassName().map(|b| b.to_string()).unwrap_or_default();
+        Some(Focused { class, selection: selection_of(&element) })
+    }
+}
+
+/// The selected text of `element`, through its text pattern.
+///
+/// # Safety
+/// COM must be initialised on this thread.
+unsafe fn selection_of(element: &IUIAutomationElement) -> Option<String> {
+    // SAFETY: the caller guarantees COM; the interfaces are reference-counted.
+    unsafe {
         let pattern: IUIAutomationTextPattern = element.GetCurrentPatternAs(UIA_TextPatternId).ok()?;
         let ranges = pattern.GetSelection().ok()?;
         let count = ranges.Length().ok()?;

@@ -98,6 +98,7 @@ the `[service · …]` line on stderr, to see who answered.
 | [`config`](#config) | Show where the settings are, or print them. |
 | [`serve`](#serve) | Run the control API in the foreground. |
 | [`action`](#action) | Ask a running Glossa to perform an action. |
+| [`doctor`](#doctor) | Show what works on this machine and what does not. |
 
 ### translate
 
@@ -598,6 +599,49 @@ reading the selection by the actions marked "text"; the others ignore it.
 
 The same ids name the actions in `[hotkeys.bindings]`.
 
+### doctor
+
+```
+glossa-cli [--json] doctor
+```
+
+Looks at this machine and prints what works and what does not, for the
+user and for bug reports: the system and the session (Windows, macOS, X11,
+or Wayland with the compositor), which desktop features work there (global
+hotkeys, reading the selection, synthetic input, screen capture, mouse
+mode, the tray icon) and the session's limitations, the macOS permissions
+(Accessibility, Screen Recording), which OCR engines are installed (Lens,
+Windows OCR with its language packs, Apple Vision, Tesseract with its
+languages), which modules loaded or failed, the files and folders in use,
+the proxy requests go through and whether certificates are checked against
+the system's store, the control API (switched on, and whether a Glossa,
+another program or nothing answers at its address), and whether the
+desktop program runs for this data folder.
+
+Nothing is changed: a `config.toml` that does not parse is reported, not
+moved aside as the desktop program does. With `--json`, the same as one
+object; each limitation there has a `key` (a locale key, which the
+interface translates) and its English `text`.
+
+```console
+$ glossa-cli doctor
+Glossa 0.1.0
+
+System
+  linux x86_64, display: Wayland (GNOME), desktop ubuntu:GNOME
+
+Desktop features
+  hotkeys          no      bind a compositor shortcut to the control API
+  selection        partly  the clipboard only: copy first
+  …
+OCR engines
+  lens             yes     lens_scan at /home/me/.local/bin/lens_scan
+  tesseract        yes     /usr/bin/tesseract (languages: eng, rus)
+  …
+Control API
+  enabled on 127.0.0.1:60828: Glossa 0.1.0 is running
+```
+
 ## Environment variables
 
 | variable | read by | meaning |
@@ -629,4 +673,9 @@ development aids used by tests.
 | `--screenshot WHAT [FILE]` | Development aid: draw one window (`main`, `options`, `dictionary`, `history`…) to a PNG and exit. |
 
 Starting `glossa` while it is already running shows the running program's
-main window (through the control API) instead of starting a second copy.
+main window instead of starting a second copy (with `--popup TEXT`, the
+running program shows `TEXT` in its popup). One copy runs per user, login
+session and data folder, so copies with different `--home` folders run side
+by side; the hand-over goes through a lock and a pipe (Windows) or socket
+of the session's own, and through the control API only when the running
+copy is too old to have them.

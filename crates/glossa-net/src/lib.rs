@@ -520,15 +520,50 @@ impl Http for HttpClient {
 /// browser and as WinHTTP did for the classic program: the system store
 /// (with corporate and user-installed roots), revocation, and fetching an
 /// intermediate certificate a misconfigured server forgot to send — a
-/// bundled root list fails those servers with "UnknownIssuer". Linux keeps
-/// the bundled Mozilla roots, which work without any system setup.
+/// bundled root list fails those servers with "UnknownIssuer". On Linux and
+/// the BSDs the platform verifier checks against the system's CA store
+/// (`/etc/ssl/certs`, `SSL_CERT_FILE`, `SSL_CERT_DIR`), so a corporate CA
+/// installed there works too; a system without any CA certificates (a bare
+/// container) falls back to the bundled Mozilla roots instead of failing
+/// every connection.
 fn tls_config() -> ureq::tls::TlsConfig {
-    let roots = if cfg!(any(windows, target_os = "macos")) {
+    ureq::tls::TlsConfig::builder().root_certs(roots(system_store_has_roots())).build()
+}
+
+/// The roots to trust, given whether the system's CA store has any.
+fn roots(system_store_has_roots: bool) -> ureq::tls::RootCerts {
+    if system_store_has_roots {
         ureq::tls::RootCerts::PlatformVerifier
     } else {
         ureq::tls::RootCerts::WebPki
-    };
-    ureq::tls::TlsConfig::builder().root_certs(roots).build()
+    }
+}
+
+/// Whether the system has CA certificates of its own. Always on Windows
+/// and macOS; on other Unix systems the store is read once per process.
+fn system_store_has_roots() -> bool {
+    #[cfg(any(windows, target_vendor = "apple"))]
+    {
+        true
+    }
+    #[cfg(not(any(windows, target_vendor = "apple")))]
+    {
+        static PRESENT: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+        *PRESENT.get_or_init(|| {
+            let found = rustls_native_certs::load_native_certs();
+            if found.certs.is_empty() {
+                let why: Vec<String> = found.errors.iter().map(|e| e.to_string()).collect();
+                tracing::warn!(
+                    "no CA certificates in the system store ({}); using the bundled Mozilla roots",
+                    if why.is_empty() { "none installed".to_owned() } else { why.join("; ") }
+                );
+                false
+            } else {
+                tracing::debug!("{} CA certificates in the system store", found.certs.len());
+                true
+            }
+        })
+    }
 }
 
 /// Strip the query string from a URL before it reaches a log, since keys and
@@ -557,6 +592,20 @@ fn proxy_spec(settings: &Network) -> Option<ProxySpec> {
         ProxyMode::Manual => settings.proxy.url().map(|u| (u, Vec::new())),
         ProxyMode::System | ProxyMode::Auto => system_proxy(),
     }
+}
+
+/// The proxy requests go through right now, without credentials (`none`,
+/// `http://proxy.example:3128`), for diagnostics such as `glossa-cli
+/// doctor`. With the system mode this is what the system says at this
+/// moment.
+pub fn proxy_in_use(settings: &Network) -> String {
+    describe_proxy(proxy_spec(settings).as_ref())
+}
+
+/// Whether certificates are checked against the system's store (else the
+/// bundled Mozilla roots), for diagnostics.
+pub fn uses_system_certificates() -> bool {
+    system_store_has_roots()
 }
 
 /// A proxy's address without any credentials in it, for the log.
@@ -843,6 +892,17 @@ mod tests {
         assert_eq!(describe_proxy(None), "none");
         assert_eq!(describe_proxy(spec("http://user:secret@proxy.test:3128").as_ref()), "http://proxy.test:3128");
         assert_eq!(describe_proxy(spec("127.0.0.1:2080").as_ref()), "127.0.0.1:2080");
+    }
+
+    #[test]
+    fn tls_trusts_the_system_store_with_the_bundled_roots_as_fallback() {
+        assert!(matches!(roots(true), ureq::tls::RootCerts::PlatformVerifier));
+        assert!(matches!(roots(false), ureq::tls::RootCerts::WebPki));
+        if cfg!(any(windows, target_os = "macos")) {
+            assert!(system_store_has_roots());
+        }
+        // Whatever the store holds, an agent builds.
+        assert!(build_agent(&Network::default(), None).is_ok());
     }
 
     #[test]

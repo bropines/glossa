@@ -223,19 +223,73 @@ pub struct HotkeysConfig {
 
 impl Default for HotkeysConfig {
     fn default() -> Self {
-        let mut bindings = BTreeMap::new();
-        let mut bind = |a: Action, s: &str| {
-            bindings.insert(a, s.parse().expect("built-in hotkey must parse"));
-        };
-        bind(Action::ShowPopup, "Ctrl+Shift+Q");
-        bind(Action::ListenSelection, "Ctrl+E");
-        bind(Action::TextRecognition, "Ctrl+Shift+O");
-        bind(Action::RecognizeAndTranslate, "Ctrl+Alt+O");
-        // Ctrl+Shift+C would be the obvious chord, but it is Copy in Windows
-        // Terminal and most Linux terminals; a global hotkey would take it.
-        bind(Action::RecognizeToClipboard, "Ctrl+Alt+C");
-        bind(Action::ShowMainWindow, "Ctrl+Alt+Q");
+        let bindings = default_hotkeys(Os::current())
+            .iter()
+            .map(|(a, s)| (*a, s.parse().expect("built-in hotkey must parse")))
+            .collect();
         Self { enabled: true, bindings }
+    }
+}
+
+/// The operating system, for defaults that differ between them.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Os {
+    Windows,
+    MacOs,
+    /// Linux and the other Unix desktops.
+    Unix,
+}
+
+impl Os {
+    pub const fn current() -> Os {
+        if cfg!(windows) {
+            Os::Windows
+        } else if cfg!(target_os = "macos") {
+            Os::MacOs
+        } else {
+            Os::Unix
+        }
+    }
+}
+
+/// The hotkeys a new config starts with on `os`. Only new configs: a saved
+/// file keeps its own bindings, and the classic import brings the classic
+/// ones.
+///
+/// - Ctrl+Shift+Q (popup) and Ctrl+Shift+O (recognise) everywhere, as users
+///   know them.
+/// - No default for "listen": Ctrl+E, the obvious one, is a browser's
+///   search box, the end of the line in a shell or a macOS text field, and
+///   the search in Explorer; a global hotkey would steal it everywhere.
+/// - Windows: no Ctrl+Alt+letter, because Windows reports AltGr as Ctrl+Alt
+///   and such a hotkey would swallow AltGr+letter (`@` is AltGr+Q on German
+///   keyboards; ó and ć are AltGr+O and AltGr+C on Polish ones). Win+Alt is
+///   free of both AltGr and the system's own Win shortcuts for these
+///   letters.
+/// - Linux: AltGr is a modifier of its own there (ISO Level 3), so
+///   Ctrl+Alt+letter is safe and free on the common desktops.
+/// - macOS: Control+Option (⌃⌥), which no system shortcut uses and which
+///   types no characters (Option alone does); it is VoiceOver's modifier
+///   only while VoiceOver runs. Command+Shift combinations clash with the
+///   system (⌘⇧Q logs out) and with most apps.
+/// - Ctrl+Shift+C would be the obvious chord for copying from the screen,
+///   but it is Copy in Windows Terminal and most Linux terminals.
+pub fn default_hotkeys(os: Os) -> &'static [(Action, &'static str)] {
+    match os {
+        Os::Windows => &[
+            (Action::ShowPopup, "Ctrl+Shift+Q"),
+            (Action::TextRecognition, "Ctrl+Shift+O"),
+            (Action::RecognizeAndTranslate, "Win+Alt+O"),
+            (Action::RecognizeToClipboard, "Win+Alt+C"),
+            (Action::ShowMainWindow, "Win+Alt+Q"),
+        ],
+        Os::MacOs | Os::Unix => &[
+            (Action::ShowPopup, "Ctrl+Shift+Q"),
+            (Action::TextRecognition, "Ctrl+Shift+O"),
+            (Action::RecognizeAndTranslate, "Ctrl+Alt+O"),
+            (Action::RecognizeToClipboard, "Ctrl+Alt+C"),
+            (Action::ShowMainWindow, "Ctrl+Alt+Q"),
+        ],
     }
 }
 
@@ -942,6 +996,24 @@ pub struct Advanced {
     /// How long to wait for another program to put the selection on the
     /// clipboard after the synthetic copy.
     pub copy_wait_ms: u64,
+    /// Terminal windows, where Ctrl+C interrupts the running command instead
+    /// of copying (Windows Terminal with nothing selected, mintty, PuTTY,
+    /// VS Code's terminal…). There the selection is read through UI
+    /// Automation, then with [`Advanced::terminal_copy_action`] instead of
+    /// [`Advanced::copy_action`]. A rule's class matches the window's class,
+    /// the focused control's, or the focused UI Automation element's (the
+    /// HTML class in Electron apps). Windows only: on macOS Cmd+C copies in
+    /// terminals, and on Linux no keystroke is sent at all.
+    pub terminals: Vec<ExceptionRule>,
+    /// The copy keystroke in [`Advanced::terminals`]: none by default
+    /// (`accessibility_only`). `ctrl_insert` copies in the Windows console,
+    /// Windows Terminal, mintty and WezTerm, but a terminal that does not
+    /// bind it passes it to the shell as an escape sequence.
+    pub terminal_copy_action: CopyAction,
+    /// Which built-in [`Advanced::terminals`] rules this file has been given
+    /// ([`TERMINAL_RULE_SETS`]); newer ones are added once on load, so a rule
+    /// the user deleted stays deleted.
+    pub terminal_rules_version: u32,
 }
 
 impl Default for Advanced {
@@ -955,8 +1027,94 @@ impl Default for Advanced {
             slower_listen_repeat: true,
             remove_line_breaks: false,
             copy_wait_ms: 250,
+            terminals: TERMINAL_RULE_SETS.iter().flat_map(|(_, rules)| rules.iter().map(|r| r.rule())).collect(),
+            terminal_copy_action: CopyAction::AccessibilityOnly,
+            terminal_rules_version: latest_terminal_rules(),
         }
     }
+}
+
+/// A built-in terminal rule: a program (empty for any) and a class (empty
+/// for any).
+#[derive(Debug, Clone, Copy)]
+pub struct TerminalRule(pub &'static str, pub &'static str);
+
+impl TerminalRule {
+    fn rule(&self) -> ExceptionRule {
+        ExceptionRule { program: self.0.into(), window_class: self.1.into() }
+    }
+}
+
+/// The built-in terminal rules, by the version that introduced them. A new
+/// terminal goes into a new entry with the next version, so existing
+/// configs receive it once ([`Advanced::migrate_terminal_rules`]).
+pub const TERMINAL_RULE_SETS: &[(u32, &[TerminalRule])] = &[(
+    1,
+    &[
+        // Windows Terminal (any build: the class is the same).
+        TerminalRule("", "CASCADIA_HOSTING_WINDOW_CLASS"),
+        // The classic console (conhost), also excepted by default.
+        TerminalRule("", "ConsoleWindowClass"),
+        // xterm.js, which VS Code, Cursor, Hyper, Tabby and web terminals
+        // use: the focused element's class when UI Automation reaches it.
+        // VS Code's editor in the same window keeps Ctrl+C.
+        TerminalRule("", "xterm-helper-textarea"),
+        TerminalRule("mintty.exe", ""),
+        TerminalRule("wezterm-gui.exe", ""),
+        TerminalRule("alacritty.exe", ""),
+        TerminalRule("putty.exe", ""),
+        TerminalRule("kitty.exe", ""),
+        TerminalRule("MobaXterm.exe", ""),
+        TerminalRule("ConEmu.exe", ""),
+        TerminalRule("ConEmu64.exe", ""),
+        TerminalRule("Hyper.exe", ""),
+        TerminalRule("Tabby.exe", ""),
+    ],
+)];
+
+fn latest_terminal_rules() -> u32 {
+    TERMINAL_RULE_SETS.iter().map(|(v, _)| *v).max().unwrap_or(0)
+}
+
+impl Advanced {
+    /// Add the built-in terminal rules newer than this config's
+    /// [`Advanced::terminal_rules_version`], skipping any the user already
+    /// has, and bring the version up to date. Idempotent.
+    pub fn migrate_terminal_rules(&mut self) {
+        for (version, rules) in TERMINAL_RULE_SETS {
+            if *version <= self.terminal_rules_version {
+                continue;
+            }
+            for rule in rules.iter().map(TerminalRule::rule) {
+                let present = self
+                    .terminals
+                    .iter()
+                    .any(|r| r.program.eq_ignore_ascii_case(&rule.program) && r.window_class == rule.window_class);
+                if !present {
+                    self.terminals.push(rule);
+                }
+            }
+        }
+        self.terminal_rules_version = self.terminal_rules_version.max(latest_terminal_rules());
+    }
+
+    /// Whether a window is a terminal per [`Advanced::terminals`]: `classes`
+    /// are the window's class and those of its focused control and focused
+    /// UI Automation element (empty ones are ignored).
+    pub fn is_terminal(&self, program: &str, classes: &[&str]) -> bool {
+        is_terminal(&self.terminals, program, classes)
+    }
+}
+
+/// Whether any of the terminal `rules` matches a window of `program` with
+/// these classes (see [`Advanced::is_terminal`]).
+pub fn is_terminal(rules: &[ExceptionRule], program: &str, classes: &[&str]) -> bool {
+    rules.iter().any(|r| {
+        let program_ok = r.program.is_empty() || r.program.eq_ignore_ascii_case(program);
+        let class_ok = r.window_class.is_empty() || classes.iter().any(|c| !c.is_empty() && *c == r.window_class);
+        // A rule with neither field would match every window.
+        program_ok && class_ok && !(r.program.is_empty() && r.window_class.is_empty())
+    })
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
@@ -1291,6 +1449,16 @@ pub struct WindowGeometry {
 
 // -- loading and saving ---------------------------------------------------------
 
+/// A config file that could not be parsed and was moved aside
+/// ([`Config::load_or_recover`]).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RecoveredConfig {
+    /// Where the unreadable file went.
+    pub backup: PathBuf,
+    /// What was wrong with it.
+    pub error: String,
+}
+
 impl Config {
     /// Read a config file. A missing file is not an error: it means "all
     /// defaults". A malformed one is, so the user's settings are never
@@ -1300,6 +1468,41 @@ impl Config {
             Ok(text) => Config::from_toml(&text),
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(Config::default()),
             Err(e) => Err(e.into()),
+        }
+    }
+
+    /// [`Config::load`] for starting the program: a file that cannot be
+    /// parsed is moved aside to `config.toml.broken-<unix time>` and the
+    /// defaults are used, so a typo in a hand edit cannot keep the program
+    /// from starting. What happened is returned for the user to be told.
+    /// Errors other than parsing (a file that cannot be read) still fail.
+    pub fn load_or_recover(path: &Path) -> crate::Result<(Config, Option<RecoveredConfig>)> {
+        let text = match std::fs::read_to_string(path) {
+            Ok(text) => text,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok((Config::default(), None)),
+            Err(e) => return Err(e.into()),
+        };
+        match Config::from_toml(&text) {
+            Ok(c) => Ok((c, None)),
+            Err(e) => {
+                let secs = std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .map(|d| d.as_secs())
+                    .unwrap_or_default();
+                let mut name = path.file_name().unwrap_or_default().to_os_string();
+                name.push(format!(".broken-{secs}"));
+                let backup = path.with_file_name(name);
+                // Moved, not copied: the next save writes a fresh file, and
+                // the user's text survives beside it.
+                std::fs::rename(path, &backup).map_err(|io| {
+                    crate::Error::Config(format!(
+                        "{e}; and the file could not be moved aside to {}: {io}",
+                        backup.display()
+                    ))
+                })?;
+                tracing::error!("{e}; moved it to {} and started with the defaults", backup.display());
+                Ok((Config::default(), Some(RecoveredConfig { backup, error: e.to_string() })))
+            }
         }
     }
 
@@ -1345,6 +1548,7 @@ impl Config {
         self.appearance.keyboard_scale = self.appearance.keyboard_scale.clamp(0.5, 3.0);
         self.appearance.window_transparency = self.appearance.window_transparency.min(90);
         self.dictionary.zoom = self.dictionary.zoom.clamp(50, 400);
+        self.advanced.migrate_terminal_rules();
         self.general.instant_delay_ms = self.general.instant_delay_ms.clamp(150, 5000);
         // Keep the first (newest) of each pair, wherever the repeats are.
         let mut seen = Vec::with_capacity(self.general.recent_pairs.len());
@@ -1425,6 +1629,29 @@ mod tests {
         // Untouched sibling fields keep their defaults.
         assert_eq!(c.general.second_language, LangId::ENGLISH);
         assert_eq!(c.appearance.popup.auto_hide_secs, 5);
+    }
+
+    #[test]
+    fn a_broken_file_is_moved_aside_and_defaults_are_used() {
+        let dir = std::env::temp_dir().join(format!("glossa-recover-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("config.toml");
+        std::fs::write(&path, "[general\nbroken = ").unwrap();
+        let (c, recovered) = Config::load_or_recover(&path).unwrap();
+        assert_eq!(c, Config::default());
+        let r = recovered.expect("reported");
+        assert!(!path.exists(), "moved, so the next save starts afresh");
+        assert_eq!(std::fs::read_to_string(&r.backup).unwrap(), "[general\nbroken = ", "kept verbatim");
+        let name = r.backup.file_name().unwrap().to_string_lossy().into_owned();
+        assert!(name.starts_with("config.toml.broken-") && name[19..].parse::<u64>().is_ok(), "{name}");
+        assert!(r.error.contains("config file"), "{}", r.error);
+        // A good file, or none, is not a recovery.
+        std::fs::write(&path, "[general]\ninstant_translation = true\n").unwrap();
+        let (c, recovered) = Config::load_or_recover(&path).unwrap();
+        assert!(c.general.instant_translation && recovered.is_none());
+        std::fs::remove_file(&path).unwrap();
+        assert!(Config::load_or_recover(&path).unwrap().1.is_none());
+        std::fs::remove_dir_all(&dir).ok();
     }
 
     #[test]
@@ -1511,11 +1738,11 @@ copy_joined_lines = true",
     fn default_hotkeys_do_not_conflict_and_conflicts_are_found() {
         let mut h = HotkeysConfig::default();
         assert!(h.conflicts().is_empty());
-        h.bindings.insert(Action::ShowHistory, "Ctrl+E".parse().unwrap());
+        h.bindings.insert(Action::ShowHistory, "Ctrl+Shift+Q".parse().unwrap());
         let conflicts = h.conflicts();
         assert_eq!(conflicts.len(), 1);
-        assert_eq!(conflicts[0].0.to_string(), "Ctrl+E");
-        assert!(conflicts[0].1.contains(&Action::ListenSelection));
+        assert_eq!(conflicts[0].0.to_string(), "Ctrl+Shift+Q");
+        assert!(conflicts[0].1.contains(&Action::ShowPopup));
         assert!(conflicts[0].1.contains(&Action::ShowHistory));
     }
 
@@ -1538,6 +1765,87 @@ copy_joined_lines = true",
         assert_eq!(s.new_ai_endpoint_id("Модель"), "ai-endpoint");
         s.ai_endpoints.push(AiEndpoint { id: "ai-ollama".into(), name: "Ollama".into(), preset: "ollama".into() });
         assert_eq!(s.new_ai_endpoint_id("Ollama"), "ai-ollama-2");
+    }
+
+    #[test]
+    fn default_hotkeys_avoid_altgr_and_common_shortcuts() {
+        for os in [Os::Windows, Os::MacOs, Os::Unix] {
+            let keys: Vec<(Action, Hotkey)> =
+                default_hotkeys(os).iter().map(|(a, s)| (*a, s.parse::<Hotkey>().unwrap())).collect();
+            assert!(!keys.iter().any(|(a, _)| *a == Action::ListenSelection), "{os:?}: no default for listen");
+            assert!(!keys.iter().any(|(_, k)| k.to_string() == "Ctrl+E"), "{os:?}");
+            let popup = keys.iter().find(|(a, _)| *a == Action::ShowPopup).unwrap();
+            assert_eq!(popup.1.to_string(), "Ctrl+Shift+Q", "{os:?}: users rely on it");
+            let mut seen = std::collections::HashSet::new();
+            assert!(keys.iter().all(|(_, k)| seen.insert(k.to_string())), "{os:?}: no chord twice");
+            if os == Os::Windows {
+                // AltGr is Ctrl+Alt on Windows: Ctrl+Alt+<letter> would eat
+                // AltGr+<letter> characters.
+                for (a, k) in &keys {
+                    assert!(!(k.mods.ctrl && k.mods.alt && !k.mods.meta), "{a:?}: {k} collides with AltGr");
+                }
+            }
+        }
+        let c = HotkeysConfig::default();
+        assert_eq!(c.bindings.len(), default_hotkeys(Os::current()).len());
+        assert!(c.conflicts().is_empty());
+    }
+
+    #[test]
+    fn saved_hotkeys_are_kept_when_the_defaults_change() {
+        let c = Config::from_toml("[hotkeys.bindings]\nlisten_selection = \"Ctrl+E\"\nshow_popup = \"Ctrl+Alt+Q\"\n")
+            .unwrap();
+        assert_eq!(c.hotkeys.bindings.len(), 2);
+        assert_eq!(c.hotkeys.bindings[&Action::ListenSelection].to_string(), "Ctrl+E");
+        assert_eq!(c.hotkeys.bindings[&Action::ShowPopup].to_string(), "Ctrl+Alt+Q");
+    }
+
+    #[test]
+    fn terminals_are_recognised_by_program_or_any_class() {
+        let a = Advanced::default();
+        assert_eq!(a.terminal_copy_action, CopyAction::AccessibilityOnly, "no keystroke into a terminal");
+        assert!(a.is_terminal("WindowsTerminal.exe", &["CASCADIA_HOSTING_WINDOW_CLASS", "", ""]));
+        assert!(a.is_terminal("MINTTY.EXE", &["mintty", "", ""]), "program names ignore case");
+        assert!(a.is_terminal("conhost.exe", &["ConsoleWindowClass"]));
+        // VS Code: only its terminal, which UI Automation names by xterm.js's class.
+        assert!(
+            a.is_terminal("Code.exe", &["Chrome_WidgetWin_1", "Chrome_RenderWidgetHostHWND", "xterm-helper-textarea"])
+        );
+        assert!(!a.is_terminal("Code.exe", &["Chrome_WidgetWin_1", "Chrome_RenderWidgetHostHWND", "inputarea"]));
+        assert!(!a.is_terminal("notepad.exe", &["Notepad", "Edit", ""]));
+        assert!(!a.is_terminal("", &["", "", ""]));
+        // A rule with neither field never matches everything.
+        let mut b = a.clone();
+        b.terminals.push(ExceptionRule { program: String::new(), window_class: String::new() });
+        assert!(!b.is_terminal("notepad.exe", &["Notepad"]));
+    }
+
+    #[test]
+    fn terminal_rules_reach_existing_configs_once() {
+        // A file from before the rules existed gets all of them.
+        let c = Config::from_toml("[advanced]\ncopy_action = \"ctrl_insert\"\n").unwrap();
+        assert_eq!(c.advanced.terminals, Advanced::default().terminals);
+        assert_eq!(c.advanced.copy_action, CopyAction::CtrlInsert, "the user's setting stays");
+        assert_eq!(c.advanced.terminal_rules_version, latest_terminal_rules());
+
+        // An older version with the user's own rules and one built-in rule
+        // (with different case) gains the rest, without duplicates.
+        let old = "[advanced]\nterminal_rules_version = 0\n\
+                   [[advanced.terminals]]\nprogram = \"myterm.exe\"\n\
+                   [[advanced.terminals]]\nprogram = \"MINTTY.EXE\"\n";
+        let c = Config::from_toml(old).unwrap();
+        assert_eq!(c.advanced.terminals[0].program, "myterm.exe");
+        assert_eq!(c.advanced.terminals.iter().filter(|r| r.program.eq_ignore_ascii_case("mintty.exe")).count(), 1);
+        assert_eq!(c.advanced.terminals.len(), Advanced::default().terminals.len() + 1);
+        assert_eq!(c.advanced.terminal_rules_version, latest_terminal_rules());
+
+        // Up to date and the user deleted some: they stay deleted, also
+        // after a save and a reload.
+        let mut c = Config::default();
+        c.advanced.terminals.retain(|r| r.program != "putty.exe");
+        let back = Config::from_toml(&c.to_toml()).unwrap();
+        assert!(!back.advanced.terminals.iter().any(|r| r.program == "putty.exe"));
+        assert_eq!(back.advanced.terminals, c.advanced.terminals);
     }
 
     #[test]

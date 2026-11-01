@@ -972,6 +972,18 @@ pub static STRINGS: &[(&str, &str, Option<&str>)] = &[
     ("ocr.result.to_main", "To main window", None),
     ("ocr.result.read_aloud", "Read aloud", None),
     ("ocr.result.no_clipboard", "The clipboard is not available", None),
+    // -- start-up warnings and platform limitations (glossa-cli doctor) --
+    ("startup.config_broken", "config.toml could not be read, so Glossa started with the default settings. The file was moved to %s. The problem: %s", None),
+    ("limitation.windows.elevated", "Programs running as administrator cannot be read from or typed into unless Glossa also runs as administrator.", None),
+    ("limitation.macos.accessibility", "Reading the selection and pasting translations need the Accessibility permission (System Settings → Privacy & Security → Accessibility).", None),
+    ("limitation.macos.screen_recording", "Screen text recognition needs the Screen Recording permission.", None),
+    ("limitation.x11.primary", "The selection is read from the PRIMARY selection: the text highlighted most recently, in any window.", None),
+    ("limitation.wayland.hotkeys", "Wayland does not allow global hotkeys. Bind a shortcut in your compositor's settings that calls Glossa's local HTTP API with curl.", None),
+    ("limitation.wayland.typing", "Wayland does not allow typing into other programs: \"replace selection\" leaves the translation on the clipboard for you to paste.", None),
+    ("limitation.wayland.no_primary", "%s does not let Glossa read the highlighted text; copy it with Ctrl+C first and Glossa will use the clipboard.", None),
+    ("limitation.wayland.no_primary_unknown", "This compositor does not let Glossa read the highlighted text; copy it with Ctrl+C first and Glossa will use the clipboard.", None),
+    ("limitation.wayland.popup_position", "The popup cannot be placed at the text cursor; it opens near the mouse or in the centre of the screen.", None),
+    ("limitation.no_display", "No graphical session was found (neither WAYLAND_DISPLAY nor DISPLAY is set): clipboard, hotkeys and screen capture are unavailable.", None),
 ];
 
 #[cfg(test)]

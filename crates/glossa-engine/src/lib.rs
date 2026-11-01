@@ -27,6 +27,7 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use glossa_core::config::OcrTranslateWith;
+use glossa_core::error::catch_panic;
 use glossa_core::history::{HistoryEntry, HistoryResult};
 use glossa_core::ocr::{ImageSource, OcrGranularity, OcrRequest};
 use glossa_core::{
@@ -231,6 +232,24 @@ struct Inner {
     ocr_builtins: Mutex<(glossa_core::config::OcrConfig, Vec<Arc<dyn Provider>>)>,
     /// The JavaScript modules compiled into the program, also created once.
     bundled: Vec<Arc<dyn Provider>>,
+    startup_warnings: Mutex<Vec<StartupWarning>>,
+}
+
+/// Something that went wrong at start without stopping it
+/// ([`Engine::startup_warnings`]).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct StartupWarning {
+    /// A locale key whose text has a `%s` for each of `args`.
+    pub key: &'static str,
+    pub args: Vec<String>,
+}
+
+impl StartupWarning {
+    /// The message in `locale`'s language.
+    pub fn message(&self, locale: &glossa_core::Locale) -> String {
+        let args: Vec<&str> = self.args.iter().map(String::as_str).collect();
+        locale.fmt_args(self.key, &args)
+    }
 }
 
 /// The engine. Cheap to clone; all clones share one state.
@@ -240,10 +259,26 @@ pub struct Engine {
 }
 
 impl Engine {
-    /// Start with the settings found under `paths`.
+    /// Start with the settings found under `paths`. A `config.toml` that
+    /// cannot be parsed does not stop the start: it is moved aside, the
+    /// defaults are used, and [`Engine::startup_warnings`] says so.
     pub fn start(paths: Paths) -> Result<Engine> {
-        let config = Config::load(&paths.config_file())?;
-        Engine::with_config(paths, config)
+        let (config, recovered) = Config::load_or_recover(&paths.config_file())?;
+        let engine = Engine::with_config(paths, config)?;
+        if let Some(r) = recovered {
+            engine.inner.startup_warnings.lock().push(StartupWarning {
+                key: "startup.config_broken",
+                args: vec![r.backup.display().to_string(), r.error],
+            });
+        }
+        Ok(engine)
+    }
+
+    /// Problems met while starting that the user should hear about once (a
+    /// broken `config.toml` that was set aside). Each has a locale key and
+    /// its arguments, for the front end to show in the interface language.
+    pub fn startup_warnings(&self) -> Vec<StartupWarning> {
+        self.inner.startup_warnings.lock().clone()
     }
 
     /// Start with explicit settings (tests, `--config`).
@@ -297,6 +332,7 @@ impl Engine {
             builtins,
             ocr_builtins,
             bundled,
+            startup_warnings: Mutex::new(Vec::new()),
         };
         let engine = Engine { inner: Arc::new(inner) };
         engine.reload_modules();
@@ -678,6 +714,16 @@ impl Engine {
         // 8 MB of address space, committed only as used: module scripts
         // run here, and turning a deeply nested result (an OCR layout) into
         // JSON recurses through the JavaScript engine.
+        // Jobs turn their own panics into error results (`catch_panic`);
+        // this catches whatever is left (emitting the event, say) so a bug
+        // costs one job, not the program.
+        let job = name.to_owned();
+        let f = move || {
+            if let Err(payload) = std::panic::catch_unwind(std::panic::AssertUnwindSafe(f)) {
+                let msg = glossa_core::error::panic_message(payload.as_ref());
+                tracing::error!("worker thread for {job} panicked: {msg}");
+            }
+        };
         if let Err(e) = std::thread::Builder::new().name(format!("glossa-{name}")).stack_size(8 << 20).spawn(f) {
             tracing::error!("could not start a worker thread: {e}");
         }
@@ -799,7 +845,7 @@ impl Engine {
         }
         let me = self.clone();
         self.spawn("translate", move || {
-            let result = me.with_pipeline(&cancel, |p| p.translate(&text, pair, &opts));
+            let result = catch_panic("translation", || me.with_pipeline(&cancel, |p| p.translate(&text, pair, &opts)));
             if cancel.is_cancelled() || !me.current(slot, job) {
                 return;
             }
@@ -881,7 +927,7 @@ impl Engine {
         let (job, cancel) = self.begin(slot);
         let me = self.clone();
         self.spawn("dictionary", move || {
-            let result = me.lookup(&text, pair, provider.as_deref(), &cancel);
+            let result = catch_panic("dictionary lookup", || me.lookup(&text, pair, provider.as_deref(), &cancel));
             if cancel.is_cancelled() || !me.current(slot, job) {
                 return;
             }
@@ -1182,7 +1228,7 @@ impl Engine {
         let (job, cancel) = self.begin(slot);
         let me = self.clone();
         self.spawn("ocr", move || {
-            let result = me.recognize_with(image, &opts, &cancel);
+            let result = catch_panic("text recognition", || me.recognize_with(image, &opts, &cancel));
             if cancel.is_cancelled() || !me.current(slot, job) {
                 return;
             }
@@ -1249,7 +1295,7 @@ impl Engine {
         let (job, cancel) = self.begin(slot);
         let me = self.clone();
         self.spawn("speech", move || {
-            let result = me.speak_with(&text, lang, slow, &cancel);
+            let result = catch_panic("speech", || me.speak_with(&text, lang, slow, &cancel));
             if cancel.is_cancelled() || !me.current(slot, job) {
                 return;
             }
@@ -1547,6 +1593,27 @@ mod tests {
         let mut cfg = Config::default();
         cfg.modules.allow_legacy_scripts = true;
         (Engine::with_config(paths, cfg).unwrap(), dir)
+    }
+
+    #[test]
+    fn a_broken_config_does_not_stop_the_start() {
+        let dir = std::env::temp_dir().join(format!("glossa-engine-{}-broken", std::process::id()));
+        std::fs::remove_dir_all(&dir).ok();
+        let paths = Paths::for_exe_dir(dir.clone(), Some(dir.join("home")));
+        std::fs::create_dir_all(&paths.data_dir).unwrap();
+        std::fs::write(paths.config_file(), "[general\nthis is not toml").unwrap();
+        let e = Engine::start(paths.clone()).expect("starts with the defaults");
+        let warnings = e.startup_warnings();
+        assert_eq!(warnings.len(), 1);
+        assert_eq!(warnings[0].key, "startup.config_broken");
+        let backup = PathBuf::from(&warnings[0].args[0]);
+        assert_eq!(std::fs::read_to_string(&backup).unwrap(), "[general\nthis is not toml");
+        let text = warnings[0].message(&glossa_core::Locale::english());
+        assert!(text.contains(&warnings[0].args[0]) && !text.contains("%s"), "{text}");
+        // The new token was saved to a fresh, valid file.
+        assert!(Config::load(&paths.config_file()).is_ok());
+        assert!(Engine::start(paths).unwrap().startup_warnings().is_empty(), "only once");
+        std::fs::remove_dir_all(&dir).ok();
     }
 
     #[test]

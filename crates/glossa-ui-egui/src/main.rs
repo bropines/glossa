@@ -118,7 +118,9 @@ fn main() -> eframe::Result<()> {
     };
     init_logging(&paths);
     glossa_platform::crash::install(&paths.log_file());
-    // Release builds abort on panic; leave a trace in the log first.
+    // Log every panic with its frames. Panics unwind afterwards (release
+    // builds too) to the `catch_unwind` around providers, engine jobs and
+    // API requests, which fail that one request instead of the program.
     std::panic::set_hook(Box::new(|info| {
         let thread = std::thread::current();
         let thread = thread.name().unwrap_or("unnamed");
@@ -134,11 +136,32 @@ fn main() -> eframe::Result<()> {
     }));
     crash_test();
 
-    // A second launch hands over to the running instance through its control
-    // API, then leaves.
-    if launch.screenshot.is_none() && hand_over_to_running_instance(&paths) {
-        tracing::info!("another Glossa is running; asked it to show its window");
-        return Ok(());
+    // One copy per user, session and data folder: a second launch hands its
+    // request to the running one over a local pipe or socket (the control
+    // API only as a fallback) and leaves.
+    let mut instance = None;
+    if launch.screenshot.is_none() {
+        use glossa_platform::instance::{self, Instance, Message};
+        match instance::acquire(&paths) {
+            Instance::Primary(guard) => instance = Some(guard),
+            Instance::Secondary => {
+                let message = match &launch.popup_text {
+                    Some(text) => Message { action: Action::ShowPopup, text: Some(text.clone()) },
+                    None => Message::show(),
+                };
+                match instance::send(&paths, &message, Duration::from_secs(3)) {
+                    Ok(()) => {
+                        tracing::info!("another Glossa is running; handed over to it");
+                        return Ok(());
+                    }
+                    Err(e) if hand_over_to_running_instance(&paths) => {
+                        tracing::info!("another Glossa is running; handed over through the control API ({e})");
+                        return Ok(());
+                    }
+                    Err(e) => tracing::warn!("another Glossa holds the lock but did not answer ({e}); starting anyway"),
+                }
+            }
+        }
     }
 
     let engine = match Engine::start(paths.clone()) {
@@ -153,6 +176,11 @@ fn main() -> eframe::Result<()> {
             std::process::exit(1);
         }
     };
+
+    if let Some(guard) = &instance {
+        let engine = engine.clone();
+        guard.set_handler(move |m| engine.request_action(m.action, m.text));
+    }
 
     // macOS: reading and replacing the selection need Accessibility; show
     // the system's prompt rather than failing silently later. Once per
@@ -278,8 +306,10 @@ fn main() -> eframe::Result<()> {
         // Dropping the rest releases the hotkeys and the tray icon.
     }
     if restart {
-        // Only now: the new copy finds the control port free and starts for
-        // real instead of handing over to this one.
+        // Only now, with the lock released: the new copy finds it and the
+        // control port free and starts for real instead of handing over to
+        // this one.
+        drop(instance.take());
         let args: Vec<String> = std::env::args().skip(1).filter(|a| a != "--hidden").collect();
         match std::env::current_exe().map(|exe| std::process::Command::new(exe).args(&args).spawn()) {
             Ok(Ok(_)) => tracing::info!("restarting"),

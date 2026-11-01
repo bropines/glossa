@@ -79,13 +79,16 @@ windows = "0.62"
 opt-level = "z"
 lto = "fat"
 codegen-units = 1
-panic = "abort"
+# Unwind, not abort: JavaScript, classic and pot-app modules, native modules
+# and the image code run in-process, and a panic in one of them must fail that
+# call (`catch_unwind` at the provider, worker and module boundaries) instead
+# of taking the whole program down. Costs about 2 MB (12%) of glossa.exe.
+panic = "unwind"
 strip = true
 
 [profile.release-perf]
 inherits = "release"
 opt-level = 3
-panic = "unwind"
 strip = "debuginfo"
 
 # Local fixes to upstream crates; see third_party/README.md.

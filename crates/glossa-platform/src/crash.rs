@@ -1,9 +1,9 @@
 //! Last words for a crashing process.
 //!
-//! Release builds are stripped and abort on panic, so without help a crash
-//! leaves nothing usable behind: the panic hook's backtrace is a column of
-//! `<unknown>`, and a native fault (an access violation in a driver, a stack
-//! overflow) never reaches Rust code at all. Two things fill the gap:
+//! Release builds are stripped, so without help a crash leaves nothing usable
+//! behind: the panic hook's backtrace is a column of `<unknown>`, and a
+//! native fault (an access violation in a driver, a stack overflow) never
+//! reaches Rust code at all. Two things fill the gap:
 //!
 //! * [`stack_trace`] lists the caller's frames as `module+offset`, which can
 //!   be resolved later against an unstripped build of the same commit
@@ -16,8 +16,13 @@
 //!   allocation, no locks, nothing that could itself fail on a broken heap or
 //!   an exhausted stack.
 //!
-//! A Rust `abort` (what a panic becomes in a release build) is a fail-fast
-//! that no handler sees; the panic hook has run by then.
+//! Panics unwind (release builds included): the panic hook logs the panic
+//! and its frames, then the unwinding goes on to the nearest `catch_unwind`
+//! (around every provider call, engine job and control-API request), which
+//! turns it into an error for that one request. Unwinding is not an
+//! unhandled exception, so the filter here stays quiet for those. A Rust
+//! `abort` (a panic while panicking) is a fail-fast that no handler sees;
+//! the panic hook has run by then.
 
 use std::path::Path;
 

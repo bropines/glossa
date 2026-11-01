@@ -123,8 +123,10 @@ impl Registry {
         self.insert(Entry { provider, origin: Origin::Bundled });
     }
 
-    /// Add or replace by id.
-    pub fn insert(&mut self, entry: Entry) {
+    /// Add or replace by id. The provider is put behind a panic barrier
+    /// ([`Guarded`](crate::provider::Guarded)).
+    pub fn insert(&mut self, mut entry: Entry) {
+        entry.provider = crate::provider::Guarded::wrap(entry.provider);
         let id = entry.info().id.clone();
         if let Some(existing) = self.entries.iter_mut().find(|e| e.info().id == id) {
             tracing::debug!(%id, "module overrides an earlier provider with the same id");
@@ -337,6 +339,33 @@ mod tests {
         assert!(r.with_capability(Capabilities::OCR).is_empty());
         assert!(r.get("x").is_some());
         assert!(r.get("nope").is_none());
+    }
+
+    #[test]
+    fn a_panicking_provider_fails_the_call_not_the_program() {
+        let mut r = Registry::new();
+        r.add_builtin(Arc::new(FnProvider::translator("boom", |_, req| {
+            let v: Vec<u8> = Vec::new();
+            Ok(Translation::plain(v[req.text.len()].to_string()))
+        })));
+        let p = r.get("boom").unwrap();
+        let http = glossa_net::mock::MockHttp::new();
+        let req = glossa_core::TranslateRequest::new(
+            "hi",
+            glossa_core::LangPair::new(glossa_core::LangId::AUTO, glossa_core::LangId::ENGLISH),
+        );
+        let err = crate::provider::with_test_host(&http, &Default::default(), |h| p.translate(h, &req)).unwrap_err();
+        match err {
+            glossa_core::Error::Module { module, detail } => {
+                assert_eq!(module, "boom");
+                assert!(detail.contains("translation panicked") && detail.contains("index out of bounds"), "{detail}");
+            }
+            other => panic!("expected a module error, got {other:?}"),
+        }
+        // Wrapping is not stacked when a provider is re-inserted.
+        let again = r.get("boom").unwrap();
+        r.add_builtin(again);
+        assert!(r.get("boom").unwrap().is_guarded());
     }
 
     #[test]

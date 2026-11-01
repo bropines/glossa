@@ -148,14 +148,21 @@ to = 17
 
 ```toml
 [hotkeys.bindings]
-show_main_window = "Ctrl+Alt+Q"
 show_popup = "Ctrl+Shift+Q"
-listen_selection = "Ctrl+E"
 text_recognition = "Ctrl+Shift+O"
-recognize_and_translate = "Ctrl+Alt+O"
+recognize_and_translate = "Ctrl+Alt+O"   # Windows: Win+Alt+O
+recognize_to_clipboard = "Ctrl+Alt+C"    # Windows: Win+Alt+C
+show_main_window = "Ctrl+Alt+Q"          # Windows: Win+Alt+Q
 ```
 
-These five are the defaults. The action ids are listed in
+These five are the defaults of a new config (on macOS, Ctrl+Alt is
+Control+Option). They differ by system because Windows reports AltGr as
+Ctrl+Alt: a Ctrl+Alt+letter hotkey there would swallow AltGr+letter, which
+types `@` on German keyboards and ó or ć on Polish ones. "Listen" has no
+default, since Ctrl+E is a browser's search box, Explorer's search and the
+end of the line in a shell and in macOS text fields. A config that already
+has bindings keeps them, and importing a classic installation brings its
+own. The action ids are listed in
 [cli.md](cli.md#action). Two actions bound to the same chord cannot both be
 registered; the Hotkeys page marks such conflicts. On Wayland, where
 programs cannot register global hotkeys, bind keys to the
@@ -329,6 +336,27 @@ classes `SysListView32`, `SysTreeView32`, `ListBox`, `ScrollBar`, `ComboBox`,
 | `slower_listen_repeat` | bool | `true` | Options → Advanced | Listening to the same text again within five seconds plays it slowly. |
 | `remove_line_breaks` | bool | `false` | Options → Advanced | Join lines before translating. |
 | `copy_wait_ms` | integer | `250` | Options → Advanced | How long to wait for the other program to put the selection on the clipboard after the copy keystroke, 20–3000 ms. |
+| `terminals` | array of tables | see below | `config.toml` | Terminal windows, where Ctrl+C would interrupt the running command (Windows Terminal with nothing selected, mintty, PuTTY, VS Code's terminal); see [`[[advanced.terminals]]`](#advancedterminals). |
+| `terminal_copy_action` | `"ctrl_c"`, `"ctrl_insert"`, `"accessibility_only"` | `"accessibility_only"` | `config.toml` | How the selection is copied out of a terminal when UI Automation does not give it. The default sends no keystroke: Windows Terminal and the console answer through UI Automation, and in mintty and WezTerm a selection is already on the clipboard, which the popup falls back to. `ctrl_insert` copies in the console, Windows Terminal, mintty and WezTerm, but a terminal that does not bind it passes it on to the shell as an escape sequence. `copy_action = "accessibility_only"` wins over this. |
+| `terminal_rules_version` | integer | `1` | written by Glossa | Which built-in terminal rules this file has received. A newer Glossa adds the rules it knows beyond this version once, skipping ones already in the list, so a rule you delete stays deleted. |
+
+### `[[advanced.terminals]]`
+
+Windows only: on macOS Cmd+C copies in terminals, and on Linux the selection
+is read from PRIMARY (or the clipboard) without any keystroke.
+
+| key | type | default | what it does |
+|---|---|---|---|
+| `program` | string | `""` | The executable's name (`mintty.exe`), compared without regard to case. Empty matches any program. |
+| `window_class` | string | `""` | The class of the window, of the focused control, or of the focused UI Automation element (in Chromium and Electron programs that is the HTML element's class), compared exactly. Empty matches any window. |
+
+A rule matches when both of its fields match; a rule with both empty matches
+nothing. The defaults: the classes `CASCADIA_HOSTING_WINDOW_CLASS` (Windows
+Terminal), `ConsoleWindowClass` (the console) and `xterm-helper-textarea`
+(xterm.js, the terminal of VS Code, Cursor, Hyper, Tabby and web terminals;
+VS Code's editor keeps Ctrl+C), and the programs `mintty.exe`,
+`wezterm-gui.exe`, `alacritty.exe`, `putty.exe`, `kitty.exe`,
+`MobaXterm.exe`, `ConEmu.exe`, `ConEmu64.exe`, `Hyper.exe` and `Tabby.exe`.
 
 ### `[mouse_mode]`
 
@@ -430,7 +458,7 @@ The local [control API](control-api.md). Set in *Options → Control API*.
 | `enabled` | bool | `true` | Start the API with the desktop program. Takes effect at the next start. [`glossa-cli serve`](cli.md#serve) ignores it (with a note on stderr): running that command is the request to start the API. |
 | `bind` | string | `"127.0.0.1:60828"` | Address and port to listen on. An address beyond loopback requires a token. Takes effect at the next start. With `0.0.0.0` or `[::]`, `glossa-cli action` connects to `127.0.0.1` or `[::1]` on that port. |
 | `token` | string | generated | Required on every request (but see the next key). Never empty: an empty or missing token is replaced with a new random one, and saved, at the next start or as soon as the settings are applied with the field cleared. Applies at once. |
-| `pot_compat_without_token` | bool | `true` | Let [pot-app's routes](control-api.md#pot-app-compatibility) through without the token, so pot-app key bindings work unchanged. Only for requests from this machine (a loopback address) without an `Origin` header; those routes can open windows but never return data. Set to `false` to require the token there too. |
+| `pot_compat_without_token` | bool | `true` | Let [pot-app's routes](control-api.md#pot-app-compatibility) through without the token, so pot-app key bindings work unchanged. Only for requests from this machine (a loopback address) that carry none of the headers browsers send (`Origin`, `Sec-Fetch-*`, `Referer`), so a web page cannot trigger them; those routes can open windows but never return data. Set to `false` to require the token there too. |
 
 ### `[modules]`
 

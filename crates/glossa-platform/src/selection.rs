@@ -8,9 +8,11 @@
 //!   synthetic copy — release the user's still-held hotkey modifiers, save
 //!   the clipboard, send Ctrl+C (or Ctrl+Insert), watch
 //!   `GetClipboardSequenceNumber` until the target program has copied or the
-//!   timeout passes, read the text, restore the clipboard.
+//!   timeout passes, read the text, restore the clipboard. In a terminal
+//!   (`[advanced] terminals`), where Ctrl+C interrupts the running command,
+//!   the terminal's own copy action applies instead: none by default.
 //! - **X11**: the PRIMARY selection, which is exactly "what is highlighted";
-//!   no keystroke at all.
+//!   no keystroke at all, so a terminal never receives a Ctrl+C.
 //! - **Wayland**: PRIMARY where the compositor offers data-control (KDE,
 //!   wlroots, Hyprland; GNOME bridges it for XWayland), otherwise the regular
 //!   clipboard — the user has to press Ctrl+C first, which
@@ -20,7 +22,7 @@
 
 use std::time::{Duration, Instant};
 
-use glossa_core::config::CopyAction;
+use glossa_core::config::{is_terminal, Advanced, CopyAction, ExceptionRule};
 
 use crate::Result;
 #[cfg(any(windows, target_os = "macos"))]
@@ -34,7 +36,7 @@ pub const REPLACE_RESTORE_DELAY: Duration = Duration::from_millis(600);
 
 /// How selection capture should behave; usually built from the options with
 /// [`CaptureOptions::from_config`].
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CaptureOptions {
     /// The keystroke for the synthetic copy, or none at all.
     pub copy_action: CopyAction,
@@ -44,17 +46,41 @@ pub struct CaptureOptions {
     /// Put the user's clipboard back afterwards. Off leaves the copied
     /// selection on the clipboard, as a manual Ctrl+C would.
     pub restore_clipboard: bool,
+    /// Terminal windows (`[advanced] terminals`), and the copy action used
+    /// there instead of `copy_action`.
+    pub terminals: Vec<ExceptionRule>,
+    pub terminal_copy_action: CopyAction,
 }
 
 impl Default for CaptureOptions {
     fn default() -> Self {
-        Self { copy_action: CopyAction::CtrlC, wait_ms: 250, restore_clipboard: true }
+        Self::from_config(&Advanced::default())
     }
 }
 
 impl CaptureOptions {
-    pub fn from_config(advanced: &glossa_core::config::Advanced) -> Self {
-        Self { copy_action: advanced.copy_action, wait_ms: advanced.copy_wait_ms, restore_clipboard: true }
+    pub fn from_config(advanced: &Advanced) -> Self {
+        Self {
+            copy_action: advanced.copy_action,
+            wait_ms: advanced.copy_wait_ms,
+            restore_clipboard: true,
+            terminals: advanced.terminals.clone(),
+            terminal_copy_action: advanced.terminal_copy_action,
+        }
+    }
+
+    /// The copy action for a window: the terminal one when the program or
+    /// any of `classes` (window, focused control, focused UI Automation
+    /// element) is a terminal, else the usual one.
+    pub fn copy_action_for(&self, program: &str, classes: &[&str]) -> CopyAction {
+        if self.copy_action == CopyAction::AccessibilityOnly {
+            return CopyAction::AccessibilityOnly;
+        }
+        if is_terminal(&self.terminals, program, classes) {
+            self.terminal_copy_action
+        } else {
+            self.copy_action
+        }
     }
 }
 
@@ -64,14 +90,22 @@ impl CaptureOptions {
 pub fn capture_selection(opts: &CaptureOptions) -> Result<Option<String>> {
     #[cfg(windows)]
     {
-        if let Some(text) = crate::uia::selected_text() {
+        let focused = crate::uia::focused().unwrap_or_default();
+        if let Some(text) = focused.selection {
             tracing::debug!("selection via UI Automation");
             return Ok(Some(text));
         }
         if opts.copy_action == CopyAction::AccessibilityOnly {
             return Ok(None);
         }
-        copy_via_clipboard(opts)
+        let win = crate::window::foreground_window().unwrap_or_default();
+        let action = opts.copy_action_for(&win.process_name, &[&win.class_name, &win.focus_class, &focused.class]);
+        if action == CopyAction::AccessibilityOnly {
+            tracing::debug!(program = %win.process_name, class = %win.class_name, uia_class = %focused.class,
+                "a terminal: no copy keystroke (Ctrl+C would interrupt it)");
+            return Ok(None);
+        }
+        copy_via_clipboard(&CaptureOptions { copy_action: action, ..opts.clone() })
     }
     #[cfg(target_os = "macos")]
     {
@@ -277,6 +311,26 @@ mod tests {
         assert_eq!(o.copy_action, CopyAction::CtrlInsert);
         assert_eq!(o.wait_ms, 900);
         assert!(o.restore_clipboard);
+    }
+
+    #[test]
+    fn terminals_never_get_ctrl_c() {
+        let o = CaptureOptions::default();
+        assert_eq!(o.copy_action_for("notepad.exe", &["Notepad", "Edit", ""]), CopyAction::CtrlC);
+        for (program, classes) in [
+            ("WindowsTerminal.exe", ["CASCADIA_HOSTING_WINDOW_CLASS", "", ""]),
+            ("mintty.exe", ["mintty", "", ""]),
+            ("Code.exe", ["Chrome_WidgetWin_1", "Chrome_RenderWidgetHostHWND", "xterm-helper-textarea"]),
+        ] {
+            assert_eq!(o.copy_action_for(program, &classes), CopyAction::AccessibilityOnly, "{program}");
+        }
+        let mut adv = Advanced { terminal_copy_action: CopyAction::CtrlInsert, ..Advanced::default() };
+        let o = CaptureOptions::from_config(&adv);
+        assert_eq!(o.copy_action_for("mintty.exe", &[]), CopyAction::CtrlInsert);
+        // Accessibility only everywhere means accessibility only in terminals too.
+        adv.copy_action = CopyAction::AccessibilityOnly;
+        let o = CaptureOptions::from_config(&adv);
+        assert_eq!(o.copy_action_for("mintty.exe", &[]), CopyAction::AccessibilityOnly);
     }
 
     #[test]

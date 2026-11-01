@@ -10,6 +10,8 @@
 //! `glossa-cli translate -t ru < in.txt > out.txt` holds only the translation.
 //! Exit codes: 0 success, 1 the operation failed, 64 bad command line.
 
+mod doctor;
+
 use std::io::{IsTerminal, Read};
 use std::path::PathBuf;
 use std::process::ExitCode;
@@ -75,6 +77,8 @@ COMMANDS
     config     path | show
     serve                             run the control API until Ctrl+C
     action     ACTION [TEXT]          ask a running Glossa to act (show_popup, text_recognition…)
+    doctor                            what works here: session, hotkeys, selection, OCR engines,
+                                      modules, permissions, files, proxy, control API
 
 Languages are codes (en, ru, zh-CN, he, auto). SERVICE is a provider id from `services`.
 ";
@@ -165,9 +169,8 @@ fn command_flags(command: &str) -> Option<&'static [&'static str]> {
         "speak" => &["-o", "--out", "-l", "--lang", "--slow"],
         "services" => &["-c", "--capability"],
         "history" => &["--search", "--favorites", "--export"],
-        "detect" | "modules" | "import-classic" | "theme" | "locale" | "config" | "serve" | "action" | "" | "help" => {
-            &[]
-        }
+        "detect" | "modules" | "import-classic" | "theme" | "locale" | "config" | "serve" | "action" | "doctor"
+        | "" | "help" => &[],
         _ => return None,
     })
 }
@@ -315,7 +318,11 @@ fn paths(args: &Args) -> Paths {
 }
 
 fn engine(args: &Args) -> Result<Engine, Fail> {
-    Ok(Engine::start(paths(args))?)
+    let e = Engine::start(paths(args))?;
+    for w in e.startup_warnings() {
+        eprintln!("glossa-cli: {}", w.message(&glossa_core::Locale::english()));
+    }
+    Ok(e)
 }
 
 fn lang(code: Option<&str>, default: LangId) -> Result<LangId, Fail> {
@@ -746,6 +753,15 @@ fn run(args: &Args) -> Result<(), Fail> {
             let resp = glossa_net::Http::send(&http, glossa_net::HttpRequest::get(url))?;
             if !resp.is_success() {
                 return Err(Fail::Op(format!("Glossa answered {}: {}", resp.status, resp.text())));
+            }
+            Ok(())
+        }
+        "doctor" => {
+            let report = doctor::report(&paths(args));
+            if args.json {
+                out!("{}", serde_json::to_string_pretty(&report).unwrap_or_default());
+            } else {
+                outp!("{}", doctor::print(&report));
             }
             Ok(())
         }

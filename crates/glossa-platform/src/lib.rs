@@ -44,6 +44,7 @@ pub mod fonts;
 pub mod hotkeys;
 pub mod idle;
 pub mod input;
+pub mod instance;
 pub mod layout;
 pub mod mouse;
 pub mod permissions;
@@ -66,7 +67,7 @@ pub use hotkeys::{HotkeyError, HotkeyService};
 pub use input::{release_modifiers, send_copy, send_paste, type_text};
 pub use layout::{convert_layout, guess_direction, switch_keyboard_layout_of_foreground, Conversion};
 pub use selection::{capture_selection, replace_selection, CaptureOptions};
-pub use session::{Compositor, DisplayServer, Os, Session};
+pub use session::{Compositor, DisplayServer, Feature, Limitation, Os, Session, Support};
 pub use window::{
     caret_rect, cursor_position, foreground_window, monitor_at, monitors, place_popup, Monitor, WindowInfo,
 };

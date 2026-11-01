@@ -168,6 +168,98 @@ pub trait Provider: Send + Sync {
     fn unsupported(&self, what: &'static str) -> Error {
         Error::Unsupported { provider: self.info().name.clone(), capability: what }
     }
+
+    /// Whether this is already a [`Guarded`] wrapper, so wrapping twice is
+    /// avoided. Providers never override it.
+    #[doc(hidden)]
+    fn is_guarded(&self) -> bool {
+        false
+    }
+}
+
+/// A provider behind a panic barrier. JavaScript, classic and pot-app
+/// scripts, native modules, the image code and the built-in services all run
+/// in this process; a panic in any of them (a bug in boa, an out-of-range
+/// index in a parser) fails that one call with [`Error::Module`] instead of
+/// taking the program down. The [`Registry`](crate::Registry) wraps every
+/// provider it holds in one, so callers never see an unguarded provider.
+pub struct Guarded {
+    inner: Arc<dyn Provider>,
+}
+
+impl Guarded {
+    /// Wrap `inner`, unless it is already wrapped.
+    pub fn wrap(inner: Arc<dyn Provider>) -> Arc<dyn Provider> {
+        if inner.is_guarded() {
+            inner
+        } else {
+            Arc::new(Guarded { inner })
+        }
+    }
+
+    fn call<T>(&self, op: &str, f: impl FnOnce() -> Result<T>) -> Result<T> {
+        match std::panic::catch_unwind(std::panic::AssertUnwindSafe(f)) {
+            Ok(r) => r,
+            Err(payload) => {
+                let id = &self.inner.info().id;
+                let msg = glossa_core::error::panic_message(payload.as_ref());
+                tracing::error!(provider = %id, "{op} panicked: {msg}");
+                Err(Error::module(id.clone(), format!("{op} panicked: {msg}")))
+            }
+        }
+    }
+}
+
+impl Provider for Guarded {
+    fn info(&self) -> &ProviderInfo {
+        self.inner.info()
+    }
+
+    fn options(&self) -> &[OptionSpec] {
+        self.inner.options()
+    }
+
+    fn translate(&self, host: &Host, req: &TranslateRequest) -> Result<Translation> {
+        self.call("translation", || self.inner.translate(host, req))
+    }
+
+    fn translate_stream(&self, host: &Host, req: &TranslateRequest, progress: &dyn Fn(&str)) -> Result<Translation> {
+        self.call("translation", || self.inner.translate_stream(host, req, progress))
+    }
+
+    fn list_models(&self, host: &Host) -> Result<Vec<String>> {
+        self.call("listing models", || self.inner.list_models(host))
+    }
+
+    fn detect(&self, host: &Host, text: &str) -> Result<Detection> {
+        self.call("language detection", || self.inner.detect(host, text))
+    }
+
+    fn dictionary(&self, host: &Host, req: &DictRequest) -> Result<Article> {
+        self.call("dictionary lookup", || self.inner.dictionary(host, req))
+    }
+
+    fn speak(&self, host: &Host, req: &SpeakRequest) -> Result<Audio> {
+        self.call("speech", || self.inner.speak(host, req))
+    }
+
+    fn recognize(&self, host: &Host, req: &OcrRequest) -> Result<OcrResult> {
+        self.call("text recognition", || self.inner.recognize(host, req))
+    }
+
+    fn web_link(&self, text: &str, pair: LangPair) -> Option<String> {
+        std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| self.inner.web_link(text, pair))).ok().flatten()
+    }
+
+    fn suspend(&self) {
+        if std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| self.inner.suspend())).is_err() {
+            tracing::error!(provider = %self.inner.info().id, "suspend panicked");
+        }
+    }
+
+    fn is_guarded(&self) -> bool {
+        true
+    }
 }
 
 /// One setting a provider takes. Mirrors the `[[options]]` table of a module

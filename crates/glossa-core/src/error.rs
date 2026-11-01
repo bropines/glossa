@@ -99,6 +99,11 @@ pub enum Error {
     /// The user cancelled, or a newer request superseded this one.
     #[error("cancelled")]
     Cancelled,
+
+    /// A bug in Glossa itself: code below the provider boundary panicked and
+    /// the panic was caught, so the request failed instead of the program.
+    #[error("internal error: {0}")]
+    Internal(String),
 }
 
 impl Error {
@@ -141,6 +146,33 @@ impl Error {
 
     pub fn bad_response(provider: impl Into<String>, detail: impl std::fmt::Display) -> Error {
         Error::BadResponse { provider: provider.into(), detail: detail.to_string() }
+    }
+}
+
+/// The message a caught panic carried: the `&str` or `String` given to
+/// `panic!`, else a placeholder (a panic with another payload type).
+pub fn panic_message(payload: &(dyn std::any::Any + Send)) -> String {
+    if let Some(s) = payload.downcast_ref::<&str>() {
+        (*s).to_owned()
+    } else if let Some(s) = payload.downcast_ref::<String>() {
+        s.clone()
+    } else {
+        "panic with a non-text payload".to_owned()
+    }
+}
+
+/// Run `f`, turning a panic into [`Error::Internal`] (logged) so that a bug
+/// in one request fails that request rather than the whole program. The
+/// release build unwinds on panic for this; the panic hook still logs the
+/// panic with its stack first.
+pub fn catch_panic<T>(what: &str, f: impl FnOnce() -> Result<T>) -> Result<T> {
+    match std::panic::catch_unwind(std::panic::AssertUnwindSafe(f)) {
+        Ok(r) => r,
+        Err(payload) => {
+            let msg = panic_message(payload.as_ref());
+            tracing::error!("{what} panicked: {msg}");
+            Err(Error::Internal(format!("{what} panicked: {msg}")))
+        }
     }
 }
 
@@ -220,5 +252,17 @@ mod tests {
     fn language_errors_name_the_language_in_english() {
         let e = Error::TargetLanguageUnsupported { provider: "DeepL".into(), lang: crate::lang::LangId::RUSSIAN };
         assert_eq!(e.to_string(), "DeepL does not support Russian as a target language");
+    }
+
+    #[test]
+    fn a_caught_panic_becomes_an_internal_error() {
+        let r: Result<u32> = catch_panic("test job", || panic!("index {} out of range", 7));
+        match r {
+            Err(Error::Internal(m)) => assert_eq!(m, "test job panicked: index 7 out of range"),
+            other => panic!("expected an internal error, got {other:?}"),
+        }
+        assert_eq!(catch_panic("ok", || Ok(5)).unwrap(), 5);
+        let r: Result<()> = catch_panic("static", || panic!("plain"));
+        assert!(matches!(r, Err(Error::Internal(m)) if m.ends_with("plain")));
     }
 }
