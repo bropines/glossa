@@ -103,7 +103,7 @@ installation) but nothing reads it yet.
 | `recent_pairs` | array of language pairs | ru→en, en→ru | kept by the program | Recently used directions, newest first, offered in the ⋮ menu. At most 12; pairs with `auto` are not added. A pair listed more than once keeps only its first (newest) place. |
 | `instant_translation` | bool | `false` | main window menu | Translate as you type, after a pause. |
 | `instant_delay_ms` | integer | `700` | file only | The pause before an instant translation, 150–5000 ms. |
-| `spell_checking` | bool | `true` | file only | Kept from the classic settings; there is no spell checker yet, and no switch for it in the options. |
+| `spell_checking` | bool | `true` | main window menu | Underline misspelled words in the source pane and offer suggestions in its context menu. Checks in the source language, else the one the last translation detected; nothing is underlined while the language is unknown. Uses the system's checker (Windows Spell Checking API, macOS `NSSpellChecker`, Hunspell dictionaries on Linux); a language without a dictionary is not checked. |
 | `back_translation` | bool | `false` | main window menu | Translate the translation back, shown in a third pane. |
 | `read_phonetically` | bool | `false` | file only | Kept from the classic settings; not used yet, so the main window menu no longer shows it. |
 | `clear_on_drag_drop` | bool | `true` | main window menu | Clear the source pane before text is dropped on it. |

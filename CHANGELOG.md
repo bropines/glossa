@@ -247,6 +247,14 @@ for Windows, macOS and Linux.
   (Windows 11 with any graphics engine, the GPU one presenting through
   DirectComposition; vibrancy on macOS with OpenGL); the tray menu dark or
   light with the theme (Windows 10 1809+); an icon size setting; changing the graphics engine offers to restart.
+- **Spell checking** in the main window's source pane, as in the classic
+  program (`general.spell_checking`, in the ⋮ menu): misspelled words get a
+  wavy red line a moment after typing stops, and the right-click menu offers
+  suggestions, *Ignore* and *Add to dictionary*. The language is the source
+  language, else the one the last translation detected. It uses the
+  system's checker: the Windows Spell Checking API, `NSSpellChecker` on
+  macOS, the installed Hunspell dictionaries on Linux (read in pure Rust by
+  spellbook; words added go to `~/.hunspell_<lang>`).
 - **Text zoom**: Ctrl+wheel over a text area (the main window's panes, the
   popup, the dictionary article) and Ctrl+plus / minus / 0 zoom the text
   alone (`appearance.text_scale`); the interface scale is set in Options
