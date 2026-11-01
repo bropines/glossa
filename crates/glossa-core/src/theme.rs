@@ -1521,7 +1521,9 @@ pub mod builtin {
         let base = Color::grey(0x32);
         let text = Color::grey(0xdf);
         let secondary = Color::grey(0x9b);
-        let disabled = Color::grey(0x70);
+        // Hints and captions are drawn in this colour too, so it sits between
+        // tertiary and secondary label: readable over a vibrancy material.
+        let disabled = Color::grey(0x88);
         let separator = Color::grey(0x47);
         let content = Color::grey(0x1e);
         let control = Color::grey(0x56); // a push button's bezel
@@ -1610,7 +1612,9 @@ pub mod builtin {
         let base = Color::grey(0xec);
         let text = Color::grey(0x26);
         let secondary = Color::grey(0x6e);
-        let disabled = Color::grey(0x9a);
+        // As in the dark one: hints use it, and over the light material
+        // (greyer than #ECECEC on a dark desktop) 0x9a was hard to read.
+        let disabled = Color::grey(0x7c);
         let separator = Color::grey(0xd4);
         let button = |back: Color, text: Color| ButtonStyle {
             back_top: back,

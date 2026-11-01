@@ -229,7 +229,7 @@ impl Look {
             fluent_visuals(&mut v, t);
         }
         if mac {
-            mac_visuals(&mut v, t);
+            mac_visuals(&mut v, t, from32(self.overlay_back));
         }
         // egui keeps a dark and a light style and picks one per window by the
         // system theme that window reports; `set_visuals` fills only the one
@@ -344,14 +344,17 @@ fn fluent_spacing(s: &mut egui::Style, t: &Theme) {
 
 /// AppKit's conventions (Apple's Human Interface Guidelines) on top of the
 /// colours [`Look::apply`] mapped.
-fn mac_visuals(v: &mut Visuals, t: &Theme) {
+/// `base` is the theme's window colour before a backdrop made it clear.
+fn mac_visuals(v: &mut Visuals, t: &Theme, base: Color) {
     let w = &mut v.widgets;
     for state in [&mut w.noninteractive, &mut w.inactive, &mut w.hovered, &mut w.active, &mut w.open] {
         // AppKit controls never grow under the pointer.
         state.expansion = 0.0;
     }
-    // secondaryLabelColor: hints and captions.
-    v.weak_text_color = Some(c(t.window.back.lerp(t.window.text, 0.6)));
+    // secondaryLabelColor: hints and captions. Mixed from the opaque window
+    // colour: under a backdrop `window.back` is clear, and the text came
+    // out half transparent.
+    v.weak_text_color = Some(c(base.lerp(t.window.text, 0.6)));
     // Since macOS 14 the insertion point takes the accent colour.
     v.text_cursor.stroke = Stroke::new(1.5, c(t.accent));
     // A slider's track is accent-filled up to the knob.
