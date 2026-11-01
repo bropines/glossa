@@ -16,11 +16,19 @@ percent-encoding = { workspace = true }
 tracing = { workspace = true }
 base64 = { workspace = true }
 
+# Certificates are checked against the system's store everywhere (see
+# `tls_config`): by the OS on Windows and macOS, against the CA files on
+# Linux and the BSDs, with the bundled Mozilla roots (ureq's default) as the
+# fallback where the system has none.
 [target.'cfg(windows)'.dependencies]
 winreg = "0.55"
-# Certificates are checked by the operating system on Windows and macOS (see
-# `tls_config`); Linux keeps the bundled Mozilla roots.
 ureq = { workspace = true, features = ["platform-verifier"] }
 
 [target.'cfg(target_os = "macos")'.dependencies]
 ureq = { workspace = true, features = ["platform-verifier"] }
+
+[target.'cfg(all(unix, not(target_vendor = "apple")))'.dependencies]
+ureq = { workspace = true, features = ["platform-verifier"] }
+# Already in the tree through the platform verifier; used directly to see
+# whether the system store is empty before relying on it.
+rustls-native-certs = "0.8"

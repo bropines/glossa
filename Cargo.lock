@@ -2225,6 +2225,7 @@ dependencies = [
  "base64 0.22.1",
  "glossa-core",
  "percent-encoding",
+ "rustls-native-certs",
  "serde",
  "serde_json",
  "tracing",
