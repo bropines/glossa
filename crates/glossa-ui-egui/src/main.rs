@@ -698,6 +698,15 @@ pub fn app_icon(size: u32) -> egui::IconData {
     tinted_icon(size, [0.16, 0.55, 0.89])
 }
 
+/// The child windows' icon, drawn once. egui tells an icon change by the
+/// pointer, so a fresh copy per frame (as `chrome::builder` made) had it
+/// redraw the icon and hand it to the system on every frame of every
+/// open window.
+pub fn window_icon() -> std::sync::Arc<egui::IconData> {
+    static ICON: std::sync::OnceLock<std::sync::Arc<egui::IconData>> = std::sync::OnceLock::new();
+    ICON.get_or_init(|| std::sync::Arc::new(app_icon(32))).clone()
+}
+
 /// The icon with another base colour (the tray follows the theme's accent).
 pub fn tinted_icon(size: u32, base: [f32; 3]) -> egui::IconData {
     let n = size as f32;

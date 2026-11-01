@@ -72,7 +72,7 @@ pub fn custom(cfg: &glossa_core::Config) -> bool {
 pub fn builder(app: &GlossaApp, title: &str) -> egui::ViewportBuilder {
     egui::ViewportBuilder::default()
         .with_title(title)
-        .with_icon(crate::app_icon(32))
+        .with_icon(crate::window_icon())
         .with_decorations(!custom(&app.cfg))
         .with_transparent(app.transparent_root())
 }
