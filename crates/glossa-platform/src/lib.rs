@@ -41,6 +41,7 @@ pub mod crash;
 pub mod hotkeys;
 pub mod idle;
 pub mod input;
+pub mod instance;
 pub mod layout;
 pub mod mouse;
 pub mod permissions;

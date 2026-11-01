@@ -29,9 +29,14 @@ token filled in.
 `60828` is also pot-app's port, so tools made for pot-app find Glossa where
 they expect it (see [pot-app compatibility](#pot-app-compatibility)).
 
-Glossa itself uses the API: starting `glossa` while it is already running
-asks the running copy, through the API, to show its main window. With the
-API off, a second start opens a second copy.
+Starting `glossa` while it is already running shows the running copy's
+main window instead of opening a second one. That does not need the API:
+one copy runs per user, login session and data folder, held by a lock of
+the session's own (a named mutex and pipe on Windows, a lock file and a Unix
+socket in the user's runtime folder elsewhere), and the second start hands
+over through it. The API is only the fallback, for a running copy too old
+to have the pipe. Copies with different data folders (`GLOSSA_HOME`) run
+side by side.
 
 [`glossa-cli serve`](cli.md#serve) runs the same API without the desktop
 program, for scripts and for trying it out; there, actions are only printed.
