@@ -918,6 +918,24 @@ pub struct Advanced {
     /// How long to wait for another program to put the selection on the
     /// clipboard after the synthetic copy.
     pub copy_wait_ms: u64,
+    /// Terminal windows, where Ctrl+C interrupts the running command instead
+    /// of copying (Windows Terminal with nothing selected, mintty, PuTTY,
+    /// VS Code's terminal…). There the selection is read through UI
+    /// Automation, then with [`Advanced::terminal_copy_action`] instead of
+    /// [`Advanced::copy_action`]. A rule's class matches the window's class,
+    /// the focused control's, or the focused UI Automation element's (the
+    /// HTML class in Electron apps). Windows only: on macOS Cmd+C copies in
+    /// terminals, and on Linux no keystroke is sent at all.
+    pub terminals: Vec<ExceptionRule>,
+    /// The copy keystroke in [`Advanced::terminals`]: none by default
+    /// (`accessibility_only`). `ctrl_insert` copies in the Windows console,
+    /// Windows Terminal, mintty and WezTerm, but a terminal that does not
+    /// bind it passes it to the shell as an escape sequence.
+    pub terminal_copy_action: CopyAction,
+    /// Which built-in [`Advanced::terminals`] rules this file has been given
+    /// ([`TERMINAL_RULE_SETS`]); newer ones are added once on load, so a rule
+    /// the user deleted stays deleted.
+    pub terminal_rules_version: u32,
 }
 
 impl Default for Advanced {
@@ -931,8 +949,93 @@ impl Default for Advanced {
             slower_listen_repeat: true,
             remove_line_breaks: false,
             copy_wait_ms: 250,
+            terminals: TERMINAL_RULE_SETS.iter().flat_map(|(_, rules)| rules.iter().map(|r| r.rule())).collect(),
+            terminal_copy_action: CopyAction::AccessibilityOnly,
+            terminal_rules_version: latest_terminal_rules(),
         }
     }
+}
+
+/// A built-in terminal rule: a program (empty for any) and a class (empty
+/// for any).
+#[derive(Debug, Clone, Copy)]
+pub struct TerminalRule(pub &'static str, pub &'static str);
+
+impl TerminalRule {
+    fn rule(&self) -> ExceptionRule {
+        ExceptionRule { program: self.0.into(), window_class: self.1.into() }
+    }
+}
+
+/// The built-in terminal rules, by the version that introduced them. A new
+/// terminal goes into a new entry with the next version, so existing
+/// configs receive it once ([`Advanced::migrate_terminal_rules`]).
+pub const TERMINAL_RULE_SETS: &[(u32, &[TerminalRule])] = &[(
+    1,
+    &[
+        // Windows Terminal (any build: the class is the same).
+        TerminalRule("", "CASCADIA_HOSTING_WINDOW_CLASS"),
+        // The classic console (conhost), also excepted by default.
+        TerminalRule("", "ConsoleWindowClass"),
+        // xterm.js, which VS Code, Cursor, Hyper, Tabby and web terminals
+        // use: the focused element's class when UI Automation reaches it.
+        // VS Code's editor in the same window keeps Ctrl+C.
+        TerminalRule("", "xterm-helper-textarea"),
+        TerminalRule("mintty.exe", ""),
+        TerminalRule("wezterm-gui.exe", ""),
+        TerminalRule("alacritty.exe", ""),
+        TerminalRule("putty.exe", ""),
+        TerminalRule("kitty.exe", ""),
+        TerminalRule("MobaXterm.exe", ""),
+        TerminalRule("ConEmu.exe", ""),
+        TerminalRule("ConEmu64.exe", ""),
+        TerminalRule("Hyper.exe", ""),
+        TerminalRule("Tabby.exe", ""),
+    ],
+)];
+
+fn latest_terminal_rules() -> u32 {
+    TERMINAL_RULE_SETS.iter().map(|(v, _)| *v).max().unwrap_or(0)
+}
+
+impl Advanced {
+    /// Add the built-in terminal rules newer than this config's
+    /// [`Advanced::terminal_rules_version`], skipping any the user already
+    /// has, and bring the version up to date. Idempotent.
+    pub fn migrate_terminal_rules(&mut self) {
+        for (version, rules) in TERMINAL_RULE_SETS {
+            if *version <= self.terminal_rules_version {
+                continue;
+            }
+            for rule in rules.iter().map(TerminalRule::rule) {
+                let present = self.terminals.iter().any(|r| {
+                    r.program.eq_ignore_ascii_case(&rule.program) && r.window_class == rule.window_class
+                });
+                if !present {
+                    self.terminals.push(rule);
+                }
+            }
+        }
+        self.terminal_rules_version = self.terminal_rules_version.max(latest_terminal_rules());
+    }
+
+    /// Whether a window is a terminal per [`Advanced::terminals`]: `classes`
+    /// are the window's class and those of its focused control and focused
+    /// UI Automation element (empty ones are ignored).
+    pub fn is_terminal(&self, program: &str, classes: &[&str]) -> bool {
+        is_terminal(&self.terminals, program, classes)
+    }
+}
+
+/// Whether any of the terminal `rules` matches a window of `program` with
+/// these classes (see [`Advanced::is_terminal`]).
+pub fn is_terminal(rules: &[ExceptionRule], program: &str, classes: &[&str]) -> bool {
+    rules.iter().any(|r| {
+        let program_ok = r.program.is_empty() || r.program.eq_ignore_ascii_case(program);
+        let class_ok = r.window_class.is_empty() || classes.iter().any(|c| !c.is_empty() && *c == r.window_class);
+        // A rule with neither field would match every window.
+        program_ok && class_ok && !(r.program.is_empty() && r.window_class.is_empty())
+    })
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
@@ -1321,6 +1424,7 @@ impl Config {
         self.appearance.keyboard_scale = self.appearance.keyboard_scale.clamp(0.5, 3.0);
         self.appearance.window_transparency = self.appearance.window_transparency.min(90);
         self.dictionary.zoom = self.dictionary.zoom.clamp(50, 400);
+        self.advanced.migrate_terminal_rules();
         self.general.instant_delay_ms = self.general.instant_delay_ms.clamp(150, 5000);
         // Keep the first (newest) of each pair, wherever the repeats are.
         let mut seen = Vec::with_capacity(self.general.recent_pairs.len());
@@ -1514,6 +1618,52 @@ copy_joined_lines = true",
         assert_eq!(s.new_ai_endpoint_id("Модель"), "ai-endpoint");
         s.ai_endpoints.push(AiEndpoint { id: "ai-ollama".into(), name: "Ollama".into(), preset: "ollama".into() });
         assert_eq!(s.new_ai_endpoint_id("Ollama"), "ai-ollama-2");
+    }
+
+    #[test]
+    fn terminals_are_recognised_by_program_or_any_class() {
+        let a = Advanced::default();
+        assert_eq!(a.terminal_copy_action, CopyAction::AccessibilityOnly, "no keystroke into a terminal");
+        assert!(a.is_terminal("WindowsTerminal.exe", &["CASCADIA_HOSTING_WINDOW_CLASS", "", ""]));
+        assert!(a.is_terminal("MINTTY.EXE", &["mintty", "", ""]), "program names ignore case");
+        assert!(a.is_terminal("conhost.exe", &["ConsoleWindowClass"]));
+        // VS Code: only its terminal, which UI Automation names by xterm.js's class.
+        assert!(a.is_terminal("Code.exe", &["Chrome_WidgetWin_1", "Chrome_RenderWidgetHostHWND", "xterm-helper-textarea"]));
+        assert!(!a.is_terminal("Code.exe", &["Chrome_WidgetWin_1", "Chrome_RenderWidgetHostHWND", "inputarea"]));
+        assert!(!a.is_terminal("notepad.exe", &["Notepad", "Edit", ""]));
+        assert!(!a.is_terminal("", &["", "", ""]));
+        // A rule with neither field never matches everything.
+        let mut b = a.clone();
+        b.terminals.push(ExceptionRule { program: String::new(), window_class: String::new() });
+        assert!(!b.is_terminal("notepad.exe", &["Notepad"]));
+    }
+
+    #[test]
+    fn terminal_rules_reach_existing_configs_once() {
+        // A file from before the rules existed gets all of them.
+        let c = Config::from_toml("[advanced]\ncopy_action = \"ctrl_insert\"\n").unwrap();
+        assert_eq!(c.advanced.terminals, Advanced::default().terminals);
+        assert_eq!(c.advanced.copy_action, CopyAction::CtrlInsert, "the user's setting stays");
+        assert_eq!(c.advanced.terminal_rules_version, latest_terminal_rules());
+
+        // An older version with the user's own rules and one built-in rule
+        // (with different case) gains the rest, without duplicates.
+        let old = "[advanced]\nterminal_rules_version = 0\n\
+                   [[advanced.terminals]]\nprogram = \"myterm.exe\"\n\
+                   [[advanced.terminals]]\nprogram = \"MINTTY.EXE\"\n";
+        let c = Config::from_toml(old).unwrap();
+        assert_eq!(c.advanced.terminals[0].program, "myterm.exe");
+        assert_eq!(c.advanced.terminals.iter().filter(|r| r.program.eq_ignore_ascii_case("mintty.exe")).count(), 1);
+        assert_eq!(c.advanced.terminals.len(), Advanced::default().terminals.len() + 1);
+        assert_eq!(c.advanced.terminal_rules_version, latest_terminal_rules());
+
+        // Up to date and the user deleted some: they stay deleted, also
+        // after a save and a reload.
+        let mut c = Config::default();
+        c.advanced.terminals.retain(|r| r.program != "putty.exe");
+        let back = Config::from_toml(&c.to_toml()).unwrap();
+        assert!(!back.advanced.terminals.iter().any(|r| r.program == "putty.exe"));
+        assert_eq!(back.advanced.terminals, c.advanced.terminals);
     }
 
     #[test]

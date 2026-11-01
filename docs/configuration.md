@@ -326,6 +326,27 @@ classes `SysListView32`, `SysTreeView32`, `ListBox`, `ScrollBar`, `ComboBox`,
 | `slower_listen_repeat` | bool | `true` | Options → Advanced | Listening to the same text again within five seconds plays it slowly. |
 | `remove_line_breaks` | bool | `false` | Options → Advanced | Join lines before translating. |
 | `copy_wait_ms` | integer | `250` | Options → Advanced | How long to wait for the other program to put the selection on the clipboard after the copy keystroke, 20–3000 ms. |
+| `terminals` | array of tables | see below | `config.toml` | Terminal windows, where Ctrl+C would interrupt the running command (Windows Terminal with nothing selected, mintty, PuTTY, VS Code's terminal); see [`[[advanced.terminals]]`](#advancedterminals). |
+| `terminal_copy_action` | `"ctrl_c"`, `"ctrl_insert"`, `"accessibility_only"` | `"accessibility_only"` | `config.toml` | How the selection is copied out of a terminal when UI Automation does not give it. The default sends no keystroke: Windows Terminal and the console answer through UI Automation, and in mintty and WezTerm a selection is already on the clipboard, which the popup falls back to. `ctrl_insert` copies in the console, Windows Terminal, mintty and WezTerm, but a terminal that does not bind it passes it on to the shell as an escape sequence. `copy_action = "accessibility_only"` wins over this. |
+| `terminal_rules_version` | integer | `1` | written by Glossa | Which built-in terminal rules this file has received. A newer Glossa adds the rules it knows beyond this version once, skipping ones already in the list, so a rule you delete stays deleted. |
+
+### `[[advanced.terminals]]`
+
+Windows only: on macOS Cmd+C copies in terminals, and on Linux the selection
+is read from PRIMARY (or the clipboard) without any keystroke.
+
+| key | type | default | what it does |
+|---|---|---|---|
+| `program` | string | `""` | The executable's name (`mintty.exe`), compared without regard to case. Empty matches any program. |
+| `window_class` | string | `""` | The class of the window, of the focused control, or of the focused UI Automation element (in Chromium and Electron programs that is the HTML element's class), compared exactly. Empty matches any window. |
+
+A rule matches when both of its fields match; a rule with both empty matches
+nothing. The defaults: the classes `CASCADIA_HOSTING_WINDOW_CLASS` (Windows
+Terminal), `ConsoleWindowClass` (the console) and `xterm-helper-textarea`
+(xterm.js, the terminal of VS Code, Cursor, Hyper, Tabby and web terminals;
+VS Code's editor keeps Ctrl+C), and the programs `mintty.exe`,
+`wezterm-gui.exe`, `alacritty.exe`, `putty.exe`, `kitty.exe`,
+`MobaXterm.exe`, `ConEmu.exe`, `ConEmu64.exe`, `Hyper.exe` and `Tabby.exe`.
 
 ### `[mouse_mode]`
 
