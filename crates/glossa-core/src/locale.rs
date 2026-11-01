@@ -13,6 +13,12 @@
 //!   37 of them. Every string here that has a counterpart in the classic UI
 //!   carries the classic address in [`STRINGS`], so those files translate this
 //!   interface without being converted.
+//!
+//! Some languages also ship compiled in ([`BUILTIN_LOCALES`], native files
+//! under `assets/locales/`) and cover every key. Loading a language layers
+//! English, then the built-in pack, then a classic file, then the user's own
+//! file (see `glossa_engine::LocaleCatalog::load`), so a classic file written
+//! for the old program no longer leaves Glossa's newer strings in English.
 
 use std::collections::HashMap;
 
@@ -28,8 +34,28 @@ pub struct Locale {
     pub name: String,
     pub native_name: String,
     pub author: String,
+    /// Read from a classic numeric-id `lang.json`.
+    pub classic: bool,
     strings: HashMap<String, String>,
 }
+
+/// A language compiled into the program.
+pub struct BuiltinLocale {
+    pub code: &'static str,
+    pub name: &'static str,
+    pub native_name: &'static str,
+    /// The pack in the native format.
+    pub source: &'static str,
+}
+
+/// The languages that ship inside the executable. English needs no pack: it
+/// is the second column of [`STRINGS`].
+pub static BUILTIN_LOCALES: &[BuiltinLocale] = &[BuiltinLocale {
+    code: "ru",
+    name: "Russian",
+    native_name: "Русский",
+    source: include_str!("../../../assets/locales/ru.json"),
+}];
 
 impl Locale {
     /// English: every key, nothing loaded.
@@ -39,8 +65,42 @@ impl Locale {
             name: "English".into(),
             native_name: "English".into(),
             author: String::new(),
+            classic: false,
             strings: HashMap::new(),
         }
+    }
+
+    /// The compiled-in pack for `code` (`ru`, `ru-RU`), if there is one.
+    pub fn builtin(code: &str) -> Option<Locale> {
+        let base = code.split(['-', '_']).next().unwrap_or(code);
+        let pack = BUILTIN_LOCALES.iter().find(|b| b.code.eq_ignore_ascii_case(base))?;
+        match Locale::parse(pack.source) {
+            Ok(l) => Some(l),
+            Err(e) => {
+                // Only a broken build gets here; the tests parse every pack.
+                tracing::error!("built-in locale {}: {e}", pack.code);
+                None
+            }
+        }
+    }
+
+    /// Lay `over` on top of this locale: its strings win, and its name and
+    /// author replace these where it has them.
+    pub fn merge(&mut self, over: Locale) {
+        for (field, value) in
+            [(&mut self.name, over.name), (&mut self.native_name, over.native_name), (&mut self.author, over.author)]
+        {
+            if !value.is_empty() {
+                *field = value;
+            }
+        }
+        self.strings.extend(over.strings);
+    }
+
+    /// Whether this locale itself translates `key` (rather than falling back
+    /// to English).
+    pub fn has(&self, key: &str) -> bool {
+        self.strings.contains_key(key)
     }
 
     /// The text for `key`, in this language if it has it, else in English,
@@ -55,6 +115,19 @@ impl Locale {
     /// `get`, with `%s` replaced by `arg` — the classic placeholder.
     pub fn fmt(&self, key: &str, arg: &str) -> String {
         self.get(key).replacen("%s", arg, 1)
+    }
+
+    /// `get`, with each `%s` replaced by the next of `args`, in order. An
+    /// argument that itself contains `%s` is left alone.
+    pub fn fmt_args(&self, key: &str, args: &[&str]) -> String {
+        let mut parts = self.get(key).split("%s");
+        let mut out = parts.next().unwrap_or_default().to_owned();
+        let mut args = args.iter();
+        for part in parts {
+            out.push_str(args.next().copied().unwrap_or("%s"));
+            out.push_str(part);
+        }
+        out
     }
 
     /// How many of the known keys this locale actually translates.
@@ -82,7 +155,14 @@ impl Locale {
                 strings: HashMap<String, String>,
             }
             let n: Native = serde_json::from_value(value).map_err(|e| e.to_string())?;
-            Ok(Locale { code: n.code, name: n.name, native_name: n.native_name, author: n.author, strings: n.strings })
+            Ok(Locale {
+                code: n.code,
+                name: n.name,
+                native_name: n.native_name,
+                author: n.author,
+                classic: false,
+                strings: n.strings,
+            })
         }
     }
 
@@ -103,7 +183,14 @@ impl Locale {
         if native_name.is_empty() {
             native_name = s("LanguageName");
         }
-        Locale { code: s("LanguageCode"), name: s("LanguageName"), native_name, author: s("Author"), strings }
+        Locale {
+            code: s("LanguageCode"),
+            name: s("LanguageName"),
+            native_name,
+            author: s("Author"),
+            classic: true,
+            strings,
+        }
     }
 
     /// Serialise in the native format, e.g. to convert a classic file.
@@ -252,16 +339,37 @@ pub static STRINGS: &[(&str, &str, Option<&str>)] = &[
     ("msg.copied", "Copied", None),
     ("msg.translating", "Translating…", None),
     ("msg.recognizing", "Recognising…", None),
+    ("msg.yes", "Yes", None),
+    ("msg.no", "No", None),
+    ("msg.ms", "%s ms", None),
+    ("msg.watching", "Watching the region — press the hotkey again to stop.", None),
+    ("msg.watch_stopped", "Stopped watching the region.", None),
+    ("msg.not_available", "%s — not available in this version.", None),
     // -- main window --------------------------------------------------------
     ("main.title", "Glossa", Some("w:1:caption")),
     ("main.translate", "Translate", Some("w:1:1004")),
     ("main.auto_detect", "Auto-detect", None),
     ("main.auto_detect_as", "Auto-detect (%s)", None),
     ("main.source_placeholder", "Type, paste or drop text here", None),
+    ("main.tried_first", "Tried first: %s", None),
+    ("lang.search", "Search…", None),
+    // -- on-screen keyboard -------------------------------------------------
+    ("keyboard.space", "Space", None),
+    ("keyboard.backspace", "Backspace", None),
+    ("keyboard.enter", "Enter", None),
+    ("keyboard.shift", "Shift", None),
+    // -- about window -------------------------------------------------------
+    ("about.tagline", "A clean-room reincarnation of QTranslate.", None),
+    ("about.summary", "Translation, dictionaries and screen OCR — Rust, egui, no web engine.", None),
+    ("about.ocr_credit", "OCR: chrome-lens-py by Bropines (MIT)", None),
+    ("about.scripting", "Scripting: Boa (JavaScript), CPython modules, native modules", None),
+    ("about.compat", "Compatible with classic QTranslate services, themes, locales, and pot-app plugins", None),
+    ("about.status", "%s providers · %s modules loaded · %s failed", None),
     // -- popup --------------------------------------------------------------
     ("popup.dictionary", "Dictionary search for", Some("w:6:10:20")),
     ("popup.listen", "Listen to selected text", Some("w:6:10:30")),
     ("popup.copy", "Copy translation to clipboard", Some("w:6:10:40")),
+    ("popup.title_direction", "%s to %s (%s)", None),
     ("popup.reset_size", "Back to automatic size", None),
     ("mouse.translate", "Translate the selection", None),
     ("options.appearance.backdrop", "Window backdrop:", None),
@@ -293,11 +401,18 @@ pub static STRINGS: &[(&str, &str, Option<&str>)] = &[
     ("history.clear", "Clear", Some("w:3:1067")),
     ("history.search", "Search history", None),
     ("history.favorites_only", "Favourites only", None),
+    ("history.confirm_clear", "Clear all non-favourite entries?", None),
+    ("history.format_text", "Text file", None),
+    ("history.format_csv", "CSV file", None),
+    ("history.format_html", "HTML file", None),
+    ("history.format_json", "JSON file", None),
     // -- options frame --------------------------------------------------------
     ("options.title", "Options", Some("w:2:caption")),
     ("options.ok", "OK", Some("w:2:1")),
     ("options.cancel", "Cancel", Some("w:2:2")),
     ("options.apply", "Apply", Some("w:2:1049")),
+    ("options.saved", "Saved.", None),
+    ("options.remove", "Remove", None),
     // -- options: basics --------------------------------------------------------
     ("options.basics", "Basics", Some("w:10:caption")),
     ("options.basics.start_with_system", "Start with Windows", Some("w:10:1045")),
@@ -313,6 +428,13 @@ pub static STRINGS: &[(&str, &str, Option<&str>)] = &[
     ("options.basics.enable_history", "Enable history", Some("w:10:1122")),
     ("options.basics.clear_history_on_exit", "Clear history on exit", Some("w:10:1124")),
     ("options.basics.expand_items", "Expand items", Some("w:10:1123")),
+    ("options.basics.ui_language_system", "System", None),
+    ("options.basics.font_default", "--- Default ---", None),
+    (
+        "options.basics.smart_direction",
+        "Smart direction: the first language goes to the second, everything else to the first",
+        None,
+    ),
     // -- options: internet ------------------------------------------------------
     ("options.internet", "Internet", Some("w:11:caption")),
     ("options.internet.connection", "Connection", Some("w:11:1049")),
@@ -326,6 +448,8 @@ pub static STRINGS: &[(&str, &str, Option<&str>)] = &[
     ("options.internet.proxy_none", "No proxy", Some("w:11:1135:1")),
     ("options.internet.proxy_manual", "Manual proxy configuration", Some("w:11:1135:2")),
     ("options.internet.proxy_auto", "Auto-detect proxy settings", Some("w:11:1135:3")),
+    ("options.internet.retries", "Retries:", None),
+    ("options.internet.password_plain", "The password is stored in the settings file in plain text.", None),
     // -- options: services --------------------------------------------------------
     ("options.services", "Services", Some("w:12:caption")),
     ("options.services.add_dictionary", "Add dictionary...", Some("w:12:1177")),
@@ -336,6 +460,34 @@ pub static STRINGS: &[(&str, &str, Option<&str>)] = &[
     ("options.services.ocr", "Text recognition", None),
     ("options.services.settings", "Settings", None),
     ("options.services.fail_over", "If a service fails, try the next one", None),
+    ("options.services.origin_builtin", "Built-in", None),
+    ("options.services.origin_bundled", "Bundled", None),
+    ("capability.translate", "translation", None),
+    ("capability.detect_language", "language detection", None),
+    ("capability.listen", "speech", None),
+    ("capability.dictionary", "dictionary", None),
+    ("capability.ocr", "text recognition", None),
+    ("capability.speech_input", "speech input", None),
+    ("capability.batch", "batches", None),
+    ("capability.alternatives", "alternatives", None),
+    ("capability.promptable", "custom prompt", None),
+    ("capability.offline", "offline", None),
+    // -- options: AI endpoints (on the Services page) ---------------------------
+    ("options.ai.title", "AI endpoints (OpenAI-compatible)", None),
+    (
+        "options.ai.hint",
+        "Each endpoint is a translator of its own: OpenAI, OpenRouter, DeepSeek, Gemini, a local Ollama… \
+         Select it in the list above for its settings.",
+        None,
+    ),
+    ("options.ai.add", "Add endpoint", None),
+    ("options.ai.load_models", "Load models", None),
+    ("options.ai.test", "Test", None),
+    ("options.ai.test_tip", "Translate a short sample", None),
+    ("options.ai.test_ok", "OK, %s ms: %s", None),
+    ("options.ai.models", "Models (%s)", None),
+    ("options.ai.models_loaded", "%s models", None),
+    ("options.ai.pick_model", "Pick a model", None),
     // -- options: languages --------------------------------------------------------
     ("options.languages", "Languages", Some("w:13:caption")),
     ("options.languages.toggle_all", "Check / Uncheck all", Some("w:13:1099")),
@@ -364,6 +516,22 @@ pub static STRINGS: &[(&str, &str, Option<&str>)] = &[
     ("options.appearance.ui_scale", "Interface scale:", None),
     ("options.appearance.edit_theme", "Edit theme file", None),
     ("options.appearance.reload_themes", "Reload themes", None),
+    ("options.appearance.classic_theme", "%s  (classic)", None),
+    ("options.appearance.window_transparency", "Window transparency (0 - 90):", None),
+    ("options.appearance.renderer", "Graphics engine (after restart):", None),
+    ("options.appearance.renderer_opengl", "OpenGL — lightest", None),
+    ("options.appearance.renderer_gpu", "GPU — Direct3D 12 / Vulkan / Metal", None),
+    ("options.appearance.renderer_software", "Software — no GPU (WARP)", None),
+    ("options.appearance.unload_after", "Unload graphics after hiding, s (0 = never):", None),
+    (
+        "options.appearance.unload_hint",
+        "While everything is hidden in the tray, Glossa frees its graphics and keeps only the tray, hotkeys \
+         and engine — a few MB. The first window afterwards takes a moment longer to appear.",
+        None,
+    ),
+    ("options.appearance.popup_width", "Width:", None),
+    ("options.appearance.width_max", "max ", None),
+    ("options.appearance.width_min", "min ", None),
     // -- options: exceptions -----------------------------------------------------------
     ("options.exceptions", "Exceptions", Some("w:15:caption")),
     ("options.exceptions.enabled_for", "Enabled for these programs:", Some("w:15:1162:0")),
@@ -376,6 +544,8 @@ pub static STRINGS: &[(&str, &str, Option<&str>)] = &[
     ("options.exceptions.window_class", "Window class name", None),
     ("options.exceptions.any_program", "* All Programs *", None),
     ("options.exceptions.any_window", "* All Windows *", None),
+    ("options.exceptions.from_active", "From the active window", None),
+    ("options.exceptions.from_active_tip", "Fill from the window that was active before this one", None),
     // -- options: hotkeys ----------------------------------------------------------------
     ("options.hotkeys", "Hotkeys", Some("w:16:caption")),
     ("options.hotkeys.enable", "Enable hotkeys", Some("w:16:1118")),
@@ -383,6 +553,12 @@ pub static STRINGS: &[(&str, &str, Option<&str>)] = &[
     ("options.hotkeys.hotkey", "Hotkey", None),
     ("options.hotkeys.press_keys", "Press a key combination… (Esc cancels, Backspace clears)", None),
     ("options.hotkeys.conflict", "Also bound to: %s", None),
+    (
+        "options.hotkeys.wayland",
+        "Global hotkeys are not available in this session (Wayland). Bind a shortcut in your desktop's \
+         keyboard settings to:",
+        None,
+    ),
     ("action.show_main_window", "Show main window", Some("w:16:1165:0")),
     ("action.show_popup", "Show popup window", Some("w:16:1165:1")),
     ("action.show_dictionary", "Show dictionary window", Some("w:16:1165:2")),
@@ -423,15 +599,88 @@ pub static STRINGS: &[(&str, &str, Option<&str>)] = &[
     ("options.advanced.tray_toggles_mouse", "Click on system tray icon switches mouse mode", Some("w:17:1156")),
     ("options.advanced.api_keys", "API keys", Some("w:17:1158")),
     ("options.advanced.ocr_key", "OCR API key:", Some("w:17:1195")),
+    ("options.advanced.browser_default", "system default", None),
+    ("options.advanced.copy_accessibility", "Accessibility only", None),
+    ("options.advanced.copy_wait", "Selection copy wait, ms:", None),
+    (
+        "options.advanced.mouse_mode_note",
+        "Mouse mode (translate on mouse selection, without a hotkey) is saved but not active in this version.",
+        None,
+    ),
     // -- options: updates ------------------------------------------------------------------
     ("options.updates", "Updates", Some("w:18:caption")),
     ("options.updates.auto", "Automatically check for updates", Some("w:18:1188")),
     ("options.updates.check_now", "Check now", Some("w:18:1190")),
     ("options.updates.install", "Install", Some("w:18:1191")),
+    (
+        "options.updates.no_server",
+        "Glossa has no update server yet; new versions are published as releases of the project.",
+        None,
+    ),
     // -- options: new pages ---------------------------------------------------------------
     ("options.ocr", "Text recognition", None),
     ("options.modules", "Modules", None),
     ("options.server", "Control API", None),
+    // -- options: text recognition ----------------------------------------------------------
+    ("options.ocr.provider", "Provider:", None),
+    ("options.ocr.translate_after", "Translate the recognised text", None),
+    ("options.ocr.keep_line_breaks", "Keep line breaks", None),
+    ("options.ocr.watch_interval", "Watched region check, ms:", None),
+    ("options.ocr.save_dir", "Save captured regions to:", None),
+    ("options.ocr.lens_auto", "Auto", None),
+    ("options.ocr.lens_daemon", "Daemon only", None),
+    ("options.ocr.lens_cli", "CLI only", None),
+    ("options.ocr.lens_endpoint", "Daemon URL:", None),
+    ("options.ocr.lens_endpoint_hint", "discovered automatically", None),
+    ("options.ocr.lens_cli_path", "lens_scan path:", None),
+    ("options.ocr.lens_cli_hint", "found on PATH", None),
+    (
+        "options.ocr.lens_install",
+        "Install: pip install \"chrome-lens-py[clipboard]\" — the warm daemon makes a scan take ~0.4 s.",
+        None,
+    ),
+    // -- options: modules ----------------------------------------------------------------------
+    ("options.modules.runtimes", "Runtimes", None),
+    ("options.modules.legacy_scripts", "Load classic QTranslate service scripts", None),
+    ("options.modules.native", "Load native modules (they run with Glossa's full privileges)", None),
+    ("options.modules.python", "Python interpreter:", None),
+    ("options.modules.python_hint", "python3 / py -3 from PATH", None),
+    ("options.modules.call_timeout", "Call timeout, ms:", None),
+    ("options.modules.classic", "Classic QTranslate installation", None),
+    ("options.modules.choose", "Choose…", None),
+    ("options.modules.use_services", "services", None),
+    ("options.modules.use_themes", "themes", None),
+    ("options.modules.use_locales", "interface languages", None),
+    ("options.modules.import", "Import its settings and history", None),
+    ("options.modules.imported", "Imported: settings %s, %s history entries", None),
+    ("options.modules.folders", "Module folders", None),
+    ("options.modules.open_folder", "Open my modules folder", None),
+    ("options.modules.install", "Install module…", None),
+    ("options.modules.install_tip", "A module folder, or a pot-app .potext file", None),
+    ("options.modules.potext_filter", "pot-app plugin", None),
+    ("options.modules.installed", "Installed. Enable it on the Services page.", None),
+    ("options.modules.not_a_module", "That folder has no module.toml, Service.js or info.json.", None),
+    ("options.modules.reload", "Reload modules", None),
+    ("options.modules.add_folder", "Add a folder…", None),
+    ("options.modules.status", "Status: %s loaded, %s failed, %s skipped", None),
+    ("options.modules.failed_item", "failed  %s: %s", None),
+    // -- options: control API ------------------------------------------------------------------
+    ("options.server.enable", "Enable the local control API (restart to apply)", None),
+    ("options.server.listen_on", "Listen on:", None),
+    ("options.server.token", "Token:", None),
+    ("options.server.regenerate", "Regenerate", None),
+    ("options.server.show_token", "Show token", None),
+    ("options.server.running", "Running.", None),
+    ("options.server.not_running", "Not running: %s", None),
+    (
+        "options.server.bind_hint",
+        "Bind any of these to a key in your desktop or launcher (essential on Wayland):",
+        None,
+    ),
+    ("options.server.cmd_popup", "Translate the selection in the popup", None),
+    ("options.server.cmd_ocr", "Recognise a screen region", None),
+    ("options.server.cmd_ocr_translate", "Recognise and translate", None),
+    ("options.server.cmd_main", "Show the main window", None),
     // -- main menu (the "⋮" button) -------------------------------------------------------
     ("menu.spell_checking", "Spell checking", Some("m:1:10")),
     ("menu.instant_translation", "Instant translation", Some("m:1:20")),
@@ -609,5 +858,63 @@ mod tests {
             let key = format!("action.{}", a.id());
             assert!(english(&key).is_some(), "missing {key}");
         }
+    }
+
+    #[test]
+    fn every_capability_has_a_label_key() {
+        for name in crate::Capabilities(u32::MAX).names() {
+            let key = format!("capability.{name}");
+            assert!(english(&key).is_some(), "missing {key}");
+        }
+    }
+
+    #[test]
+    fn several_placeholders_fill_in_order() {
+        let en = Locale::english();
+        assert_eq!(en.fmt_args("options.ai.test_ok", &["12", "Hallo"]), "OK, 12 ms: Hallo");
+        // Too few arguments leave the rest visible; an argument holding a
+        // placeholder is not expanded again.
+        assert_eq!(en.fmt_args("options.ai.test_ok", &["%s"]), "OK, %s ms: %s");
+        assert_eq!(en.fmt_args("msg.ms", &["5", "extra"]), "5 ms");
+    }
+
+    #[test]
+    fn merging_lays_strings_over_and_keeps_the_rest() {
+        let mut ru = Locale::builtin("ru").unwrap();
+        let built_in = ru.get("options.modules").to_owned();
+        ru.merge(Locale::parse(CLASSIC_RU).unwrap());
+        assert_eq!(ru.get("options.hotkeys"), "Горячие клавиши", "the classic file wins");
+        assert_eq!(ru.get("main.translate"), "Перевести");
+        assert_eq!(ru.get("options.modules"), built_in, "what the classic file lacks stays from the pack");
+        assert_eq!(ru.author, "someone");
+    }
+
+    /// Every compiled-in pack parses, translates every key and nothing else,
+    /// and keeps the English placeholders.
+    #[test]
+    fn built_in_packs_cover_every_key() {
+        let known: std::collections::HashSet<&str> = STRINGS.iter().map(|(k, _, _)| *k).collect();
+        for pack in BUILTIN_LOCALES {
+            let l = Locale::parse(pack.source).unwrap_or_else(|e| panic!("{}: {e}", pack.code));
+            assert_eq!(l.code, pack.code);
+            assert_eq!(l.native_name, pack.native_name);
+            let missing: Vec<&str> = STRINGS.iter().map(|(k, _, _)| *k).filter(|k| !l.has(k)).collect();
+            assert!(missing.is_empty(), "{}: untranslated keys {missing:?}", pack.code);
+            let mut stale: Vec<&String> = l.strings.keys().filter(|k| !known.contains(k.as_str())).collect();
+            stale.sort();
+            assert!(stale.is_empty(), "{}: keys that no longer exist {stale:?}", pack.code);
+            for (key, en, _) in STRINGS {
+                let text = l.get(key);
+                assert!(!text.trim().is_empty(), "{}: {key} is blank", pack.code);
+                assert_eq!(
+                    text.matches("%s").count(),
+                    en.matches("%s").count(),
+                    "{}: {key} has a different number of %s than English",
+                    pack.code
+                );
+            }
+        }
+        assert!(Locale::builtin("ru-RU").is_some(), "a regional code finds its base pack");
+        assert!(Locale::builtin("xx").is_none());
     }
 }
