@@ -424,7 +424,7 @@ fn show_window<R>(
         actual = ui.input(|i| i.viewport().inner_rect.map(|r| r.size()));
         let Some(add) = add.take() else { return };
         egui::CentralPanel::no_frame().show(ui, |ui| {
-            let (r, content, closing) = body(ui, true, max_height, settling, add);
+            let (r, content, closing) = body(ui, true, size.x - 2.0 * EDGE, max_height, settling, add);
             result = Some(r);
             measured = Some(content);
             close_now |= closing;
@@ -540,10 +540,16 @@ fn show_area<R>(
         area.fixed_pos(anchor.left_bottom())
     };
     let shown = area.show(ctx, |ui| {
-        ui.set_min_width((min_width - 2.0 * EDGE).max(0.0));
-        out = Some(body(ui, false, max_height, settling, add));
+        let width = st.content.map_or(min_width, |c| c.x.max(min_width)) - 2.0 * EDGE;
+        ui.set_min_width(width.max(0.0));
+        out = Some(body(ui, false, width.max(1.0), max_height, settling, add));
     });
     st.area = Some(shown.response.rect);
+    if let Some((_, c, _)) = &out {
+        // As in a window of its own: the width only grows while it is open.
+        let w = (c.x + 2.0 * EDGE).ceil();
+        st.content = Some(vec2(st.content.map_or(w, |old| old.x.max(w)), c.y + 2.0 * EDGE));
+    }
     st.shown = true;
     let escape = ctx.input(|i| i.key_pressed(Key::Escape));
     match out {
@@ -557,6 +563,7 @@ fn show_area<R>(
 fn body<R>(
     ui: &mut Ui,
     fill_window: bool,
+    width: f32,
     max_height: f32,
     settling: bool,
     add: impl FnOnce(&mut Ui, bool) -> R,
@@ -584,6 +591,12 @@ fn body<R>(
                     .max_height(if fill_window { f32::INFINITY } else { max_height })
                     .auto_shrink([!fill_window, !fill_window])
                     .show(ui, |ui| {
+                        // Rows and fields that stretch fill `width`, not the
+                        // room the window or the screen leaves: measured
+                        // against that room, the list would widen itself a
+                        // little more every frame (or reach across the
+                        // screen). Wider content still shows, and widens it.
+                        ui.set_max_width(width.min(ui.available_width()).max(1.0));
                         ui.with_layout(egui::Layout::top_down_justified(egui::Align::Min), |ui| add(ui, settling)).inner
                     });
                 (scroll.inner, scroll.content_size, ui.should_close())
@@ -676,7 +689,9 @@ impl ComboBox {
             let picked = ctx
                 .interaction_snapshot(|s| s.clicked)
                 .and_then(|clicked| ctx.read_response(clicked))
-                .is_some_and(|r| !r.sense.senses_drag());
+                // In the list itself: drawn in the owner's window, the list
+                // also sees the click on the combo that opened it.
+                .is_some_and(|r| !r.sense.senses_drag() && r.layer_id == ui.layer_id());
             if picked {
                 ui.close();
             }
@@ -701,6 +716,88 @@ mod tests {
         assert_eq!(in_window(room, low, vec2(200.0, 700.0), true), (true, true));
         // Wider than the window.
         assert!(!in_window(room, high, vec2(900.0, 100.0), true).0);
+    }
+
+    fn items(ui: &mut Ui, _: bool) {
+        for s in ["Use the system proxy", "No proxy", "Manual"] {
+            let _ = ui.selectable_label(s == "Manual", s);
+        }
+    }
+
+    #[test]
+    fn a_list_window_keeps_the_width_of_its_content() {
+        let ctx = Context::default();
+        let mut widths = Vec::new();
+        let mut w = 120.0;
+        for _ in 0..12 {
+            let input = egui::RawInput {
+                screen_rect: Some(Rect::from_min_size(Pos2::ZERO, vec2(w, 300.0))),
+                ..Default::default()
+            };
+            let mut measured = Vec2::ZERO;
+            let mut out = ctx.run_ui(input, |ui| {
+                egui::CentralPanel::no_frame().show(ui, |ui| {
+                    measured = body(ui, true, w - 2.0 * EDGE, 400.0, false, items).1;
+                });
+            });
+            out.textures_delta.clear();
+            w = (measured.x + 2.0 * EDGE).ceil().max(w);
+            widths.push(w);
+        }
+        eprintln!("window widths: {widths:?}");
+        assert!(widths[11] < 260.0, "{widths:?}");
+        assert_eq!(widths[11], widths[6], "{widths:?}");
+    }
+
+    fn search_and_items(ui: &mut Ui, settling: bool) {
+        let mut query = String::new();
+        ui.add(egui::TextEdit::singleline(&mut query).hint_text("Search..."));
+        items(ui, settling);
+    }
+
+    #[test]
+    fn a_window_bigger_than_asked_does_not_widen_the_list() {
+        let ctx = Context::default();
+        let mut asked = 140.0;
+        for _ in 0..12 {
+            // The system gives the window a third more than asked (a scale
+            // the window was created at, before it moved to its monitor).
+            let input = egui::RawInput {
+                screen_rect: Some(Rect::from_min_size(Pos2::ZERO, vec2(asked * 1.33, 300.0))),
+                ..Default::default()
+            };
+            let mut measured = Vec2::ZERO;
+            let mut out = ctx.run_ui(input, |ui| {
+                egui::CentralPanel::no_frame().show(ui, |ui| {
+                    measured = body(ui, true, asked - 2.0 * EDGE, 400.0, false, search_and_items).1;
+                });
+            });
+            out.textures_delta.clear();
+            asked = (measured.x + 2.0 * EDGE).ceil().max(asked);
+        }
+        assert!(asked < 200.0, "the list grew to {asked}");
+    }
+
+    #[test]
+    fn a_list_in_the_window_is_as_wide_as_its_content() {
+        let ctx = Context::default();
+        let anchor = Rect::from_min_size(pos2(20.0, 20.0), vec2(100.0, 24.0));
+        let mut st = State::default();
+        let mut last = Rect::NOTHING;
+        for _ in 0..6 {
+            let input = egui::RawInput {
+                screen_rect: Some(Rect::from_min_size(Pos2::ZERO, vec2(1200.0, 600.0))),
+                ..Default::default()
+            };
+            let mut out = ctx.run_ui(input, |ui| {
+                let ctx = ui.ctx().clone();
+                show_area(&ctx, Id::unique("list"), &mut st, anchor, 100.0, 400.0, search_and_items);
+            });
+            out.textures_delta.clear();
+            last = st.area.unwrap();
+        }
+        eprintln!("area: {last:?}");
+        assert!(last.width() < 260.0, "{last:?}");
     }
 
     fn frame(owner: bool, list: bool) -> Seen {
