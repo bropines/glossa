@@ -444,6 +444,14 @@ pub static STRINGS: &[(&str, &str, Option<&str>)] = &[
     ),
     ("options.backdrop.none", "None", None),
     ("options.backdrop.blur", "Blur", None),
+    ("options.backdrop.mica", "Mica", None),
+    ("options.backdrop.mica_alt", "Mica Alt", None),
+    ("options.backdrop.acrylic", "Acrylic", None),
+    // macOS: the NSVisualEffectView materials the same choices become.
+    ("options.backdrop.mac.window", "Window", None),
+    ("options.backdrop.mac.under_window", "Under window", None),
+    ("options.backdrop.mac.popover", "Popover", None),
+    ("options.backdrop.mac.full_screen", "Full-screen UI", None),
     ("options.backdrop.needs_opengl", "Backdrops need Windows, or macOS with the OpenGL engine.", None),
     ("popup.close", "Close", None),
     ("popup.pin", "Keep it open", None),
@@ -462,6 +470,11 @@ pub static STRINGS: &[(&str, &str, Option<&str>)] = &[
     (
         "options.appearance.backdrop_opacity_hint",
         "How much of the theme's colour (and of Acrylic's tint) covers the backdrop; lower shows more of what is behind. Mica tints itself: only the window's own colours thin out there.",
+        None,
+    ),
+    (
+        "options.appearance.backdrop_opacity_hint_mac",
+        "How much of the theme's colour covers the material; lower shows more of what is behind the window. The material tints itself, light or dark with the theme.",
         None,
     ),
     ("options.appearance.show_border", "Show the popup border", None),

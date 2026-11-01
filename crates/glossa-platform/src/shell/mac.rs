@@ -22,6 +22,7 @@ pub const SHELL: Shell = Shell {
     switcher_follows_windows: true,
     portable_beside_exe: false,
     autostart_label: "options.basics.start_with_system_macos",
+    backdrop_names: super::MAC_BACKDROP_NAMES,
 };
 
 pub fn open(target: &str) -> std::io::Result<()> {

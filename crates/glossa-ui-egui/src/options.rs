@@ -799,12 +799,13 @@ fn backdrop_row(
 ) {
     use glossa_core::config::Backdrop;
     let supported = crate::style::backdrops_supported(&app.engine.config());
+    let keys = glossa_platform::shell::SHELL.backdrop_names;
     let names = [
         (Backdrop::None, app.t("options.backdrop.none")),
-        (Backdrop::Mica, "Mica".to_owned()),
-        (Backdrop::MicaAlt, "Mica Alt".to_owned()),
-        (Backdrop::Acrylic, "Acrylic".to_owned()),
-        (Backdrop::Blur, app.t("options.backdrop.blur")),
+        (Backdrop::Mica, app.t(keys.mica)),
+        (Backdrop::MicaAlt, app.t(keys.mica_alt)),
+        (Backdrop::Acrylic, app.t(keys.acrylic)),
+        (Backdrop::Blur, app.t(keys.blur)),
     ];
     row(ui, label, |ui| {
         ui.add_enabled_ui(supported, |ui| {
@@ -826,7 +827,7 @@ fn backdrop_opacity_row(app: &GlossaApp, ui: &mut egui::Ui, look: &crate::style:
         row(ui, &app.t("options.appearance.backdrop_opacity"), |ui| {
             ui.add(egui::Slider::new(value, 0..=100).suffix(" %"));
         });
-        hint(ui, look, &app.t("options.appearance.backdrop_opacity_hint"));
+        hint(ui, look, &app.t(glossa_platform::shell::SHELL.backdrop_names.opacity_hint));
     });
 }
 
