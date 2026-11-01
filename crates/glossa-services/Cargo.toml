@@ -1,6 +1,6 @@
 [package]
 name = "glossa-services"
-description = "Built-in translation, dictionary and speech services, in Rust."
+description = "Built-in translation, dictionary and speech services, in Rust, and the system voice."
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -15,3 +15,15 @@ base64 = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 tracing = { workspace = true }
+
+# The system voice on Windows (WinRT `Windows.Media.SpeechSynthesis`).
+# `windows-future` names the async types `windows` returns, to poll them.
+[target.'cfg(windows)'.dependencies]
+windows = { workspace = true, features = [
+    "Foundation",
+    "Media_Core",
+    "Media_SpeechSynthesis",
+    "Storage_Streams",
+    "Win32_System_Com",
+] }
+windows-future = "0.3"

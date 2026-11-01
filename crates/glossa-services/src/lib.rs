@@ -4,7 +4,8 @@
 //! [`glossa_modules::Provider`]. They hold no global state and reach the
 //! network only through the [`Host`](glossa_modules::Host) they are handed,
 //! so the same code runs against the real client in the app and against
-//! canned responses in the tests below each module.
+//! canned responses in the tests below each module. The exception is
+//! [`system_tts`], the offline system voice, which calls the OS.
 //!
 //! | id                  | service                                   | key        |
 //! |---------------------|-------------------------------------------|------------|
@@ -18,6 +19,7 @@
 //! | `lingva`            | Lingva (Google proxy)                     | none       |
 //! | `openai`            | Any OpenAI-compatible LLM                 | optional   |
 //! | `yandex`            | Yandex Cloud Translate                    | required   |
+//! | `system-tts`        | The system's own voices (speech, offline) | none       |
 //!
 //! These are clean-room implementations written from the services' public
 //! API documentation and observed response shapes; parsers are written to
@@ -38,6 +40,7 @@ pub mod libretranslate;
 pub mod lingva;
 pub mod mymemory;
 pub mod openai;
+pub mod system_tts;
 pub mod yandex;
 
 pub use bing::Bing;
@@ -48,10 +51,13 @@ pub use libretranslate::LibreTranslate;
 pub use lingva::Lingva;
 pub use mymemory::MyMemory;
 pub use openai::OpenAi;
+pub use system_tts::SystemTts;
 pub use yandex::Yandex;
 
 /// Every built-in service, in the order the options page lists them: the
-/// keyless ones first, so a fresh install has something that works.
+/// keyless ones first, so a fresh install has something that works. The
+/// system voice comes after Google, so Google stays the default speech
+/// service.
 pub fn builtin_providers() -> Vec<Arc<dyn Provider>> {
     vec![
         Arc::new(Google::new()),
@@ -64,6 +70,7 @@ pub fn builtin_providers() -> Vec<Arc<dyn Provider>> {
         Arc::new(Lingva::new()),
         Arc::new(OpenAi::new()),
         Arc::new(Yandex::new()),
+        Arc::new(SystemTts::new()),
     ]
 }
 
@@ -89,7 +96,8 @@ mod tests {
                 "mymemory",
                 "lingva",
                 "openai",
-                "yandex"
+                "yandex",
+                "system-tts"
             ]
         );
         for p in &all {
