@@ -1,0 +1,39 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!-- Glossa.app's Info.plist; the release workflow fills in @VERSION@. -->
+<plist version="1.0">
+<dict>
+    <key>CFBundleDevelopmentRegion</key>
+    <string>en</string>
+    <key>CFBundleDisplayName</key>
+    <string>Glossa</string>
+    <key>CFBundleExecutable</key>
+    <string>glossa</string>
+    <key>CFBundleIconFile</key>
+    <string>glossa</string>
+    <key>CFBundleIdentifier</key>
+    <string>io.github.bropines.glossa</string>
+    <key>CFBundleInfoDictionaryVersion</key>
+    <string>6.0</string>
+    <key>CFBundleName</key>
+    <string>Glossa</string>
+    <key>CFBundlePackageType</key>
+    <string>APPL</string>
+    <key>CFBundleShortVersionString</key>
+    <string>@VERSION@</string>
+    <key>CFBundleVersion</key>
+    <string>@VERSION@</string>
+    <key>LSApplicationCategoryType</key>
+    <string>public.app-category.productivity</string>
+    <!-- Apple Vision's text recogniser needs 10.15. -->
+    <key>LSMinimumSystemVersion</key>
+    <string>10.15</string>
+    <!-- A menu-bar app: no Dock icon, no app menu, like the tray on Windows. -->
+    <key>LSUIElement</key>
+    <true/>
+    <key>NSHighResolutionCapable</key>
+    <true/>
+    <key>NSHumanReadableCopyright</key>
+    <string>Glossa contributors. MIT OR Apache-2.0.</string>
+</dict>
+</plist>

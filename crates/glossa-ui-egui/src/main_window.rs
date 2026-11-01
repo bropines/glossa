@@ -248,9 +248,23 @@ fn source_pane(app: &mut GlossaApp, ui: &mut egui::Ui, height: f32) {
         egui::ScrollArea::vertical().id_salt("source").max_height(inner_h).show(ui, |ui| {
             // No frame and no margin of its own: the pane's frame gives the
             // same inset as the translation pane's.
+            // Right-to-left and mixed-direction text needs its own layout
+            // (see `bidi`); the rest goes the default way.
+            let color = c(look.theme.edit.normal.text);
+            let halign = if glossa_core::text::guessed_direction(&app.main.source).is_rtl() {
+                egui::Align::RIGHT
+            } else {
+                egui::Align::LEFT
+            };
+            let layout_font = font.clone();
+            let mut layouter = |ui: &egui::Ui, buf: &dyn egui::TextBuffer, wrap_width: f32| {
+                crate::bidi::editor_layout(ui, buf.as_str(), &layout_font, color, wrap_width, halign)
+            };
             let edit = egui::TextEdit::multiline(&mut app.main.source)
                 .font(font)
-                .text_color(c(look.theme.edit.normal.text))
+                .text_color(color)
+                .align(egui::Align2([halign, egui::Align::TOP]))
+                .layouter(&mut layouter)
                 .frame(egui::Frame::NONE)
                 .desired_width(f32::INFINITY)
                 .desired_rows(4)
@@ -403,36 +417,19 @@ fn result_pane(app: &mut GlossaApp, ui: &mut egui::Ui, height: f32) {
         egui::ScrollArea::vertical().id_salt("result").stick_to_bottom(app.main.busy).show(ui, |ui| {
             if let Some(partial) = app.main.partial.clone().filter(|_| app.main.busy) {
                 // A streaming service is still writing.
-                ui.add(
-                    egui::Label::new(
-                        RichText::new(partial).font(look.text_font()).color(c(look.theme.edit.normal.text)),
-                    )
-                    .wrap(),
-                );
+                let rtl = glossa_core::text::guessed_direction(&partial).is_rtl();
+                let text = RichText::new(partial).font(look.text_font()).color(c(look.theme.edit.normal.text));
+                crate::bidi::label(ui, text, rtl);
             } else if let Some(err) = app.main.error.clone() {
                 ui.label(RichText::new(err).color(look.error()).font(look.text_font()));
             } else if let Some(o) = app.main.outcome.clone() {
                 let text = o.translation.text.clone();
                 app.fonts.ensure(&app.ctx, &text);
                 let rtl = o.pair.to.is_rtl() || glossa_core::text::guessed_direction(&text).is_rtl();
-                let shown = if glossa_core::text::needs_bidi(&text) {
-                    glossa_core::text::for_display(&text, rtl)
-                } else {
-                    text.clone()
-                };
-                let layout = if rtl {
-                    egui::Layout::top_down(egui::Align::Max)
-                } else {
-                    egui::Layout::top_down(egui::Align::Min)
-                };
-                ui.with_layout(layout, |ui| {
-                    let r = ui.add(
-                        egui::Label::new(
-                            RichText::new(shown).font(look.text_font()).color(c(look.theme.edit.normal.text)),
-                        )
-                        .selectable(true)
-                        .wrap(),
-                    );
+                {
+                    let shown =
+                        RichText::new(text.clone()).font(look.text_font()).color(c(look.theme.edit.normal.text));
+                    let r = crate::bidi::label(ui, shown, rtl);
                     crate::dropdown::context_menu(ui, &r, |ui| {
                         if ui.button(app.t("edit.copy_all")).clicked() {
                             app.copy_text(&text);
@@ -447,7 +444,7 @@ fn result_pane(app: &mut GlossaApp, ui: &mut egui::Ui, height: f32) {
                             ui.close();
                         }
                     });
-                });
+                }
                 // The rest of the result follows the text zoom too.
                 let body = ui.style().text_styles.get(&egui::TextStyle::Body).map_or(14.0, |f| f.size);
                 let size = body * look.text_scale;
@@ -469,7 +466,8 @@ fn result_pane(app: &mut GlossaApp, ui: &mut egui::Ui, height: f32) {
                         } else {
                             format!("  ({})", s.back_translations.join(", "))
                         };
-                        ui.label(RichText::new(format!("    {}{back}", s.word)).size(size));
+                        let line = RichText::new(format!("    {}{back}", s.word)).size(size);
+                        ui.label(crate::bidi::auto(ui, line));
                     }
                 }
                 if !o.failed.is_empty() {
@@ -557,11 +555,9 @@ fn stacked_results(app: &mut GlossaApp, ui: &mut egui::Ui, height: f32) {
                 match app.main.stacked.get(&id) {
                     Some(Ok(o)) => {
                         app.fonts.ensure(&app.ctx, &o.translation.text);
-                        ui.add(
-                            egui::Label::new(RichText::new(&o.translation.text).font(look.text_font()))
-                                .selectable(true)
-                                .wrap(),
-                        );
+                        let text = &o.translation.text;
+                        let rtl = glossa_core::text::guessed_direction(text).is_rtl();
+                        crate::bidi::label(ui, RichText::new(text).font(look.text_font()), rtl);
                     }
                     Some(Err(e)) => {
                         ui.label(RichText::new(e).color(look.error()));

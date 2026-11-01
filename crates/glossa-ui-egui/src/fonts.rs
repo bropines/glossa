@@ -103,7 +103,7 @@ impl Script {
 
     /// The script a character needs a font for, or `None` for what the
     /// built-in faces draw (and for scripts no font here covers).
-    fn of(c: char) -> Option<Script> {
+    pub(crate) fn of(c: char) -> Option<Script> {
         let u = c as u32;
         Some(match u {
             0x3040..=0x30FF | 0x31F0..=0x31FF | 0xFF66..=0xFF9F => Script::Kana,

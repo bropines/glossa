@@ -1,6 +1,6 @@
 [package]
 name = "glossa-modules"
-description = "The provider API and the module runtimes: JavaScript (Glossa, classic QTranslate, pot-app), Python, native."
+description = "The provider API and the module runtimes: JavaScript (Glossa, classic QTranslate, pot-app), Python, Java and any program over stdio, native."
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -8,9 +8,11 @@ license.workspace = true
 authors.workspace = true
 
 [features]
-default = ["js", "python", "native"]
+default = ["js", "python", "process", "native"]
 js = ["dep:boa_engine", "dep:boa_gc"]
 python = []
+# Any program over stdio (`runtime = "process"`) and Java modules (`runtime = "java"`).
+process = []
 native = ["dep:libloading"]
 
 [dependencies]

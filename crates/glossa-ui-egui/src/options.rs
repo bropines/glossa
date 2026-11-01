@@ -8,7 +8,9 @@
 //! pot-app plugin — gets a settings form without shipping any UI code.
 
 use egui::{vec2, RichText};
-use glossa_core::config::{CopyAction, ExceptionMode, ExceptionRule, LensMode, MouseBehaviour, ProxyMode, ProxyScheme};
+use glossa_core::config::{
+    CopyAction, ExceptionMode, ExceptionRule, LensMode, MouseBehaviour, ProxyMode, ProxyScheme, VisionLevel,
+};
 use glossa_core::{Action, Capabilities, Config, LangId};
 use glossa_modules::{OptionKind, OptionSpec};
 
@@ -28,11 +30,12 @@ pub enum Page {
     Ocr,
     Modules,
     Api,
+    Permissions,
     Updates,
 }
 
 impl Page {
-    const ALL: [Page; 12] = [
+    const ALL: [Page; 13] = [
         Page::Basics,
         Page::Hotkeys,
         Page::Internet,
@@ -44,6 +47,7 @@ impl Page {
         Page::Ocr,
         Page::Modules,
         Page::Api,
+        Page::Permissions,
         Page::Updates,
     ];
 
@@ -60,6 +64,7 @@ impl Page {
             Page::Ocr => "options.ocr",
             Page::Modules => "options.modules",
             Page::Api => "options.server",
+            Page::Permissions => "options.permissions",
             Page::Updates => "options.updates",
         }
     }
@@ -211,6 +216,10 @@ fn body(app: &mut GlossaApp, ui: &mut egui::Ui, st: &mut OptionsState) -> bool {
         ui.add_space(6.0);
         ui.with_layout(egui::Layout::top_down_justified(egui::Align::Min), |ui| {
             for p in Page::ALL {
+                // Only macOS asks the user for permissions.
+                if p == Page::Permissions && glossa_platform::permissions::Permission::all().is_empty() {
+                    continue;
+                }
                 let sel = st.page == p;
                 if ui.selectable_label(sel, app.t(p.key())).clicked() {
                     st.page = p;
@@ -238,6 +247,7 @@ fn body(app: &mut GlossaApp, ui: &mut egui::Ui, st: &mut OptionsState) -> bool {
                 Page::Ocr => ocr(app, ui, st),
                 Page::Modules => modules(app, ui, st),
                 Page::Api => api(app, ui, st),
+                Page::Permissions => permissions(app, ui),
                 Page::Updates => updates(app, ui, st),
             }
         });
@@ -260,7 +270,14 @@ fn basics(app: &mut GlossaApp, ui: &mut egui::Ui, st: &mut OptionsState) {
     let look = app.look.clone();
     let d = &mut st.draft;
     group(ui, &look, &app.t("options.basics.general_group"), |ui| {
-        ui.checkbox(&mut st.autostart, app.t("options.basics.start_with_system"));
+        let autostart_label = if cfg!(target_os = "macos") {
+            "options.basics.start_with_system_macos"
+        } else if cfg!(windows) {
+            "options.basics.start_with_system"
+        } else {
+            "options.basics.start_with_system_linux"
+        };
+        ui.checkbox(&mut st.autostart, app.t(autostart_label));
         row(ui, &app.t("options.basics.ui_language"), |ui| {
             let locales = app.engine.locales();
             let current = locales
@@ -1387,6 +1404,95 @@ fn ocr(app: &mut GlossaApp, ui: &mut egui::Ui, st: &mut OptionsState) {
             ui.label(RichText::new(app.t("options.ocr.oneocr_note")).small().color(look.weak_text()));
         });
     }
+    if cfg!(target_os = "macos") {
+        group(ui, &look, &app.t("options.ocr.vision_title"), |ui| {
+            let v = &mut d.vision;
+            ui.horizontal(|ui| {
+                ui.radio_value(&mut v.level, VisionLevel::Accurate, app.t("options.ocr.vision_accurate"));
+                ui.radio_value(&mut v.level, VisionLevel::Fast, app.t("options.ocr.vision_fast"));
+            });
+            ui.checkbox(&mut v.language_correction, app.t("options.ocr.vision_correction"));
+            row(ui, &app.t("options.ocr.auto_langs"), |ui| {
+                ui.add(
+                    egui::TextEdit::singleline(&mut v.auto_languages)
+                        .hint_text(app.t("options.ocr.vision_auto_hint"))
+                        .desired_width(250.0),
+                );
+            });
+            ui.label(RichText::new(app.t("options.ocr.vision_note")).small().color(look.weak_text()));
+        });
+    }
+    group(ui, &look, &app.t("options.ocr.tesseract_title"), |ui| {
+        let t = &mut d.tesseract;
+        row(ui, &app.t("options.ocr.tesseract_path"), |ui| {
+            ui.add(
+                egui::TextEdit::singleline(&mut t.path)
+                    .hint_text(app.t("options.ocr.tesseract_path_hint"))
+                    .desired_width(250.0),
+            );
+            if ui.button("…").clicked() {
+                if let Some(file) = rfd::FileDialog::new().pick_file() {
+                    t.path = file.display().to_string();
+                }
+            }
+        });
+        row(ui, &app.t("options.ocr.tesseract_tessdata"), |ui| {
+            ui.add(
+                egui::TextEdit::singleline(&mut t.tessdata_dir)
+                    .hint_text(app.t("options.ocr.tesseract_tessdata_hint"))
+                    .desired_width(250.0),
+            );
+            if ui.button("…").clicked() {
+                if let Some(dir) = rfd::FileDialog::new().pick_folder() {
+                    t.tessdata_dir = dir.display().to_string();
+                }
+            }
+        });
+        row(ui, &app.t("options.ocr.auto_langs"), |ui| {
+            ui.add(
+                egui::TextEdit::singleline(&mut t.auto_languages)
+                    .hint_text(app.t("options.ocr.tesseract_auto_hint"))
+                    .desired_width(250.0),
+            );
+        });
+        let default = app.t("options.ocr.default");
+        let psm: Vec<(u8, String)> =
+            [3u8, 4, 6, 7, 11, 13].into_iter().map(|n| (n, app.t(&format!("options.ocr.psm_{n}")))).collect();
+        row(ui, &app.t("options.ocr.tesseract_psm"), |ui| {
+            let shown = t
+                .psm
+                .map(|n| psm.iter().find(|(m, _)| *m == n).map_or(n.to_string(), |(_, l)| l.clone()))
+                .unwrap_or(default.clone());
+            egui::ComboBox::from_id_salt("tesseract-psm").width(250.0).selected_text(shown).show_ui(ui, |ui| {
+                ui.selectable_value(&mut t.psm, None, &default);
+                for (n, label) in &psm {
+                    ui.selectable_value(&mut t.psm, Some(*n), label);
+                }
+            });
+        });
+        let oem: Vec<(u8, String)> =
+            [0u8, 1, 2].into_iter().map(|n| (n, app.t(&format!("options.ocr.oem_{n}")))).collect();
+        row(ui, &app.t("options.ocr.tesseract_oem"), |ui| {
+            let shown = t
+                .oem
+                .map(|n| oem.iter().find(|(m, _)| *m == n).map_or(n.to_string(), |(_, l)| l.clone()))
+                .unwrap_or(default.clone());
+            egui::ComboBox::from_id_salt("tesseract-oem").width(250.0).selected_text(shown).show_ui(ui, |ui| {
+                ui.selectable_value(&mut t.oem, None, &default);
+                for (n, label) in &oem {
+                    ui.selectable_value(&mut t.oem, Some(*n), label);
+                }
+            });
+        });
+        row(ui, &app.t("options.ocr.tesseract_extra"), |ui| {
+            ui.add(
+                egui::TextEdit::singleline(&mut t.extra_args)
+                    .hint_text("-c preserve_interword_spaces=1")
+                    .desired_width(250.0),
+            );
+        });
+        ui.label(RichText::new(app.t("options.ocr.tesseract_note")).small().color(look.weak_text()));
+    });
 }
 
 fn modules(app: &mut GlossaApp, ui: &mut egui::Ui, st: &mut OptionsState) {
@@ -1401,6 +1507,13 @@ fn modules(app: &mut GlossaApp, ui: &mut egui::Ui, st: &mut OptionsState) {
             ui.add(
                 egui::TextEdit::singleline(&mut d.modules.python)
                     .hint_text(app.t("options.modules.python_hint"))
+                    .desired_width(280.0),
+            );
+        });
+        row(ui, &app.t("options.modules.java"), |ui| {
+            ui.add(
+                egui::TextEdit::singleline(&mut d.modules.java)
+                    .hint_text(app.t("options.modules.java_hint"))
                     .desired_width(280.0),
             );
         });
@@ -1572,6 +1685,44 @@ fn api(app: &mut GlossaApp, ui: &mut egui::Ui, st: &mut OptionsState) {
         });
         ui.code(if st.show_secrets { cmd } else { cmd.replace(&s.token, "<token>") });
     }
+}
+
+/// What the system lets Glossa do, with a way to ask for what is missing.
+fn permissions(app: &mut GlossaApp, ui: &mut egui::Ui) {
+    use glossa_platform::permissions::{self as perm, Permission, Status};
+    let look = app.look.clone();
+    // Grants happen in System Settings, outside this window: look again now
+    // and then.
+    ui.ctx().request_repaint_after(std::time::Duration::from_secs(1));
+    ui.label(RichText::new(app.t("options.permissions.intro")).color(look.weak_text()));
+    for &p in Permission::all() {
+        let (name, why) = match p {
+            Permission::Accessibility => ("options.permissions.accessibility", "options.permissions.accessibility_why"),
+            Permission::ScreenRecording => ("options.permissions.screen", "options.permissions.screen_why"),
+        };
+        group(ui, &look, &app.t(name), |ui| {
+            ui.label(RichText::new(app.t(why)).color(look.weak_text()));
+            ui.horizontal(|ui| {
+                let granted = perm::status(p) == Status::Granted;
+                let (text, colour) = if granted {
+                    (app.t("options.permissions.granted"), egui::Color32::from_rgb(0x3f, 0xb9, 0x50))
+                } else {
+                    (app.t("options.permissions.missing"), look.error())
+                };
+                ui.label(RichText::new(text).color(colour).strong());
+                if !granted && ui.button(app.t("options.permissions.request")).clicked() {
+                    perm::request(p);
+                }
+                if ui.button(app.t("options.permissions.open_settings")).clicked() {
+                    if let Err(e) = perm::open_settings(p) {
+                        app.notify(e.to_string(), true);
+                    }
+                }
+            });
+        });
+    }
+    ui.add_space(6.0);
+    ui.label(RichText::new(app.t("options.permissions.rebuild_note")).small().color(look.weak_text()));
 }
 
 fn updates(app: &mut GlossaApp, ui: &mut egui::Ui, st: &mut OptionsState) {

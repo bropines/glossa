@@ -56,8 +56,9 @@ COMMANDS
     detect     [TEXT…]
     dict       [-f FROM] [-t TO] [-s SERVICE] WORD
     ocr        IMAGE [-l LANG] [-t TO] [-e ENGINE] [--in-place] [--join-lines]
-               ENGINE: lens, windows-ocr, oneocr, command-ocr…; --in-place translates block by
-               block (each block with its box under --json); --join-lines joins lines into paragraphs
+               ENGINE: lens, windows-ocr, oneocr, macos-vision, tesseract, command-ocr…;
+               --in-place translates block by block (each block with its box under --json);
+               --join-lines joins lines into paragraphs
     speak      [-l LANG] [--slow] -o OUT.mp3 TEXT…
     services   [-c CAPABILITY]        translate | dictionary | listen | ocr | detect_language
     modules                           what loaded, what failed and why
@@ -425,8 +426,14 @@ fn run(args: &Args) -> Result<(), Fail> {
                 );
             } else {
                 out!("loaded ({}):", s.loaded.len());
+                let reg = e.registry();
                 for id in &s.loaded {
-                    out!("  {id}");
+                    match reg.entry(id).map(|entry| &entry.origin) {
+                        Some(glossa_modules::Origin::Module { runtime, .. }) => {
+                            out!("  {id:32} [{}]", runtime.label())
+                        }
+                        _ => out!("  {id}"),
+                    }
                 }
                 if !s.failed.is_empty() {
                     out!("failed ({}):", s.failed.len());

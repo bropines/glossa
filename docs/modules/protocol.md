@@ -7,7 +7,7 @@ differ in how the messages travel:
 | runtime | a request arrives as | a host call is |
 |---|---|---|
 | JavaScript | `translate(req, host)` etc. | `host.fetch(…)`, `host.http(…)`, `host.cache.get(…)` (synchronous) |
-| Python | a JSON line on stdin | a JSON line on stdout, answered on stdin (the SDK hides both) |
+| Python, Java, process | a JSON line on stdin | a JSON line on stdout, answered on stdin (the SDKs hide both; framing in [process-modules.md](process-modules.md#framing)) |
 | Native | `call(method, params_json)` through the C ABI | `host->call(ctx, method, params_json)` |
 
 Everything is JSON, UTF-8. Unknown fields are ignored in both directions, so

@@ -1,0 +1,585 @@
+# Command line
+
+`glossa-cli` is Glossa without a window. It uses the same engine, settings,
+services and modules as the desktop program, so a service configured in
+*Options* works here too, and the other way round. It does not need the
+desktop program to be running, except for [`action`](#action), which asks a
+running one to do something.
+
+Results go to stdout; status lines, timings and errors go to stderr. With
+`--json`, stdout carries one JSON document per command.
+
+## Synopsis
+
+```
+glossa-cli [--json] [--home DIR] [-v] <command> [options] [text…]
+```
+
+`glossa-cli` alone, `glossa-cli help`, or `-h` / `--help` anywhere prints the
+command list and exits with 0.
+
+### Global flags
+
+| flag | does |
+|---|---|
+| `--json` | Machine-readable output on stdout (shapes are given per command below). Errors become `{"error": "…"}` on stdout. |
+| `--home DIR` | Use `DIR` as the data folder, as `GLOSSA_HOME` does. Must be written as two words: `--home=DIR` is accepted but ignored. |
+| `-v`, `--verbose` | Log at `debug` level to stderr. `GLOSSA_LOG`, when set, takes precedence. |
+| `--` | Everything after it is text, even if it starts with `-`. |
+
+Global flags may stand anywhere on the line, before or after the command.
+
+### How arguments are read
+
+- The first word that is not a flag is the command; the remaining words are
+  its arguments. For `translate`, `detect`, `dict` and `speak` they are
+  joined with single spaces into the text.
+- Flags that take a value accept `-t ru`, `--to ru` and `--to=ru`.
+- A word that starts with `-` followed by a digit (`-5`) is text, not a flag.
+- If the same flag is given twice, the last one wins.
+- Unknown flags are ignored without a warning, so a misspelt flag
+  (`--slwo`) silently does nothing.
+
+### Languages and services
+
+Languages are codes: `en`, `ru`, `zh-CN`, `pt-BR`, `he`, and `auto` for
+"detect". An unknown code is a usage error (exit 64). A target of `auto` (the
+default) lets smart direction choose: text in the first language of
+*Options → Basics* goes to the second, anything else to the first (see
+[`[general]`](configuration.md#general)).
+
+A service is a provider id as `glossa-cli services` lists it (`google`,
+`yandex-web`, `deepl`, an AI endpoint's `ai-…` id, a module's id). An id that
+does not exist is skipped without an error: the active service and, with
+fail-over on, the other enabled services answer instead. Check the
+`service` field of the output, or the `[service · …]` line on stderr, to see
+who answered.
+
+## Exit codes
+
+| code | meaning |
+|---|---|
+| 0 | Success. |
+| 1 | The operation failed: a network error, no service could answer, a file could not be read, the running app refused an action. The message is on stderr (or on stdout as `{"error": …}` with `--json`). |
+| 64 | Bad command line: unknown command or subcommand, unknown language or capability, a missing argument or flag value. The message and the command list go to stderr, as text even with `--json`. |
+
+## Commands
+
+| command | does |
+|---|---|
+| [`translate`](#translate) (`tr`) | Translate text from arguments or stdin. |
+| [`detect`](#detect) | Detect the language of a text. |
+| [`dict`](#dict) (`dictionary`) | Look a word up in a dictionary service. |
+| [`ocr`](#ocr) | Recognise the text in an image file, optionally translate it. |
+| [`speak`](#speak) | Write text to speech to a file. |
+| [`services`](#services) | List providers with a capability. |
+| [`modules`](#modules) | Show which modules loaded, failed or were skipped. |
+| [`history`](#history) | List, search or export the translation history. |
+| [`import-classic`](#import-classic) | Import a classic QTranslate installation. |
+| [`theme`](#theme) | List, show or convert themes. |
+| [`locale`](#locale) | List or convert interface languages. |
+| [`config`](#config) | Show where the settings are, or print them. |
+| [`serve`](#serve) | Run the control API in the foreground. |
+| [`action`](#action) | Ask a running Glossa to perform an action. |
+
+### translate
+
+```
+glossa-cli translate [-f FROM] [-t TO] [-s SERVICE] [--back] [TEXT…]
+```
+
+| option | default | meaning |
+|---|---|---|
+| `-f`, `--from LANG` | `auto` | Source language. |
+| `-t`, `--to LANG` | `auto` | Target language. |
+| `-s`, `--service ID` | the active service | Ask this service first. Fail-over to the other enabled services still applies when `[services] fail_over` is on. |
+| `--back` | off | Also translate the result back into the source language. |
+
+With no text arguments the text is read from stdin. If stdin is a terminal
+and no text was given, that is a usage error (64). Empty or blank text fails
+with "no text to translate" (1).
+
+```console
+$ glossa-cli translate -t ru "Hello, world"
+Привет, мир
+
+Privet, mir
+[google · English → Russian · 196 ms]
+
+$ echo "Bonjour tout le monde" | glossa-cli translate -t en
+Hello everyone
+[google · French → English · 159 ms]
+
+$ glossa-cli translate -s yandex-web -f en -t de "Good morning"
+Guten Morgen
+[yandex-web · English → German · 228 ms]
+```
+
+The text block on stdout is what the main window shows: the translation,
+then, after a blank line each, the romanisation and the dictionary senses if
+the service sent them. For the translation alone, use `--json` and read
+`text`. The last line, on stderr, names the service, the direction and the
+time taken; with `--back`, the back translation is printed to stderr above
+it, after `↩`.
+
+When stdout is a terminal and the service streams (AI endpoints with
+streaming on), the answer is printed as it is written. If a service fails
+part-way and another takes over, its answer starts on a new line. Piped
+output, and `--json`, get the finished text only.
+
+`--json`:
+
+```console
+$ glossa-cli --json translate -s google -t ru --back "The quick brown fox"
+{"back":"Quick brown fox","elapsed_ms":139,"failed":[],"from":"en","romanization":"Bystraya korichnevaya lisa","service":"google","text":"Быстрая коричневая лиса","to":"ru"}
+```
+
+| field | type | meaning |
+|---|---|---|
+| `text` | string | The translation. |
+| `from`, `to` | string | The direction actually used, as codes (detection and smart direction resolved). |
+| `service` | string | The provider that answered. |
+| `romanization` | string or null | A Latin transcription, when the service gives one. |
+| `back` | string or null | The back translation, with `--back`. |
+| `failed` | array | Services tried before this one that failed, as `[id, message]` pairs. |
+| `elapsed_ms` | number | Time the answering service took. |
+
+`glossa-cli translate` does not add to the history; translations made in the
+desktop program do.
+
+### detect
+
+```
+glossa-cli detect [TEXT…]
+```
+
+Text from arguments or stdin, as for `translate`.
+
+```console
+$ glossa-cli detect "Это проверка"
+Russian (ru)
+
+$ glossa-cli --json detect "Это проверка"
+{"confidence":1.0,"lang":"ru","name":"Russian"}
+```
+
+`confidence` is between 0 and 1.
+
+### dict
+
+```
+glossa-cli dict [-f FROM] [-t TO] [-s SERVICE] WORD
+```
+
+| option | default | meaning |
+|---|---|---|
+| `-f`, `--from LANG` | `auto` | Language of the word. |
+| `-t`, `--to LANG` | `auto` | Language of the explanations and translations. |
+| `-s`, `--service ID` | the active dictionary | A dictionary provider id (`glossa-cli services -c dictionary`). |
+
+Exact search follows `[dictionary] exact_search`.
+
+```console
+$ glossa-cli dict -f en -t ru serendipity
+serendipity  [ˌserənˈdipədē]
+
+noun
+  1. the occurrence and development of events by chance in a happy or beneficial way.
+
+
+translation
+  1. случайность
+  2. noun: интуитивная прозорливость
+
+
+• a fortunate stroke of serendipity
+https://translate.google.com/?sl=en&tl=ru&text=serendipity&op=translate
+[google-dictionary · 317 ms]
+```
+
+The article goes to stdout; the link to the source page and the timing line
+go to stderr. Services that return a ready-made HTML article (the scraped
+dictionaries) are converted to plain text.
+
+`--json` prints the article, pretty-printed. Empty fields are left out:
+
+```json
+{
+  "headword": "serendipity",
+  "pronunciations": [{ "region": "", "symbol": "ˌserənˈdipədē" }],
+  "explanations": [
+    { "trait": "noun", "explains": ["the occurrence and development of events by chance in a happy or beneficial way."] },
+    { "trait": "translation", "explains": ["случайность", "noun: интуитивная прозорливость"] }
+  ],
+  "examples": [{ "source": "a fortunate stroke of serendipity", "target": "" }],
+  "associations": ["chance", "happy chance", "accident", "fluke", "luck"],
+  "link": "https://translate.google.com/?sl=en&tl=ru&text=serendipity&op=translate",
+  "provider_id": "google-dictionary",
+  "elapsed_ms": 333
+}
+```
+
+| field | meaning |
+|---|---|
+| `headword` | The word as the service spells it. |
+| `pronunciations` | `region` (`UK`, `US` or empty), `symbol`, and `audio_url` when there is one. |
+| `explanations` | Senses grouped by part of speech: `trait` is the group, `explains` the definitions. |
+| `examples` | Usage examples, `source` and `target`. |
+| `associations` | Word forms, synonyms, "see also". |
+| `html` | A ready-made HTML article, from services that scrape one. |
+| `link` | The page the article came from. |
+| `provider_id`, `elapsed_ms` | Who answered, and how long it took. |
+
+### ocr
+
+```
+glossa-cli ocr IMAGE [-l LANG] [-t TO] [-e ENGINE]
+```
+
+| option | default | meaning |
+|---|---|---|
+| `-l`, `--lang LANG` | `auto` | Language of the text in the image. |
+| `-t`, `--to LANG` | none | Translate the recognised text into this language. |
+| `-e`, `--engine ID` (also `-s`, `--service`) | `[ocr] provider`, with fail-over | Use only this OCR provider: `lens`, `windows-ocr`, `oneocr`, `command-ocr` or a module's id. |
+
+`IMAGE` is a file path (PNG, JPEG, whatever the engine reads). Without `-t`,
+stdout is the recognised text; with it, the translation. The timing line goes
+to stderr.
+
+`--json`:
+
+```json
+{"text": "…recognised text…", "translation": "…or null…", "detected": "ja", "service": "lens", "elapsed_ms": 412}
+```
+
+`detected` is the language the engine reported, or null. Engines and their
+setup are described in [ocr.md](ocr.md).
+
+### speak
+
+```
+glossa-cli speak [-l LANG] [--slow] -o OUT TEXT…
+```
+
+| option | default | meaning |
+|---|---|---|
+| `-o`, `--out FILE` | required | Where to write the audio. |
+| `-l`, `--lang LANG` | `auto` | Language of the text; `auto` detects it. |
+| `--slow` | off | Ask for slow speech. |
+
+The speech service is `[services] tts`, then any other service that can
+speak. The file holds what the service sends, usually MP3 (`audio/mpeg`).
+
+```console
+$ glossa-cli speak -l en -o hi.mp3 Hello there
+9024 bytes of audio/mpeg written to hi.mp3
+```
+
+### services
+
+```
+glossa-cli services [-c CAPABILITY]
+```
+
+`CAPABILITY` is one of `translate` (the default), `dictionary` (`dict`),
+`listen` (`tts`), `ocr`, `detect_language` (`detect`), `speech_input`
+(`stt`), `batch`, `alternatives`, `promptable`, `offline`. Anything else is a
+usage error.
+
+```console
+$ glossa-cli services
+* google                       Google Translate                 [Built-in]
+* bing                         Microsoft Translator             [Built-in]
+* mymemory                     MyMemory                         [Built-in]
+* yandex-web                   Yandex                           [Bundled]
+* deepl-web                    DeepL                            [Bundled]
+* lara                         Lara                             [Bundled]
+* modernmt                     ModernMT                         [Bundled]
+  deepl                        DeepL API (key)                  [Built-in] (needs a key)
+  deeplx                       DeepLX                           [Built-in]
+  libretranslate               LibreTranslate                   [Built-in]
+  lingva                       Lingva Translate                 [Built-in]
+  openai                       AI Translator (OpenAI-compatible) [Built-in]
+  yandex                       Yandex Cloud (API key)           [Built-in] (needs a key)
+```
+
+`*` marks services enabled in the service strip. The bracket is the origin:
+`Built-in` (Rust), `Bundled` (a JavaScript module compiled into the program),
+or the kind of module a provider came from.
+
+`--json` gives an array:
+
+```json
+[
+  {
+    "id": "lens",
+    "name": "Google Lens (chrome-lens)",
+    "origin": "Built-in",
+    "enabled": false,
+    "capabilities": ["ocr"],
+    "needs_credentials": false
+  }
+]
+```
+
+### modules
+
+```
+glossa-cli modules
+```
+
+Lists the modules found in the module folders: loaded (by provider id),
+failed (path and error) and skipped (path and reason). The modules compiled
+into the program are not listed here; `services` shows them as `Bundled`.
+
+The text output has a `loaded (N):` heading followed by one id per line,
+then `failed (N):` and `skipped (N):` sections with `path: reason` lines,
+each shown only when not empty. `--json`:
+
+```json
+{"loaded": ["my-translator"], "failed": [{"path": "…", "error": "…"}], "skipped": [{"path": "…", "reason": "…"}]}
+```
+
+### history
+
+```
+glossa-cli history [--search TEXT] [--favorites] [--export FILE]
+```
+
+| option | meaning |
+|---|---|
+| `--search TEXT` | Only entries whose source or a translation contains `TEXT` (case-insensitive). |
+| `--favorites` | Only favourites. |
+| `--export FILE` | Write the entries to `FILE` instead of listing them. The format follows the extension: `.txt`, `.csv`, `.html` or `.json`; another extension is a usage error. A file with no extension is written as text. `--favorites` applies; `--search` does not. |
+
+Without `--export`, the 50 newest matching entries are listed, one per line,
+as `source → latest translation`, with `★` before favourites; long lines are
+shortened to 60 characters. `--json` prints every matching entry in full, in
+this shape:
+
+```json
+[
+  {
+    "id": 12,
+    "source": "Hello",
+    "results": [{ "provider_id": "google", "from": 17, "to": 46, "text": "Привет" }],
+    "favorite": true,
+    "created": 1761980000
+  }
+]
+```
+
+`from` and `to` are numeric language ids, as in `history.json`
+([configuration.md](configuration.md#historyjson)). `created` is in Unix
+seconds.
+
+```console
+$ glossa-cli history --export history.csv
+0 entries written to history.csv
+```
+
+### import-classic
+
+```
+glossa-cli import-classic DIR
+```
+
+`DIR` is a classic QTranslate folder: one with a `Services` folder and a
+`Data` or `Themes` folder; anything else fails with exit 1. The import:
+
+- merges `Data/Options.json` into `config.toml` (languages, hotkeys, service
+  order, popup look, exceptions, proxy…), pointing classic services at
+  Glossa's own versions where they exist;
+- adds `Data/History.json` to the history;
+- sets `[classic] path` to `DIR`, so its services, themes and interface
+  languages are used in place.
+
+The classic files are only read. The output has this form (the numbers
+depend on the installation):
+
+```
+settings: imported
+history entries: 214
+providers now: 41 (modules loaded: 19, failed: 2)
+note: …
+```
+
+`settings` is `not found` when there is no `Options.json`. `note:` lines
+report settings that could not be carried over.
+
+### theme
+
+```
+glossa-cli theme list
+glossa-cli theme show NAME
+glossa-cli theme convert FILE
+```
+
+| subcommand | does |
+|---|---|
+| `list` (the default) | Every theme the picker offers, with where it comes from: `built-in`, a file path, or `classic: <path>`. |
+| `show NAME` | The theme with every field filled in, as TOML. A good start for a theme of your own. |
+| `convert FILE` | A classic JSON theme as native TOML, on stdout. |
+
+```console
+$ glossa-cli theme list
+Glossa Dark              built-in
+Glossa Light             built-in
+Glossa Midnight          built-in
+Fluent Dark              built-in
+Fluent Light             built-in
+```
+
+Writing themes: [theming.md](theming.md).
+
+### locale
+
+```
+glossa-cli locale list
+glossa-cli locale convert FILE
+```
+
+| subcommand | does |
+|---|---|
+| `list` (the default) | Interface languages: code, English name, native name. |
+| `convert FILE` | A classic `lang.json` as a native locale file (JSON) on stdout; stderr says how many of Glossa's strings it covers. |
+
+```console
+$ glossa-cli locale list
+en       English                  English
+ru       Russian                  Русский
+```
+
+### config
+
+```
+glossa-cli config path
+glossa-cli config show
+```
+
+| subcommand | does |
+|---|---|
+| `path` (the default) | The path of `config.toml` on stdout; the data folder and whether the layout is portable on stderr. |
+| `show` | The settings in effect, as TOML: the file with every default filled in and out-of-range values clamped. |
+
+```console
+$ glossa-cli config path
+/home/me/.config/glossa/config.toml
+data: /home/me/.config/glossa  (portable: false)
+```
+
+Neither subcommand starts the engine, so neither writes anything. Every
+other command that uses the engine creates `config.toml` on first use, to
+store a newly generated control API token. The fields are described in
+[configuration.md](configuration.md).
+
+### serve
+
+```
+glossa-cli serve
+```
+
+Runs the [control API](control-api.md) in the foreground until Ctrl+C, with
+the address and token from `[server]`. It starts even when `[server] enabled`
+is false. Requests for actions are printed, since there is no window to
+perform them:
+
+```console
+$ glossa-cli serve
+control API on http://127.0.0.1:60828  (token: 0123456789abcdef)
+try: curl -s 'http://127.0.0.1:60828/v1/translate?text=hello&to=ru&token=0123456789abcdef'
+action requested: show_popup (hello world)
+action requested: show_dictionary (serendipity)
+```
+
+Useful for scripts on a machine without a desktop session, and for trying
+the API. If the desktop program is running with the API on, the port is
+taken and `serve` fails with exit 1.
+
+### action
+
+```
+glossa-cli action ACTION [TEXT…]
+```
+
+Asks a running Glossa to perform an action, as if its hotkey had been
+pressed. It sends `GET /v1/action/ACTION?token=…&text=…` to the address in
+`[server] bind`, with the token from `[server] token`, both read from
+`config.toml` (so `--home` or `GLOSSA_HOME` must point at the same data
+folder as the running program). Nothing is printed on success.
+
+```console
+$ glossa-cli action show_popup "text to translate"
+$ glossa-cli action text_recognition
+$ glossa-cli action nonsense
+glossa-cli: Glossa answered 404: {"error":"no action \"nonsense\""}
+```
+
+If no Glossa is listening (not running, or its control API is off), the
+command fails with a connection error and exit 1.
+
+`ACTION` is one of the ids below. `TEXT`, when given, is used instead of
+reading the selection by the actions marked "text"; the others ignore it.
+
+| action | does | text |
+|---|---|---|
+| `show_main_window` | Show the main window; with text, translate it there. | text |
+| `show_popup` | Translate the selection in the popup. | text |
+| `show_dictionary` | Open the dictionary; with text, look it up. | text |
+| `show_history` | Open the history. | |
+| `show_keyboard` | Open the on-screen keyboard. | |
+| `listen_selection` | Read the selection aloud. | text |
+| `copy_translation` | Translate the selection to the clipboard. | text |
+| `replace_selection` | Replace the selection with its translation. | text |
+| `toggle_mouse_mode` | Turn mouse mode on or off. | |
+| `translate_clipboard` | Translate the clipboard, in the main window if it is visible, else the popup. | |
+| `translate_clipboard_in_main` | Translate the clipboard in the main window. | |
+| `translate_clipboard_in_popup` | Translate the clipboard in the popup. | |
+| `dictionary_from_clipboard` | Look the clipboard up in the dictionary. | |
+| `convert_layout` | Retype the selection in the other keyboard layout. | text |
+| `listen_translation` | Translate the selection and read the translation aloud. | text |
+| `text_recognition` | Select a screen region and recognise its text. | |
+| `speech_input` | Speech input (not implemented yet). | |
+| `recognize_and_translate` | Recognise a region and show the translation in the popup. | |
+| `repeat_last_recognition` | Recognise the last region again. | |
+| `recognize_to_clipboard` | Recognise a region straight to the clipboard. | |
+| `watch_region` | Watch a region and re-translate when it changes. | |
+| `swap_languages` | Swap the main window's direction. | |
+| `next_service` | Switch to the next enabled translation service. | |
+| `show_options` | Open the options. | |
+| `quit` | Exit Glossa. | |
+
+The same ids name the actions in `[hotkeys.bindings]`.
+
+## Environment variables
+
+| variable | read by | meaning |
+|---|---|---|
+| `GLOSSA_HOME` | both programs | The data folder. Implies the portable layout: the cache goes to `$GLOSSA_HOME/cache`. An empty value is ignored. `--home` overrides it. See [configuration.md](configuration.md#where-the-files-are). |
+| `GLOSSA_LOG` | both programs | A log filter in `tracing` syntax: a level (`debug`), or per-crate levels (`warn,glossa_engine=debug,glossa_modules=trace`). `glossa-cli` logs to stderr, by default at `warn` (`debug` with `-v`). The desktop program logs to `glossa.log` in the cache folder, by default `info,glossa=debug`. |
+| `GLOSSA_LANG` | desktop program | The interface language when `[general] ui_language` is empty (`ru`, `de-DE`). Overrides the system language. |
+| `LC_ALL`, `LC_MESSAGES`, `LANG` | desktop program | The system language, when `GLOSSA_LANG` is not set (on Windows, the display language comes first). |
+| `HTTPS_PROXY`, `ALL_PROXY`, `HTTP_PROXY` (and lower-case), `NO_PROXY` | both programs | With `[network.proxy] mode = "system"`, the first one set is the proxy, and `NO_PROXY` lists hosts that bypass it. On Windows, if none is set, the system (WinINet) proxy is used. |
+| `GLOSSA_RENDERER` | desktop program | Overrides `[appearance] renderer` for one run: `glow` (or `opengl`, `gl`), `gpu` (or `wgpu`); any other value means software rendering. |
+| `GLOSSA_PYTHON_SDK` | both programs | A folder holding `glossa_module.py`, searched first when starting Python modules. |
+| `GTK_THEME` | desktop program, Linux | A name containing `dark` means the system prefers dark. |
+| `XDG_SESSION_TYPE`, `WAYLAND_DISPLAY`, `DISPLAY`, `XDG_CURRENT_DESKTOP` | desktop program, Linux | How the session (Wayland or X11) and desktop are detected. |
+
+Glossa sets `GLOSSA_MODULE_ID` and `GLOSSA_PROTOCOL` for the Python module
+processes it starts. `GLOSSA_CRASH_TEST`, `GLOSSA_ICON_OUT`,
+`GLOSSA_OCR_SAMPLE`, `GLOSSA_CLASSIC_THEMES` and `GLOSSA_QT_SERVICES` are
+development aids used by tests.
+
+## The desktop program's own flags
+
+`glossa` (the desktop program) takes a few flags too:
+
+| flag | does |
+|---|---|
+| `--hidden`, `--tray` | Start in the tray, whatever `[general] startup_action` says. Autostart uses this. |
+| `--home DIR` | The data folder, as `GLOSSA_HOME`. |
+| `--popup TEXT` | Show `TEXT` translated in the popup at start. |
+| `--screenshot WHAT [FILE]` | Development aid: draw one window (`main`, `options`, `dictionary`, `history`…) to a PNG and exit. |
+
+Starting `glossa` while it is already running shows the running program's
+main window (through the control API) instead of starting a second copy.

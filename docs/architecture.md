@@ -15,7 +15,7 @@ fourth without touching the rest.
                      (built-in APIs)   (Lens…)     (StarDict…)    │
                              └───────────┬─────┴───────┘          │
                                    glossa-modules ────────────────┘
-                          (provider API; JS / Python / native runtimes)
+                (provider API; JS / stdio: Python, Java, any program / native)
                                    │            │
                               glossa-net   glossa-module-sdk
                                    │        (wire types, C ABI)
@@ -30,9 +30,9 @@ fourth without touching the rest.
 | `glossa-core` | The domain model: the language table, capabilities, requests and results, `config.toml`, themes, locales, history, hotkey and action definitions, the classic-format importers. Pure data and logic: no network, no threads, no UI. |
 | `glossa-net` | HTTP on `ureq`: proxies (including the Windows system proxy), timeouts, retries, legacy code pages, an HTTP mock for tests. |
 | `glossa-module-sdk` | What a module author depends on: the protocol's wire types, the C ABI (`include/glossa_module.h`), and `export_module!` for Rust modules. Depends on nothing else in the workspace. |
-| `glossa-modules` | The `Provider` trait every translator, dictionary, voice and OCR engine implements; the host API given to modules (scoped HTTP, cache, log); the registry that scans module folders; the runtimes: JavaScript (Glossa, classic QTranslate and pot-app dialects, on boa), Python (stdio child processes), native (shared libraries). |
+| `glossa-modules` | The `Provider` trait every translator, dictionary, voice and OCR engine implements; the host API given to modules (scoped HTTP, cache, log); the registry that scans module folders; the runtimes: JavaScript (Glossa, classic QTranslate and pot-app dialects, on boa), Python, Java and any other program (`runtime = "process"`) as child processes over one stdio transport, native (shared libraries). |
 | `glossa-services` | Built-in providers in Rust: Google, Google Dictionary, Bing (keyless web session or keyed API), DeepL, DeepLX, LibreTranslate, MyMemory, Lingva, OpenAI-compatible, Yandex. |
-| `glossa-ocr` | OCR providers: Google Lens through `chrome-lens-py` (warm daemon, else its CLI), Windows OCR (`Windows.Media.Ocr`) and OneOCR (the Snipping Tool's `oneocr.dll`, loaded from the user's installation) on Windows, and any external command. The Windows engines' OS calls live here behind `cfg(windows)` rather than in `glossa-platform`, which the engine and CLI do not depend on. |
+| `glossa-ocr` | OCR providers: Google Lens through `chrome-lens-py` (online; warm daemon, else its CLI); offline Windows OCR (`Windows.Media.Ocr`) and OneOCR (the Snipping Tool's `oneocr.dll`, loaded from the user's installation, opt-in only) on Windows, Apple Vision (`VNRecognizeTextRequest` via objc2) on macOS, and Tesseract (its CLI with TSV output) anywhere it is installed; and any external command. Modules add more. The OS engines' calls live here behind `cfg(windows)` / `cfg(target_os = "macos")` rather than in `glossa-platform`, which the engine and CLI do not depend on. Registration order is the fail-over order (Lens, the system engine, Tesseract, the command); the engine falls over past engines that are not installed. |
 | `glossa-dict` | Offline dictionaries (StarDict with dictzip, DSL, XDXF, tab-separated) and the HTML simplifier for dictionary articles. |
 | `glossa-engine` | The front ends' shared core: the keyless JavaScript service modules compiled in from `modules/bundled/`, the translation pipeline (direction detection, fail-over, back translation, input limits), async jobs with cancellation, history, the theme and locale catalogues, exports, the classic import, and the control API (HTTP on localhost with a token). |
 | `glossa-platform` | Everything OS-specific: clipboard, reading the selection (UI Automation, then a synthetic copy), synthetic input, screen capture, global hotkeys, the mouse watcher for mouse mode, autostart, audio playback, window placement, window backdrops (Mica, Acrylic, vibrancy), the system accent colour and dark-mode preference, dark or light system menus, the idle message pump. |
@@ -57,7 +57,8 @@ fourth without touching the rest.
 5. The result returns as an engine event; the UI shows it and records it in
    history.
 
-The CLI calls the blocking versions of the same functions.
+The CLI ([cli.md](cli.md)) and the control API ([control-api.md](control-api.md))
+call the blocking versions of the same functions.
 
 ## The desktop app and memory
 
@@ -78,9 +79,43 @@ milliseconds. Things that must happen before any window exists (reading the
 selection, whose focus a new window would steal) are done in that loop.
 
 Other choices made for size: fonts for CJK, Arabic, Indic and other scripts
-are loaded only when text in that script first appears; a Python module's
-process starts on first use and stops when idle; the renderer is selectable
-(OpenGL is the lightest).
+are loaded only when text in that script first appears; a Python, Java or
+process module's process starts on first use and stops when idle; the
+renderer is selectable (OpenGL is the lightest).
+
+## Text rendering
+
+egui's text engine (epaint 0.37) shapes text with HarfRust, the Rust port of
+HarfBuzz, so scripts that need shaping (Devanagari and the other Indic
+scripts, Sinhala, Khmer, Myanmar, Thai, Arabic joining) render correctly
+once a font is loaded (`fonts.rs` loads one per script, on first sight). It
+does not run the bidirectional algorithm: it guesses one direction per font
+run and places runs and wraps rows in logical order.
+
+`glossa-ui-egui/src/bidi.rs` adds that on top, without patching epaint, for
+text with right-to-left characters (and for text mixing a script that needs
+shaping with another, where one face could cover both):
+
+1. `unicode-bidi` resolves an embedding level per character.
+2. The text becomes a `LayoutJob` whose sections never mix levels or
+   scripts; right-to-left stretches are cut at spaces, so each word is shaped
+   right to left on its own and epaint's logical-order row wrapping is
+   right.
+3. After layout, each row's runs move into visual order (UAX #9 rule L2) by
+   shifting their glyphs and their vertices in the tessellated mesh; lone
+   brackets in right-to-left text get the mirrored glyph; the empty padding
+   glyphs epaint appends to right-to-left runs are dropped so glyphs pair up
+   with characters again. Each section's index rides in the lowest bits of
+   its line height, the only per-glyph field readable from outside epaint.
+
+The galley keeps the logical text, so copying gives what the service sent.
+Results are cached per epaint galley (`Arc` identity) in the context's
+temporary data. Everything else (Latin, Cyrillic, CJK, a single Indic
+script) takes egui's own path at no cost. Read-only text uses
+`bidi::label`/`bidi::rich`; the source editor uses `bidi::editor_layout` as
+its layouter. Known limit: inside a right-to-left row the caret and partial
+mouse selections are approximate, since egui's cursor code assumes x grows
+with the character index.
 
 ## Threads
 
@@ -89,8 +124,10 @@ process starts on first use and stops when idle; the renderer is selectable
   (`actions::Task`, engine events).
 - Engine jobs run on short-lived threads with a cancellation token per slot
   (main window, popup, dictionary…); a newer job in a slot cancels the older.
-- Each Python module has one process; calls to it are serialised.
-- The control API runs on its own thread.
+- Each Python, Java or process module has one process; calls to it are
+  serialised.
+- The control API runs on its own thread, and each request on a thread of
+  its own.
 
 ## Configuration and data
 
@@ -98,7 +135,13 @@ process starts on first use and stops when idle; the renderer is selectable
 by hand; the app rewrites it when settings are applied. History is
 `history.json`, the log is `glossa.log` in the cache folder. Portable mode
 (a `portable` file or a `data` folder next to the executable) keeps all of it
-beside the program; `GLOSSA_HOME` overrides the location.
+beside the program; `GLOSSA_HOME` overrides the location. Every key, the
+folders and the other files are described in
+[configuration.md](configuration.md); a test in `glossa-core`
+(`every_config_key_is_documented`) fails when a key is missing from that
+page.
+
+The index of all documentation is [README.md](README.md).
 
 ## Testing
 

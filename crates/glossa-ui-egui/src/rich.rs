@@ -20,7 +20,7 @@ pub fn article(ui: &mut egui::Ui, look: &Look, a: &Article, zoom: f32) -> Option
     let mut click = None;
     let base = look.theme.fonts.size * 1.35 * zoom;
     ui.horizontal_wrapped(|ui| {
-        ui.label(RichText::new(&a.headword).size(base * 1.6).strong());
+        ui.label(crate::bidi::auto(ui, RichText::new(&a.headword).size(base * 1.6).strong()));
         for p in &a.pronunciations {
             if p.symbol.is_empty() {
                 continue;
@@ -41,7 +41,8 @@ pub fn article(ui: &mut egui::Ui, look: &Look, a: &Article, zoom: f32) -> Option
         for (i, d) in e.definitions.iter().enumerate() {
             ui.horizontal_wrapped(|ui| {
                 ui.label(RichText::new(format!("{}.", i + 1)).size(base).color(look.weak_text()));
-                ui.add(egui::Label::new(RichText::new(d).size(base)).selectable(true).wrap());
+                let d = crate::bidi::auto(ui, RichText::new(d).size(base));
+                ui.add(egui::Label::new(d).selectable(true).wrap());
             });
         }
         ui.add_space(4.0);
@@ -51,9 +52,11 @@ pub fn article(ui: &mut egui::Ui, look: &Look, a: &Article, zoom: f32) -> Option
         for ex in &a.examples {
             ui.horizontal_wrapped(|ui| {
                 ui.label(RichText::new("•").size(base).color(look.weak_text()));
-                ui.add(egui::Label::new(RichText::new(&ex.source).size(base).italics()).selectable(true).wrap());
+                let source = crate::bidi::auto(ui, RichText::new(&ex.source).size(base).italics());
+                ui.add(egui::Label::new(source).selectable(true).wrap());
                 if !ex.target.is_empty() {
-                    ui.label(RichText::new(format!("— {}", ex.target)).size(base).color(look.weak_text()));
+                    let target = RichText::new(format!("— {}", ex.target)).size(base).color(look.weak_text());
+                    ui.label(crate::bidi::auto(ui, target));
                 }
             });
         }
@@ -145,7 +148,8 @@ fn spans(ui: &mut egui::Ui, look: &Look, spans: &[Span], base: f32) -> Option<Ar
                     }
                 }
                 None => {
-                    ui.add(egui::Label::new(span_text(s, look, base)).selectable(true));
+                    let text = crate::bidi::auto(ui, span_text(s, look, base));
+                    ui.add(egui::Label::new(text).selectable(true));
                 }
             }
         }

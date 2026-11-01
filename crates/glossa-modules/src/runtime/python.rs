@@ -1,517 +1,78 @@
 //! Python modules: a child process speaking the module protocol over stdio.
 //!
-//! # Framing
-//!
-//! One JSON object per line, UTF-8, in both directions.
-//!
-//! * Host → module, a request: `{"id": 7, "method": "translate", "params": {…}}`.
-//! * Module → host, the answer: `{"id": 7, "result": …}` or
-//!   `{"id": 7, "error": {"kind": "…", "message": "…"}}`.
-//! * While a request is in flight the module may call back:
-//!   `{"id": "h1", "method": "http" | "log" | "cache_get" | "cache_set", "params": {…}}`,
-//!   and the host answers `{"id": "h1", "result": …}` or `{"id": "h1", "error": …}`.
-//!   Host-call ids are strings so they can never be mistaken for the answer.
-//!
-//! Anything on stdout that is not such an object is logged and otherwise
-//! ignored, so a stray `print` cannot wedge the protocol (the Python SDK also
-//! moves `sys.stdout` to stderr). stderr goes to the log.
-//!
-//! # Process lifetime
-//!
-//! The process starts on the first call, not when the module loads: an
-//! installed module costs nothing until it is used. It is stopped after
-//! `idle_timeout_secs` without calls (default 300; `0` keeps it), on
-//! [`Transport::suspend`], when a call exceeds the call timeout, and when the
-//! provider is dropped. A process that died is started again on the next call.
-//! Calls are serialised: one request at a time per process.
+//! The transport (framing, host calls, timeouts, idle stop, restarts, logging)
+//! is the shared one in [`super::stdio`]; this file only finds the
+//! interpreter and the bundled SDK and builds the command line:
+//! `python <entry> [args…]` in the module's directory, with the SDK on
+//! `PYTHONPATH` and UTF-8 forced for the standard streams.
 
-use std::collections::VecDeque;
 use std::ffi::OsString;
-use std::io::{BufRead, BufReader, Read, Write};
+use std::io::Read;
 use std::path::{Path, PathBuf};
-use std::process::{Child, ChildStdin, Command, Stdio};
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::mpsc::{self, Receiver, RecvTimeoutError};
-use std::sync::{Arc, Weak};
+use std::process::{Command, Stdio};
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use glossa_module_sdk::wire::{ModuleError, Reply};
+use glossa_module_sdk::wire::ModuleError;
 use parking_lot::Mutex;
-use serde_json::Value;
 
+use super::stdio::{expand, hide_window, Launch, StdioConfig, StdioTransport};
 use crate::manifest::Manifest;
-use crate::protocol::{ProtocolProvider, Transport};
+use crate::protocol::ProtocolProvider;
 use crate::provider::Provider;
 use crate::registry::RuntimeContext;
 
-/// How long a module may sit unused before its process is stopped.
-pub const DEFAULT_IDLE_TIMEOUT: Duration = Duration::from_secs(300);
-/// Replies bigger than this are refused (a speech module's audio fits easily).
-const MAX_FRAME: usize = 64 * 1024 * 1024;
-/// Log lines from the module are cut here.
-const MAX_LOG_LINE: usize = 2000;
-/// How many recent stderr lines are kept to explain a crash.
-const RECENT_LINES: usize = 30;
+pub use super::stdio::DEFAULT_IDLE_TIMEOUT;
 
 pub fn load(dir: &Path, manifest: Manifest, ctx: &RuntimeContext) -> Result<Arc<dyn Provider>, String> {
-    let transport = PythonTransport::new(dir, &manifest, ctx)?;
+    let transport = transport(dir, &manifest, ctx)?;
     Ok(Arc::new(ProtocolProvider::new(manifest, transport, ctx.cache.clone())))
 }
 
-/// Everything needed to start the module's process.
-#[derive(Debug, Clone)]
-struct Config {
-    module_id: String,
-    dir: PathBuf,
-    script: PathBuf,
-    /// From the settings; empty to search.
-    interpreter: String,
-    call_timeout: Duration,
-    /// Zero: never stop for idleness.
-    idle_timeout: Duration,
-    sdk_dirs: Vec<PathBuf>,
-}
-
-/// A [`Transport`] to a Python child process.
-pub struct PythonTransport {
-    cfg: Arc<Config>,
-    inner: Arc<Mutex<Inner>>,
-    /// Set by a `suspend` that found a call in flight: the process stops
-    /// when that call ends. Suspending must not wait for the call, which
-    /// can take as long as the call timeout, because the settings are
-    /// applied (and the old modules suspended) on the UI thread.
-    stop_after_call: AtomicBool,
-}
-
-struct Inner {
-    proc: Option<Proc>,
-    next_id: u64,
-    /// Bumped per spawn, so an idle watcher knows whether its process is
-    /// still the current one.
-    generation: u64,
-    last_used: Instant,
-}
-
-/// A running module process. Dropping it kills the process.
-struct Proc {
-    child: Child,
-    stdin: ChildStdin,
-    frames: Receiver<Frame>,
-    recent: Arc<Mutex<VecDeque<String>>>,
-    stderr_done: Receiver<()>,
-}
-
-enum Frame {
-    Message(Value),
-    /// A line too long to be a frame we accept.
-    Oversize,
-}
-
-impl Drop for Proc {
-    fn drop(&mut self) {
-        let _ = self.child.kill();
-        let _ = self.child.wait();
+/// The stdio transport for a Python module. The interpreter is looked for
+/// when the process first starts, not here: loading a module costs nothing.
+pub fn transport(dir: &Path, manifest: &Manifest, ctx: &RuntimeContext) -> Result<StdioTransport, String> {
+    let entry = match manifest.module.entry.trim() {
+        "" => "main.py",
+        e => e,
+    };
+    let script = dir.join(entry);
+    if !script.is_file() {
+        return Err(format!("{} not found", script.display()));
     }
-}
-
-impl Proc {
-    /// Why the process is gone: its exit status and the end of its stderr.
-    fn exit_detail(&mut self) -> String {
-        let _ = self.child.kill(); // in case it merely closed stdout
-        let status = self.child.wait().ok();
-        let _ = self.stderr_done.recv_timeout(Duration::from_millis(500));
-        let recent: Vec<String> = self.recent.lock().iter().rev().take(12).rev().cloned().collect();
-        let mut out = match status.and_then(|s| s.code()) {
-            Some(code) => format!(" (exit code {code})"),
-            None => String::new(),
-        };
-        if !recent.is_empty() {
-            out.push_str(":\n");
-            out.push_str(&recent.join("\n"));
-        }
-        out
-    }
-}
-
-impl PythonTransport {
-    pub fn new(dir: &Path, manifest: &Manifest, ctx: &RuntimeContext) -> Result<Self, String> {
-        let entry = match manifest.module.entry.trim() {
-            "" => "main.py",
-            e => e,
-        };
-        let script = dir.join(entry);
-        if !script.is_file() {
-            return Err(format!("{} not found", script.display()));
-        }
-        let cfg = Config {
-            module_id: manifest.module.id.clone(),
-            dir: dir.to_owned(),
-            script,
-            interpreter: ctx.python.clone(),
-            call_timeout: ctx.call_timeout,
-            idle_timeout: manifest.module.idle_timeout_secs.map(Duration::from_secs).unwrap_or(DEFAULT_IDLE_TIMEOUT),
-            sdk_dirs: sdk_dirs(),
-        };
-        Ok(Self {
-            cfg: Arc::new(cfg),
-            inner: Arc::new(Mutex::new(Inner { proc: None, next_id: 0, generation: 0, last_used: Instant::now() })),
-            stop_after_call: AtomicBool::new(false),
-        })
-    }
-
-    /// Whether the module's process is running now.
-    pub fn is_running(&self) -> bool {
-        self.inner.lock().proc.is_some()
-    }
-
-    fn spawn(&self) -> Result<Proc, ModuleError> {
-        let cfg = &self.cfg;
-        let (program, pre_args) = interpreter(&cfg.interpreter).ok_or_else(|| {
+    let m = &manifest.module;
+    let cfg = StdioConfig::new(&m.id, "Python", ctx.call_timeout, m.idle_timeout_secs);
+    let configured = ctx.python.clone();
+    let dir = dir.to_owned();
+    let extra_args: Vec<OsString> = m.args.iter().map(|a| expand(a, &dir).into()).collect();
+    let extra_env: Vec<(OsString, OsString)> = m.env.iter().map(|(k, v)| (k.into(), expand(v, &dir).into())).collect();
+    let sdk = sdk_dirs();
+    let launcher = move || -> Result<Launch, ModuleError> {
+        let (program, pre_args) = interpreter(&configured).ok_or_else(|| {
             ModuleError::other("no Python 3 interpreter found; install Python or set its path in the settings")
         })?;
-        let mut cmd = Command::new(&program);
-        cmd.args(&pre_args)
-            .arg(&cfg.script)
-            .current_dir(&cfg.dir)
-            .env("PYTHONIOENCODING", "utf-8")
-            .env("PYTHONUTF8", "1")
-            .env("PYTHONUNBUFFERED", "1")
-            .env("PYTHONDONTWRITEBYTECODE", "1")
-            .env("GLOSSA_MODULE_ID", &cfg.module_id)
-            .env("GLOSSA_PROTOCOL", crate::PROTOCOL_VERSION.to_string())
-            .stdin(Stdio::piped())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped());
+        let mut args: Vec<OsString> = pre_args.into_iter().map(OsString::from).collect();
+        args.push(script.clone().into_os_string());
+        args.extend(extra_args.iter().cloned());
+        let mut env: Vec<(OsString, OsString)> = vec![
+            ("PYTHONIOENCODING".into(), "utf-8".into()),
+            ("PYTHONUTF8".into(), "1".into()),
+            ("PYTHONUNBUFFERED".into(), "1".into()),
+            ("PYTHONDONTWRITEBYTECODE".into(), "1".into()),
+        ];
         // The module's own directory is already first on sys.path (it holds
         // the script), so a vendored glossa_module.py wins over ours.
-        let mut path: Vec<PathBuf> = cfg.sdk_dirs.clone();
+        let mut path: Vec<PathBuf> = sdk.clone();
         if let Some(existing) = std::env::var_os("PYTHONPATH") {
             path.extend(std::env::split_paths(&existing));
         }
         if let Ok(joined) = std::env::join_paths(&path) {
-            cmd.env("PYTHONPATH", joined);
+            env.push(("PYTHONPATH".into(), joined));
         }
-        hide_window(&mut cmd);
-
-        let mut child = cmd
-            .spawn()
-            .map_err(|e| ModuleError::other(format!("cannot start {}: {e}", Path::new(&program).display())))?;
-        let (Some(stdin), Some(stdout), Some(stderr)) = (child.stdin.take(), child.stdout.take(), child.stderr.take())
-        else {
-            let _ = child.kill();
-            return Err(ModuleError::other("the module process has no stdio"));
-        };
-        let recent = Arc::new(Mutex::new(VecDeque::with_capacity(RECENT_LINES)));
-        let frames = read_frames(stdout, cfg.module_id.clone(), recent.clone());
-        let stderr_done = drain_stderr(stderr, cfg.module_id.clone(), recent.clone());
-        tracing::debug!(module = %cfg.module_id, pid = child.id(), "Python module started");
-        Ok(Proc { child, stdin, frames, recent, stderr_done })
-    }
-
-    /// Spawn a process and set its idle watcher going.
-    fn start(&self, inner: &mut Inner) -> Result<Proc, ModuleError> {
-        let proc = self.spawn()?;
-        inner.generation += 1;
-        if !self.cfg.idle_timeout.is_zero() {
-            watch_idle(
-                Arc::downgrade(&self.inner),
-                inner.generation,
-                self.cfg.idle_timeout,
-                self.cfg.module_id.clone(),
-            );
-        }
-        Ok(proc)
-    }
-
-    /// One request and its host calls, on a running process. The flag says
-    /// whether the process is still fit for the next call.
-    fn exchange(
-        &self,
-        proc: &mut Proc,
-        id: u64,
-        method: &str,
-        params: Value,
-        host: &dyn Fn(&str, Value) -> Reply,
-    ) -> (Result<Value, ModuleError>, bool) {
-        let frame = serde_json::json!({ "id": id, "method": method, "params": params });
-        if let Err(e) = write_frame(&mut proc.stdin, &frame) {
-            return (Err(ModuleError::other(format!("cannot reach the module: {e}{}", proc.exit_detail()))), false);
-        }
-        let timeout = self.cfg.call_timeout;
-        let mut deadline = Instant::now() + timeout;
-        loop {
-            let wait = deadline.saturating_duration_since(Instant::now());
-            match proc.frames.recv_timeout(wait) {
-                Ok(Frame::Oversize) => {
-                    return (
-                        Err(ModuleError::bad_response(format!("the module sent a line over {MAX_FRAME} bytes"))),
-                        false,
-                    );
-                }
-                Ok(Frame::Message(msg)) => {
-                    if msg.get("id").and_then(Value::as_u64) == Some(id) {
-                        return (parse_reply(&msg), true);
-                    }
-                    let call_id = msg.get("id").and_then(Value::as_str).map(str::to_owned);
-                    let call_method = msg.get("method").and_then(Value::as_str).map(str::to_owned);
-                    let (Some(call_id), Some(call_method)) = (call_id, call_method) else {
-                        tracing::debug!(module = %self.cfg.module_id, "ignoring an unexpected frame: {}", clip(&msg.to_string()));
-                        continue;
-                    };
-                    // The clock stops while the host works: a slow network
-                    // call has its own timeout and is not the module hanging.
-                    let started = Instant::now();
-                    let reply = host(&call_method, msg.get("params").cloned().unwrap_or(Value::Null));
-                    deadline += started.elapsed();
-                    let mut answer = serde_json::to_value(&reply).unwrap_or_else(|_| serde_json::json!({}));
-                    if let Some(obj) = answer.as_object_mut() {
-                        obj.insert("id".into(), Value::String(call_id));
-                    }
-                    if let Err(e) = write_frame(&mut proc.stdin, &answer) {
-                        return (
-                            Err(ModuleError::other(format!("cannot reach the module: {e}{}", proc.exit_detail()))),
-                            false,
-                        );
-                    }
-                }
-                Err(RecvTimeoutError::Timeout) => {
-                    tracing::warn!(module = %self.cfg.module_id, "module call timed out; stopping its process");
-                    return (
-                        Err(ModuleError::other(format!("{method} timed out after {} ms", timeout.as_millis()))),
-                        false,
-                    );
-                }
-                Err(RecvTimeoutError::Disconnected) => {
-                    return (
-                        Err(ModuleError::other(format!("the module process exited{}", proc.exit_detail()))),
-                        false,
-                    );
-                }
-            }
-        }
-    }
-}
-
-impl Transport for PythonTransport {
-    fn call(&self, method: &str, params: Value, host: &dyn Fn(&str, Value) -> Reply) -> Result<Value, ModuleError> {
-        let mut inner = self.inner.lock();
-        inner.last_used = Instant::now();
-
-        let mut proc = match inner.proc.take() {
-            Some(mut p) => match p.child.try_wait() {
-                Ok(None) => p,
-                _ => {
-                    tracing::debug!(module = %self.cfg.module_id, "module process had exited{}", p.exit_detail());
-                    drop(p);
-                    self.start(&mut inner)?
-                }
-            },
-            None => self.start(&mut inner)?,
-        };
-
-        inner.next_id += 1;
-        let id = inner.next_id;
-        let (result, alive) = self.exchange(&mut proc, id, method, params, host);
-        inner.last_used = Instant::now();
-        if self.stop_after_call.swap(false, Ordering::SeqCst) {
-            tracing::debug!(module = %self.cfg.module_id, "Python module suspended after its call");
-        } else if alive {
-            inner.proc = Some(proc);
-        }
-        // Otherwise `proc` is dropped here, which kills it.
-        result
-    }
-
-    fn suspend(&self) {
-        // A short wait rides out the idle watcher's brief look; a call in
-        // flight holds the lock for its whole length.
-        match self.inner.try_lock_for(Duration::from_millis(50)) {
-            Some(mut inner) => {
-                if inner.proc.take().is_some() {
-                    tracing::debug!(module = %self.cfg.module_id, "Python module suspended");
-                }
-            }
-            None => self.stop_after_call.store(true, Ordering::SeqCst),
-        }
-    }
-}
-
-impl Drop for PythonTransport {
-    fn drop(&mut self) {
-        self.inner.lock().proc = None;
-    }
-}
-
-/// Stop the process of generation `generation` once it has been idle for
-/// `idle`. Holds only a weak reference, so it never keeps a dropped
-/// transport alive, and never waits on a busy one (busy is not idle).
-fn watch_idle(inner: Weak<Mutex<Inner>>, generation: u64, idle: Duration, module: String) {
-    let tick = (idle / 4).clamp(Duration::from_millis(50), Duration::from_secs(5));
-    let spawned = std::thread::Builder::new().name(format!("py-idle-{module}")).spawn(move || loop {
-        std::thread::sleep(tick);
-        let Some(inner) = inner.upgrade() else { return };
-        let Some(mut guard) = inner.try_lock() else { continue };
-        if guard.generation != generation {
-            return;
-        }
-        if guard.proc.is_none() {
-            return;
-        }
-        if guard.last_used.elapsed() >= idle {
-            guard.proc = None;
-            tracing::debug!(module = %module, "Python module stopped after {idle:?} idle");
-            return;
-        }
-    });
-    if let Err(e) = spawned {
-        tracing::warn!("cannot start the idle watcher: {e}");
-    }
-}
-
-fn write_frame(stdin: &mut ChildStdin, value: &Value) -> std::io::Result<()> {
-    let mut line = serde_json::to_vec(value).map_err(std::io::Error::other)?;
-    line.push(b'\n');
-    stdin.write_all(&line)?;
-    stdin.flush()
-}
-
-/// The module's answer as a result.
-fn parse_reply(msg: &Value) -> Result<Value, ModuleError> {
-    if let Some(e) = msg.get("error").filter(|e| !e.is_null()) {
-        return Err(serde_json::from_value::<ModuleError>(e.clone()).unwrap_or_else(|_| {
-            let message = e.get("message").and_then(Value::as_str).map(str::to_owned).unwrap_or_else(|| match e {
-                Value::String(s) => s.clone(),
-                other => other.to_string(),
-            });
-            ModuleError::other(message)
-        }));
-    }
-    match msg.get("result") {
-        Some(v) => Ok(v.clone()),
-        None => Err(ModuleError::bad_response("the reply has neither a result nor an error")),
-    }
-}
-
-/// Read stdout on a thread: protocol frames go to the channel, other lines to
-/// the log.
-fn read_frames(
-    stdout: impl Read + Send + 'static,
-    module: String,
-    recent: Arc<Mutex<VecDeque<String>>>,
-) -> Receiver<Frame> {
-    let (tx, rx) = mpsc::channel();
-    let spawned = std::thread::Builder::new().name(format!("py-out-{module}")).spawn(move || {
-        let mut reader = BufReader::with_capacity(64 * 1024, stdout);
-        loop {
-            match read_line_bounded(&mut reader, MAX_FRAME) {
-                Ok(None) | Err(_) => return,
-                Ok(Some((_, true))) => {
-                    if tx.send(Frame::Oversize).is_err() {
-                        return;
-                    }
-                }
-                Ok(Some((line, false))) => {
-                    if line.iter().all(u8::is_ascii_whitespace) {
-                        continue;
-                    }
-                    match serde_json::from_slice::<Value>(&line) {
-                        Ok(v) if v.is_object() && v.get("id").is_some() => {
-                            if tx.send(Frame::Message(v)).is_err() {
-                                return;
-                            }
-                        }
-                        _ => {
-                            let text = clip(&String::from_utf8_lossy(&line));
-                            tracing::info!(module = %module, "stdout: {text}");
-                            push_recent(&recent, text);
-                        }
-                    }
-                }
-            }
-        }
-    });
-    if let Err(e) = spawned {
-        tracing::warn!("cannot start the module reader: {e}");
-    }
-    rx
-}
-
-/// Drain stderr into the log so the pipe never fills; signal when it closes.
-fn drain_stderr(
-    stderr: impl Read + Send + 'static,
-    module: String,
-    recent: Arc<Mutex<VecDeque<String>>>,
-) -> Receiver<()> {
-    let (tx, rx) = mpsc::channel();
-    let spawned = std::thread::Builder::new().name(format!("py-err-{module}")).spawn(move || {
-        let mut reader = BufReader::new(stderr);
-        while let Ok(Some((line, _))) = read_line_bounded(&mut reader, MAX_LOG_LINE * 4) {
-            let text = clip(&String::from_utf8_lossy(&line));
-            if !text.trim().is_empty() {
-                tracing::info!(module = %module, "{text}");
-                push_recent(&recent, text);
-            }
-        }
-        let _ = tx.send(());
-    });
-    if let Err(e) = spawned {
-        tracing::warn!("cannot start the module log reader: {e}");
-    }
-    rx
-}
-
-fn push_recent(recent: &Mutex<VecDeque<String>>, line: String) {
-    let mut r = recent.lock();
-    if r.len() >= RECENT_LINES {
-        r.pop_front();
-    }
-    r.push_back(line);
-}
-
-fn clip(s: &str) -> String {
-    let s = s.trim_end();
-    if s.chars().count() <= MAX_LOG_LINE {
-        s.to_owned()
-    } else {
-        s.chars().take(MAX_LOG_LINE).chain(std::iter::once('…')).collect()
-    }
-}
-
-/// One line without its terminator, at most `max` bytes kept; the flag says
-/// it was longer. `None` at end of stream.
-fn read_line_bounded<R: BufRead>(r: &mut R, max: usize) -> std::io::Result<Option<(Vec<u8>, bool)>> {
-    let mut buf = Vec::new();
-    let mut truncated = false;
-    let mut any = false;
-    loop {
-        let available = match r.fill_buf() {
-            Ok(b) => b,
-            Err(e) if e.kind() == std::io::ErrorKind::Interrupted => continue,
-            Err(e) => return Err(e),
-        };
-        if available.is_empty() {
-            return Ok(any.then_some((buf, truncated)));
-        }
-        any = true;
-        let (chunk_len, consumed, done) = match available.iter().position(|b| *b == b'\n') {
-            Some(i) => (i, i + 1, true),
-            None => (available.len(), available.len(), false),
-        };
-        let room = max.saturating_sub(buf.len());
-        if chunk_len > room {
-            truncated = true;
-            buf.extend_from_slice(&available[..room]);
-        } else {
-            buf.extend_from_slice(&available[..chunk_len]);
-        }
-        r.consume(consumed);
-        if done {
-            if buf.last() == Some(&b'\r') {
-                buf.pop();
-            }
-            return Ok(Some((buf, truncated)));
-        }
-    }
+        env.extend(extra_env.iter().cloned());
+        Ok(Launch { program, args, cwd: dir.clone(), env })
+    };
+    Ok(StdioTransport::new(cfg, Box::new(launcher)))
 }
 
 // -- finding Python and the SDK ---------------------------------------------------
@@ -595,7 +156,8 @@ fn probe_python() -> Option<(OsString, Vec<String>)> {
 
 /// Directories holding the bundled `glossa_module.py`, found the way
 /// [`glossa_core::paths::Paths`] finds resources: beside the executable, in
-/// a Unix `share/glossa`, in a development checkout, and `$GLOSSA_PYTHON_SDK`.
+/// a Unix `share/glossa`, in a macOS app bundle's `Resources`, in a
+/// development checkout, and `$GLOSSA_PYTHON_SDK`.
 pub fn sdk_dirs() -> Vec<PathBuf> {
     let mut out = Vec::new();
     if let Some(p) = std::env::var_os("GLOSSA_PYTHON_SDK").filter(|v| !v.is_empty()) {
@@ -605,6 +167,8 @@ pub fn sdk_dirs() -> Vec<PathBuf> {
         out.push(exe_dir.join("sdk").join("python"));
         if let Some(prefix) = exe_dir.parent() {
             out.push(prefix.join("share").join("glossa").join("sdk").join("python"));
+            // Glossa.app/Contents/MacOS/glossa -> Contents/Resources.
+            out.push(prefix.join("Resources").join("sdk").join("python"));
         }
         // target/debug/glossa and target/debug/deps/<test> -> the repository.
         for up in [2, 3] {
@@ -627,25 +191,17 @@ pub fn sdk_dirs() -> Vec<PathBuf> {
     out
 }
 
-/// Keep consoles from flashing up on Windows.
-fn hide_window(cmd: &mut Command) {
-    #[cfg(windows)]
-    {
-        use std::os::windows::process::CommandExt;
-        const CREATE_NO_WINDOW: u32 = 0x0800_0000;
-        cmd.creation_flags(CREATE_NO_WINDOW);
-    }
-    #[cfg(not(windows))]
-    let _ = cmd;
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::protocol::Transport;
     use crate::provider::{with_test_host, OptionValues};
     use glossa_core::{LangId, LangPair, TranslateRequest};
     use glossa_module_sdk::wire::ErrorKind;
+    use glossa_module_sdk::wire::Reply;
     use glossa_net::mock::MockHttp;
+    use serde_json::Value;
+    use std::sync::mpsc;
 
     fn have_python() -> bool {
         let ok = interpreter("").is_some();
@@ -683,8 +239,8 @@ mod tests {
             Self { dir, manifest }
         }
 
-        fn transport(&self, timeout: Duration) -> PythonTransport {
-            PythonTransport::new(&self.dir, &self.manifest, &ctx(timeout)).unwrap()
+        fn transport(&self, timeout: Duration) -> StdioTransport {
+            transport(&self.dir, &self.manifest, &ctx(timeout)).unwrap()
         }
     }
 
@@ -698,7 +254,7 @@ mod tests {
         Reply::err(ModuleError::other(format!("unexpected host call {method}")))
     }
 
-    fn translate(t: &PythonTransport, text: &str) -> Result<Value, ModuleError> {
+    fn translate(t: &StdioTransport, text: &str) -> Result<Value, ModuleError> {
         t.call("translate", serde_json::json!({"text": text, "from": "auto", "to": "en", "options": {}}), &no_host)
     }
 
@@ -976,28 +532,7 @@ mod.run()
     #[test]
     fn a_missing_entry_point_fails_the_load() {
         let m = TempModule::new("noentry", "entry = \"absent.py\"", "");
-        assert!(PythonTransport::new(&m.dir, &m.manifest, &ctx(Duration::from_secs(1))).is_err());
-    }
-
-    #[test]
-    fn replies_parse() {
-        assert_eq!(parse_reply(&serde_json::json!({"id": 1, "result": {"a": 1}})).unwrap()["a"], 1);
-        let e = parse_reply(&serde_json::json!({"id": 1, "error": {"kind": "rate_limited", "message": "slow down", "retry_after_secs": 5}})).unwrap_err();
-        assert_eq!((e.kind, e.retry_after_secs), (ErrorKind::RateLimited, Some(5)));
-        let e = parse_reply(&serde_json::json!({"id": 1, "error": {"kind": "weird", "message": "m"}})).unwrap_err();
-        assert_eq!((e.kind, e.message.as_str()), (ErrorKind::Other, "m"));
-        assert_eq!(parse_reply(&serde_json::json!({"id": 1, "error": "plain"})).unwrap_err().message, "plain");
-        assert_eq!(parse_reply(&serde_json::json!({"id": 1, "error": null, "result": 2})).unwrap(), 2);
-        assert!(parse_reply(&serde_json::json!({"id": 1})).is_err());
-    }
-
-    #[test]
-    fn lines_are_read_with_a_bound() {
-        let mut r = BufReader::with_capacity(4, &b"short\r\nthis one is long\nend"[..]);
-        assert_eq!(read_line_bounded(&mut r, 8).unwrap(), Some((b"short".to_vec(), false)));
-        assert_eq!(read_line_bounded(&mut r, 8).unwrap(), Some((b"this one".to_vec(), true)));
-        assert_eq!(read_line_bounded(&mut r, 8).unwrap(), Some((b"end".to_vec(), false)));
-        assert_eq!(read_line_bounded(&mut r, 8).unwrap(), None);
+        assert!(transport(&m.dir, &m.manifest, &ctx(Duration::from_secs(1))).is_err());
     }
 
     #[test]

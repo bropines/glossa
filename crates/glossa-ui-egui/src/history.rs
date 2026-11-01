@@ -150,14 +150,19 @@ fn body(app: &mut GlossaApp, ui: &mut egui::Ui, st: &mut HistoryState, open: &mu
                                         action = Some((e.id, "delete"));
                                     }
                                     ui.with_layout(egui::Layout::left_to_right(egui::Align::Center), |ui| {
-                                        ui.add(egui::Label::new(RichText::new(src).strong()).truncate());
+                                        let width = ui.available_width();
+                                        let rtl = glossa_core::text::guessed_direction(&src).is_rtl();
+                                        let wrap = egui::text::TextWrapping::truncate_at_width(width);
+                                        let src = crate::bidi::rich(ui, RichText::new(src).strong(), wrap, rtl);
+                                        ui.add(egui::Label::new(src).truncate());
                                     });
                                 });
                             });
                             let shown = if expand { tr.clone() } else { one_line(&tr, 110) };
                             ui.horizontal(|ui| {
                                 ui.add_space(indent);
-                                ui.add(egui::Label::new(RichText::new(shown).color(look.weak_text())).wrap());
+                                let shown = crate::bidi::auto(ui, RichText::new(shown).color(look.weak_text()));
+                                ui.add(egui::Label::new(shown).wrap());
                             });
                             if let Some(r) = e.latest() {
                                 ui.horizontal(|ui| {

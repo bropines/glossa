@@ -154,7 +154,9 @@ fn install_handlers(wake: WakeFn) -> Receiver<TrayEvent> {
     }));
     TrayIconEvent::set_event_handler(Some(move |e: TrayIconEvent| {
         let ev = match e {
-            TrayIconEvent::Click { button: MouseButton::Left, button_state: MouseButtonState::Up, .. } => {
+            TrayIconEvent::Click { button: MouseButton::Left, button_state: MouseButtonState::Up, .. }
+                if !cfg!(target_os = "macos") =>
+            {
                 Some(TrayEvent::Click)
             }
             TrayIconEvent::DoubleClick { button: MouseButton::Left, .. } => Some(TrayEvent::ShowMain),
@@ -173,8 +175,11 @@ impl Tray {
     pub fn new(wake: WakeFn, locale: &Locale) -> Result<Tray, String> {
         let events = install_handlers(wake);
         let (menu, hotkeys_item, mouse_item) = build_menu(locale);
-        let mut b =
-            TrayIconBuilder::new().with_tooltip("Glossa").with_menu(Box::new(menu)).with_menu_on_left_click(false);
+        let mut b = TrayIconBuilder::new()
+            .with_tooltip("Glossa")
+            .with_menu(Box::new(menu)) // A menu bar item opens its menu on click on macOS; elsewhere a
+            // click toggles mouse mode or shows the window.
+            .with_menu_on_left_click(cfg!(target_os = "macos"));
         if let Some(i) = tray_icon_image([0.16, 0.55, 0.89], false) {
             b = b.with_icon(i);
         }
