@@ -8,6 +8,11 @@
 //! - **Linux**: `~/.config/autostart/glossa.desktop` (XDG autostart, honoured
 //!   by every major desktop).
 //! - **macOS**: `~/Library/LaunchAgents/app.glossa.plist` with `RunAtLoad`.
+//!   From `Glossa.app` it runs `/usr/bin/open -b <bundle id> --args …`, so
+//!   Launch Services finds the app wherever it has been moved, and the
+//!   temporary path macOS runs a quarantined download from (App
+//!   Translocation, gone after a restart) is never written down. A bare
+//!   executable (a development build) is registered by its path.
 //!
 //! The file contents are built by pure functions so they can be tested.
 
@@ -21,6 +26,8 @@ use crate::Result;
 pub const APP_NAME: &str = "Glossa";
 /// The macOS launchd label.
 pub const LAUNCH_AGENT_LABEL: &str = "app.glossa";
+/// `Glossa.app`'s bundle identifier, when its `Info.plist` cannot be read.
+pub const BUNDLE_ID: &str = "io.github.bropines.glossa";
 
 /// Turn autostart on (registering `exe_path args…`) or off.
 pub fn set_autostart(enabled: bool, exe_path: &Path, args: &[String]) -> Result<()> {
@@ -136,11 +143,49 @@ fn desktop_exec_arg(arg: &str) -> String {
     quoted.replace('\\', "\\\\")
 }
 
+/// The `.app` bundle an executable runs from (`X.app/Contents/MacOS/x`).
+pub fn app_bundle_of(exe_path: &Path) -> Option<&Path> {
+    let macos = exe_path.parent()?;
+    let contents = macos.parent()?;
+    let app = contents.parent()?;
+    let is_app = app.extension().is_some_and(|e| e.eq_ignore_ascii_case("app"));
+    (macos.file_name()? == "MacOS" && contents.file_name()? == "Contents" && is_app).then_some(app)
+}
+
+/// `CFBundleIdentifier` from an XML property list.
+fn bundle_identifier(info_plist: &str) -> Option<String> {
+    let after_key = info_plist.split("<key>CFBundleIdentifier</key>").nth(1)?;
+    let value = after_key.trim_start().strip_prefix("<string>")?;
+    let id = value.split("</string>").next()?.trim();
+    (!id.is_empty()).then(|| id.to_owned())
+}
+
+/// What the launchd agent runs: `open -b` with the bundle's identifier for
+/// an app bundle, the executable itself otherwise.
+pub fn launch_agent_program(exe_path: &Path, args: &[String]) -> Vec<String> {
+    let mut program = match app_bundle_of(exe_path) {
+        Some(app) => {
+            let id = std::fs::read_to_string(app.join("Contents/Info.plist"))
+                .ok()
+                .and_then(|text| bundle_identifier(&text))
+                .unwrap_or_else(|| BUNDLE_ID.to_owned());
+            let mut p = vec!["/usr/bin/open".to_owned(), "-b".to_owned(), id];
+            if !args.is_empty() {
+                p.push("--args".to_owned());
+            }
+            p
+        }
+        None => vec![exe_path.to_string_lossy().into_owned()],
+    };
+    program.extend(args.iter().cloned());
+    program
+}
+
 /// The launchd agent for macOS.
 pub fn launch_agent_plist(exe_path: &Path, args: &[String]) -> String {
-    let mut program_args = format!("        <string>{}</string>\n", xml_escape(&exe_path.to_string_lossy()));
-    for a in args {
-        program_args.push_str(&format!("        <string>{}</string>\n", xml_escape(a)));
+    let mut program_args = String::new();
+    for a in launch_agent_program(exe_path, args) {
+        program_args.push_str(&format!("        <string>{}</string>\n", xml_escape(&a)));
     }
     format!(
         "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n\
@@ -320,17 +365,40 @@ mod tests {
 
     #[test]
     fn plist_contents() {
-        let text = launch_agent_plist(
-            Path::new("/Applications/Glossa.app/Contents/MacOS/glossa"),
-            &s(&["--minimized", "a&b"]),
-        );
+        let text = launch_agent_plist(Path::new("/opt/glossa/target/release/glossa"), &s(&["--minimized", "a&b"]));
         assert!(text.starts_with("<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n"));
         assert!(text.contains("<key>Label</key>\n    <string>app.glossa</string>"));
         assert!(text.contains(
-            "    <array>\n        <string>/Applications/Glossa.app/Contents/MacOS/glossa</string>\n        <string>--minimized</string>\n        <string>a&amp;b</string>\n    </array>"
+            "    <array>\n        <string>/opt/glossa/target/release/glossa</string>\n        <string>--minimized</string>\n        <string>a&amp;b</string>\n    </array>"
         ));
         assert!(text.contains("<key>RunAtLoad</key>\n    <true/>"));
         assert!(text.trim_end().ends_with("</plist>"));
+    }
+
+    #[test]
+    fn an_app_bundle_is_started_by_its_identifier() {
+        // Moved, or translocated: the path is never written down.
+        let exe = Path::new("/private/var/folders/x/AppTranslocation/1234/d/Glossa.app/Contents/MacOS/glossa");
+        assert_eq!(
+            launch_agent_program(exe, &s(&["--hidden"])),
+            s(&["/usr/bin/open", "-b", BUNDLE_ID, "--args", "--hidden"])
+        );
+        assert_eq!(launch_agent_program(exe, &[]), s(&["/usr/bin/open", "-b", BUNDLE_ID]));
+        assert!(launch_agent_plist(exe, &s(&["--hidden"])).contains("<string>/usr/bin/open</string>"));
+        assert_eq!(app_bundle_of(exe), Some(Path::new("/private/var/folders/x/AppTranslocation/1234/d/Glossa.app")));
+        assert_eq!(app_bundle_of(Path::new("/usr/local/bin/glossa")), None);
+        assert_eq!(app_bundle_of(Path::new("/x/Glossa/Contents/MacOS/glossa")), None, "not an .app");
+    }
+
+    #[test]
+    fn the_bundle_identifier_is_read_from_info_plist() {
+        let plist =
+            "<dict>\n  <key>CFBundleExecutable</key>\n  <string>glossa</string>\n  <key>CFBundleIdentifier</key>\n  \
+                     <string>org.example.glossa</string>\n</dict>";
+        assert_eq!(bundle_identifier(plist).as_deref(), Some("org.example.glossa"));
+        assert_eq!(bundle_identifier("<dict></dict>"), None);
+        assert!(include_str!("../../../assets/macos/Info.plist").contains(BUNDLE_ID));
+        assert_eq!(bundle_identifier(include_str!("../../../assets/macos/Info.plist")).as_deref(), Some(BUNDLE_ID));
     }
 
     #[test]
