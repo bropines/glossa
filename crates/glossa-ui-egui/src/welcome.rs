@@ -321,8 +321,8 @@ fn keycaps(
     let font = FontId::proportional(if big { 17.0 } else { 12.5 });
     let pad = if big { 14.0 } else { 9.0 };
     let gap = if big { 8.0 } else { 5.0 };
-    let text = hotkey.map(|h| h.to_string()).unwrap_or_default();
-    let parts: Vec<&str> = text.split('+').filter(|p| !p.is_empty()).collect();
+    let parts_owned: Vec<String> = hotkey.map(crate::widgets::hotkey_parts).unwrap_or_default();
+    let parts: Vec<&str> = parts_owned.iter().map(String::as_str).collect();
     let galleys: Vec<_> = if parts.is_empty() {
         vec![ui.painter().layout_no_wrap(empty.to_owned(), font.clone(), pal.weak)]
     } else {
@@ -584,7 +584,7 @@ fn hotkeys(app: &mut GlossaApp, ui: &mut egui::Ui, pal: &Palette) {
 
 /// A hotkey's text for the tips, if it has one.
 fn key(app: &GlossaApp, action: Action) -> Option<String> {
-    app.engine.config().hotkeys.bindings.get(&action).map(|h| h.to_string())
+    app.engine.config().hotkeys.bindings.get(&action).map(crate::widgets::hotkey_label)
 }
 
 fn usage(app: &mut GlossaApp, ui: &mut egui::Ui, pal: &Palette) {

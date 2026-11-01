@@ -337,17 +337,32 @@ pub fn color_edit(ui: &mut Ui, color: &mut glossa_core::Color) -> bool {
     changed
 }
 
+/// A hotkey's keys as this system names them: `Cmd`, `Option` on macOS,
+/// `Win` on Windows, `Super` on Linux, then the key.
+pub fn hotkey_parts(hotkey: &Hotkey) -> Vec<String> {
+    let names = glossa_platform::shell::SHELL.modifier_names;
+    let m = &hotkey.mods;
+    [(m.ctrl, names.ctrl), (m.alt, names.alt), (m.shift, names.shift), (m.meta, names.meta)]
+        .into_iter()
+        .filter(|(on, _)| *on)
+        .map(|(_, name)| name.to_owned())
+        .chain(std::iter::once(hotkey.key.0.clone()))
+        .collect()
+}
+
+/// [`hotkey_parts`] joined: `Cmd+Shift+Q`.
+pub fn hotkey_label(hotkey: &Hotkey) -> String {
+    hotkey_parts(hotkey).join("+")
+}
+
 /// A hotkey field: shows the chord; click, then press a combination.
 /// Escape cancels, Backspace clears. Returns `Some(new)` when it changed
 /// (`Some(None)` for cleared).
 pub fn hotkey_field(ui: &mut Ui, id_salt: &str, current: Option<&Hotkey>, prompt: &str) -> Option<Option<Hotkey>> {
     let id = hotkey_capture_id(ui, id_salt);
     let capturing = ui.data(|d| d.get_temp::<bool>(id).unwrap_or(false));
-    let text = if capturing {
-        prompt.to_owned()
-    } else {
-        current.map(|h| h.to_string().replace('+', " + ")).unwrap_or_default()
-    };
+    let text =
+        if capturing { prompt.to_owned() } else { current.map(|h| hotkey_parts(h).join(" + ")).unwrap_or_default() };
     let resp = ui.add(egui::Button::new(RichText::new(text).italics_if(capturing)).min_size(vec2(170.0, 0.0)));
     if resp.clicked() {
         ui.data_mut(|d| d.insert_temp(id, !capturing));
@@ -370,7 +385,12 @@ pub fn hotkey_capture(ui: &mut Ui, id: egui::Id) -> Option<Option<Hotkey>> {
     let mut out = None;
     ui.input(|i| {
         for e in &i.events {
-            if let egui::Event::Key { key, pressed: true, modifiers, .. } = e {
+            if let egui::Event::Key { key, physical_key, pressed: true, modifiers, .. } = e {
+                // The key itself, not what it types: Shift turns 1 into "!"
+                // (and a layout turns Q into "Й"), which no hotkey names, so
+                // Ctrl+Shift+1 was never taken. Global hotkeys go by the
+                // physical key too.
+                let key = physical_key.unwrap_or(*key);
                 match key {
                     egui::Key::Escape => out = Some(None::<Option<Hotkey>>),
                     egui::Key::Backspace | egui::Key::Delete if modifiers.is_none() => out = Some(Some(None)),
@@ -422,6 +442,40 @@ impl ItalicsIf for RichText {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A hotkey field waiting for a combination, given one key press.
+    fn capture(key: egui::Key, physical: egui::Key, modifiers: egui::Modifiers) -> Option<Option<Hotkey>> {
+        let ctx = egui::Context::default();
+        let mut input = egui::RawInput::default();
+        input.events.push(egui::Event::Key {
+            key,
+            physical_key: Some(physical),
+            pressed: true,
+            repeat: false,
+            modifiers,
+        });
+        let mut out = None;
+        let mut frame = ctx.run_ui(input, |ui| {
+            let id = hotkey_capture_id(ui, "test");
+            ui.data_mut(|d| d.insert_temp(id, true));
+            out = hotkey_capture(ui, id);
+        });
+        frame.textures_delta.clear();
+        out
+    }
+
+    #[test]
+    fn shift_does_not_change_the_key_a_hotkey_is_taken_from() {
+        let ctrl_shift = egui::Modifiers { ctrl: true, shift: true, ..Default::default() };
+        // Shift+1 types "!"; the hotkey is still Ctrl+Shift+1.
+        let hk = capture(egui::Key::Exclamationmark, egui::Key::Num1, ctrl_shift);
+        assert_eq!(hk, Some(Some("Ctrl+Shift+1".parse().unwrap())));
+        // A Russian layout types "Й" on Q.
+        let hk = capture(egui::Key::Q, egui::Key::Q, ctrl_shift);
+        assert_eq!(hk, Some(Some("Ctrl+Shift+Q".parse().unwrap())));
+        // Escape still cancels: no change.
+        assert_eq!(capture(egui::Key::Escape, egui::Key::Escape, egui::Modifiers::NONE), None);
+    }
 
     #[test]
     fn service_colours_are_stable_and_distinct_for_known_ids() {
