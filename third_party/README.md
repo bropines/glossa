@@ -28,7 +28,8 @@ Unchanged except for these fixes, marked `Glossa patch` in the source:
   painted and presented every frame and then slept 10 ms as an invisible
   window. The immediate viewports drawn in its pass (the popup, Options…)
   got about 60 frames per second and scrolling stuttered on a 120 Hz display.
-  A window winit reports hidden is no longer painted once it has been painted
-  once (eframe shows a new window only after its first paint), and a hidden
+  A window winit reports hidden or minimised is no longer painted once it has
+  been painted once (on Windows this now also skips a minimised main window,
+  which used to be painted) (eframe shows a new window only after its first paint), and a hidden
   window whose pass paints a visible immediate child does not sleep. Which
   windows run their UI pass is unchanged.
