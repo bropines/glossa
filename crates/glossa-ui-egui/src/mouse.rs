@@ -202,6 +202,7 @@ pub fn show_icon(app: &mut GlossaApp, ctx: &egui::Context) {
             clicked = resp.on_hover_text(app.t("mouse.translate")).clicked();
         });
     });
+    app.float_child(ICON_TITLE);
     if clicked {
         crate::popup::open(app, icon.text, icon.cursor);
         return;

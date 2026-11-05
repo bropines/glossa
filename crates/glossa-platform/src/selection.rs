@@ -18,7 +18,9 @@
 //!   clipboard — the user has to press Ctrl+C first, which
 //!   [`Session::limitations`](crate::Session::limitations) tells them.
 //! - **macOS**: Accessibility `AXSelectedText`, then a synthetic Cmd+C with
-//!   the clipboard saved and restored.
+//!   the clipboard saved and restored. In web content (browsers, Electron
+//!   apps) Cmd+C comes first: Chromium's `AXSelectedText` loses the line
+//!   breaks between paragraphs and list items.
 
 use std::time::{Duration, Instant};
 
@@ -109,14 +111,29 @@ pub fn capture_selection(opts: &CaptureOptions) -> Result<Option<String>> {
     }
     #[cfg(target_os = "macos")]
     {
-        if let Some(text) = crate::macos_ax::selected_text() {
-            tracing::debug!("selection via AXSelectedText");
-            return Ok(Some(text));
+        let ax = crate::macos_ax::selected_text();
+        let copy_allowed = opts.copy_action != CopyAction::AccessibilityOnly;
+        match ax {
+            // Web content's AXSelectedText runs paragraphs and list items
+            // together; Cmd+C keeps the line breaks. The AX text stays the
+            // fallback when copying gives nothing.
+            Some(sel) if sel.web && copy_allowed => match copy_via_clipboard(opts) {
+                Ok(Some(text)) => {
+                    tracing::debug!("selection via Cmd+C (web content)");
+                    Ok(Some(text))
+                }
+                other => {
+                    tracing::debug!(?other, "Cmd+C gave nothing in web content; using AXSelectedText");
+                    Ok(Some(sel.text))
+                }
+            },
+            Some(sel) => {
+                tracing::debug!("selection via AXSelectedText");
+                Ok(Some(sel.text))
+            }
+            None if copy_allowed => copy_via_clipboard(opts),
+            None => Ok(None),
         }
-        if opts.copy_action == CopyAction::AccessibilityOnly {
-            return Ok(None);
-        }
-        copy_via_clipboard(opts)
     }
     #[cfg(not(any(windows, target_os = "macos")))]
     {

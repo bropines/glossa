@@ -7,6 +7,22 @@ the notes of its GitHub release.
 
 ## [Unreleased]
 
+### Fixed
+
+- macOS: the screen-region overlay was squeezed below the menu bar, so the
+  picture under the selection was shifted and squashed and a different
+  area from the one selected was recognised. It now covers the menu bar
+  and lines up with the screen.
+- macOS: with Stage Manager on, the region overlay switched stages, and the
+  popup did not show while another Glossa window (the main window,
+  Options) was open. The overlay, popup, notices, the mouse-selection icon
+  and the in-place translation are now auxiliary windows that Stage
+  Manager leaves alone, and they show on every Space.
+- macOS: text selected in a browser or an Electron app lost its line
+  breaks between paragraphs and list items, so the translation ran them
+  together. Selections in web content are now read with Cmd+C, which keeps
+  them.
+
 ## [0.1.0-beta.2] - 2026-11-02
 
 ### Added

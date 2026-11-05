@@ -3,7 +3,7 @@
 use objc2::rc::Retained;
 use objc2::runtime::AnyObject;
 use objc2::{msg_send, MainThreadMarker};
-use objc2_app_kit::{NSApplication, NSColor, NSWindow};
+use objc2_app_kit::{NSApplication, NSColor, NSWindow, NSWindowCollectionBehavior};
 use objc2_foundation::NSString;
 
 /// One of this program's windows by its title, as a pointer to its
@@ -32,6 +32,25 @@ pub fn lift_above_menu_bar(title: &str) -> bool {
     // thread (`own_window_by_title` returns `None` elsewhere).
     let window: &NSWindow = unsafe { &*(ptr as *const NSWindow) };
     window.setLevel(ABOVE_MENU_BAR);
+    true
+}
+
+/// Take the window titled `title` out of window management: it shows on
+/// whichever Space and over full-screen apps, is skipped by Cmd-`, and is
+/// an auxiliary window to Stage Manager, which then neither makes a stage
+/// for it nor switches stages to show it. For the overlays, popups and
+/// notices that appear over what the user is doing. Main thread only.
+pub fn float_free(title: &str) -> bool {
+    let Some(ptr) = own_window_by_title(title) else { return false };
+    // SAFETY: as in `lift_above_menu_bar`.
+    let window: &NSWindow = unsafe { &*(ptr as *const NSWindow) };
+    window.setCollectionBehavior(
+        NSWindowCollectionBehavior::CanJoinAllSpaces
+            | NSWindowCollectionBehavior::FullScreenAuxiliary
+            | NSWindowCollectionBehavior::Transient
+            | NSWindowCollectionBehavior::IgnoresCycle
+            | NSWindowCollectionBehavior::Auxiliary,
+    );
     true
 }
 

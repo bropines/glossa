@@ -88,8 +88,18 @@ fn to_string(s: CFStringRef) -> Option<String> {
     }
 }
 
+/// The focused element's selected text, and whether that element is web
+/// content.
+pub struct Selected {
+    pub text: String,
+    /// The element is in a web page (Chromium, an Electron app, Safari).
+    /// Chromium's `AXSelectedText` drops the line breaks between
+    /// paragraphs and list items, so a copy keystroke reads it better.
+    pub web: bool,
+}
+
 /// The focused element's selected text, or `None`.
-pub fn selected_text() -> Option<String> {
+pub fn selected_text() -> Option<Selected> {
     // SAFETY: no arguments; reads the process's trust state.
     if unsafe { AXIsProcessTrusted() } == 0 {
         return None;
@@ -105,5 +115,27 @@ pub fn selected_text() -> Option<String> {
     if unsafe { CFGetTypeID(text.0) != CFStringGetTypeID() } {
         return None;
     }
-    to_string(text.0).filter(|t| !t.trim().is_empty())
+    let text = to_string(text.0).filter(|t| !t.trim().is_empty())?;
+    Some(Selected { text, web: in_web_area(focused) })
+}
+
+/// Whether `element` is, or sits inside, an `AXWebArea`: a web page's
+/// root. Walks up a bounded number of parents.
+fn in_web_area(element: Owned) -> bool {
+    let mut current = element;
+    for _ in 0..32 {
+        let is_web = copy_attribute(current.0, "AXRole").is_some_and(|role| {
+            // SAFETY: only inspects a live CF object.
+            let is_string = unsafe { CFGetTypeID(role.0) == CFStringGetTypeID() };
+            is_string && to_string(role.0).is_some_and(|r| r == "AXWebArea")
+        });
+        if is_web {
+            return true;
+        }
+        match copy_attribute(current.0, "AXParent") {
+            Some(parent) => current = parent,
+            None => return false,
+        }
+    }
+    false
 }
