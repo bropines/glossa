@@ -7,14 +7,24 @@ the notes of its GitHub release.
 
 ## [Unreleased]
 
+### Added
+
+- `GLOSSA_FRAME_TRACE`: a per-frame trace of the main window, the popup and
+  Options to a CSV file, for diagnosing stutter.
+
 ### Fixed
 
-- macOS: Options, the popup and the other windows ran at about 60 frames
-  per second while the main window was in the tray, so scrolling stuttered
-  on a 120 Hz display. The hidden main window was still being drawn and then
-  throttled every frame; it no longer is, and those windows reach the
-  display's refresh rate. A minimised main window is not drawn either (on
-  Windows it used to be).
+- macOS: the hidden main window was still drawn every frame while it sat
+  in the tray, and then throttled, holding back Options and the popup. It no
+  longer is. A minimised main window is not drawn either (on Windows it used
+  to be).
+- macOS: scrolling in Options and the other windows juddered: frames started
+  at an uneven 5 ms / 16 ms rhythm, worse with the main window open. Frames
+  now come at an even pace matched to the screen (60 frames per second on a
+  60 Hz display, 120 on ProMotion).
+- Dragging the popup's edge could leave it redrawing without end and using
+  a quarter of a CPU core (seen on macOS with the right and top edges): the
+  window was resized back to its size of the previous frame, every frame.
 - macOS: the screen-region overlay was squeezed below the menu bar, so the
   picture under the selection was shifted and squashed and a different
   area from the one selected was recognised. It now covers the menu bar
