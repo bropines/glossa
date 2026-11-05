@@ -1,8 +1,15 @@
 #!/bin/sh
-# Bundle a local release build into Glossa.app, for trying it on this Mac.
+# Bundle a local release build into "Glossa Dev.app", for trying it on this
+# Mac.
 #
 #   cargo build --release -p glossa-ui-egui -p glossa-cli
 #   scripts/macos-bundle.sh [OUT_DIR]        # default: ~/Desktop/Glossa
+#
+# The development copy has its own name and bundle identifier
+# (io.github.bropines.glossa.dev), so it sits next to a release Glossa.app
+# from GitHub without the two fighting over the permissions macOS stores
+# per identifier: each keeps its own. Both use the same settings folder, so
+# run one at a time (a second copy only brings the first one forward).
 #
 # Signs with the "Glossa Dev" identity when it exists (see
 # scripts/macos-dev-identity.sh), so the app keeps its permissions across
@@ -11,16 +18,28 @@
 set -e
 ROOT=$(cd "$(dirname "$0")/.." && pwd)
 OUT=${1:-"$HOME/Desktop/Glossa"}
-APP="$OUT/Glossa.app"
+APP="$OUT/Glossa Dev.app"
 BIN="${CARGO_TARGET_DIR:-$ROOT/target}/release"
-ID=io.github.bropines.glossa
+ID=io.github.bropines.glossa.dev
+
+# A development Glossa.app from before the split carried the release's
+# identifier; drop it so Spotlight and Launchpad show one of each.
+if [ -d "$OUT/Glossa.app" ]; then
+  /System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister \
+    -u "$OUT/Glossa.app" >/dev/null 2>&1 || true
+  rm -rf "$OUT/Glossa.app"
+fi
 
 rm -rf "$APP"
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
 cp "$BIN/glossa" "$APP/Contents/MacOS/glossa"
 cp "$BIN/glossa-cli" "$OUT/glossa-cli"
 VERSION=$(grep -m1 '^version' "$ROOT/Cargo.toml" | sed 's/.*"\(.*\)".*/\1/')
-sed "s/@VERSION@/$VERSION/g" "$ROOT/assets/macos/Info.plist" > "$APP/Contents/Info.plist"
+sed -e "s/@VERSION@/$VERSION/g" \
+    -e "s|<string>io.github.bropines.glossa</string>|<string>$ID</string>|" \
+    -e "s|<string>Glossa</string>|<string>Glossa Dev</string>|g" \
+    "$ROOT/assets/macos/Info.plist" > "$APP/Contents/Info.plist"
+plutil -lint "$APP/Contents/Info.plist" >/dev/null
 # The bundled Python SDK lets Python modules start from a Finder launch.
 if [ -f "$ROOT/sdk/python/glossa_module.py" ]; then
   cp "$ROOT/sdk/python/glossa_module.py" "$APP/Contents/Resources/"
