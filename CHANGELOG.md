@@ -13,7 +13,8 @@ the notes of its GitHub release.
   per second while the main window was in the tray, so scrolling stuttered
   on a 120 Hz display. The hidden main window was still being drawn and then
   throttled every frame; it no longer is, and those windows reach the
-  display's refresh rate.
+  display's refresh rate. A minimised main window is not drawn either (on
+  Windows it used to be).
 - macOS: the screen-region overlay was squeezed below the menu bar, so the
   picture under the selection was shifted and squashed and a different
   area from the one selected was recognised. It now covers the menu bar
