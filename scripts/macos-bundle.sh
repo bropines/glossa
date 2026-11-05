@@ -23,11 +23,11 @@ BIN="${CARGO_TARGET_DIR:-$ROOT/target}/release"
 ID=io.github.bropines.glossa.dev
 
 # A development Glossa.app from before the split carried the release's
-# identifier; drop it so Spotlight and Launchpad show one of each.
+# identifier. It is not removed here: a release Glossa.app may just as well
+# sit in the same folder, and nothing tells the two apart for certain.
 if [ -d "$OUT/Glossa.app" ]; then
-  /System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister \
-    -u "$OUT/Glossa.app" >/dev/null 2>&1 || true
-  rm -rf "$OUT/Glossa.app"
+  echo "Note: $OUT/Glossa.app exists. If it is an old development build, delete it" >&2
+  echo "      yourself, so Spotlight and Launchpad show one copy of each." >&2
 fi
 
 rm -rf "$APP"
