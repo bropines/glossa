@@ -182,3 +182,14 @@ fn ns_view_from_handle(handle: &AppKitWindowHandle) -> Option<&NSView> {
         }
     }
 }
+
+/// Glossa patch: the most frames per second the screen showing this window
+/// can display (120 on a ProMotion display). winit's monitor refresh rate
+/// reports 60 there, the rate of the display mode, not of the panel.
+pub(crate) fn max_frames_per_second(window_handle: &RawWindowHandle) -> Option<u32> {
+    let RawWindowHandle::AppKit(appkit_handle) = window_handle else {
+        return None;
+    };
+    let screen = ns_view_from_handle(appkit_handle)?.window()?.screen()?;
+    u32::try_from(screen.maximumFramesPerSecond()).ok().filter(|f| *f > 0)
+}

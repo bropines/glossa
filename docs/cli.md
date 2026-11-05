@@ -702,6 +702,7 @@ Desktop portal
 | `GLOSSA_LANG` | desktop program | The interface language when `[general] ui_language` is empty (`ru`, `de-DE`). Overrides the system language. |
 | `LC_ALL`, `LC_MESSAGES`, `LANG` | desktop program | The system language, when `GLOSSA_LANG` is not set (on Windows, the display language comes first). |
 | `HTTPS_PROXY`, `ALL_PROXY`, `HTTP_PROXY` (and lower-case), `NO_PROXY` | both programs | With `[network.proxy] mode = "system"`, the first one set is the proxy, and `NO_PROXY` lists hosts that bypass it. On Windows, if none is set, the system (WinINet) proxy is used. |
+| `GLOSSA_FRAME_TRACE` | desktop program | Diagnosing stutter: a file path (or `1` for `frames.csv` in the cache folder) that gets one CSV line per frame of the main window, the popup and Options: when the frame started, the time since that window's previous frame, how long its UI took, and the scroll events it consumed. |
 | `GLOSSA_RENDERER` | desktop program | Overrides `[appearance] renderer` for one run, with the same names `config.toml` takes: `open_gl` (or `glow`, `opengl`, `gl`), `gpu` (or `wgpu`), `software` (or `cpu`, `warp`). An unknown value is ignored. |
 | `GLOSSA_PYTHON_SDK` | both programs | A folder holding `glossa_module.py`, searched first when starting Python modules. |
 | `GTK_THEME` | desktop program, Linux | A name containing `dark` means the system prefers dark. |

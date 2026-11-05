@@ -325,6 +325,7 @@ pub fn show(app: &mut GlossaApp, ctx: &egui::Context) {
         if ui.input(|i| i.viewport().close_requested()) {
             open = false;
         }
+        let _trace = crate::frametrace::begin(ui.ctx(), "options");
         crate::chrome::frame(ui, &app.look, custom, &crate::chrome::Caption::new(&title));
         open &= body(app, ui, &mut st);
     });

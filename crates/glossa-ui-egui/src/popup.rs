@@ -38,6 +38,12 @@ pub struct PopupState {
     /// Screen position of the window's top-left, in points.
     pub pos: egui::Pos2,
     pub size: egui::Vec2,
+    /// The size the window is created with. Later sizes go to the window as
+    /// commands only: the builder is rebuilt every frame, and egui turns any
+    /// change of its size into a resize, so a size that lagged a frame behind
+    /// the user's edge drag (macOS) resized the window back to it, the popup
+    /// adopted that, and the two fought every frame.
+    pub created_size: egui::Vec2,
     pub pinned: bool,
     /// The pointer position it was opened at, in physical pixels, while it is
     /// placed automatically (kept on screen as its size changes). `None` once
@@ -103,6 +109,7 @@ pub fn open(app: &mut GlossaApp, text: String, cursor: Option<(i32, i32)>) {
         service,
         pos,
         size: vec2(min_w, 60.0),
+        created_size: vec2(min_w, 60.0),
         pinned: false,
         cursor_px,
         moved: false,
@@ -142,6 +149,7 @@ pub fn show_text(app: &mut GlossaApp, source: String, outcome: Option<Arc<Transl
         outcome,
         pos,
         size: vec2(app.cfg.appearance.popup.min_width, 60.0),
+        created_size: vec2(app.cfg.appearance.popup.min_width, 60.0),
         pinned,
         cursor_px,
         moved: false,
@@ -318,12 +326,13 @@ pub fn show(app: &mut GlossaApp, ctx: &egui::Context) {
         .with_transparent(!glossa_platform::shell::SHELL.transparency_needs_alpha_root || app.transparent_root())
         .with_active(cfg.activate_on_open)
         .with_position(state.pos)
-        .with_inner_size(state.size);
+        .with_inner_size(state.created_size);
     let mut close = false;
     let mut desired = state.size;
     let mut outer: Option<egui::Rect> = None;
     let mut inner: Option<egui::Rect> = None;
     ctx.show_viewport_immediate(viewport_id(), builder, |ui, _class| {
+        let _trace = crate::frametrace::begin(ui.ctx(), "popup");
         let (c, r) = body(app, ui, &mut state);
         close = c;
         desired = r;

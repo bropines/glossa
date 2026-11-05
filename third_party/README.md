@@ -22,14 +22,25 @@ Unchanged except for these fixes, marked `Glossa patch` in the source:
   it the composition visual sits on top of the window's unpainted, opaque
   redirection surface, and neither the desktop nor Mica / Acrylic shows
   through. egui's `ViewportBuilder` has no setting for it.
-- `src/native/glow_integration.rs`: on macOS `ViewportInfo::visible()` stays
-  unknown for a window hidden with `ViewportCommand::Visible(false)`, so a
-  hidden root window (Glossa's main window while it sits in the tray) was
-  painted and presented every frame and then slept 10 ms as an invisible
-  window. The immediate viewports drawn in its pass (the popup, Options…)
-  got about 60 frames per second and scrolling stuttered on a 120 Hz display.
-  A window winit reports hidden or minimised is no longer painted once it has
-  been painted once (on Windows this now also skips a minimised main window,
-  which used to be painted) (eframe shows a new window only after its first paint), and a hidden
+- `src/native/glow_integration.rs`, hidden windows: on macOS
+  `ViewportInfo::visible()` stays unknown for a window hidden with
+  `ViewportCommand::Visible(false)`, so a hidden root window (Glossa's main
+  window while it sits in the tray) was painted and presented every frame,
+  then slept 10 ms as an invisible window, and the immediate viewports drawn
+  in its pass (the popup, Options…) were held back with it. A window winit
+  reports hidden or minimised is no longer painted once it has been painted
+  once, since eframe shows a new window only after its first paint. On Windows
+  this also skips a minimised main window, which used to be painted. A hidden
   window whose pass paints a visible immediate child does not sleep. Which
   windows run their UI pass is unchanged.
+- `src/native/glow_integration.rs` and `src/native/macos.rs`, frame pacing
+  (macOS): every window's swap is vsync'd and all of them share one thread
+  and GL context, so a pass that painted the main window and Options waited
+  for two refreshes, and frames started at an uneven 5 ms / 16 ms cadence that
+  made scrolling judder. An immediate viewport painted in the same pass as a
+  visible root window now swaps without waiting, the root window's swap sets
+  the interval back, and root passes are paced to the refresh rate of the
+  fastest screen showing a window (`NSScreen.maximumFramesPerSecond`, which
+  needs the `NSScreen` feature of `objc2-app-kit`). A window shown alone keeps
+  its vsync'd swap: a translucent window swapping without waiting asked AppKit
+  for another frame at once and redrew forever.

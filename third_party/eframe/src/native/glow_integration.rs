@@ -81,6 +81,10 @@ struct GlowWinitRunning<'app> {
 
     /// Any not yet applied deltas for this app.
     pending_deltas: TexturesDelta,
+
+    /// Glossa patch: when the last root pass started, for pacing (see
+    /// [`GlutinWindowContext::paced`]).
+    last_pass: Option<Instant>,
 }
 
 impl Drop for GlowWinitRunning<'_> {
@@ -108,6 +112,22 @@ struct GlutinWindowContext {
 
     swap_interval: glutin::surface::SwapInterval,
     gl_config: glutin::config::Config,
+
+    /// Glossa patch: on macOS a root pass starts no sooner than one refresh
+    /// of the fastest screen showing a window after the previous one.
+    ///
+    /// Every window's swap there is vsync'd and they share one thread and GL
+    /// context. A pass that painted the main window and an immediate viewport
+    /// (Options, the popup) waited for two refreshes and presented them on
+    /// alternating ones: scrolling juddered. So an immediate viewport painted
+    /// in the same pass as a visible root window swaps without waiting (see
+    /// `render_immediate_viewport`). Changing the context's swap interval
+    /// that way also stops macOS from blocking on the root window's swap, so
+    /// the passes are paced here instead; input arriving meanwhile goes into
+    /// the next frame. A window shown alone keeps its vsync'd swap: a
+    /// translucent window swapping without waiting asks AppKit for another
+    /// frame at once, and redrew forever.
+    paced: bool,
 
     max_texture_side: Option<usize>,
 
@@ -469,6 +489,7 @@ impl<'app> GlowWinitApp<'app> {
             glutin,
             painter,
             pending_deltas: Default::default(),
+            last_pass: None,
         }))
     }
 }
@@ -652,6 +673,51 @@ impl GlowWinitRunning<'_> {
         };
 
         profiling::finish_frame!();
+
+        // Glossa patch: see `GlutinWindowContext::paced`.
+        if viewport_id == ViewportId::ROOT && mode == PassMode::Full {
+            let (paced, refresh_mhz) = {
+                let glutin = self.glutin.borrow();
+                // The fastest monitor any shown window is on (the root window may be
+                // hidden while Options or the popup is up).
+                let refresh = glutin
+                    .viewports
+                    .values()
+                    .filter_map(|v| v.window.as_deref())
+                    .filter(|w| !is_invisible_or_minimized(w))
+                    .filter_map(|w| {
+                        #[cfg(target_os = "macos")]
+                        {
+                            use raw_window_handle::HasWindowHandle as _;
+                            if let Some(fps) = w
+                                .window_handle()
+                                .ok()
+                                .and_then(|h| super::macos::max_frames_per_second(&h.as_raw()))
+                            {
+                                return Some(fps * 1000);
+                            }
+                        }
+                        w.current_monitor()?.refresh_rate_millihertz()
+                    })
+                    .max();
+                (glutin.paced, refresh)
+            };
+            if paced {
+                let hz = f64::from(refresh_mhz.unwrap_or(60_000).max(30_000)) / 1000.0;
+                let period = std::time::Duration::from_secs_f64(1.0 / hz);
+                // Aim at a steady schedule (the previous slot plus one period),
+                // so that sleeping a little too long does not add up.
+                let now = Instant::now();
+                let slot = match self.last_pass {
+                    Some(prev) if now < prev + period * 2 => prev + period,
+                    _ => now,
+                };
+                if slot > now {
+                    std::thread::sleep(slot - now);
+                }
+                self.last_pass = Some(slot.max(now));
+            }
+        }
 
         let mut frame_timer = crate::stopwatch::Stopwatch::new();
         frame_timer.start();
@@ -871,6 +937,8 @@ impl GlowWinitRunning<'_> {
             current_gl_context,
             not_current_gl_context,
             current_viewport,
+            swap_interval,
+            paced,
             ..
         } = &mut *glutin;
 
@@ -975,6 +1043,14 @@ impl GlowWinitRunning<'_> {
                 // swap with interval 0 on Wayland (see `GlutinWindowContext::new`).
                 // egui-wgpu does the same. A no-op on other platforms.
                 window.pre_present_notify();
+                // Glossa patch: the swap interval belongs to the GL context on
+                // macOS, which immediate viewports share and may have set to
+                // DontWait (see `render_immediate_viewport`): set this one's.
+                if *paced
+                    && let Err(err) = gl_surface.set_swap_interval(context, *swap_interval)
+                {
+                    log::debug!("set_swap_interval for {viewport_id:?}: {err}");
+                }
                 gl_surface.swap_buffers(context)?;
                 frame_timer.resume();
             }
@@ -1234,6 +1310,9 @@ impl GlutinWindowContext {
         } else {
             glutin::surface::SwapInterval::DontWait
         };
+        // Glossa patch: see `GlutinWindowContext::paced`.
+        let paced = cfg!(target_os = "macos")
+            && matches!(swap_interval, glutin::surface::SwapInterval::Wait(_));
         /*  opengl setup flow goes like this:
             1. we create a configuration for opengl "Display" / "Config" creation
             2. choose between special extensions like glx or egl or wgl and use them to create config/display
@@ -1370,6 +1449,7 @@ impl GlutinWindowContext {
         let mut slf = Self {
             egui_ctx: egui_ctx.clone(),
             swap_interval,
+            paced,
             gl_config,
             current_gl_context: None,
             not_current_gl_context,
@@ -1831,8 +1911,22 @@ fn render_immediate_viewport(
         not_current_gl_context,
         current_viewport,
         viewports,
+        swap_interval,
+        paced,
         ..
     } = &mut *glutin;
+
+    // Glossa patch: when the root window is painted in this pass, its swap
+    // alone waits for the refresh (see `GlutinWindowContext::paced`).
+    let root_paints_too = viewports
+        .get(&ViewportId::ROOT)
+        .and_then(|root| root.window.as_deref())
+        .is_some_and(|w| !is_invisible_or_minimized(w));
+    let interval = if *paced && root_paints_too {
+        glutin::surface::SwapInterval::DontWait
+    } else {
+        *swap_interval
+    };
 
     let Some(viewport) = viewports.get_mut(&viewport_id) else {
         warn!("Viewport disappeared unexpectedly!");
@@ -1885,6 +1979,11 @@ fn render_immediate_viewport(
 
     {
         profiling::scope!("swap_buffers");
+        if *paced
+            && let Err(err) = gl_surface.set_swap_interval(current_gl_context, interval)
+        {
+            log::debug!("set_swap_interval for {viewport_id:?}: {err}");
+        }
         if let Err(err) = gl_surface.swap_buffers(current_gl_context) {
             log::error!("swap_buffers failed: {err}");
         }

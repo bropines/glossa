@@ -14,6 +14,7 @@ mod chrome;
 mod dictionary;
 mod dropdown;
 mod fonts;
+mod frametrace;
 mod history;
 mod icons;
 mod inplace;
@@ -127,6 +128,7 @@ fn main() -> eframe::Result<()> {
         None => Paths::discover(),
     };
     init_logging(&paths);
+    frametrace::init(&paths.cache_dir);
     glossa_platform::crash::install(&paths.log_file());
     // The desktop portal's permissions to remember (Wayland) live with the data.
     glossa_platform::portal::set_state_dir(&paths.data_dir);
