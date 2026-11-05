@@ -14,6 +14,9 @@ the notes of its GitHub release.
 
 ### Fixed
 
+- macOS: with the main window open behind other windows, the popup did not
+  show (selection translation, the control API) until Glossa was switched
+  to with Cmd+Tab. It now shows at once.
 - macOS: the hidden main window was still drawn every frame while it sat
   in the tray, and then throttled, holding back Options and the popup. It no
   longer is. A minimised main window is not drawn either (on Windows it used

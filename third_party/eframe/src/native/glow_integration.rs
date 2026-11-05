@@ -765,9 +765,11 @@ impl GlowWinitRunning<'_> {
             // slept 10 ms as an invisible window: the popup and Options, drawn in
             // its pass, got about 60 frames per second and scrolling stuttered on
             // a 120 Hz display. Ask winit too before painting.
-            let window_hidden =
-                viewport.painted_window == Some(window.id()) && is_invisible_or_minimized(window);
+            // An occluded window is not painted either: nothing of it is shown.
+            let window_hidden = viewport.painted_window == Some(window.id())
+                && (is_invisible_or_minimized(window) || is_occluded(&viewport.info));
             let is_visible = (ui_visible && !window_hidden) || wants_paint;
+            let occluded = is_occluded(&viewport.info);
 
             let Some(egui_winit) = viewport.egui_winit.as_mut() else {
                 return Ok(EventResult::Wait);
@@ -786,8 +788,10 @@ impl GlowWinitRunning<'_> {
                 });
             // As before: the UI pass of a window egui still thinks is visible runs
             // (Glossa opens its popup from it while the main window is hidden).
+            // So does an occluded one's (see `is_occluded`).
             let show_ui = mode == PassMode::Full
                 && (ui_visible
+                    || occluded
                     || is_viewport_or_descendant_visible(&glutin.viewports, viewport_id));
 
             self.integration.pre_update();
@@ -1170,6 +1174,11 @@ impl GlowWinitRunning<'_> {
                     && let Some(viewport) = glutin.viewports.get_mut(&viewport_id)
                 {
                     viewport.info.occluded = Some(*is_occluded);
+                    // Glossa patch: an occluded window is not painted (see
+                    // `is_occluded`), so bring it up to date once it shows again.
+                    if !*is_occluded {
+                        repaint_asap = true;
+                    }
                 }
             }
 
@@ -1802,6 +1811,15 @@ fn initialize_or_update_viewport<'a>(
     }
 }
 
+/// Glossa patch: whether macOS reported this window as fully covered by other
+/// windows. egui counts such a window as invisible, so eframe skipped its UI
+/// pass, and with it the immediate viewports drawn there: Glossa's popup did
+/// not open while the main window sat behind other windows, until the app was
+/// activated. Other systems keep their behaviour.
+fn is_occluded(info: &egui::ViewportInfo) -> bool {
+    cfg!(target_os = "macos") && info.occluded == Some(true)
+}
+
 /// Is this viewport, or any of its (transitive) descendant viewports, visible?
 ///
 /// Immediate viewports are rendered inline while their parent's UI runs, so even
@@ -1923,6 +1941,7 @@ fn render_immediate_viewport(
     // alone waits for the refresh (see `GlutinWindowContext::paced`).
     let root_paints_too = viewports
         .get(&ViewportId::ROOT)
+        .filter(|root| !is_occluded(&root.info))
         .and_then(|root| root.window.as_deref())
         .is_some_and(|w| !is_invisible_or_minimized(w));
     let interval = if *paced && root_paints_too {

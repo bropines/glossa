@@ -44,3 +44,9 @@ Unchanged except for these fixes, marked `Glossa patch` in the source:
   needs the `NSScreen` feature of `objc2-app-kit`). A window shown alone keeps
   its vsync'd swap: a translucent window swapping without waiting asked AppKit
   for another frame at once and redrew forever.
+- `src/native/glow_integration.rs`, occluded windows (macOS): egui counts a
+  window covered by other windows as invisible, so eframe skipped its UI
+  pass, and the immediate viewports drawn in it with it: a popup asked for
+  while Glossa's main window sat behind other windows did not open until
+  the app was activated. An occluded window's UI pass now runs; the window
+  itself is not painted until it shows again.
