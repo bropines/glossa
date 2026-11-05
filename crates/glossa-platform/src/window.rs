@@ -356,6 +356,10 @@ pub fn lift_above_menu_bar(title: &str) -> bool {
     }
 }
 
+/// Whether [`float_free`] does anything here (macOS), so callers can skip
+/// looking the window up elsewhere.
+pub const CAN_FLOAT_FREE: bool = cfg!(target_os = "macos");
+
 /// Keep one of this program's windows, by its exact title, out of the
 /// system's window management: on macOS it then follows the user to any
 /// Space or full-screen app and Stage Manager neither gives it a stage of
