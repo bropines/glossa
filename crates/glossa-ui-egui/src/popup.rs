@@ -23,6 +23,9 @@ use glossa_engine::{Slot, TranslateOptions, TranslationOutcome};
 use crate::app::GlossaApp;
 use crate::icons::{self, Icon};
 
+/// The smallest the popup window may be, in points.
+const MIN_SIZE: egui::Vec2 = egui::vec2(160.0, 48.0);
+
 pub struct PopupState {
     pub source: String,
     pub job: u64,
@@ -307,7 +310,7 @@ pub fn show(app: &mut GlossaApp, ctx: &egui::Context) {
         .with_title(POPUP_TITLE)
         .with_decorations(false)
         .with_resizable(true)
-        .with_min_inner_size([160.0, 48.0])
+        .with_min_inner_size(MIN_SIZE)
         .with_taskbar(false)
         .with_window_level(egui::WindowLevel::AlwaysOnTop)
         // macOS's OpenGL refuses a translucent window unless the main window
@@ -334,7 +337,7 @@ pub fn show(app: &mut GlossaApp, ctx: &egui::Context) {
     if !state.resizing
         && state.sized_at.elapsed() > Duration::from_millis(400)
         && state.last_hover.elapsed() < Duration::from_secs(2)
-        && inner.is_some_and(|r| (r.size() - state.size).length() > 1.0)
+        && inner.is_some_and(|r| (r.size() - state.size.max(MIN_SIZE)).length() > 1.0)
     {
         state.resizing = true;
         state.pinned = true;
@@ -486,7 +489,9 @@ fn body(app: &mut GlossaApp, ui: &mut egui::Ui, st: &mut PopupState) -> (bool, e
         Some(s) => s.x,
         None if cfg.auto_size => soft_clamp(text_w.max(title_w) + 16.0, min_w, max_w),
         None => max_w,
-    };
+    }
+    // No narrower than the window can be, so the content fills it.
+    .max(MIN_SIZE.x);
 
     let mut overflow = 0.0f32;
     let resp = egui::CentralPanel::no_frame().show(ui, |ui| {
@@ -830,7 +835,9 @@ fn body(app: &mut GlossaApp, ui: &mut egui::Ui, st: &mut PopupState) -> (bool, e
         None if cfg.auto_size => soft_clamp(content.y + overflow, 36.0, cfg.max_height),
         None => cfg.max_height,
     };
-    (close, vec2(desired_w.ceil(), h.ceil()))
+    // Never ask for less than the window can be: the system would keep it
+    // at the minimum, and that difference would read as a user's resize.
+    (close, vec2(desired_w.ceil(), h.ceil()).max(MIN_SIZE))
 }
 
 /// The header's language menu: the automatic direction, a swap of the
