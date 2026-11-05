@@ -356,6 +356,25 @@ pub fn lift_above_menu_bar(title: &str) -> bool {
     }
 }
 
+/// Lift one of this program's windows, by its exact title, over everything
+/// on screen, the menu bar, the Dock and the system's edge strips (Stage
+/// Manager) included: for the screen-region overlay, which the pointer
+/// drags to the screen's edges. On macOS a lower window lets the Stage
+/// Manager strip slide in over it there. Elsewhere an always-on-top window
+/// is enough, and this does nothing. Returns whether the window was found.
+/// Call it on the GUI's thread.
+pub fn lift_over_everything(title: &str) -> bool {
+    #[cfg(target_os = "macos")]
+    {
+        mac::lift_over_everything(title)
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        let _ = title;
+        false
+    }
+}
+
 /// Whether [`float_free`] does anything here (macOS), so callers can skip
 /// looking the window up elsewhere.
 pub const CAN_FLOAT_FREE: bool = cfg!(target_os = "macos");

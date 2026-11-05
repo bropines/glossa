@@ -18,6 +18,16 @@ the notes of its GitHub release.
   Options) was open. The overlay, popup, notices, the mouse-selection icon
   and the in-place translation are now auxiliary windows that Stage
   Manager leaves alone, and they show on every Space.
+- macOS: dragging the popup's edge made the window bigger while its
+  content (the separator, the service buttons) kept the old width. macOS
+  resizes the borderless popup itself; Glossa now notices and adopts the
+  new size, as on Windows.
+- macOS: dragging a screen region to the screen's edge brought in the
+  Stage Manager strip over the overlay. The overlay now sits above it, as
+  screenshot tools' overlays do.
+- macOS: scrolling past the end of a page in Options with a trackpad
+  stuttered. egui's rubber-band bounce redrew the whole page every frame;
+  scrolling now stops at the edge.
 - macOS: text selected in a browser or an Electron app lost its line
   breaks between paragraphs and list items, so the translation ran them
   together. Selections in web content are now read with Cmd+C, which keeps
