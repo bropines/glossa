@@ -938,6 +938,7 @@ impl GlowWinitRunning<'_> {
             not_current_gl_context,
             current_viewport,
             swap_interval,
+            paced,
             ..
         } = &mut *glutin;
 
@@ -1045,7 +1046,9 @@ impl GlowWinitRunning<'_> {
                 // Glossa patch: the swap interval belongs to the GL context on
                 // macOS, which immediate viewports share and may have set to
                 // DontWait (see `render_immediate_viewport`): set this one's.
-                if let Err(err) = gl_surface.set_swap_interval(context, *swap_interval) {
+                if *paced
+                    && let Err(err) = gl_surface.set_swap_interval(context, *swap_interval)
+                {
                     log::debug!("set_swap_interval for {viewport_id:?}: {err}");
                 }
                 gl_surface.swap_buffers(context)?;
@@ -1909,6 +1912,7 @@ fn render_immediate_viewport(
         current_viewport,
         viewports,
         swap_interval,
+        paced,
         ..
     } = &mut *glutin;
 
@@ -1918,7 +1922,7 @@ fn render_immediate_viewport(
         .get(&ViewportId::ROOT)
         .and_then(|root| root.window.as_deref())
         .is_some_and(|w| !is_invisible_or_minimized(w));
-    let interval = if root_paints_too {
+    let interval = if *paced && root_paints_too {
         glutin::surface::SwapInterval::DontWait
     } else {
         *swap_interval
@@ -1975,7 +1979,9 @@ fn render_immediate_viewport(
 
     {
         profiling::scope!("swap_buffers");
-        if let Err(err) = gl_surface.set_swap_interval(current_gl_context, interval) {
+        if *paced
+            && let Err(err) = gl_surface.set_swap_interval(current_gl_context, interval)
+        {
             log::debug!("set_swap_interval for {viewport_id:?}: {err}");
         }
         if let Err(err) = gl_surface.swap_buffers(current_gl_context) {
