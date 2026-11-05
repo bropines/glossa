@@ -14,7 +14,7 @@
 //! remembered until reset with the button next to the close one.
 
 use std::sync::Arc;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use egui::{vec2, Color32, RichText, Sense};
 use glossa_core::{Action, Capabilities, Error, LangId, LangPair};
@@ -47,6 +47,10 @@ pub struct PopupState {
     pub user_size: Option<egui::Vec2>,
     /// An edge drag started: adopt whatever size the window takes.
     pub resizing: bool,
+    /// When the program last set the window's size itself (opening it, or
+    /// fitting it to the text); a size change long after that is the
+    /// user's.
+    pub sized_at: Instant,
     /// Last time the pointer was over the popup (or it was opened).
     pub last_hover: Instant,
     pub hovered: bool,
@@ -101,6 +105,7 @@ pub fn open(app: &mut GlossaApp, text: String, cursor: Option<(i32, i32)>) {
         moved: false,
         user_size: remembered_size(app),
         resizing: false,
+        sized_at: now,
         last_hover: now,
         hovered: false,
         favorite: false,
@@ -139,6 +144,7 @@ pub fn show_text(app: &mut GlossaApp, source: String, outcome: Option<Arc<Transl
         moved: false,
         user_size: remembered_size(app),
         resizing: false,
+        sized_at: now,
         last_hover: now,
         hovered: false,
         favorite: false,
@@ -286,7 +292,7 @@ pub fn tick(app: &mut GlossaApp) {
     if p.pinned || p.hovered || p.busy || delay == 0 {
         return;
     }
-    let left = std::time::Duration::from_secs(delay as u64).saturating_sub(p.last_hover.elapsed());
+    let left = Duration::from_secs(delay as u64).saturating_sub(p.last_hover.elapsed());
     if left.is_zero() {
         app.popup = None;
     } else {
@@ -321,6 +327,18 @@ pub fn show(app: &mut GlossaApp, ctx: &egui::Context) {
         outer = ui.input(|i| i.viewport().outer_rect);
         inner = ui.input(|i| i.viewport().inner_rect);
     });
+    // Where the system itself resizes a borderless window by its edges
+    // (macOS), our edge strips never see the drag: a size the window takes
+    // well after we last set one, with the pointer just over it, is the
+    // user's too.
+    if !state.resizing
+        && state.sized_at.elapsed() > Duration::from_millis(400)
+        && state.last_hover.elapsed() < Duration::from_secs(2)
+        && inner.is_some_and(|r| (r.size() - state.size).length() > 1.0)
+    {
+        state.resizing = true;
+        state.pinned = true;
+    }
     // After an edge drag, the size the window has is the user's: keep it
     // (and remember it for the next popup).
     if state.resizing {
@@ -363,6 +381,7 @@ pub fn show(app: &mut GlossaApp, ctx: &egui::Context) {
     if (desired - state.size).length() > 1.0 {
         tracing::trace!(?desired, old = ?state.size, "popup resized");
         state.size = desired;
+        state.sized_at = Instant::now();
         ctx.send_viewport_cmd_to(viewport_id(), egui::ViewportCommand::InnerSize(desired));
         if let Some(c) = state.cursor_px {
             let pos = placed(c, desired);
