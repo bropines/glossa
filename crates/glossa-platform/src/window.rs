@@ -356,6 +356,25 @@ pub fn lift_above_menu_bar(title: &str) -> bool {
     }
 }
 
+/// Keep one of this program's windows, by its exact title, out of the
+/// system's window management: on macOS it then follows the user to any
+/// Space or full-screen app and Stage Manager neither gives it a stage of
+/// its own nor switches to the stage of another Glossa window to show it.
+/// Elsewhere a borderless always-on-top window already behaves so, and this
+/// does nothing. Returns whether the window was found. Call it on the GUI's
+/// thread.
+pub fn float_free(title: &str) -> bool {
+    #[cfg(target_os = "macos")]
+    {
+        mac::float_free(title)
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        let _ = title;
+        false
+    }
+}
+
 /// Make a window one that clicks do not activate (`WS_EX_NOACTIVATE`), like
 /// a combo box's list or a menu: the window it belongs to keeps the focus
 /// and an active title bar, and closing the list hands the focus to no one

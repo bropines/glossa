@@ -158,6 +158,9 @@ pub struct GlossaApp {
     /// Borderless child windows whose corners the system rounds (macOS),
     /// by title, with the window they were rounded for.
     rounded_windows: HashMap<String, isize>,
+    /// Windows taken out of window management (Stage Manager, Spaces) by
+    /// [`Self::float_child`], by title, with the window it was done for.
+    floating_windows: HashMap<String, isize>,
     /// Child windows' frames as styled (rounded corners, border colour):
     /// title -> (the root pass it was last drawn in, the settings generation
     /// it was styled for). A window not drawn in the previous pass was
@@ -263,6 +266,7 @@ impl GlossaApp {
             backdrop_dirty: true,
             child_backdrops: HashMap::new(),
             rounded_windows: HashMap::new(),
+            floating_windows: HashMap::new(),
             child_frames: HashMap::new(),
             backdrop_generation: 0,
             popup_blurred: false,
@@ -490,6 +494,21 @@ impl GlossaApp {
             self.rounded_windows.insert(title.to_owned(), window);
         }
         rounded
+    }
+
+    /// Keep a window that appears over what the user is doing (popup,
+    /// notice, OCR overlay…) out of the system's window management, once
+    /// per window: on macOS Stage Manager would otherwise switch to the
+    /// stage of another open Glossa window to show it, or hide it there
+    /// (`glossa_platform::window::float_free`).
+    pub fn float_child(&mut self, title: &str) {
+        let Some(window) = glossa_platform::window::own_window_by_title(title) else { return };
+        if self.floating_windows.get(title) == Some(&window) {
+            return;
+        }
+        if glossa_platform::window::float_free(title) {
+            self.floating_windows.insert(title.to_owned(), window);
+        }
     }
 
     /// Whether the child window titled `title` had its corners rounded by

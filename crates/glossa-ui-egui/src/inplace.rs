@@ -169,6 +169,7 @@ pub fn show(app: &mut GlossaApp, ctx: &egui::Context) {
     if st.full_screen && !st.lifted {
         st.lifted = glossa_platform::window::lift_above_menu_bar(TITLE);
     }
+    app.float_child(TITLE);
     if keep {
         app.in_place = Some(st);
     }

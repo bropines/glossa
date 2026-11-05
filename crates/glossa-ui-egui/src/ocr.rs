@@ -67,6 +67,18 @@ pub struct OcrState {
     pub selection: Option<Rect>,
     pub phase: Phase,
     pub lang: LangId,
+    /// Where the window was asked to be, in desktop points.
+    wanted: egui::Pos2,
+    /// How far the window sits from `wanted`, in points: macOS keeps a
+    /// window below its menu bar until it is lifted above it. The
+    /// screenshot is drawn that much the other way, so it lies over the
+    /// screen it was taken from, and selections are read through it.
+    offset: egui::Vec2,
+    /// Whether the window has been lifted above the menu bar and taken out
+    /// of Stage Manager.
+    lifted: bool,
+    /// How many times the window has been put back where it belongs.
+    replaced: u32,
 }
 
 /// A recognition running after the overlay closed: copy mode, or in place.
@@ -79,6 +91,7 @@ pub struct Background {
 }
 
 const ID: &str = "glossa-ocr";
+const TITLE: &str = "Glossa OCR";
 
 pub fn begin(app: &mut GlossaApp, action: Action, image: image::RgbaImage, origin: (i32, i32)) {
     if action == Action::TranslateScreenInPlace {
@@ -96,6 +109,10 @@ pub fn begin(app: &mut GlossaApp, action: Action, image: image::RgbaImage, origi
         .map(|m| m.scale)
         .filter(|s| *s > 0.0)
         .unwrap_or(1.0);
+    // The origin is in desktop coordinates (points on macOS), the image in
+    // pixels.
+    let d = glossa_platform::window::desktop_scale(scale);
+    let wanted = pos2(origin.0 as f32 / d, origin.1 as f32 / d);
     app.ocr = Some(OcrState {
         action,
         image,
@@ -106,6 +123,10 @@ pub fn begin(app: &mut GlossaApp, action: Action, image: image::RgbaImage, origi
         selection: None,
         phase: Phase::Selecting,
         lang: app.cfg.ocr.language,
+        wanted,
+        offset: egui::Vec2::ZERO,
+        lifted: false,
+        replaced: 0,
     });
     // An engine with a slow first call (Apple Vision after the Mac starts)
     // gets ready while the user drags.
@@ -276,29 +297,43 @@ pub fn show(app: &mut GlossaApp, ctx: &egui::Context) {
     let Some(mut st) = app.ocr.take() else { return };
     let (w, h) = (st.image.width() as f32 / st.scale, st.image.height() as f32 / st.scale);
     let builder = egui::ViewportBuilder::default()
-        .with_title("Glossa OCR")
+        .with_title(TITLE)
         .with_decorations(false)
         .with_taskbar(false)
         .with_window_level(egui::WindowLevel::AlwaysOnTop)
-        // The origin is in desktop coordinates (points on macOS), the image
-        // in pixels.
-        .with_position({
-            let d = glossa_platform::window::desktop_scale(st.scale);
-            pos2(st.origin.0 as f32 / d, st.origin.1 as f32 / d)
-        })
+        .with_position(st.wanted)
         .with_inner_size([w, h])
         .with_active(true);
     let mut keep = true;
     ctx.show_viewport_immediate(egui::ViewportId::from_hash_of(ID), builder, |ui, _| {
-        keep = overlay(app, ui, &mut st);
+        keep = overlay(app, ui, &mut st, vec2(w, h));
     });
+    if !st.lifted {
+        // Over the menu bar, and not a window Stage Manager switches
+        // stages for. Both need the NSWindow, which exists from the first
+        // frame on.
+        st.lifted = glossa_platform::window::lift_above_menu_bar(TITLE);
+    }
+    app.float_child(TITLE);
     if keep {
         app.ocr = Some(st);
     }
 }
 
-fn overlay(app: &mut GlossaApp, ui: &mut egui::Ui, st: &mut OcrState) -> bool {
+fn overlay(app: &mut GlossaApp, ui: &mut egui::Ui, st: &mut OcrState, size: egui::Vec2) -> bool {
     let ctx = ui.ctx().clone();
+    // Put the window back where it was asked to be while AppKit keeps it
+    // below the menu bar (it lets go once the window is lifted), and draw
+    // the screenshot shifted by however far off it still is.
+    let actual = ui.input(|i| i.viewport().outer_rect);
+    let offset = actual.map_or(egui::Vec2::ZERO, |r| st.wanted - r.min);
+    st.offset = if offset.length() > 0.5 { offset } else { egui::Vec2::ZERO };
+    if st.offset != egui::Vec2::ZERO && st.replaced < 10 {
+        st.replaced += 1;
+        ctx.send_viewport_cmd(egui::ViewportCommand::OuterPosition(st.wanted));
+        ctx.send_viewport_cmd(egui::ViewportCommand::InnerSize(size));
+        ctx.request_repaint();
+    }
     if ui.input(|i| i.key_pressed(egui::Key::Escape) || i.viewport().close_requested()) {
         return false;
     }
@@ -316,7 +351,8 @@ fn overlay(app: &mut GlossaApp, ui: &mut egui::Ui, st: &mut OcrState) -> bool {
         let full = ui.max_rect();
         let resp = ui.allocate_rect(full, Sense::click_and_drag());
         let p = ui.painter();
-        p.image(texture.id(), full, Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0)), Color32::WHITE);
+        let picture = Rect::from_min_size(full.min + st.offset, size);
+        p.image(texture.id(), picture, Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0)), Color32::WHITE);
         let dim = Color32::from_black_alpha(110);
         match st.selection {
             Some(sel) => {
@@ -420,6 +456,9 @@ fn default_choice(app: &GlossaApp) -> Choice {
 
 /// The selection in screenshot pixels, clamped to the screenshot.
 fn pixel_rect(st: &OcrState, sel: Rect) -> (u32, u32, u32, u32) {
+    // The selection is in window points; the screenshot is drawn `offset`
+    // from the window's corner.
+    let sel = sel.translate(-st.offset);
     let s = st.scale;
     let x = ((sel.min.x * s).max(0.0) as u32).min(st.image.width().saturating_sub(1));
     let y = ((sel.min.y * s).max(0.0) as u32).min(st.image.height().saturating_sub(1));

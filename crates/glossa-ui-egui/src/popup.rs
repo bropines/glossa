@@ -355,6 +355,7 @@ pub fn show(app: &mut GlossaApp, ctx: &egui::Context) {
     app.child_backdrop(POPUP_TITLE, true);
     let radius = popup_radius(&app.look);
     app.round_child(POPUP_TITLE, radius);
+    app.float_child(POPUP_TITLE);
     if close {
         return;
     }

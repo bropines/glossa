@@ -138,6 +138,7 @@ pub fn draw(app: &mut GlossaApp, ctx: &egui::Context) {
         });
     });
     keep_from_activating(app);
+    app.float_child(TITLE);
     if dismissed {
         app.notice = None;
     }
