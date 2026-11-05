@@ -35,6 +35,21 @@ pub fn lift_above_menu_bar(title: &str) -> bool {
     true
 }
 
+/// `NSScreenSaverWindowLevel`: over the menu bar, the Dock and what the
+/// system shows at the screen's edges (the Stage Manager strip, hot
+/// corners), as screenshot tools put their selection overlays.
+const OVER_EVERYTHING: isize = 1000;
+
+/// Lift the window titled `title` over everything else on screen. Main
+/// thread only.
+pub fn lift_over_everything(title: &str) -> bool {
+    let Some(ptr) = own_window_by_title(title) else { return false };
+    // SAFETY: as in `lift_above_menu_bar`.
+    let window: &NSWindow = unsafe { &*(ptr as *const NSWindow) };
+    window.setLevel(OVER_EVERYTHING);
+    true
+}
+
 /// Take the window titled `title` out of window management: it shows on
 /// whichever Space and over full-screen apps, is skipped by Cmd-`, and is
 /// an auxiliary window to Stage Manager, which then neither makes a stage

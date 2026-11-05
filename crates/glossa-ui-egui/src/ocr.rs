@@ -309,10 +309,11 @@ pub fn show(app: &mut GlossaApp, ctx: &egui::Context) {
         keep = overlay(app, ui, &mut st, vec2(w, h));
     });
     if !st.lifted {
-        // Over the menu bar, and not a window Stage Manager switches
-        // stages for. Both need the NSWindow, which exists from the first
-        // frame on.
-        st.lifted = glossa_platform::window::lift_above_menu_bar(TITLE);
+        // Over the menu bar and the Stage Manager strip (which otherwise
+        // slides in when the drag reaches the screen's edge), and not a
+        // window Stage Manager switches stages for. Both need the
+        // NSWindow, which exists from the first frame on.
+        st.lifted = glossa_platform::window::lift_over_everything(TITLE);
     }
     app.float_child(TITLE);
     if keep {

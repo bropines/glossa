@@ -273,6 +273,12 @@ impl Look {
             if mac {
                 mac_spacing(s, t);
             }
+            // egui 0.37 rubber-bands trackpad scrolling past the edge. The
+            // spring redraws a whole Options page every frame while it
+            // settles, which stutters badly there; a mouse wheel (Windows)
+            // never triggers it. Stop at the edge as before. After the
+            // Fluent and macOS spacing, which replace the whole scroll style.
+            s.spacing.scroll.kinetic.rubber_band = false;
         });
         ctx.set_zoom_factor(ui_scale.clamp(0.5, 3.0));
     }
