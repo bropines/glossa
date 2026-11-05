@@ -41,7 +41,10 @@ use super::{
 use crate::epaint::textures::TexturesDelta;
 use crate::{
     App, AppCreator, CreationContext, NativeOptions, Result, Storage,
-    native::{epi_integration::EpiIntegration, winit_integration::sleep_if_invisible_or_minimized},
+    native::{
+        epi_integration::EpiIntegration,
+        winit_integration::{is_invisible_or_minimized, sleep_if_invisible_or_minimized},
+    },
 };
 
 // ----------------------------------------------------------------------------
@@ -151,6 +154,11 @@ struct Viewport {
     gl_surface: Option<glutin::surface::Surface<glutin::surface::WindowSurface>>,
     window: Option<Arc<Window>>,
     egui_winit: Option<egui_winit::State>,
+
+    /// Glossa patch: the window this viewport has painted at least once. eframe
+    /// keeps a new window hidden until its first paint, so a hidden window is
+    /// only skipped once it has been painted.
+    painted_window: Option<winit::window::WindowId>,
 }
 
 impl Viewport {
@@ -664,7 +672,7 @@ impl GlowWinitRunning<'_> {
             }
         }
 
-        let (raw_input, viewport_ui_cb, is_visible, show_ui) = {
+        let (raw_input, viewport_ui_cb, is_visible, show_ui, shows_descendant) = {
             let mut glutin = self.glutin.borrow_mut();
             let egui_ctx = glutin.egui_ctx.clone();
             let Some(viewport) = glutin.viewports.get_mut(&viewport_id) else {
@@ -677,11 +685,20 @@ impl GlowWinitRunning<'_> {
 
             // A hidden window is not painted, since nothing would be shown — unless someone
             // wants the pixels anyway, e.g. to screenshot an app that is in the background:
-            let is_visible = viewport.info.visible().unwrap_or(true)
-                || viewport
-                    .actions_requested
-                    .iter()
-                    .any(egui_winit::ActionRequested::wants_paint);
+            let wants_paint = viewport
+                .actions_requested
+                .iter()
+                .any(egui_winit::ActionRequested::wants_paint);
+            let ui_visible = viewport.info.visible().unwrap_or(true) || wants_paint;
+            // Glossa patch: on macOS `info.visible()` stays unknown for a window
+            // hidden with `Visible(false)`, so a hidden root window (Glossa's main
+            // window in the tray) was painted and presented every frame, and then
+            // slept 10 ms as an invisible window: the popup and Options, drawn in
+            // its pass, got about 60 frames per second and scrolling stuttered on
+            // a 120 Hz display. Ask winit too before painting.
+            let window_hidden =
+                viewport.painted_window == Some(window.id()) && is_invisible_or_minimized(window);
+            let is_visible = (ui_visible && !window_hidden) || wants_paint;
 
             let Some(egui_winit) = viewport.egui_winit.as_mut() else {
                 return Ok(EventResult::Wait);
@@ -689,8 +706,19 @@ impl GlowWinitRunning<'_> {
             let mut raw_input = egui_winit.take_egui_input(window);
             let viewport_ui_cb = viewport.viewport_ui_cb.clone();
 
+            // Glossa patch: remember whether this (hidden) window's pass paints a
+            // visible immediate child, so the pass below is not throttled like an
+            // idle hidden window's.
+            let shows_descendant = window_hidden
+                && glutin.viewports.iter().any(|(id, child)| {
+                    *id != viewport_id
+                        && child.ids.parent == viewport_id
+                        && child.window.as_deref().is_some_and(|w| !is_invisible_or_minimized(w))
+                });
+            // As before: the UI pass of a window egui still thinks is visible runs
+            // (Glossa opens its popup from it while the main window is hidden).
             let show_ui = mode == PassMode::Full
-                && (is_visible
+                && (ui_visible
                     || is_viewport_or_descendant_visible(&glutin.viewports, viewport_id));
 
             self.integration.pre_update();
@@ -702,7 +730,7 @@ impl GlowWinitRunning<'_> {
                 .map(|(id, viewport)| (*id, viewport.info.clone()))
                 .collect();
 
-            (raw_input, viewport_ui_cb, is_visible, show_ui)
+            (raw_input, viewport_ui_cb, is_visible, show_ui, shows_descendant)
         };
 
         if !show_ui {
@@ -929,6 +957,7 @@ impl GlowWinitRunning<'_> {
                 }
 
                 integration.post_rendering(&window);
+                viewport.painted_window = Some(window.id());
             }
 
             {
@@ -968,7 +997,14 @@ impl GlowWinitRunning<'_> {
             (viewport_id == ViewportId::ROOT).then_some(&window),
         );
 
-        sleep_if_invisible_or_minimized(Some(&window));
+        // Glossa patch: a hidden root window whose pass paints visible immediate
+        // viewports (Glossa's popup and Options while the main window is in the
+        // tray) must not sleep 10 ms every frame: that capped those windows at
+        // about 60 frames per second and made scrolling stutter on a 120 Hz
+        // display. They are paced by their own vsync'd swaps instead.
+        if !shows_descendant {
+            sleep_if_invisible_or_minimized(Some(&window));
+        }
 
         if integration.should_close() {
             Ok(EventResult::CloseRequested)
@@ -1322,6 +1358,7 @@ impl GlutinWindowContext {
                 gl_surface: None,
                 window: window.map(Arc::new),
                 egui_winit: None,
+                painted_window: None,
             },
         );
 
@@ -1647,6 +1684,7 @@ fn initialize_or_update_viewport<'a>(
                 window: None,
                 egui_winit: None,
                 gl_surface: None,
+                painted_window: None,
             })
         }
 
