@@ -675,7 +675,10 @@ impl GlowWinitRunning<'_> {
         profiling::finish_frame!();
 
         // Glossa patch: see `GlutinWindowContext::paced`.
-        if viewport_id == ViewportId::ROOT && mode == PassMode::Full {
+        if viewport_id == ViewportId::ROOT
+            && mode == PassMode::Full
+            && self.glutin.borrow().paced
+        {
             let (paced, refresh_mhz) = {
                 let glutin = self.glutin.borrow();
                 // The fastest monitor any shown window is on (the root window may be
