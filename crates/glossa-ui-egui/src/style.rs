@@ -259,11 +259,6 @@ impl Look {
             s.spacing.menu_margin = Margin::same(4);
             s.spacing.interact_size.y = (t.fonts.size * 2.0).max(22.0);
             s.interaction.tooltip_delay = 0.35;
-            // egui 0.37 rubber-bands trackpad scrolling past the edge. The
-            // spring redraws a whole Options page every frame while it
-            // settles, which stutters badly there; a mouse wheel (Windows)
-            // never triggers it. Stop at the edge as before.
-            s.spacing.scroll.kinetic.rubber_band = false;
             s.text_styles.insert(egui::TextStyle::Body, egui::FontId::proportional(t.fonts.size * 1.33));
             s.text_styles.insert(egui::TextStyle::Button, egui::FontId::proportional(t.fonts.size * 1.33));
             s.text_styles.insert(egui::TextStyle::Small, egui::FontId::proportional(t.fonts.size * 1.1));
@@ -278,6 +273,12 @@ impl Look {
             if mac {
                 mac_spacing(s, t);
             }
+            // egui 0.37 rubber-bands trackpad scrolling past the edge. The
+            // spring redraws a whole Options page every frame while it
+            // settles, which stutters badly there; a mouse wheel (Windows)
+            // never triggers it. Stop at the edge as before. After the
+            // Fluent and macOS spacing, which replace the whole scroll style.
+            s.spacing.scroll.kinetic.rubber_band = false;
         });
         ctx.set_zoom_factor(ui_scale.clamp(0.5, 3.0));
     }
