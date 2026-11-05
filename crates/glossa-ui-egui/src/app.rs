@@ -1089,6 +1089,7 @@ impl eframe::App for GlossaApp {
         self.save_zoom_later();
         if self.main_visible {
             phase("main window");
+            let _trace = crate::frametrace::begin(&ctx, "main");
             crate::main_window::show(self, ui);
         }
         phase("popup");
