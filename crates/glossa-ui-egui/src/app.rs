@@ -502,6 +502,9 @@ impl GlossaApp {
     /// stage of another open Glossa window to show it, or hide it there
     /// (`glossa_platform::window::float_free`).
     pub fn float_child(&mut self, title: &str) {
+        if !glossa_platform::window::CAN_FLOAT_FREE {
+            return;
+        }
         let Some(window) = glossa_platform::window::own_window_by_title(title) else { return };
         if self.floating_windows.get(title) == Some(&window) {
             return;
