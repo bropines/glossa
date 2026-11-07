@@ -416,7 +416,7 @@ empty. `--json`:
 
 ```
 glossa-cli module test [--live | --record] [--case NAME] [--set-from-env KEY=VAR]… [--set KEY=VALUE]…
-                       [--timeout SECS] [--strict] [--require-runtimes] [--ignore-recordings] DIR…
+                       [--timeout SECS] [--strict] [--require-runtimes] [--ignore-recordings] [--download] DIR…
 glossa-cli module check [--strict] DIR…
 ```
 
@@ -439,7 +439,8 @@ check are described in [modules/testing.md](modules/testing.md).
 | `--set KEY=VALUE` | none | An option value over the fixtures' own (a number or `true`/`false` is passed as one). Repeatable. |
 | `--timeout SECS` | 30 | The budget for one call. |
 | `--strict` | off | Warnings fail a module too, not only errors. |
-| `--require-runtimes` | off | A module that cannot run here (no interpreter, not built) fails instead of being skipped. |
+| `--require-runtimes` | off | A module that cannot run here (no interpreter, not built, its files not downloaded) fails instead of being skipped. |
+| `--download` | off | Download a module's missing required files ([assets](modules/README.md#assets)) before running it; without it such a module is skipped with the `module assets download` command to run. |
 
 The text report has one line per module (`PASS`, `FAIL` or `SKIP`, its id,
 runtime, folder, load time and size), its findings (`error:`, `warning:`,

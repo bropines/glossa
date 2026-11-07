@@ -72,11 +72,13 @@ COMMANDS
     services   [-c CAPABILITY]        translate | dictionary | listen | ocr | detect_language
     modules                           what loaded, what failed and why
     module test [--live|--record] [--case NAME] [--set-from-env KEY=VAR] [--set KEY=VALUE]
-                [--timeout SECS] [--strict] [--require-runtimes] [--ignore-recordings] DIR…
+                [--timeout SECS] [--strict] [--require-runtimes] [--ignore-recordings] [--download] DIR…
                                       check a module folder (or every module below DIR), load it
                                       and run its fixtures (tests/*.toml) with recorded HTTP;
                                       --record writes tests/recorded/, which replays then prefer
-                                      over the fixtures' own answers (--ignore-recordings: not)
+                                      over the fixtures' own answers (--ignore-recordings: not);
+                                      a module whose files are not downloaded is skipped, unless
+                                      --download fetches them first
     module check [--strict] DIR…      the same checks without loading or running anything
     assets     [list | status ID | download ID [NAME…] | verify ID | remove ID]
                                       files modules declare (models, dictionaries): their state,
@@ -161,6 +163,7 @@ const SWITCHES: &[&str] = &[
     "--full",
     "--in-place",
     "--join-lines",
+    "--download",
     "--live",
     "--record",
     "--strict",
@@ -205,6 +208,7 @@ fn command_flags(command: &str) -> Option<&'static [&'static str]> {
             "--strict",
             "--require-runtimes",
             "--ignore-recordings",
+            "--download",
         ],
         "detect" | "modules" | "assets" | "import-classic" | "theme" | "locale" | "config" | "serve" | "action"
         | "doctor" | "" | "help" | "version" => &[],
@@ -426,6 +430,8 @@ fn module_command(args: &Args) -> Result<(), Fail> {
         require_runtimes: args.has(&["--require-runtimes"]),
         case_filter: args.flag(&["--case"]).map(str::to_owned),
         ignore_recordings: args.has(&["--ignore-recordings"]),
+        models_dir: Some(paths(args).models_dir()),
+        download_assets: args.has(&["--download"]),
         ..Settings::default()
     };
     if let Some(t) = args.flag(&["--timeout"]) {

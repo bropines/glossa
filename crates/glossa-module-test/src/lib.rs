@@ -70,6 +70,13 @@ pub struct Settings {
     pub options: OptionValues,
     pub python: String,
     pub java: String,
+    /// Where module assets are downloaded, as the program has it
+    /// (`Paths::models_dir`), so files the user already downloaded are
+    /// found. `None`: a scratch folder.
+    pub models_dir: Option<PathBuf>,
+    /// Download a module's missing required assets before running it,
+    /// instead of skipping the module.
+    pub download_assets: bool,
 }
 
 impl Default for Settings {
@@ -85,6 +92,8 @@ impl Default for Settings {
             options: OptionValues::new(),
             python: String::new(),
             java: String::new(),
+            models_dir: None,
+            download_assets: false,
         }
     }
 }
@@ -291,6 +300,7 @@ pub fn test_module(dir: &Path, s: &Settings) -> ModuleReport {
         java: s.java.clone(),
         call_timeout: s.timeout,
         cache_dir: std::env::temp_dir().join("glossa-module-test"),
+        models_dir: s.models_dir.clone().unwrap_or_else(|| std::env::temp_dir().join("glossa-module-test-models")),
         ..Default::default()
     };
 
@@ -358,6 +368,27 @@ pub fn test_module(dir: &Path, s: &Settings) -> ModuleReport {
         }
     };
     report.load_ms = Some(started.elapsed().as_millis() as u64);
+    // A module whose files are not downloaded is listed but not started,
+    // in the program as here: fetch them when asked to, else skip it the
+    // way a missing interpreter is skipped.
+    if let Some(assets) = entry.assets.as_ref().filter(|a| !a.ready()) {
+        if s.download_assets {
+            let http = glossa_net::HttpClient::plain();
+            if let Err(e) = assets.download(&http, &CancelToken::new(), &|_| {}) {
+                report.findings.push(Finding::error(format!("downloading the module's files failed: {e}")));
+                report.settle(s);
+                return report;
+            }
+        } else {
+            report.skipped = Some(format!(
+                "the module's files are not downloaded ({}); run `glossa-cli module assets download {}`, or test with --download",
+                assets.missing().join(", "),
+                report.id
+            ));
+            report.settle(s);
+            return report;
+        }
+    }
     let provider = entry.provider;
     // Everything given on the command line is treated as secret, whatever
     // the option's type: a key in a `text` option is still a key.
@@ -809,6 +840,30 @@ mod tests {
         assert!(text.contains("secret option \"api_key\" has a default"), "{text}");
         assert!(text.contains("no fixtures"), "{text}");
         assert!(r.load_ms.is_none(), "an invalid module is not run");
+        let _ = std::fs::remove_dir_all(&d);
+    }
+
+    #[test]
+    fn a_module_whose_files_are_not_downloaded_is_skipped_with_the_command() {
+        let d = temp("assets");
+        write(
+            &d,
+            "module.toml",
+            "capabilities = [\"translate\"]\n[module]\nid = \"needs-model\"\nname = \"Needs a model\"\nversion = \"1.0.0\"\nruntime = \"process\"\ncommand = [\"${ASSETS_DIR}/tool\"]\n[permissions]\nnetwork = [\"dl.test\"]\n[[assets]]\nname = \"tool\"\nurl = \"https://dl.test/tool\"\nsha256 = \"b94d27b9934d3e08a52e52d7da7dabfac484efe37a5380ee9088f7ace2efcde9\"\nsize = 11\nexecutable = true\n",
+        );
+        write(&d, "tests/basic.toml", "[[case]]\nname = \"hi\"\nop = \"translate\"\ntext = \"hi\"\nto = \"de\"\n");
+        let models = d.join("models");
+        let s = Settings { models_dir: Some(models.clone()), ..Settings::default() };
+        let r = test_module(&d, &s);
+        assert_eq!(r.status, Status::Skip, "{r:?}");
+        let why = r.skipped.clone().unwrap_or_default();
+        assert!(why.contains("tool") && why.contains("glossa-cli module assets download needs-model"), "{why}");
+        // The command naming the asset is not reported as a missing program.
+        assert!(r.findings.iter().all(|f| f.severity != Severity::Error), "{:?}", r.findings);
+
+        // CI asks for every module to run: then it is a failure.
+        let strict = Settings { models_dir: Some(models), require_runtimes: true, ..Settings::default() };
+        assert_eq!(test_module(&d, &strict).status, Status::Fail);
         let _ = std::fs::remove_dir_all(&d);
     }
 

@@ -128,7 +128,8 @@ glossa-cli --json module test .                  # the report as JSON, for scrip
 | `--ignore-recordings` | Replay only the hand-written `[[case.http]]` entries, ignoring `tests/recorded/`. |
 | `--timeout SECS` | The budget for one call (default 30). |
 | `--strict` | Warnings fail the module too. CI runs with it. |
-| `--require-runtimes` | A module that cannot run here (no Python, no Node, no JDK, a native library not built) fails instead of being skipped. |
+| `--require-runtimes` | A module that cannot run here (no Python, no Node, no JDK, a native library not built, its [files](README.md#assets) not downloaded) fails instead of being skipped. |
+| `--download` | Download a module's missing required [files](README.md#assets) before running it, instead of skipping it. Uses the network even without `--live`. |
 
 The report gives one line per module (PASS, FAIL or SKIP, the runtime, the
 time it took to load, the folder's size), then the findings and one line
@@ -151,8 +152,17 @@ The exit code is 1 when any module failed. A skipped module (its runtime
 is missing here) does not fail the run unless `--require-runtimes` is
 given.
 
-The harness needs no data folder and does not read `config.toml`: a module
-is tested on its own, with the options its fixtures give.
+A module with [assets](README.md#assets) runs only when its required files
+are downloaded: the harness looks for them where the program keeps them
+(`glossa-cli module assets status <id>` shows the folder). When they are
+missing, the module is skipped with the command that fetches them
+(`glossa-cli module assets download <id>`), or `--download` fetches them
+first. Until then only the manifest and the entry file are checked: a
+`command` naming `${ASSETS_DIR}` cannot be resolved before the files exist.
+
+The harness does not read `config.toml`: a module is tested on its own,
+with the options its fixtures give. The data folder is used only to find
+downloaded module files.
 
 ## Fixtures
 
@@ -220,7 +230,7 @@ All are optional; the [shape checks](#what-is-checked) run regardless.
 | `detected` | The detected language (translate, detect, ocr). |
 | `headword` | The article's headword. |
 | `mime` | The audio's MIME type. |
-| `error` | The call must fail with this kind: `missing_credential`, `unsupported`, `source_language`, `target_language`, `rate_limited`, `network`, `http`, `bad_response`, `not_found`, `timeout` or `module` (any other module error). A dictionary's `not_found` reaches the program as a plain module error carrying your message, the same as a crash would, so a `not_found` expectation that meets a module error also needs `error_contains` with words from your not_found message; without it the case fails. |
+| `error` | The call must fail with this kind: `missing_credential`, `unsupported`, `source_language`, `target_language`, `rate_limited`, `network`, `http`, `bad_response`, `not_found`, `timeout`, `assets_missing` (the module's files are not downloaded) or `module` (any other module error). A dictionary's `not_found` reaches the program as a plain module error carrying your message, the same as a crash would, so a `not_found` expectation that meets a module error also needs `error_contains` with words from your not_found message; without it the case fails. |
 | `error_contains` | The error message must contain this. |
 | `max_ms` | The call must finish within this many milliseconds. Leave room: the first call to a process module includes starting it. |
 | `result` | A partial match on the result as JSON: every key given must be there with an equal value, and arrays match element by element for as many elements as are given. The names are the program's serialised ones (`trait` and `explains` in an article's explanations, `bounds` for an OCR box); when a key is missing, the report lists the ones that are there. |

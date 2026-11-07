@@ -344,6 +344,49 @@ impl ModuleAssets {
         info
     }
 
+    /// Tell a module with assets where they are: `${ASSETS_DIR}` in its command
+    /// line, arguments, environment and working folder, `GLOSSA_ASSETS_DIR` and
+    /// one `GLOSSA_ASSET_<NAME>` per required asset in its environment
+    /// (unless the manifest sets them itself), and the `assets` host call.
+    /// The registry does this for every module it loads; tools that resolve
+    /// a module's command line themselves (the module tester) do it too.
+    pub fn apply_to(&self, manifest: &mut Manifest) {
+        let assets = self;
+        let root = assets.root.to_string_lossy().into_owned();
+        let expand = |s: &mut String| {
+            if s.contains("${ASSETS_DIR}") {
+                *s = s.replace("${ASSETS_DIR}", &root);
+            }
+        };
+        let m = &mut manifest.module;
+        match &mut m.command {
+            Some(crate::manifest::CommandSpec::Line(line)) => line.iter_mut().for_each(expand),
+            Some(crate::manifest::CommandSpec::Program(p)) => expand(p),
+            Some(crate::manifest::CommandSpec::PerPlatform(p)) => {
+                for line in
+                    [&mut p.windows, &mut p.macos, &mut p.linux, &mut p.unix, &mut p.default].into_iter().flatten()
+                {
+                    line.iter_mut().for_each(expand);
+                }
+            }
+            None => {}
+        }
+        m.args.iter_mut().for_each(expand);
+        m.env.values_mut().for_each(expand);
+        m.classpath.iter_mut().for_each(expand);
+        m.jvm_args.iter_mut().for_each(expand);
+        expand(&mut m.cwd);
+        m.env.entry("GLOSSA_ASSETS_DIR".into()).or_insert_with(|| root.clone());
+        // Required assets only: the module starts once those are verified.
+        // Optional ones may be missing or outdated, so a module learns about
+        // them from the `assets` host call, which checks.
+        for spec in assets.specs.iter().filter(|s| !s.optional) {
+            let path = assets.path(&spec.name);
+            m.env.entry(env_name(&spec.name)).or_insert_with(|| path.to_string_lossy().into_owned());
+        }
+        manifest.assets_dir = Some(assets.root.clone());
+    }
+
     /// Every asset's path, by name.
     pub fn paths(&self) -> BTreeMap<String, PathBuf> {
         self.specs.iter().map(|s| (s.name.clone(), self.path(&s.name))).collect()
