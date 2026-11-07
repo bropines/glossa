@@ -531,30 +531,78 @@ pub fn describe(ctx: &Ctx<'_>, err: rquickjs::Error) -> String {
         return "the script recursed too deeply (stack overflow)".into();
     }
     let mut text = if name.is_empty() || name == "Error" { message } else { format!("{name}: {message}") };
-    if name == "SyntaxError" {
-        // QuickJS keeps the position in the stack ("    at main.js:3:14").
-        if let Some(at) =
-            get("stack").and_then(|s| s.lines().find_map(|l| l.trim().strip_prefix("at ").map(str::to_owned)))
-        {
-            text = format!("{text} (at {at})");
-        }
+    // QuickJS keeps the position in the stack ("    at main.js:3:14" for a
+    // syntax error, "    at translate (main.js:3:14)" for a thrown one).
+    // The first frame in the module's own code is the one worth naming; the
+    // preludes' frames say nothing to the author.
+    if let Some(at) = get("stack").and_then(|s| s.lines().find_map(user_frame)) {
+        text = format!("{text} (at {at})");
     }
     text
 }
 
-/// Turn a module error thrown by a script (via the prelude's `ModuleError`)
-/// into the protocol's error type; anything else becomes a generic error.
-pub fn script_error(message: String) -> ModuleError {
-    // The prelude encodes typed errors as "glossa:<kind>:<message>".
-    if let Some(rest) = message.split("glossa:").nth(1) {
-        if let Some((kind, msg)) = rest.split_once(':') {
-            let kind: Option<ErrorKind> = serde_json::from_value(serde_json::Value::String(kind.to_owned())).ok();
-            if let Some(kind) = kind {
-                return ModuleError::new(kind, msg.trim().to_owned());
+/// Scripts Glossa itself evaluates in every call; a stack frame in one of
+/// these is not where the author's mistake is.
+const INTERNAL_SCRIPTS: &[&str] = &["prelude.js", "web.js", "glossa.js", "pot.js", "host objects", "options"];
+
+/// `file:line[:column]` from one line of a QuickJS stack, unless it points
+/// into one of Glossa's own preludes or at native code.
+fn user_frame(line: &str) -> Option<String> {
+    let rest = line.trim().strip_prefix("at ")?;
+    // "name (file:line:col)" or plain "file:line:col".
+    let place = match (rest.rfind('('), rest.ends_with(')')) {
+        (Some(open), true) => &rest[open + 1..rest.len() - 1],
+        _ => rest,
+    };
+    let loc = parse_location(place)?;
+    (!INTERNAL_SCRIPTS.contains(&loc.file.as_str())).then(|| place.to_owned())
+}
+
+/// Read `file:line` or `file:line:column`.
+fn parse_location(place: &str) -> Option<glossa_module_sdk::wire::ErrorLocation> {
+    let mut parts = place.rsplitn(3, ':');
+    let last = parts.next()?;
+    let middle = parts.next()?;
+    let (file, line, column) = match parts.next() {
+        Some(file) if middle.parse::<u32>().is_ok() => (file, middle.parse().ok()?, last.parse().ok()?),
+        _ => (middle, last.parse().ok()?, 0),
+    };
+    if file.is_empty() || file.contains('<') {
+        return None;
+    }
+    Some(glossa_module_sdk::wire::ErrorLocation { file: file.to_owned(), line, column })
+}
+
+/// The place [`describe`] appended to a message (" (at main.js:3:14)"), and
+/// the message without it.
+pub fn split_location(message: &str) -> (&str, Option<glossa_module_sdk::wire::ErrorLocation>) {
+    if let Some(open) = message.rfind(" (at ") {
+        if message.ends_with(')') {
+            if let Some(loc) = parse_location(&message[open + 5..message.len() - 1]) {
+                return (&message[..open], Some(loc));
             }
         }
     }
-    ModuleError::other(message)
+    (message, None)
+}
+
+/// Turn a module error thrown by a script (via the prelude's `ModuleError`)
+/// into the protocol's error type; anything else becomes a generic error.
+/// Where the script threw goes into the error's `location`; a typed error's
+/// message loses it (a `missing_credential` message is an option key), a
+/// generic one keeps it, so the place shows wherever the message is shown.
+pub fn script_error(message: String) -> ModuleError {
+    let (bare, location) = split_location(&message);
+    // The prelude encodes typed errors as "glossa:<kind>:<message>".
+    if let Some(rest) = bare.split("glossa:").nth(1) {
+        if let Some((kind, msg)) = rest.split_once(':') {
+            let kind: Option<ErrorKind> = serde_json::from_value(serde_json::Value::String(kind.to_owned())).ok();
+            if let Some(kind) = kind {
+                return ModuleError::new(kind, msg.trim().to_owned()).at(location);
+            }
+        }
+    }
+    ModuleError::other(message).at(location)
 }
 
 // -- natives ---------------------------------------------------------------
@@ -836,6 +884,40 @@ mod tests {
         let e = script_error(err);
         assert_eq!(e.kind, ErrorKind::MissingCredential);
         assert_eq!(e.message, "api_key");
+    }
+
+    #[test]
+    fn runtime_errors_carry_the_place_in_the_script() {
+        let err = with_context(|ctx| {
+            eval(ctx, "function f() {\n  return optons.x;\n}\nf();", "main.js").map(|_| ()).unwrap_err()
+        })
+        .unwrap();
+        let e = script_error(err.clone());
+        let loc = e.location.clone().unwrap_or_else(|| panic!("no location in {err:?}"));
+        assert_eq!((loc.file.as_str(), loc.line), ("main.js", 2), "{err}");
+        assert!(loc.column > 0, "{err}");
+        assert!(e.message.contains("optons"), "{e:?}");
+
+        // A typed error keeps its message clean and still says where.
+        let err = with_context(|ctx| {
+            eval(ctx, "\n\nthrow new ModuleError('missing_credential', 'api_key');", "main.js").map(|_| ()).unwrap_err()
+        })
+        .unwrap();
+        let e = script_error(err);
+        assert_eq!(e.kind, ErrorKind::MissingCredential);
+        assert_eq!(e.message, "api_key");
+        assert_eq!(e.location.map(|l| l.file), Some("main.js".into()));
+    }
+
+    #[test]
+    fn frames_in_the_preludes_are_not_the_authors_mistake() {
+        assert_eq!(user_frame("    at translate (main.js:3:14)").as_deref(), Some("main.js:3:14"));
+        assert_eq!(user_frame("    at main.js:2").as_deref(), Some("main.js:2"));
+        assert_eq!(user_frame("    at ModuleError (prelude.js:10:5)"), None);
+        assert_eq!(user_frame("    at <eval> (<input>:1:1)"), None);
+        assert_eq!(user_frame("    at push (native)"), None);
+        assert_eq!(split_location("x (at a.js:1:2)").1.map(|l| (l.line, l.column)), Some((1, 2)));
+        assert_eq!(split_location("plain (at noon)").1, None);
     }
 
     #[test]

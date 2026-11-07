@@ -48,6 +48,8 @@ function ModuleError(kind, message) {
   this.kind = kind;
   // Encoded so the kind survives the trip through the engine's error text.
   this.message = "glossa:" + kind + ":" + (message || "");
+  // Where it was thrown, for the error's location.
+  this.stack = new Error().stack;
 }
 ModuleError.prototype = Object.create(Error.prototype);
 ModuleError.prototype.constructor = ModuleError;

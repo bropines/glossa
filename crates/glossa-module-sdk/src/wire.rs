@@ -585,11 +585,32 @@ pub struct ModuleError {
     /// For `rate_limited`: seconds until a retry may work.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub retry_after_secs: Option<u64>,
+    /// Where in the module's own code the error was raised, when the runtime
+    /// can tell (a JavaScript exception, a Python traceback). Optional, and
+    /// only for showing the author the line: the host never acts on it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub location: Option<ErrorLocation>,
+}
+
+/// A place in a module's source: a file relative to the module's folder, a
+/// 1-based line and a 1-based column (0 when unknown).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ErrorLocation {
+    pub file: String,
+    pub line: u32,
+    #[serde(default)]
+    pub column: u32,
 }
 
 impl ModuleError {
     pub fn new(kind: ErrorKind, message: impl Into<String>) -> Self {
-        Self { kind, message: message.into(), retry_after_secs: None }
+        Self { kind, message: message.into(), retry_after_secs: None, location: None }
+    }
+
+    /// The same error, pointing at `location`.
+    pub fn at(mut self, location: Option<ErrorLocation>) -> Self {
+        self.location = location;
+        self
     }
 
     pub fn other(message: impl Into<String>) -> Self {
@@ -664,6 +685,19 @@ mod tests {
         assert_eq!(ok, serde_json::json!({"result": {"text": "hi"}}));
         let err = serde_json::to_value(Reply::err(ModuleError::missing_option("api_key"))).unwrap();
         assert_eq!(err, serde_json::json!({"error": {"kind": "missing_credential", "message": "api_key"}}));
+    }
+
+    #[test]
+    fn an_error_location_is_optional_both_ways() {
+        let old: ModuleError = serde_json::from_str(r#"{"kind": "other", "message": "x"}"#).unwrap();
+        assert_eq!(old.location, None);
+        let e = ModuleError::other("boom").at(Some(ErrorLocation { file: "main.js".into(), line: 3, column: 7 }));
+        let v = serde_json::to_value(&e).unwrap();
+        assert_eq!(v["location"], serde_json::json!({"file": "main.js", "line": 3, "column": 7}));
+        let back: ModuleError =
+            serde_json::from_str(r#"{"kind": "other", "message": "x", "location": {"file": "m.py", "line": 9}}"#)
+                .unwrap();
+        assert_eq!(back.location, Some(ErrorLocation { file: "m.py".into(), line: 9, column: 0 }));
     }
 
     #[test]

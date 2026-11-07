@@ -175,6 +175,22 @@ JavaScript throws `new ModuleError(kind, message)`; Python raises
 exception that is not a `ModuleError` becomes `other` with its message (and
 the traceback, for Python).
 
+An error may also say where in the module's own code it was raised, for
+the author's benefit (the [module editor](editor.md) underlines the line):
+
+```json
+{ "kind": "other", "message": "TypeError: cannot read property 'x' of undefined (at main.js:23:14)",
+  "location": { "file": "main.js", "line": 23, "column": 14 } }
+```
+
+`location` is optional and additive: `file` is relative to the module's
+folder, `line` and `column` are 1-based (`column` may be left out or 0).
+Glossa's JavaScript runtime fills it from the exception's stack, skipping
+its own preludes, and also appends ` (at file:line:col)` to the message of
+an `other` error so the place shows wherever the message is shown. Other
+runtimes may fill it from a traceback; a host that does not know the field
+ignores it.
+
 ## Host calls
 
 While handling a request, a module may ask Glossa for these. Each returns a

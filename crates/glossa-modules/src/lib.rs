@@ -16,6 +16,7 @@
 //!   and generic processes over one stdio transport, native.
 //! * [`image_ops`] — the image API modules reach through `image.*` host calls
 //!   (the `image` feature).
+//! * [`log_tap`] — what one module logs, for the module editor.
 //! * [`child`] — running a helper program with a deadline, for providers
 //!   built on one (Tesseract, the system voice).
 
@@ -24,6 +25,7 @@ pub mod child;
 pub mod host_api;
 #[cfg(feature = "image")]
 pub mod image_ops;
+pub mod log_tap;
 pub mod manifest;
 pub mod protocol;
 pub mod provider;
