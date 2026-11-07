@@ -1,0 +1,20 @@
+# Text recognition. Replace api.example.com with your service, here and in
+# main.js. Reference: docs/modules/ocr-modules.md.
+capabilities = ["ocr"]
+
+[module]
+id = "{{id}}"
+name = "{{name}}"
+version = "0.1.0"
+runtime = "js"
+entry = "main.js"
+description = "Recognises text through api.example.com."
+
+[permissions]
+network = ["api.example.com"]
+
+[[options]]
+key = "api_key"
+type = "secret"
+label = "API key"
+required = true

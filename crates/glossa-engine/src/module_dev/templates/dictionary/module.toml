@@ -1,0 +1,25 @@
+# A dictionary. This one asks dictionaryapi.dev (free, no key) for English
+# words; point it at your own source in main.js and [permissions].
+# Reference: docs/modules/README.md and docs/modules/js-modules.md.
+capabilities = ["dictionary"]
+
+[module]
+id = "{{id}}"
+name = "{{name}}"
+version = "0.1.0"
+runtime = "js"
+entry = "main.js"
+max_input_chars = 100
+description = "English definitions from dictionaryapi.dev."
+ready_to_use = true
+
+[permissions]
+network = ["api.dictionaryapi.dev"]
+
+[[options]]
+key = "max_definitions"
+type = "number"
+label = "Definitions per part of speech"
+default = 3
+min = 1
+max = 20
