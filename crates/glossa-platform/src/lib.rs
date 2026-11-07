@@ -21,7 +21,7 @@
 //! | Screen capture ([`capture`])    | xcap                            | x11rb `GetImage`        | xcap with `wayland-capture`, else the Screenshot portal (may ask once), else `grim`; `grim` first on wlroots | xcap, needs Screen Recording |
 //! | Desktop portals ([`portal`])    | none                            | not used                | GlobalShortcuts, Screenshot                     | none                           |
 //! | D-Bus service (`glossa_engine::dbus`) | none                      | session bus             | session bus                                     | none                           |
-//! | Autostart ([`autostart`])       | `HKCU\…\Run`                    | XDG autostart `.desktop`| XDG autostart `.desktop`                        | LaunchAgent plist              |
+//! | Autostart ([`autostart`])       | `HKCU\…\Run`                    | XDG autostart `.desktop`| XDG autostart `.desktop`                        | LaunchAgent plist, Login Items |
 //! | Audio ([`audio`])               | rodio                           | rodio (ALSA)            | rodio (ALSA)                                    | rodio                          |
 //! | Layout conversion ([`layout`])  | pure + switch foreground layout | pure                    | pure                                            | pure                           |
 //! | Window backdrops ([`backdrop`]) | Mica / Acrylic / blur (DWM)     | KWin blur-behind        | none                                            | `NSVisualEffectView`           |

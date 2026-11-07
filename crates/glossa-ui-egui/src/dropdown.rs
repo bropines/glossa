@@ -34,6 +34,11 @@ const EDGE: f32 = MARGIN as f32 + 1.0;
 const MENU_MAX_HEIGHT: f32 = 760.0;
 /// Longest a [`ComboBox`]'s list gets before it scrolls, unless it says.
 const COMBO_MAX_HEIGHT: f32 = 400.0;
+/// The least room a scrolling list takes inside its window (about a dozen
+/// rows); with less, it opens in a window of its own, which has the screen.
+const FAIR_HEIGHT: f32 = 300.0;
+/// The fewest rows [`list_room`] leaves an inner list.
+const MIN_LIST_ROWS: f32 = 3.0;
 
 /// An open dropdown, kept in egui's memory under its id.
 #[derive(Clone, Copy, Debug, Default)]
@@ -276,7 +281,16 @@ pub fn show<R>(
     let last_size_id = id.with("last-size");
     if st.in_window.is_none() {
         let last: Option<Vec2> = ctx.data(|d| d.get_temp(last_size_id));
-        let wanted = last.unwrap_or(vec2(min_width, max_height));
+        // A list that fills whatever room it gets (see [`list_room`]) and
+        // filled all of it last time was cut short by that room (a cramped
+        // corner, or a list still loading): it wants its full height. One
+        // that came out shorter than its room is as tall as it measured.
+        let filled_room: Option<f32> = ctx.data(|d| d.get_temp(fills_id(id)));
+        let wanted = match last {
+            Some(l) if filled_room.is_some_and(|room| l.y >= room + 2.0 * EDGE - 6.0) => vec2(l.x, max_height),
+            Some(l) => l,
+            None => vec2(min_width, max_height),
+        };
         let (inside, above) = in_window(room, anchor, wanted, max_height < MENU_MAX_HEIGHT);
         st.in_window = Some(!can_window || (glossa_platform::shell::SHELL.slow_child_windows && inside));
         st.above = above;
@@ -319,7 +333,8 @@ pub fn show<R>(
 /// Whether a list of about `wanted` points fits inside the window's `room`
 /// at `anchor`, and whether it goes above the control for that (below when
 /// there is room). A list that scrolls anyway (`scrolls`) fits wherever it
-/// gets a fair height; a menu has to fit whole.
+/// gets a fair height (a dozen rows or so, [`FAIR_HEIGHT`]); a menu has to
+/// fit whole.
 fn in_window(room: Rect, anchor: Rect, wanted: Vec2, scrolls: bool) -> (bool, bool) {
     let below = room.max.y - anchor.max.y;
     let above = anchor.min.y - room.min.y;
@@ -330,7 +345,7 @@ fn in_window(room: Rect, anchor: Rect, wanted: Vec2, scrolls: bool) -> (bool, bo
         (wide_enough, true)
     } else {
         let best = below.max(above);
-        (wide_enough && scrolls && best >= 200.0, above > below)
+        (wide_enough && scrolls && best >= wanted.y.min(FAIR_HEIGHT), above > below)
     }
 }
 
@@ -373,6 +388,11 @@ fn show_window<R>(
     };
     let place = window::place_dropdown(anchor_px, (wanted.x * own_ppp, wanted.y * own_ppp), monitors);
     let size = vec2(wanted.x, place.height / own_ppp).max(vec2(20.0, 20.0)).round();
+    // The most the screen gives the list at its full height, for content
+    // that fills the room it has (see [`list_room`]). Measuring that against
+    // the window, which follows the content, would never let it grow back.
+    let room = window::place_dropdown(anchor_px, (wanted.x * own_ppp, max_height * own_ppp), monitors).height / own_ppp;
+    let room = room.min(max_height).max(60.0);
     let pos = pos2(place.x / own_ppp, place.y / own_ppp);
 
     // Several windows of this process may have a list open; each window
@@ -428,7 +448,7 @@ fn show_window<R>(
         actual = ui.input(|i| i.viewport().inner_rect.map(|r| r.size()));
         let Some(add) = add.take() else { return };
         egui::CentralPanel::no_frame().show(ui, |ui| {
-            let (r, content, closing) = body(ui, true, rounded, size.x - 2.0 * EDGE, max_height, settling, add);
+            let (r, content, closing) = body(ui, id, true, rounded, size.x - 2.0 * EDGE, room, settling, add);
             result = Some(r);
             measured = Some(content);
             close_now |= closing;
@@ -565,7 +585,11 @@ fn show_area<R>(
         // The frame goes inside this width: asking for the content's width
         // here let the area settle that much narrower than the control.
         ui.set_min_width((width + 2.0 * EDGE).max(0.0));
-        out = Some(body(ui, false, false, width.max(1.0), max_height, settling, add));
+        // An area offers its content only the size it had last frame, so a
+        // list that grows after it opened (fonts listed by a worker) would
+        // stay as short as its first frame: let it have its full height.
+        ui.set_max_height(max_height + 2.0 * EDGE);
+        out = Some(body(ui, id, false, false, width.max(1.0), max_height, settling, add));
     });
     st.area = Some(shown.response.rect);
     if let Some((_, c, _)) = &out {
@@ -581,10 +605,13 @@ fn show_area<R>(
     }
 }
 
-/// The frame, the scrolling list and the content. Returns the content's
-/// result, its natural size, and whether it asked to close.
+/// The frame, the scrolling list and the content, at most `max_height` tall
+/// (the room [`list_room`] measures from). Returns the content's result, its
+/// natural size, and whether it asked to close.
+#[allow(clippy::too_many_arguments)]
 fn body<R>(
     ui: &mut Ui,
+    id: Id,
     fill_window: bool,
     window_rounded: bool,
     width: f32,
@@ -627,13 +654,50 @@ fn body<R>(
                         // little more every frame (or reach across the
                         // screen). Wider content still shows, and widens it.
                         ui.set_max_width(width.min(ui.available_width()).max(1.0));
+                        let top = ui.cursor().top();
+                        ui.ctx().data_mut(|d| d.insert_temp(room_id(), Room { id, top, height: max_height }));
                         ui.with_layout(egui::Layout::top_down_justified(egui::Align::Min), |ui| add(ui, settling)).inner
                     });
+                // The room belongs to this content only: a list drawn later
+                // outside any dropdown must not find it.
+                ui.ctx().data_mut(|d| d.remove::<Room>(room_id()));
                 (scroll.inner, scroll.content_size, ui.should_close())
             })
             .inner
         })
         .inner
+}
+
+/// The room of the dropdown whose content is being drawn: its id, where its
+/// content starts and the most height it has. See [`list_room`].
+#[derive(Clone, Copy)]
+struct Room {
+    id: Id,
+    top: f32,
+    height: f32,
+}
+
+fn room_id() -> Id {
+    Id::unique("glossa-dropdown-room")
+}
+
+fn fills_id(id: Id) -> Id {
+    id.with("fills")
+}
+
+/// The height left for a scrolling list inside dropdown content, under what
+/// the content has drawn so far (a search box, say), so the list fills the
+/// dropdown and the search box stays in view instead of scrolling away with
+/// it. Calling it marks the dropdown as one that fills its room: the next
+/// time it opens it asks for its full height if it filled that room.
+pub fn list_room(ui: &Ui) -> f32 {
+    let row = ui.spacing().interact_size.y + ui.spacing().item_spacing.y;
+    let least = MIN_LIST_ROWS * row;
+    let Some(room) = ui.ctx().data(|d| d.get_temp::<Room>(room_id())) else { return least };
+    ui.ctx().data_mut(|d| d.insert_temp(fills_id(room.id), room.height));
+    // The frame's margin and the scroll area's own slack below the list.
+    let used = ui.cursor().top() - room.top + 2.0;
+    (room.height - used).max(least)
 }
 
 /// A button that looks like egui's combo box and opens a dropdown: the
@@ -746,6 +810,12 @@ mod tests {
         assert_eq!(in_window(room, low, vec2(200.0, 700.0), true), (true, true));
         // Wider than the window.
         assert!(!in_window(room, high, vec2(900.0, 100.0), true).0);
+        // A scrolling list with only a few rows' room either way leaves too;
+        // a short one that fits there stays.
+        let short = Rect::from_min_size(Pos2::ZERO, vec2(600.0, 320.0));
+        let middle = Rect::from_min_size(pos2(10.0, 150.0), vec2(200.0, 24.0));
+        assert!(!in_window(short, middle, vec2(200.0, 460.0), true).0);
+        assert!(in_window(short, middle, vec2(200.0, 120.0), true).0);
     }
 
     fn items(ui: &mut Ui, _: bool) {
@@ -767,7 +837,7 @@ mod tests {
             let mut measured = Vec2::ZERO;
             let mut out = ctx.run_ui(input, |ui| {
                 egui::CentralPanel::no_frame().show(ui, |ui| {
-                    measured = body(ui, true, false, w - 2.0 * EDGE, 400.0, false, items).1;
+                    measured = body(ui, Id::unique("list"), true, false, w - 2.0 * EDGE, 400.0, false, items).1;
                 });
             });
             out.textures_delta.clear();
@@ -799,7 +869,8 @@ mod tests {
             let mut measured = Vec2::ZERO;
             let mut out = ctx.run_ui(input, |ui| {
                 egui::CentralPanel::no_frame().show(ui, |ui| {
-                    measured = body(ui, true, false, asked - 2.0 * EDGE, 400.0, false, search_and_items).1;
+                    measured =
+                        body(ui, Id::unique("list"), true, false, asked - 2.0 * EDGE, 400.0, false, search_and_items).1;
                 });
             });
             out.textures_delta.clear();

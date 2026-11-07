@@ -60,6 +60,80 @@ pub fn is_autostart_enabled() -> bool {
     }
 }
 
+/// Whether the system lets the autostart entry run, as far as it says.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LoginItemStatus {
+    /// Registered and allowed to run at login.
+    Enabled,
+    /// Registered, but switched off in the system's list of login items:
+    /// the user has to allow it there (macOS: System Settings, Login Items).
+    RequiresApproval,
+    /// The system does not know the entry (yet: macOS picks up a new launch
+    /// agent a moment after it is written).
+    NotRegistered,
+    /// The system cannot tell (Windows, Linux, macOS before 13).
+    Unknown,
+}
+
+/// Ask the system whether the autostart entry may run. On macOS 13 and
+/// later this asks Background Task Management about the launch agent
+/// (`SMAppService.statusForLegacyURL`), a call to another process: run it
+/// off the UI thread. Elsewhere [`is_autostart_enabled`] already reads the
+/// system's own switch, so this says [`LoginItemStatus::Unknown`].
+pub fn login_item_status() -> LoginItemStatus {
+    #[cfg(target_os = "macos")]
+    {
+        match autostart_file() {
+            Ok(file) => mac::status(&file),
+            Err(_) => LoginItemStatus::Unknown,
+        }
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        LoginItemStatus::Unknown
+    }
+}
+
+#[cfg(target_os = "macos")]
+mod mac {
+    use std::path::Path;
+
+    use objc2::msg_send;
+    use objc2::runtime::{AnyClass, AnyObject};
+    use objc2_foundation::NSString;
+
+    use super::LoginItemStatus;
+
+    // SMAppService lives in ServiceManagement, which nothing else links.
+    #[link(name = "ServiceManagement", kind = "framework")]
+    extern "C" {}
+
+    pub fn status(plist: &Path) -> LoginItemStatus {
+        // macOS 13 and later; older systems have no such class.
+        let (Some(service), Some(url_class)) = (AnyClass::get(c"SMAppService"), AnyClass::get(c"NSURL")) else {
+            return LoginItemStatus::Unknown;
+        };
+        let path = NSString::from_str(&plist.to_string_lossy());
+        // SAFETY: both selectors exist on these classes from macOS 13 (the
+        // class lookups above), take an object and return an object or an
+        // NSInteger; the URL is autoreleased and only used within this call.
+        let status: isize = unsafe {
+            let url: *mut AnyObject = msg_send![url_class, fileURLWithPath: &*path];
+            if url.is_null() {
+                return LoginItemStatus::Unknown;
+            }
+            msg_send![service, statusForLegacyURL: url]
+        };
+        // SMAppServiceStatus: notRegistered, enabled, requiresApproval, notFound.
+        match status {
+            1 => LoginItemStatus::Enabled,
+            2 => LoginItemStatus::RequiresApproval,
+            0 | 3 => LoginItemStatus::NotRegistered,
+            _ => LoginItemStatus::Unknown,
+        }
+    }
+}
+
 /// Where the autostart file lives on this platform.
 #[cfg(not(windows))]
 fn autostart_file() -> Result<PathBuf> {
@@ -354,6 +428,13 @@ mod win {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Asks the real system; run by hand on a Mac (macOS 13+ answers).
+    #[test]
+    #[ignore]
+    fn login_item_status_answers() {
+        println!("{:?}", login_item_status());
+    }
 
     fn s(v: &[&str]) -> Vec<String> {
         v.iter().map(|x| x.to_string()).collect()

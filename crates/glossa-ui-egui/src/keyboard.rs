@@ -2,12 +2,16 @@
 //!
 //! It is drawn like a real keyboard: ANSI rows with their stagger and wide
 //! modifier keys, keycaps with a lower edge that sinks when pressed, and the
-//! shifted character printed above the plain one. The layout follows the
+//! shifted character printed above the plain one. The keys that type nothing
+//! follow the system's keyboards (`SHELL.keyboard`): Ctrl, Win and Alt on
+//! Windows, Super on Linux, Delete, Return and fn, Control, Option, Cmd on a
+//! Mac. The layout follows the
 //! first language (English or Russian, switchable); in Russian the Latin
 //! letter of each key sits small in its corner, as on Russian keyboards.
 //! Keys type into the main window's source pane.
 //!
-//! Its size is its own, apart from the interface scale: Ctrl+wheel over it,
+//! Its size is its own, apart from the interface scale: Ctrl+wheel (Cmd on
+//! macOS) over it,
 //! or dragging the window's edge, scales the keys, and the scale is kept in
 //! `appearance.keyboard_scale`.
 
@@ -46,8 +50,11 @@ enum Kind {
     Enter,
     Shift,
     Space,
-    /// Drawn so the keyboard looks whole; does nothing.
+    /// Drawn so the keyboard looks whole; does nothing. Its label's locale
+    /// key.
     Inert(&'static str),
+    /// The context menu key, drawn so too.
+    Menu,
 }
 
 struct Key {
@@ -111,16 +118,17 @@ fn rows() -> [Vec<Key>; 5] {
     let mut r3 = vec![k(Kind::Shift, 2.25)];
     r3.extend(chars(3, 10));
     r3.push(k(Kind::Shift, 2.75));
-    let r4 = vec![
-        k(Kind::Inert("keyboard.ctrl"), 1.25),
-        k(Kind::Inert("keyboard.win"), 1.25),
-        k(Kind::Inert("keyboard.alt"), 1.25),
-        k(Kind::Space, 6.25),
-        k(Kind::Inert("keyboard.alt"), 1.25),
-        k(Kind::Inert("keyboard.win"), 1.25),
-        k(Kind::Inert(""), 1.25),
-        k(Kind::Inert("keyboard.ctrl"), 1.25),
-    ];
+    use glossa_platform::shell::BottomKey;
+    let r4 = glossa_platform::shell::SHELL
+        .keyboard
+        .bottom
+        .iter()
+        .map(|&(key, width)| match key {
+            BottomKey::Space => k(Kind::Space, width),
+            BottomKey::Named(name) => k(Kind::Inert(name), width),
+            BottomKey::Menu => k(Kind::Menu, width),
+        })
+        .collect();
     [r0, r1, r2, r3, r4]
 }
 
@@ -267,7 +275,7 @@ fn contents(app: &mut GlossaApp, ui: &mut egui::Ui, st: &mut KbState) {
         }
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
             ui.label(RichText::new(format!("{:.0}%", st.scale * 100.0)).small().color(look.weak_text()))
-                .on_hover_text(app.t("keyboard.size_tip"));
+                .on_hover_text(crate::widgets::shortcut_text(&app.t("keyboard.size_tip")));
         });
     });
 
@@ -363,7 +371,7 @@ fn contents(app: &mut GlossaApp, ui: &mut egui::Ui, st: &mut KbState) {
         for (i, key) in row.iter().enumerate() {
             let slot = Rect::from_min_size(origin + vec2(x, r as f32) * unit, vec2(key.width, 1.0) * unit);
             x += key.width;
-            let live = !matches!(key.kind, Kind::Inert(_));
+            let live = !matches!(key.kind, Kind::Inert(_) | Kind::Menu);
             let id = ui.scope_id().with(("key", r, i));
             let resp = ui.interact(slot, id, if live { Sense::click() } else { Sense::hover() });
             let down = live && resp.is_pointer_button_down_on();
@@ -432,7 +440,7 @@ fn press(app: &mut GlossaApp, st: &mut KbState, kind: Kind) {
             st.caps = !st.caps;
             None
         }
-        Kind::Inert(_) => None,
+        Kind::Inert(_) | Kind::Menu => None,
     };
     if let Some(ch) = typed {
         app.main.source.push(ch);
@@ -595,6 +603,7 @@ fn legend(
 ) {
     let font = |k: f32| FontId::proportional(k * unit);
     let weak = colors.weak;
+    let names = glossa_platform::shell::SHELL.keyboard;
     match kind {
         Kind::Char(row, col) => {
             let (plain, shifted) = st.layout().chars(row, col);
@@ -646,7 +655,7 @@ fn legend(
             let name = st.layout().lang.native_name();
             painter.text(face.center(), Align2::CENTER_CENTER, name, font(0.22), weak);
         }
-        Kind::Inert("") => {
+        Kind::Menu => {
             // The menu key: a page with lines.
             let s = 0.3 * unit;
             let r = Rect::from_center_size(face.center(), vec2(s * 0.8, s));
@@ -665,12 +674,12 @@ fn legend(
             let led = face.left_top() + vec2(0.2, 0.2) * unit;
             let on = if st.caps { colors.lit_text } else { weak.gamma_multiply(0.5) };
             painter.circle_filled(led, (0.05 * unit).max(1.5), on);
-            labelled(painter, face, unit, None, &app.t("keyboard.caps"), text);
+            labelled(painter, face, unit, None, &app.t(names.caps), text);
         }
-        Kind::Tab => labelled(painter, face, unit, Some(Glyph::Tab), &app.t("keyboard.tab"), text),
-        Kind::Shift => labelled(painter, face, unit, Some(Glyph::Shift), &app.t("keyboard.shift"), text),
-        Kind::Backspace => labelled(painter, face, unit, Some(Glyph::Backspace), &app.t("keyboard.backspace"), text),
-        Kind::Enter => labelled(painter, face, unit, Some(Glyph::Enter), &app.t("keyboard.enter"), text),
+        Kind::Tab => labelled(painter, face, unit, Some(Glyph::Tab), &app.t(names.tab), text),
+        Kind::Shift => labelled(painter, face, unit, Some(Glyph::Shift), &app.t(names.shift), text),
+        Kind::Backspace => labelled(painter, face, unit, Some(Glyph::Backspace), &app.t(names.backspace), text),
+        Kind::Enter => labelled(painter, face, unit, Some(Glyph::Enter), &app.t(names.enter), text),
     }
 }
 

@@ -160,6 +160,13 @@ pub struct OptionsState {
     exception_edit: Option<(Option<usize>, ExceptionRule)>,
     autostart: bool,
     autostart_initial: bool,
+    /// What the last change to starting at login did, shown next to the
+    /// checkbox: turned on or off, or the error.
+    autostart_done: Option<Result<bool, String>>,
+    /// Whether the system lets the entry run (macOS Login Items), asked on a
+    /// worker when Options opens with it on and after turning it on.
+    login_status: Option<glossa_platform::autostart::LoginItemStatus>,
+    login_status_rx: Option<std::sync::mpsc::Receiver<glossa_platform::autostart::LoginItemStatus>>,
     message: Option<(String, bool)>,
     show_secrets: bool,
     /// A setting that applies at start-up changed: offer to restart.
@@ -182,6 +189,8 @@ pub struct OptionsState {
 struct FontList {
     names: Option<Vec<String>>,
     pending: Option<std::sync::mpsc::Receiver<Vec<String>>>,
+    /// Open the picker at the next frame (`--screenshot options:font`).
+    open_now: bool,
 }
 
 impl FontList {
@@ -216,8 +225,14 @@ fn font_picker(app: &GlossaApp, ui: &mut egui::Ui, list: &mut FontList, value: &
     let default = app.t("options.basics.font_default");
     let shown = if value.trim().is_empty() { default.clone() } else { value.clone() };
     let button = dropdown::combo_button(ui, &shown, 240.0, dropdown::is_open(ui.ctx(), id));
-    if button.clicked() {
-        dropdown::toggle(ui.ctx(), id);
+    let for_screenshot = std::mem::take(&mut list.open_now);
+    if button.clicked() || for_screenshot {
+        if for_screenshot {
+            // A screenshot's window may never get the focus.
+            dropdown::toggle_unfocused(ui.ctx(), id);
+        } else {
+            dropdown::toggle(ui.ctx(), id);
+        }
         ui.ctx().data_mut(|d| d.remove::<String>(search_id));
         list.load(ui.ctx());
     }
@@ -238,6 +253,8 @@ fn font_picker(app: &GlossaApp, ui: &mut egui::Ui, list: &mut FontList, value: &
         if needle.is_empty() && ui.selectable_label(value.trim().is_empty(), &default).clicked() {
             picked = Some(String::new());
         }
+        // The list fills the dropdown under the search box, which stays put.
+        let room = dropdown::list_room(ui);
         match &list.names {
             None => {
                 ui.horizontal(|ui| {
@@ -251,7 +268,7 @@ fn font_picker(app: &GlossaApp, ui: &mut egui::Ui, list: &mut FontList, value: &
                 if ui.input(|i| i.key_pressed(egui::Key::Enter)) && !needle.is_empty() {
                     picked = Some(matches.first().map(|n| (*n).clone()).unwrap_or_else(|| search.trim().to_owned()));
                 }
-                egui::ScrollArea::vertical().id_salt("font-list").max_height(360.0).show(ui, |ui| {
+                egui::ScrollArea::vertical().id_salt("font-list").max_height(room).show(ui, |ui| {
                     for n in matches {
                         let current = n.eq_ignore_ascii_case(value.trim());
                         let resp = ui.selectable_label(current, n.as_str());
@@ -283,6 +300,19 @@ enum AiReply {
 /// `ocr`…), for `--screenshot options:NAME`.
 pub fn open_at(app: &mut GlossaApp, name: &str) {
     open(app);
+    // Development aids for `--screenshot`: the font list open, or the note
+    // shown once starting at login has been turned on (shown, not done).
+    if let Some(st) = app.options.as_mut() {
+        match name {
+            "font" => st.fonts.open_now = true,
+            "autostart" => {
+                st.autostart = true;
+                st.autostart_initial = true;
+                st.autostart_done = Some(Ok(true));
+            }
+            _ => {}
+        }
+    }
     let page = Page::ALL.into_iter().find(|p| p.key().ends_with(name));
     if let (Some(st), Some(page)) = (app.options.as_mut(), page) {
         st.page = page;
@@ -302,6 +332,9 @@ pub fn open(app: &mut GlossaApp) {
             exception_edit: None,
             autostart,
             autostart_initial: autostart,
+            autostart_done: None,
+            login_status: None,
+            login_status_rx: autostart.then(|| ask_login_status(&app.ctx)).flatten(),
             message: None,
             show_secrets: false,
             ask_restart: false,
@@ -337,7 +370,11 @@ pub fn show(app: &mut GlossaApp, ctx: &egui::Context) {
     }
 }
 
-fn apply(app: &mut GlossaApp, st: &mut OptionsState) {
+/// Save the draft and, when it changed, the autostart entry, and say how it
+/// went at the bottom of the window. Returns true when the window should
+/// stay open to show the result: starting at login was turned on (the note
+/// under its checkbox says what the system may still ask) or failed.
+fn apply(app: &mut GlossaApp, st: &mut OptionsState) -> bool {
     // The checkbox shows the system's own autostart entry; the setting
     // follows it, so the program can keep the entry pointing at itself.
     st.draft.general.start_with_system = st.autostart;
@@ -356,17 +393,40 @@ fn apply(app: &mut GlossaApp, st: &mut OptionsState) {
         c.windows = windows;
         c.contents = contents;
     });
+    let mut attention = false;
+    let mut autostart_error = None;
     if st.autostart != st.autostart_initial {
         let exe = std::env::current_exe().unwrap_or_default();
         match glossa_platform::autostart::set_autostart(st.autostart, &exe, &["--hidden".to_owned()]) {
-            Ok(()) => st.autostart_initial = st.autostart,
-            Err(e) => st.message = Some((e.to_string(), true)),
+            Ok(()) => {
+                st.autostart_initial = st.autostart;
+                st.autostart_done = Some(Ok(st.autostart));
+                attention = st.autostart;
+                st.login_status = None;
+                st.login_status_rx = if st.autostart { ask_login_status(&app.ctx) } else { None };
+            }
+            Err(e) => {
+                autostart_error = Some(app.locale.fmt("options.basics.autostart_failed", &e.to_string()));
+                st.autostart_done = Some(Err(e.to_string()));
+                attention = true;
+            }
         }
     }
-    match result {
-        Ok(()) => st.draft = app.engine.config(),
-        Err(e) => st.message = Some((e.to_string(), true)),
+    st.message = Some(match result {
+        Ok(()) => {
+            st.draft = app.engine.config();
+            match autostart_error {
+                Some(e) => (e, true),
+                None => (app.t("options.saved"), false),
+            }
+        }
+        Err(e) => (e.to_string(), true),
+    });
+    if attention {
+        // The note is under the checkbox on the first page.
+        st.page = Page::Basics;
     }
+    attention
 }
 
 /// Returns false when the dialog should close.
@@ -395,14 +455,15 @@ fn body(app: &mut GlossaApp, ui: &mut egui::Ui, st: &mut OptionsState) -> bool {
                 let w = vec2(100.0, 28.0);
                 if ui.add(egui::Button::new(app.t("options.apply")).min_size(w)).clicked() {
                     apply(app, st);
-                    st.message = Some((app.t("options.saved"), false));
                 }
                 if ui.add(egui::Button::new(app.t("options.cancel")).min_size(w)).clicked() {
                     keep = false;
                 }
                 if ui.add(egui::Button::new(app.t("options.ok")).min_size(w)).clicked() {
-                    apply(app, st);
-                    keep = false;
+                    // Stays open when starting at login changed in a way the
+                    // user has to see (the note and its button, or an error);
+                    // a second OK closes it.
+                    keep = apply(app, st);
                 }
             });
         });
@@ -580,6 +641,18 @@ fn basics(app: &mut GlossaApp, ui: &mut egui::Ui, st: &mut OptionsState) {
     let d = &mut st.draft;
     group(ui, &look, &app.t("options.basics.general_group"), |ui| {
         ui.checkbox(&mut st.autostart, app.t(glossa_platform::shell::SHELL.autostart_label));
+        if let Some(status) = st.login_status_rx.as_ref().and_then(|rx| rx.try_recv().ok()) {
+            st.login_status = Some(status);
+            st.login_status_rx = None;
+        }
+        autostart_feedback(
+            app,
+            ui,
+            &look,
+            st.autostart != st.autostart_initial,
+            st.autostart_done.as_ref(),
+            st.login_status,
+        );
         row(ui, &app.t("options.basics.ui_language"), |ui| {
             let locales = app.engine.locales();
             let current = chosen_locale(&locales, &d.general.ui_language)
@@ -1023,6 +1096,83 @@ fn backdrop_opacity_row(app: &GlossaApp, ui: &mut egui::Ui, look: &crate::style:
         });
         hint(ui, look, &app.t(glossa_platform::shell::SHELL.backdrop_names.opacity_hint));
     });
+}
+
+/// Under the "start at login" checkbox: that the change waits for OK or
+/// Apply, then what it did, in a box that stands out from the hints. On
+/// macOS the system may want Glossa allowed in Login Items, so there is a
+/// button that opens them.
+fn autostart_feedback(
+    app: &GlossaApp,
+    ui: &mut egui::Ui,
+    look: &crate::style::Look,
+    pending: bool,
+    done: Option<&Result<bool, String>>,
+    status: Option<glossa_platform::autostart::LoginItemStatus>,
+) {
+    use glossa_platform::autostart::LoginItemStatus;
+    let shell = glossa_platform::shell::SHELL;
+    if pending {
+        hint(ui, look, &app.t("options.basics.autostart_pending"));
+        return;
+    }
+    let needs_approval = status == Some(LoginItemStatus::RequiresApproval);
+    let (text, colour, login_items) = match done {
+        Some(Err(e)) => (app.locale.fmt("options.basics.autostart_failed", e), look.error(), shell.login_items_url),
+        Some(Ok(false)) => (app.t("options.basics.autostart_off"), look.accent(), None),
+        // On, but the system keeps it from running: said whether or not it
+        // was turned on just now, since the checkbox alone looks fine.
+        _ if needs_approval => (app.t("options.basics.autostart_needs_approval"), look.error(), shell.login_items_url),
+        Some(Ok(true)) if status == Some(LoginItemStatus::Enabled) => {
+            (app.t("options.basics.autostart_allowed_macos"), look.accent(), shell.login_items_url)
+        }
+        Some(Ok(true)) => (app.t(shell.autostart_note), look.accent(), shell.login_items_url),
+        None => return,
+    };
+    egui::Frame::new()
+        .fill(colour.gamma_multiply(0.12))
+        .stroke(egui::Stroke::new(1.0, colour.gamma_multiply(0.6)))
+        .corner_radius(look.theme.metrics.button_radius.clamp(2.0, 8.0) as u8)
+        .inner_margin(egui::Margin::symmetric(10, 8))
+        .show(ui, |ui| {
+            ui.set_max_width(ui.available_width().min(560.0));
+            ui.label(RichText::new(text).color(look.text()));
+            if let Some(url) = login_items {
+                ui.add_space(4.0);
+                if ui.button(app.t("options.basics.open_login_items")).clicked() {
+                    if let Err(e) = glossa_platform::shell::open(url) {
+                        tracing::warn!("opening Login Items: {e}");
+                    }
+                }
+            }
+        });
+}
+
+/// Ask on a worker whether the system lets the autostart entry run, where it
+/// can tell (macOS: Login Items). A new launch agent takes macOS a moment to
+/// notice, so it asks a few times before settling for what it heard.
+fn ask_login_status(
+    ctx: &egui::Context,
+) -> Option<std::sync::mpsc::Receiver<glossa_platform::autostart::LoginItemStatus>> {
+    use glossa_platform::autostart::{login_item_status, LoginItemStatus};
+    glossa_platform::shell::SHELL.login_items_url?;
+    let (tx, rx) = std::sync::mpsc::channel();
+    let ctx = ctx.clone();
+    std::thread::spawn(move || {
+        let mut status = LoginItemStatus::Unknown;
+        for attempt in 0..6 {
+            if attempt > 0 {
+                std::thread::sleep(std::time::Duration::from_millis(500));
+            }
+            status = login_item_status();
+            if !matches!(status, LoginItemStatus::NotRegistered) {
+                break;
+            }
+        }
+        let _ = tx.send(status);
+        ctx.request_repaint();
+    });
+    Some(rx)
 }
 
 /// A line of quiet text explaining the setting above it.
@@ -1626,11 +1776,29 @@ fn advanced(app: &mut GlossaApp, ui: &mut egui::Ui, st: &mut OptionsState) {
         });
         hint(ui, &look, &app.t("options.advanced.browser_hint"));
         row(ui, &app.t("options.advanced.copy_action"), |ui| {
-            let names = [
-                (CopyAction::CtrlC, "Ctrl + C".to_owned()),
-                (CopyAction::CtrlInsert, "Ctrl + Insert".to_owned()),
+            // Cmd+C on macOS, which has no Insert key: Ctrl+Insert is offered
+            // only where the command key is Ctrl (or when already chosen).
+            let shell = glossa_platform::shell::SHELL;
+            let names: Vec<(CopyAction, String)> = [
+                (CopyAction::CtrlC, format!("{} + C", shell.command_key)),
+                (
+                    CopyAction::CtrlInsert,
+                    if shell.command_is_ctrl {
+                        "Ctrl + Insert".to_owned()
+                    } else {
+                        // What it does there: Cmd+C (see `input::send_copy`).
+                        app.locale.fmt("options.advanced.copy_insert_no_key", shell.command_key)
+                    },
+                ),
                 (CopyAction::AccessibilityOnly, app.t("options.advanced.copy_accessibility")),
-            ];
+            ]
+            .into_iter()
+            .filter(|(a, _)| {
+                *a != CopyAction::CtrlInsert
+                    || shell.command_is_ctrl
+                    || d.advanced.copy_action == CopyAction::CtrlInsert
+            })
+            .collect();
             let cur =
                 names.iter().find(|(a, _)| *a == d.advanced.copy_action).map(|(_, n)| n.clone()).unwrap_or_default();
             crate::dropdown::ComboBox::from_id_salt("copy-action").width(260.0).selected_text(cur).show_ui(ui, |ui| {
@@ -1747,8 +1915,10 @@ fn mouse_mode_options(app: &GlossaApp, ui: &mut egui::Ui, look: &crate::style::L
             app.t("tray.mouse_translation_read"),
         );
     });
-    ui.checkbox(&mut d.mouse_mode.ctrl_only, app.t("options.advanced.mouse_ctrl_only"));
-    hint(ui, look, &app.t("options.advanced.mouse_ctrl_only_hint"));
+    // On macOS the key is Cmd (or Control): see `mouse::selection_task`.
+    let ctrl_only = crate::widgets::shortcut_text(&app.t("options.advanced.mouse_ctrl_only"));
+    ui.checkbox(&mut d.mouse_mode.ctrl_only, ctrl_only);
+    hint(ui, look, &crate::widgets::shortcut_text(&app.t("options.advanced.mouse_ctrl_only_hint")));
     ui.label(RichText::new(app.t("options.advanced.mouse_mode_note")).small().color(look.weak_text()));
 }
 

@@ -28,6 +28,13 @@ the notes of its GitHub release.
   menu.
 - `GLOSSA_FRAME_TRACE`: a per-frame trace of the main window, the popup and
   Options to a CSV file, for diagnosing stutter.
+- Options: turning "start at login" on or off says right under the checkbox
+  that it waits for OK or Apply, then what it did; after turning it on, or
+  when it failed, OK keeps Options open on that note (a second OK closes
+  it), and the error also shows at the bottom. On macOS 13 and later Glossa
+  asks the system whether Login Items lets it run and says so, also when
+  Options opens with it switched off there, with a button that opens Login
+  Items.
 
 ### Fixed
 
@@ -39,6 +46,20 @@ the notes of its GitHub release.
   and Ctrl+I; on macOS they are Cmd+Enter, Cmd+N and Cmd+I.
 - The Google Lens Python example module returned an empty result for a
   picture without text; it now reports that no text was found.
+- The on-screen keyboard follows the system: on a Mac it reads Delete and
+  Return, and its bottom row is fn, Control, Option, Cmd, the space bar,
+  Cmd, Option (it showed Ctrl, Win and Alt); on Linux the Windows key is
+  Super. The national layouts are unchanged.
+- The font list in Options showed only two rows: a list that grows after it
+  opens (the installed fonts arrive a moment later) stayed as short as its
+  first frame. Lists inside dropdowns now fill the room they have, about
+  fifteen rows, with the search box kept in view, and a dropdown short of
+  room in its window opens in a window of its own.
+- macOS: shortcuts spelt into the interface say Cmd and Option where they
+  said Ctrl and Alt (the main window's tooltips, the keyboard size tip,
+  mouse mode's key, the copy keys). Ctrl + Insert, which a Mac has no key
+  for, is no longer offered there; kept from an older setting, it says that
+  it sends Cmd + C.
 - macOS: with the main window open behind other windows, the popup did not
   show (selection translation, the control API) until Glossa was switched
   to with Cmd+Tab. It now shows at once.

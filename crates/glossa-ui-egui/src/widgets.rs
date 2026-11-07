@@ -223,35 +223,33 @@ pub fn lang_combo(
         ui.set_min_width(widest + 2.0 * ui.spacing().button_padding.x + ui.spacing().scroll.bar_width + 8.0);
         let marked_fill = ui.visuals().widgets.hovered.weak_bg_fill;
         let radius = ui.visuals().widgets.hovered.corner_radius;
-        egui::ScrollArea::vertical().id_salt("languages").max_height(LIST_HEIGHT).auto_shrink([false, true]).show(
-            ui,
-            |ui| {
-                ui.with_layout(egui::Layout::top_down_justified(egui::Align::Min), |ui| {
-                    for (n, (l, text)) in items.iter().copied().zip(labels).enumerate() {
-                        let behind = ui.painter().add(egui::Shape::Noop);
-                        // A right-to-left name (Arabic, Hebrew, Persian…) needs
-                        // the bidi layout; the others go as they are.
-                        let text = crate::bidi::rich(
-                            ui,
-                            RichText::new(text).text_style(egui::TextStyle::Button),
-                            egui::text::TextWrapping::no_max_width(),
-                            false,
-                        );
-                        let resp = ui.selectable_label(l == current, text);
-                        if n == mark && l != current {
-                            ui.painter().set(behind, egui::Shape::rect_filled(resp.rect, radius, marked_fill));
-                        }
-                        if (moved && n == mark) || (settling && needle.is_empty() && l == current) {
-                            resp.scroll_to_me(Some(egui::Align::Center));
-                        }
-                        if resp.clicked() {
-                            picked = Some(l);
-                            ui.close();
-                        }
+        let room = dropdown::list_room(ui).min(LIST_HEIGHT);
+        egui::ScrollArea::vertical().id_salt("languages").max_height(room).auto_shrink([false, true]).show(ui, |ui| {
+            ui.with_layout(egui::Layout::top_down_justified(egui::Align::Min), |ui| {
+                for (n, (l, text)) in items.iter().copied().zip(labels).enumerate() {
+                    let behind = ui.painter().add(egui::Shape::Noop);
+                    // A right-to-left name (Arabic, Hebrew, Persian…) needs
+                    // the bidi layout; the others go as they are.
+                    let text = crate::bidi::rich(
+                        ui,
+                        RichText::new(text).text_style(egui::TextStyle::Button),
+                        egui::text::TextWrapping::no_max_width(),
+                        false,
+                    );
+                    let resp = ui.selectable_label(l == current, text);
+                    if n == mark && l != current {
+                        ui.painter().set(behind, egui::Shape::rect_filled(resp.rect, radius, marked_fill));
                     }
-                });
-            },
-        );
+                    if (moved && n == mark) || (settling && needle.is_empty() && l == current) {
+                        resp.scroll_to_me(Some(egui::Align::Center));
+                    }
+                    if resp.clicked() {
+                        picked = Some(l);
+                        ui.close();
+                    }
+                }
+            });
+        });
         ui.ctx().data_mut(|d| {
             d.insert_temp(search_id, search);
             d.insert_temp(mark_id, mark);
@@ -348,6 +346,39 @@ pub fn hotkey_parts(hotkey: &Hotkey) -> Vec<String> {
         .map(|(_, name)| name.to_owned())
         .chain(std::iter::once(hotkey.key.0.clone()))
         .collect()
+}
+
+/// Text that names a shortcut the way the strings (and classic `lang.json`
+/// files) spell it, "Ctrl+Enter" or "Alt+Left Arrow", as this system says
+/// it: egui's `command` modifier is Cmd on macOS, and Alt is Option there.
+/// Only the words on their own are changed, not ones inside another word.
+pub fn shortcut_text(text: &str) -> String {
+    let shell = glossa_platform::shell::SHELL;
+    let mut out = text.to_owned();
+    if !shell.command_is_ctrl {
+        out = replace_word(&out, "Ctrl", shell.command_key);
+    }
+    if shell.modifier_names.alt != "Alt" {
+        out = replace_word(&out, "Alt", shell.modifier_names.alt);
+    }
+    out
+}
+
+/// `text` with `word` replaced by `with` wherever it stands alone: not
+/// next to a letter or a digit.
+fn replace_word(text: &str, word: &str, with: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    let mut rest = text;
+    while let Some(at) = rest.find(word) {
+        let before = rest[..at].chars().next_back().or_else(|| out.chars().next_back());
+        let after = rest[at + word.len()..].chars().next();
+        let alone = !before.is_some_and(char::is_alphanumeric) && !after.is_some_and(char::is_alphanumeric);
+        out.push_str(&rest[..at]);
+        out.push_str(if alone { with } else { word });
+        rest = &rest[at + word.len()..];
+    }
+    out.push_str(rest);
+    out
 }
 
 /// [`hotkey_parts`] joined: `Cmd+Shift+Q`.
@@ -462,6 +493,18 @@ mod tests {
         });
         frame.textures_delta.clear();
         out
+    }
+
+    #[test]
+    fn ctrl_is_replaced_only_as_a_word() {
+        assert_eq!(replace_word("Translate (Ctrl+Enter)", "Ctrl", "Cmd"), "Translate (Cmd+Enter)");
+        assert_eq!(replace_word("Ctrl + wheel, Ctrl+C", "Ctrl", "Cmd"), "Cmd + wheel, Cmd+C");
+        assert_eq!(replace_word("с нажатой Ctrl;", "Ctrl", "Cmd"), "с нажатой Cmd;");
+        assert_eq!(replace_word("CtrlInsert, LCtrl", "Ctrl", "Cmd"), "CtrlInsert, LCtrl");
+        let key = glossa_platform::shell::SHELL.command_key;
+        assert_eq!(shortcut_text("Ctrl+N"), format!("{key}+N"));
+        let alt = glossa_platform::shell::SHELL.modifier_names.alt;
+        assert_eq!(shortcut_text("Go back (Alt+Left Arrow)"), format!("Go back ({alt}+Left Arrow)"));
     }
 
     #[test]
