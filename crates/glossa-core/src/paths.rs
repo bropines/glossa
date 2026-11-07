@@ -115,12 +115,29 @@ impl Paths {
     /// model can be hundreds of megabytes and need not follow the user
     /// between machines.
     pub fn models_dir(&self) -> PathBuf {
+        self.local_data("models")
+    }
+
+    /// Where the managed Python and `uv` are downloaded
+    /// (`runtimes/python-<version>/`), shared by every Python module. Local
+    /// data, like [`Self::models_dir`].
+    pub fn runtimes_dir(&self) -> PathBuf {
+        self.local_data("runtimes")
+    }
+
+    /// Where Python modules with dependencies get their own environment
+    /// (`venvs/<module-id>/`).
+    pub fn venvs_dir(&self) -> PathBuf {
+        self.local_data("venvs")
+    }
+
+    /// `name` beside the data in a portable layout, else in the local (not
+    /// roaming) data folder.
+    fn local_data(&self, name: &str) -> PathBuf {
         if self.portable {
-            return self.data_dir.join("models");
+            return self.data_dir.join(name);
         }
-        dirs::data_local_dir()
-            .map(|d| d.join(app_dir_name()).join("models"))
-            .unwrap_or_else(|| self.data_dir.join("models"))
+        dirs::data_local_dir().map(|d| d.join(app_dir_name()).join(name)).unwrap_or_else(|| self.data_dir.join(name))
     }
 
     /// Where the user's own interface languages and rewordings go. It is

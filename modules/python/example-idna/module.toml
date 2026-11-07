@@ -1,0 +1,19 @@
+# A Python module with a dependency: Glossa installs `idna` with uv into an
+# environment of this module's own (and downloads a Python for it when
+# needed). See docs/modules/README.md#python-dependencies.
+capabilities = ["translate"]
+
+[module]
+id = "example-idna"
+name = "Punycode (Python example)"
+version = "1.0.0"
+api = 1
+runtime = "python"
+entry = "main.py"
+description = "Turns internationalised domain names into their ASCII (punycode) form and back with the idna package. An example of a Python module with dependencies; it never touches the network."
+license = "MIT"
+idle_timeout_secs = 60
+requirements = ["idna==3.10"]
+
+[permissions]
+network = []

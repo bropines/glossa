@@ -281,6 +281,40 @@ pub struct Exclusive {
     _guard: parking_lot::ArcMutexGuard<parking_lot::RawMutex, ()>,
 }
 
+/// Take folder `name` below `parent` for writing: an in-process lock, then
+/// `<parent>/.locks/<name>.lock` against another Glossa process. Blocks while
+/// either is held elsewhere. Module assets, the managed Python and the
+/// modules' Python environments all go through this.
+pub fn lock_folder(parent: &Path, name: &str) -> io::Result<Exclusive> {
+    let guard = folder_lock(&parent.join(name)).lock_arc();
+    let locks = parent.join(".locks");
+    let file = fs::create_dir_all(&locks).and_then(|()| {
+        fs::OpenOptions::new().create(true).truncate(false).write(true).open(locks.join(format!("{name}.lock")))
+    });
+    let file = match file {
+        Ok(f) => {
+            if f.try_lock().is_err() {
+                tracing::info!(folder = %name, "another Glossa is working on these files; waiting");
+                f.lock()?;
+            }
+            Some(f)
+        }
+        // A read-only folder fails later with a clearer error; the
+        // in-process lock still holds.
+        Err(e) => {
+            tracing::debug!(folder = %name, "no lock file: {e}");
+            None
+        }
+    };
+    Ok(Exclusive { _file: file, _guard: guard })
+}
+
+/// Whether folder `name` below `parent` is taken by [`lock_folder`] in this
+/// process now.
+pub fn folder_busy(parent: &Path, name: &str) -> bool {
+    folder_lock(&parent.join(name)).try_lock().is_none()
+}
+
 /// The most an archive may unpack to: generous for compressed text
 /// (dictionaries shrink tenfold or more), but bounded, so a small archive
 /// cannot fill the disk.
@@ -319,6 +353,13 @@ impl ModuleAssets {
             return Err(format!("module id {id:?} cannot name a folder for its files"));
         }
         Ok(Some(Self { module: id.clone(), root: models_dir.join(id), models_dir: models_dir.to_owned(), specs }))
+    }
+
+    /// Files that belong to no module (the managed Python, `uv`): `specs`
+    /// under `<parent>/<name>`, with the same checks, locking and unpacking.
+    /// `specs` should already be the ones for this system.
+    pub fn new(name: &str, parent: &Path, specs: Vec<AssetSpec>) -> Self {
+        Self { module: name.to_owned(), root: parent.join(name), models_dir: parent.to_owned(), specs }
     }
 
     /// Where `name` is (or will be) once ready: the file, or the folder it
@@ -449,31 +490,7 @@ impl ModuleAssets {
     /// lock file beside the folder against another Glossa process. Blocks
     /// while either is held elsewhere.
     pub fn exclusive(&self) -> io::Result<Exclusive> {
-        let guard = folder_lock(&self.root).lock_arc();
-        let locks = self.models_dir.join(".locks");
-        let file = fs::create_dir_all(&locks).and_then(|()| {
-            fs::OpenOptions::new()
-                .create(true)
-                .truncate(false)
-                .write(true)
-                .open(locks.join(format!("{}.lock", self.module)))
-        });
-        let file = match file {
-            Ok(f) => {
-                if f.try_lock().is_err() {
-                    tracing::info!(module = %self.module, "another Glossa is working on these files; waiting");
-                    f.lock()?;
-                }
-                Some(f)
-            }
-            // A read-only models folder fails later with a clearer error;
-            // the in-process lock still holds.
-            Err(e) => {
-                tracing::debug!(module = %self.module, "no lock file for the module's files: {e}");
-                None
-            }
-        };
-        Ok(Exclusive { _file: file, _guard: guard })
+        lock_folder(&self.models_dir, &self.module)
     }
 
     fn marker_path(&self, name: &str) -> PathBuf {

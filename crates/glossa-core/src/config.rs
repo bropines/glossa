@@ -1649,7 +1649,10 @@ impl Default for Server {
 pub struct ModulesConfig {
     /// Extra directories to look for modules in, after the built-in ones.
     pub dirs: Vec<PathBuf>,
-    /// The Python interpreter for Python modules. Empty finds one on `PATH`.
+    /// Which Python runs Python modules: `auto` (a system Python 3.8+ for a
+    /// module without dependencies, else the managed one Glossa downloads),
+    /// `system`, `managed`, or a path to an interpreter (or a command line
+    /// such as `py -3`). Empty means `auto`.
     pub python: String,
     /// `java` for Java modules: the executable or a Java home folder. Empty
     /// looks in `JAVA_HOME`, on `PATH` and in the usual install folders.
@@ -1673,7 +1676,7 @@ impl Default for ModulesConfig {
     fn default() -> Self {
         Self {
             dirs: Vec::new(),
-            python: String::new(),
+            python: "auto".into(),
             java: String::new(),
             allow_native: true,
             allow_legacy_scripts: true,

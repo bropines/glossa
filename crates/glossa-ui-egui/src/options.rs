@@ -1091,6 +1091,7 @@ fn service_details(
             .color(look.weak_text()),
         );
         module_assets(app, ui, st, &id);
+        module_python(app, ui, &id);
         if p.options.is_empty() {
             ui.label(RichText::new(app.t("options.services.no_settings")).color(look.weak_text()));
         } else {
@@ -1235,6 +1236,92 @@ fn module_assets(app: &mut GlossaApp, ui: &mut egui::Ui, st: &mut OptionsState, 
         let color = if *error { look.error() } else { look.weak_text() };
         ui.label(RichText::new(text).small().color(color));
     }
+    ui.add_space(4.0);
+}
+
+/// A Python module's interpreter and packages when something is missing:
+/// what, the download with its progress, and deleting its environment. The
+/// work runs in the engine on worker threads; this only draws and
+/// dispatches.
+fn module_python(app: &mut GlossaApp, ui: &mut egui::Ui, id: &str) {
+    // Cached in the engine and refreshed when it reports a change, so
+    // drawing this every frame reads nothing from disk.
+    let Some(m) = app.engine.module_python(id) else { return };
+    let look = app.look.clone();
+    let failed = m.job.as_ref().is_some_and(|j| !j.running && !j.error.is_empty());
+    let has_venv = m.venv_exists;
+    if m.state == "ready" && !failed && !has_venv && !m.busy {
+        return;
+    }
+    if m.state == "unknown" {
+        // The search for a system Python runs; the page redraws when it ends.
+        return;
+    }
+    ui.add_space(4.0);
+    ui.label(RichText::new(app.t("options.python.title")).strong());
+    if let Some(req) = &m.requirements {
+        ui.label(RichText::new(app.locale.fmt("options.python.requirements", req)).small().color(look.weak_text()));
+    }
+    match m.state {
+        "ready" => {
+            ui.label(RichText::new(app.t("options.python.ready")).small().color(look.weak_text()));
+        }
+        "impossible" => {
+            ui.label(RichText::new(m.missing.join("\n")).small().color(look.error()));
+        }
+        _ => {
+            ui.label(RichText::new(app.t("options.python.hint")).small().color(look.weak_text()));
+            for line in &m.missing {
+                ui.label(RichText::new(line).small().color(look.error()));
+            }
+        }
+    }
+    if let Some(job) = &m.job {
+        if job.running {
+            let p = &job.progress;
+            if p.total > 0 {
+                let fraction = p.done as f32 / p.total as f32;
+                let text = app.locale.fmt_args("options.assets.progress", &[&human_size(p.done), &human_size(p.total)]);
+                ui.add(egui::ProgressBar::new(fraction).text(text).desired_width(320.0));
+            } else {
+                ui.horizontal(|ui| {
+                    ui.add(egui::Spinner::new().size(14.0));
+                    ui.label(RichText::new(app.t("options.python.installing")).small().color(look.weak_text()));
+                });
+            }
+        } else if !job.error.is_empty() {
+            ui.label(RichText::new(&job.error).small().color(look.error()));
+        }
+    }
+    ui.horizontal_wrapped(|ui| {
+        let running = m.job.as_ref().is_some_and(|j| j.running);
+        if running {
+            if ui.button(app.t("options.assets.cancel")).clicked() {
+                app.engine.cancel_python_install(id);
+            }
+        } else if m.busy {
+            ui.add(egui::Spinner::new().size(14.0));
+        } else if m.state == "missing" {
+            let label = if m.download_size > 0 {
+                app.locale.fmt("options.assets.download", &human_size(m.download_size))
+            } else {
+                app.t("options.python.install")
+            };
+            if ui.button(label).clicked() {
+                if let Err(e) = app.engine.start_python_install(Some(id)) {
+                    app.notify(e.to_string(), true);
+                }
+            }
+        }
+        if has_venv && !m.busy && ui.button(app.t("options.python.remove")).clicked() {
+            let (engine, id) = (app.engine.clone(), id.to_owned());
+            std::thread::spawn(move || {
+                if let Err(e) = engine.remove_module_python(&id) {
+                    tracing::warn!(module = %id, "could not delete the module's Python environment: {e}");
+                }
+            });
+        }
+    });
     ui.add_space(4.0);
 }
 
@@ -2360,12 +2447,42 @@ fn modules(app: &mut GlossaApp, ui: &mut egui::Ui, st: &mut OptionsState) {
         ui.checkbox(&mut d.modules.allow_legacy_scripts, app.t("options.modules.legacy_scripts"));
         ui.checkbox(&mut d.modules.allow_native, app.t("options.modules.native"));
         row(ui, &app.t("options.modules.python"), |ui| {
-            ui.add(
-                egui::TextEdit::singleline(&mut d.modules.python)
-                    .hint_text(app.t("options.modules.python_hint"))
-                    .desired_width(280.0),
-            );
+            use glossa_modules::python_env::PythonChoice;
+            let choice = PythonChoice::parse(&d.modules.python);
+            let names = [
+                ("auto", app.t("options.modules.python_auto")),
+                ("system", app.t("options.modules.python_system")),
+                ("managed", app.t("options.modules.python_managed")),
+                ("path", app.t("options.modules.python_path")),
+            ];
+            let current = match choice {
+                PythonChoice::Auto => 0,
+                PythonChoice::System => 1,
+                PythonChoice::Managed => 2,
+                PythonChoice::Path(_) => 3,
+            };
+            let mut picked = current;
+            crate::dropdown::ComboBox::from_id_salt("python-choice")
+                .width(200.0)
+                .selected_text(names[current].1.clone())
+                .show_ui(ui, |ui| {
+                    for (i, (_, name)) in names.iter().enumerate() {
+                        ui.selectable_value(&mut picked, i, name);
+                    }
+                });
+            if picked != current {
+                // A path starts as the usual command, for the user to edit.
+                d.modules.python = if picked == 3 { "python3".into() } else { names[picked].0.into() };
+            }
+            if picked == 3 {
+                ui.add(
+                    egui::TextEdit::singleline(&mut d.modules.python)
+                        .hint_text(app.t("options.modules.python_hint"))
+                        .desired_width(200.0),
+                );
+            }
         });
+        ui.label(RichText::new(app.t("options.modules.python_note")).small().color(look.weak_text()));
         row(ui, &app.t("options.modules.java"), |ui| {
             ui.add(
                 egui::TextEdit::singleline(&mut d.modules.java)

@@ -107,14 +107,28 @@ jobs:
       # the native and Java examples are built first, and the runner has
       # Python, Node and a JDK. Copies go into the checkout only, never into
       # a commit (.gitignore covers them).
+      # The managed Python and uv the Python example with dependencies needs
+      # (about 40 MB), kept between runs. The key names the pinned versions
+      # (PYTHON_VERSION, PBS_RELEASE, UV_VERSION in python_env.rs).
+      - name: Cache the managed Python and uv
+        uses: actions/cache@v4
+        with:
+          path: |
+            ${{ runner.temp }}/glossa-home/runtimes
+            ${{ runner.temp }}/glossa-home/cache/uv
+          key: glossa-python-${{ runner.os }}-3.13.18-20261026-uv0.13.7
       - name: Module fixtures (glossa-cli module test)
+        env:
+          GLOSSA_HOME: ${{ runner.temp }}/glossa-home
         run: |
           cargo build --locked -p glossa-cli -p glossa-example-rot13 -p glossa-example-lines
           cp target/debug/libglossa_example_rot13.so modules/native/example-rot13/
           cp target/debug/libglossa_example_lines.so modules/native/example-lines/
           (cd modules/native/example-c && cc -shared -fPIC -std=c99 -I ../../../include -o libshout.so shout.c)
           (cd modules/java/example-upper && ./build.sh)
-          target/debug/glossa-cli module test --strict --require-runtimes modules
+          # --download: the Python example with dependencies gets the
+          # managed Python, uv and its package (about 45 MB) first.
+          target/debug/glossa-cli module test --strict --require-runtimes --download modules
       # Every window drawn to a PNG under Xvfb, with Mesa's llvmpipe as the
       # OpenGL driver: no GPU on the runner, and none needed.
       - name: Screenshot smoke test

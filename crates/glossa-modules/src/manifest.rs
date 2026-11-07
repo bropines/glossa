@@ -13,6 +13,7 @@
 //! homepage = "https://…"
 //! author = "…"
 //! license = "MIT"
+//! requirements = ["requests>=2.31"]  # runtime = "python" only: packages, see `python_env`
 //!
 //! capabilities = ["translate", "detect_language"]
 //! languages = ["en", "ru", "de"]   # omit for "all"
@@ -134,6 +135,18 @@ pub struct ModuleSection {
     /// `runtime = "java"`: options for the JVM, before `-jar` / the class.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub jvm_args: Vec<String>,
+    /// `runtime = "python"`: packages the module needs, as pip requirement
+    /// lines (`"requests>=2.31"`). Glossa installs them with `uv` into an
+    /// environment of the module's own; see [`crate::python_env`]. A
+    /// `requirements.txt` or `pyproject.toml` beside the manifest does the
+    /// same when this is empty.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub requirements: Vec<String>,
+    /// `runtime = "python"`: the package index `requirements` come from,
+    /// instead of PyPI (`https://…/simple`). Its host must be in
+    /// `[permissions] network`.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub python_index: String,
 }
 
 /// A process module's command line: one for every platform, or one per
@@ -324,6 +337,29 @@ impl Manifest {
         }
         if self.module.runtime == Runtime::Process && self.module.command.is_none() {
             return Err("runtime = \"process\" needs a command, e.g. command = [\"node\", \"main.mjs\"]".into());
+        }
+        if !self.module.requirements.is_empty() && self.module.runtime != Runtime::Python {
+            return Err("requirements are for runtime = \"python\" only".into());
+        }
+        for r in &self.module.requirements {
+            crate::python_env::check_requirement(r)?;
+        }
+        let index = self.module.python_index.trim();
+        if !index.is_empty() {
+            if self.module.runtime != Runtime::Python {
+                return Err("python_index is for runtime = \"python\" only".into());
+            }
+            if !index.starts_with("https://") {
+                return Err(format!("python_index {index:?} must be an https:// URL"));
+            }
+            // Like asset downloads: the permissions list says every host the
+            // module may get anything from.
+            if !self.permissions.allows_url(index) {
+                let host = url_host(index).unwrap_or_else(|| index.to_owned());
+                return Err(format!(
+                    "python_index: {host} is not in [permissions] network; add it to install from there"
+                ));
+            }
         }
         for asset in &self.assets {
             asset.validate()?;

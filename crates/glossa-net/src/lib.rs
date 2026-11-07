@@ -701,6 +701,13 @@ fn proxy_spec(settings: &Network) -> Option<ProxySpec> {
     }
 }
 
+/// The proxy the settings call for right now, credentials included, for a
+/// program Glossa starts that should go the same way (`uv`); `None` for a
+/// direct connection.
+pub fn proxy_url(settings: &Network) -> Option<String> {
+    proxy_spec(settings).map(|(url, _)| url)
+}
+
 /// The proxy requests go through right now, without credentials (`none`,
 /// `http://proxy.example:3128`), for diagnostics such as `glossa-cli
 /// doctor`. With the system mode this is what the system says at this
@@ -845,14 +852,19 @@ pub mod mock {
             self.route(method, url_prefix, status, body, true)
         }
 
-        fn route(self, method: Method, url_prefix: &str, status: u16, body: &str, once: bool) -> Self {
+        /// Answer with a binary body (an archive, an image).
+        pub fn on_bytes(self, method: Method, url_prefix: &str, status: u16, body: &[u8]) -> Self {
+            self.route(method, url_prefix, status, body, false)
+        }
+
+        fn route(self, method: Method, url_prefix: &str, status: u16, body: impl AsRef<[u8]>, once: bool) -> Self {
             self.routes.lock().unwrap().push((
                 method,
                 url_prefix.to_owned(),
                 HttpResponse {
                     status,
                     headers: vec![("content-type".into(), "application/json; charset=utf-8".into())],
-                    body: body.as_bytes().to_vec(),
+                    body: body.as_ref().to_vec(),
                     codepage: None,
                 },
                 once,

@@ -23,6 +23,7 @@ use crate::assets::{AssetGate, ModuleAssets};
 use crate::host_api::ModuleCache;
 use crate::manifest::{Manifest, Runtime};
 use crate::provider::Provider;
+use crate::python_env::{PythonDirs, PythonEnv};
 use crate::runtime;
 
 /// Where a provider came from.
@@ -43,6 +44,8 @@ pub struct Entry {
     pub origin: Origin,
     /// The files the module declares for this system, if any.
     pub assets: Option<Arc<ModuleAssets>>,
+    /// A Python module's interpreter and environment.
+    pub python: Option<Arc<PythonEnv>>,
 }
 
 impl Entry {
@@ -54,8 +57,11 @@ impl Entry {
 /// What the runtimes need from the program.
 #[derive(Clone)]
 pub struct RuntimeContext {
-    /// The Python interpreter for Python modules; empty to search `PATH`.
+    /// `[modules] python`: `auto` (or empty), `system`, `managed`, or an
+    /// interpreter; see [`crate::python_env::PythonChoice`].
     pub python: String,
+    /// Where the managed Python, `uv` and the modules' environments go.
+    pub python_dirs: PythonDirs,
     /// The `java` for Java modules (an executable or a Java home); empty to
     /// look in `JAVA_HOME`, `PATH` and the usual install folders.
     pub java: String,
@@ -82,6 +88,7 @@ impl Default for RuntimeContext {
     fn default() -> Self {
         Self {
             python: String::new(),
+            python_dirs: PythonDirs::default(),
             java: String::new(),
             allow_native: true,
             allow_legacy_scripts: true,
@@ -124,13 +131,13 @@ impl Registry {
 
     /// Add a provider compiled into the program.
     pub fn add_builtin(&mut self, provider: Arc<dyn Provider>) {
-        self.insert(Entry { provider, origin: Origin::Builtin, assets: None });
+        self.insert(Entry { provider, origin: Origin::Builtin, assets: None, python: None });
     }
 
     /// Add a module compiled into the program. Add these before loading the
     /// module directories, so a module there with the same id wins.
     pub fn add_bundled(&mut self, provider: Arc<dyn Provider>) {
-        self.insert(Entry { provider, origin: Origin::Bundled, assets: None });
+        self.insert(Entry { provider, origin: Origin::Bundled, assets: None, python: None });
     }
 
     /// Add or replace by id. The provider is put behind a panic barrier
@@ -248,27 +255,28 @@ impl Registry {
             let assets = ModuleAssets::for_manifest(&manifest, &ctx.models_dir)
                 .map_err(|e| Skip::Failed(format!("{}: {e}", manifest_path.display())))?
                 .map(Arc::new);
+            let python = python_env(path, &manifest, ctx)?;
             let Some(assets) = assets else {
-                let provider = instantiate(path, manifest, ctx)?;
-                return Ok(Some(Entry { provider, origin, assets: None }));
+                let provider = instantiate(path, manifest, ctx, python.as_ref())?;
+                return Ok(Some(Entry { provider, origin, assets: None, python }));
             };
             assets.apply_to(&mut manifest);
             // Ready files: load as usual, so a broken module is reported
             // now. Missing ones: list the module, start nothing; the gate
             // loads it once the files are there.
             let provider: Arc<dyn Provider> = if assets.ready() {
-                instantiate(path, manifest, ctx)?
+                instantiate(path, manifest, ctx, python.as_ref())?
             } else {
                 tracing::debug!(module = %manifest.module.id, missing = ?assets.missing(), "module waits for its files");
-                let (dir, m, c) = (path.to_owned(), manifest.clone(), ctx.clone());
+                let (dir, m, c, py) = (path.to_owned(), manifest.clone(), ctx.clone(), python.clone());
                 let make: crate::assets::MakeProvider = Box::new(move || {
-                    instantiate(&dir, m.clone(), &c).map_err(|s| match s {
+                    instantiate(&dir, m.clone(), &c, py.as_ref()).map_err(|s| match s {
                         Skip::Reason(r) | Skip::Failed(r) => r,
                     })
                 });
                 Arc::new(AssetGate::new(&manifest, assets.clone(), ctx.auto_download_assets, make))
             };
-            return Ok(Some(Entry { provider, origin, assets: Some(assets) }));
+            return Ok(Some(Entry { provider, origin, assets: Some(assets), python }));
         }
 
         if path.join("Service.js").is_file() {
@@ -280,6 +288,7 @@ impl Registry {
                 provider,
                 origin: Origin::Module { dir: path.to_owned(), runtime: Runtime::Qtranslate, version: String::new() },
                 assets: None,
+                python: None,
             }));
         }
 
@@ -289,6 +298,7 @@ impl Registry {
                 provider,
                 origin: Origin::Module { dir: path.to_owned(), runtime: Runtime::Pot, version: String::new() },
                 assets: None,
+                python: None,
             }));
         }
 
@@ -296,8 +306,30 @@ impl Registry {
     }
 }
 
+/// A Python module's environment as the settings describe it; `None` for
+/// other runtimes.
+fn python_env(dir: &Path, manifest: &Manifest, ctx: &RuntimeContext) -> Result<Option<Arc<PythonEnv>>, Skip> {
+    if manifest.module.runtime != Runtime::Python {
+        return Ok(None);
+    }
+    #[cfg(feature = "python")]
+    {
+        runtime::python::env_for(dir, manifest, ctx).map(|e| Some(Arc::new(e))).map_err(Skip::Failed)
+    }
+    #[cfg(not(feature = "python"))]
+    {
+        let _ = (dir, ctx);
+        Ok(None)
+    }
+}
+
 /// Start the runtime for a module with a manifest.
-fn instantiate(dir: &Path, manifest: Manifest, ctx: &RuntimeContext) -> Result<Arc<dyn Provider>, Skip> {
+fn instantiate(
+    dir: &Path,
+    manifest: Manifest,
+    ctx: &RuntimeContext,
+    python: Option<&Arc<PythonEnv>>,
+) -> Result<Arc<dyn Provider>, Skip> {
     match manifest.module.runtime {
         Runtime::Js => runtime_js_glossa(dir, manifest, ctx),
         Runtime::Qtranslate => runtime_js_qtranslate(dir, ctx),
@@ -305,11 +337,12 @@ fn instantiate(dir: &Path, manifest: Manifest, ctx: &RuntimeContext) -> Result<A
         Runtime::Python => {
             #[cfg(feature = "python")]
             {
-                runtime::python::load(dir, manifest, ctx).map_err(Skip::Failed)
+                let env = python.cloned().ok_or_else(|| Skip::Failed("no Python environment".into()))?;
+                runtime::python::load(dir, manifest, ctx, env).map_err(Skip::Failed)
             }
             #[cfg(not(feature = "python"))]
             {
-                let _ = (dir, manifest);
+                let _ = (dir, manifest, python);
                 Err(Skip::Reason("this build has no Python runtime".into()))
             }
         }

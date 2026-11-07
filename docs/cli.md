@@ -24,7 +24,7 @@ glossa-cli doctor                             # what works on this machine
 - [Commands](#commands): [`translate`](#translate), [`detect`](#detect),
   [`dict`](#dict), [`ocr`](#ocr), [`speak`](#speak),
   [`services`](#services), [`modules`](#modules), [`module`](#module),
-  [`assets`](#assets),
+  [`assets`](#assets), [`python`](#python),
   [`history`](#history),
   [`import-classic`](#import-classic), [`theme`](#theme),
   [`locale`](#locale), [`config`](#config), [`serve`](#serve),
@@ -449,7 +449,7 @@ check are described in [modules/testing.md](modules/testing.md).
 | `--timeout SECS` | 30 | The budget for one call. |
 | `--strict` | off | Warnings fail a module too, not only errors. |
 | `--require-runtimes` | off | A module that cannot run here (no interpreter, not built, its files not downloaded) fails instead of being skipped. |
-| `--download` | off | Download a module's missing required files ([assets](modules/README.md#assets)) before running it; without it such a module is skipped with the `module assets download` command to run. |
+| `--download` | off | Download a module's missing required files ([assets](modules/README.md#assets)), and the managed Python and packages a Python module needs ([Python dependencies](modules/README.md#python-dependencies)), before running it; without it such a module is skipped with the command to run. |
 
 The text report has one line per module (`PASS`, `FAIL` or `SKIP`, its id,
 runtime, folder, load time and size), its findings (`error:`, `warning:`,
@@ -492,6 +492,31 @@ returns:
 {"module": "my-ocr", "dir": "…/models/my-ocr", "ready": true, "total_size": 4718592,
  "assets": [{"name": "det", "path": "…/models/my-ocr/det", "size": 4718592, "sha256": "…", "optional": false, "state": "ready"}]}
 ```
+
+### python
+
+```
+glossa-cli python [status]
+glossa-cli python install [ID]
+glossa-cli python remove [ID]
+```
+
+The Python that Python modules run with ([modules/README.md](modules/README.md#python-dependencies)).
+
+- `status` (the default) shows `[modules] python`, the Python found on the
+  machine, the managed Python and `uv` (ready, partly downloaded, or not
+  downloaded with their size), and each Python module: its dependencies
+  and whether it is `ready`, `missing` something (listed), or cannot work
+  as set up (`impossible`, with why).
+- `install` downloads the managed Python and `uv`. With a module id it gets
+  what that module needs: the managed Python if it uses it, `uv` and its
+  packages if it has dependencies. Downloads resume, are checked against
+  their pinned SHA-256 and show progress on stderr when it is a terminal.
+- `remove` deletes the managed Python, `uv`, every module's environment and
+  `uv`'s cache; with a module id, only that module's environment.
+
+`--json` prints the report [`/v1/python`](control-api.md#v1python) returns,
+with `system_python` added.
 
 ### history
 

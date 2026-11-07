@@ -230,7 +230,7 @@ All are optional; the [shape checks](#what-is-checked) run regardless.
 | `detected` | The detected language (translate, detect, ocr). |
 | `headword` | The article's headword. |
 | `mime` | The audio's MIME type. |
-| `error` | The call must fail with this kind: `missing_credential`, `unsupported`, `source_language`, `target_language`, `rate_limited`, `network`, `http`, `bad_response`, `not_found`, `timeout`, `assets_missing` (the module's files are not downloaded) or `module` (any other module error). A dictionary's `not_found` reaches the program as a plain module error carrying your message, the same as a crash would, so a `not_found` expectation that meets a module error also needs `error_contains` with words from your not_found message; without it the case fails. |
+| `error` | The call must fail with this kind: `missing_credential`, `unsupported`, `source_language`, `target_language`, `rate_limited`, `network`, `http`, `bad_response`, `not_found`, `timeout`, `assets_missing` (the module's files are not downloaded), `runtime_missing` (a Python module's Python or packages are not there) or `module` (any other module error). A dictionary's `not_found` reaches the program as a plain module error carrying your message, the same as a crash would, so a `not_found` expectation that meets a module error also needs `error_contains` with words from your not_found message; without it the case fails. |
 | `error_contains` | The error message must contain this. |
 | `max_ms` | The call must finish within this many milliseconds. Leave room: the first call to a process module includes starting it. |
 | `result` | A partial match on the result as JSON: every key given must be there with an equal value, and arrays match element by element for as many elements as are given. The names are the program's serialised ones (`trait` and `explains` in an article's explanations, `bounds` for an OCR box); when a key is missing, the report lists the ones that are there. |
@@ -321,6 +321,7 @@ fixtures. Copy the one for your runtime, change the `id`, and keep the
 | JavaScript | [`modules/js/free-dictionary`](../../modules/js/free-dictionary) | `host.fetch`, `host.cache`, typed errors, recorded answers |
 | JavaScript (OCR) | [`modules/js/google-vision-ocr`](../../modules/js/google-vision-ocr) | the image API, a layout result, a secret option with a fake in tests |
 | Python | [`modules/python/example-reverse`](../../modules/python/example-reverse) | the smallest SDK module |
+| Python (dependencies) | [`modules/python/example-idna`](../../modules/python/example-idna) | `requirements` installed by Glossa; test with `--download` |
 | Python (OCR) | [`modules/python/ocr-space`](../../modules/python/ocr-space) | `host.http`, `map_box_back`, error mapping |
 | Java | [`modules/java/example-upper`](../../modules/java/example-upper) | the Java SDK; build `module.jar` with `build.sh` first |
 | process | [`modules/process/example-node`](../../modules/process/example-node) | the protocol by hand, host calls, no SDK |

@@ -25,7 +25,7 @@ bus, with no token: see [D-Bus](#d-bus).
   [`/v1/services`](#get-v1services), [`/v1/translate`](#v1translate),
   [`/v1/detect`](#post-v1detect), [`/v1/dictionary`](#v1dictionary),
   [`/v1/ocr`](#post-v1ocr), [`/v1/speak`](#post-v1speak),
-  [`/v1/action`](#v1actionaction), [`/v1/assets`](#v1assets)
+  [`/v1/action`](#v1actionaction), [`/v1/assets`](#v1assets), [`/v1/python`](#v1python)
 - [pot-app compatibility](#pot-app-compatibility)
 - [D-Bus](#d-bus)
 - [Binding hotkeys to it](#binding-hotkeys-to-it)
@@ -164,7 +164,7 @@ Errors have a status code and a body of the form:
 | 403 | The request came from a browser: it carries an `Origin`, `Sec-Fetch-Site`, `Sec-Fetch-Mode`, `Sec-Fetch-Dest`, `Sec-Fetch-User` or `Referer` header (any value). Or its `Host` header is a name other than `localhost` (see [Security](#security)). |
 | 404 | No such route or action; no service can do what was asked (no speech service). |
 | 405 | The path exists but not for this method; the `Allow` header lists the methods it answers. |
-| 412 | The service needs a key that is not set, or a module's files have not been downloaded ([`/v1/assets`](#v1assets)). |
+| 412 | The service needs a key that is not set, a module's files have not been downloaded ([`/v1/assets`](#v1assets)), or a Python module's Python or packages are not there yet ([`/v1/python`](#v1python)). |
 | 413 | The body is larger than 32 MiB. |
 | 422 | No text was found in the image, or the language could not be detected. |
 | 429 | The service is rate-limiting. |
@@ -416,6 +416,22 @@ $ curl -s -X POST -H "Authorization: Bearer $T" http://127.0.0.1:60828/v1/assets
 `corrupt` (a check found it damaged and deleted it). `job.error` says why
 the last download failed. An unknown module is a 404; one without files a
 400.
+
+### /v1/python
+
+The Python that Python modules run with
+([modules/README.md](modules/README.md#python-dependencies)).
+
+| method | path | does |
+|---|---|---|
+| GET | `/v1/python` | The setting, the managed Python and `uv` with their state, and every Python module. |
+| POST | `/v1/python/install` | Start downloading the managed Python and `uv`. Returns `202` at once; poll the GET for `job.progress`. |
+| POST | `/v1/python/cancel` | Stop that download; the next one resumes. |
+| GET | `/v1/python/<id>` | One Python module: `state` (`ready`, `missing`, `unknown` while Glossa looks for an installed Python, `impossible`), `missing`, `requirements`, `venv`, `download_size`. |
+| POST | `/v1/python/<id>/install` | Start getting what the module needs (the managed Python, `uv`, its packages). Returns `202`; poll the GET. |
+| POST | `/v1/python/<id>/cancel` | Stop it. |
+
+An unknown or non-Python module is a 404.
 
 ## pot-app compatibility
 

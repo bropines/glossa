@@ -74,9 +74,14 @@ pub struct Settings {
     /// (`Paths::models_dir`), so files the user already downloaded are
     /// found. `None`: a scratch folder.
     pub models_dir: Option<PathBuf>,
-    /// Download a module's missing required assets before running it,
-    /// instead of skipping the module.
+    /// Download a module's missing required assets (and the managed Python
+    /// and packages a Python module needs) before running it, instead of
+    /// skipping the module.
     pub download_assets: bool,
+    /// Where the managed Python, `uv` and the modules' environments are, as
+    /// the program has them, so a Python the user already downloaded is
+    /// used. `None`: a scratch folder.
+    pub python_dirs: Option<glossa_modules::python_env::PythonDirs>,
 }
 
 impl Default for Settings {
@@ -94,6 +99,7 @@ impl Default for Settings {
             java: String::new(),
             models_dir: None,
             download_assets: false,
+            python_dirs: None,
         }
     }
 }
@@ -301,6 +307,7 @@ pub fn test_module(dir: &Path, s: &Settings) -> ModuleReport {
         call_timeout: s.timeout,
         cache_dir: std::env::temp_dir().join("glossa-module-test"),
         models_dir: s.models_dir.clone().unwrap_or_else(|| std::env::temp_dir().join("glossa-module-test-models")),
+        python_dirs: s.python_dirs.clone().unwrap_or_default(),
         ..Default::default()
     };
 
@@ -387,6 +394,35 @@ pub fn test_module(dir: &Path, s: &Settings) -> ModuleReport {
             ));
             report.settle(s);
             return report;
+        }
+    }
+    // Likewise a Python module whose interpreter or packages are not there.
+    if let Some(env) = entry.python.as_ref() {
+        use glossa_modules::python_env::EnvState;
+        match env.state() {
+            EnvState::Ready | EnvState::Unknown => {}
+            EnvState::Impossible(why) => {
+                report.skipped = Some(why);
+                report.settle(s);
+                return report;
+            }
+            EnvState::Missing(missing) if s.download_assets => {
+                let http = glossa_net::HttpClient::plain();
+                if let Err(e) = env.install(&http, &CancelToken::new(), &|_| {}) {
+                    report.findings.push(Finding::error(format!("getting {} failed: {e}", missing.join(", "))));
+                    report.settle(s);
+                    return report;
+                }
+            }
+            EnvState::Missing(missing) => {
+                report.skipped = Some(format!(
+                    "the module needs {}; run `glossa-cli python install {}`, or test with --download",
+                    missing.join(", "),
+                    report.id
+                ));
+                report.settle(s);
+                return report;
+            }
         }
     }
     let provider = entry.provider;

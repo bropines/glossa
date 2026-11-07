@@ -7,31 +7,66 @@
 //! `PYTHONPATH` and UTF-8 forced for the standard streams.
 
 use std::ffi::OsString;
-use std::io::Read;
 use std::path::{Path, PathBuf};
-use std::process::{Command, Stdio};
 use std::sync::Arc;
-use std::time::{Duration, Instant};
 
+use glossa_core::{
+    Article, Audio, Detection, DictRequest, Error, OcrRequest, OcrResult, ProviderInfo, Result, SpeakRequest,
+    TranslateRequest, Translation,
+};
 use glossa_module_sdk::wire::ModuleError;
 use parking_lot::Mutex;
 
-use super::stdio::{expand, hide_window, Launch, StdioConfig, StdioTransport};
+use super::stdio::{expand, Launch, StdioConfig, StdioTransport};
 use crate::manifest::Manifest;
 use crate::protocol::ProtocolProvider;
-use crate::provider::Provider;
+use crate::provider::{Host, OptionSpec, Provider};
+pub use crate::python_env::{parse_configured, system_python, system_python_if_known};
+use crate::python_env::{EnvState, PythonChoice, PythonEnv, Toolchain};
 use crate::registry::RuntimeContext;
 
 pub use super::stdio::DEFAULT_IDLE_TIMEOUT;
 
-pub fn load(dir: &Path, manifest: Manifest, ctx: &RuntimeContext) -> Result<Arc<dyn Provider>, String> {
-    let transport = transport(dir, &manifest, ctx)?;
-    Ok(Arc::new(ProtocolProvider::new(manifest, transport, ctx.cache.clone())))
+/// The module's environment as the settings in `ctx` describe it.
+pub fn env_for(dir: &Path, manifest: &Manifest, ctx: &RuntimeContext) -> std::result::Result<PythonEnv, String> {
+    let toolchain = Arc::new(Toolchain::new(ctx.python_dirs.clone()));
+    PythonEnv::new(dir, manifest, PythonChoice::parse(&ctx.python), toolchain)
+}
+
+/// The module's provider, behind a [`PythonGate`] that makes sure its
+/// Python is there before the first call starts it.
+pub fn load(
+    dir: &Path,
+    manifest: Manifest,
+    ctx: &RuntimeContext,
+    env: Arc<PythonEnv>,
+) -> std::result::Result<Arc<dyn Provider>, String> {
+    let transport = transport_with(dir, &manifest, ctx, env.clone())?;
+    let gate = PythonGate {
+        info: manifest.provider_info(),
+        options: manifest.options.clone(),
+        env,
+        auto_download: ctx.auto_download_assets,
+        installing: Mutex::new(()),
+        inner: Arc::new(ProtocolProvider::new(manifest, transport, ctx.cache.clone())),
+    };
+    Ok(Arc::new(gate))
+}
+
+/// The stdio transport for a Python module, with the interpreter the
+/// settings in `ctx` choose.
+pub fn transport(dir: &Path, manifest: &Manifest, ctx: &RuntimeContext) -> std::result::Result<StdioTransport, String> {
+    transport_with(dir, manifest, ctx, Arc::new(env_for(dir, manifest, ctx)?))
 }
 
 /// The stdio transport for a Python module. The interpreter is looked for
 /// when the process first starts, not here: loading a module costs nothing.
-pub fn transport(dir: &Path, manifest: &Manifest, ctx: &RuntimeContext) -> Result<StdioTransport, String> {
+fn transport_with(
+    dir: &Path,
+    manifest: &Manifest,
+    ctx: &RuntimeContext,
+    env: Arc<PythonEnv>,
+) -> std::result::Result<StdioTransport, String> {
     let entry = match manifest.module.entry.trim() {
         "" => "main.py",
         e => e,
@@ -42,15 +77,12 @@ pub fn transport(dir: &Path, manifest: &Manifest, ctx: &RuntimeContext) -> Resul
     }
     let m = &manifest.module;
     let cfg = StdioConfig::new(&m.id, "Python", ctx.call_timeout, m.idle_timeout_secs);
-    let configured = ctx.python.clone();
     let dir = dir.to_owned();
     let extra_args: Vec<OsString> = m.args.iter().map(|a| expand(a, &dir).into()).collect();
     let extra_env: Vec<(OsString, OsString)> = m.env.iter().map(|(k, v)| (k.into(), expand(v, &dir).into())).collect();
     let sdk = sdk_dirs();
-    let launcher = move || -> Result<Launch, ModuleError> {
-        let (program, pre_args) = interpreter(&configured).ok_or_else(|| {
-            ModuleError::other("no Python 3 interpreter found; install Python or set its path in the settings")
-        })?;
+    let launcher = move || -> std::result::Result<Launch, ModuleError> {
+        let (program, pre_args) = env.interpreter().map_err(ModuleError::other)?;
         let mut args: Vec<OsString> = pre_args.into_iter().map(OsString::from).collect();
         args.push(script.clone().into_os_string());
         args.extend(extra_args.iter().cloned());
@@ -75,6 +107,94 @@ pub fn transport(dir: &Path, manifest: &Manifest, ctx: &RuntimeContext) -> Resul
     Ok(StdioTransport::new(cfg, Box::new(launcher)))
 }
 
+// -- the gate ------------------------------------------------------------------------
+
+/// Stands in front of a Python module and checks, before a call starts its
+/// process, that its Python (and environment, with dependencies) is there.
+/// When it is not, the call fails with [`Error::RuntimeMissing`] for the
+/// front end to offer the download, or, with automatic downloads on, the
+/// download runs on the call's worker first, as for module assets.
+pub struct PythonGate {
+    info: ProviderInfo,
+    options: Vec<OptionSpec>,
+    env: Arc<PythonEnv>,
+    auto_download: bool,
+    /// One first-call install at a time.
+    installing: Mutex<()>,
+    inner: Arc<dyn Provider>,
+}
+
+impl PythonGate {
+    fn provider(&self, host: &Host) -> Result<&Arc<dyn Provider>> {
+        match self.env.state() {
+            EnvState::Ready => {}
+            EnvState::Impossible(why) => return Err(Error::module(&self.info.id, why)),
+            EnvState::Unknown => unreachable!("state() searches for a system Python"),
+            EnvState::Missing(missing) => {
+                if !self.auto_download {
+                    return Err(Error::RuntimeMissing { module: self.info.id.clone(), what: missing.join(", ") });
+                }
+                let _one = self.installing.lock();
+                if self.env.state() != EnvState::Ready {
+                    tracing::info!(module = %self.info.id, missing = ?missing, "getting the module's Python on its first use");
+                    self.env.install(host.http, host.cancel, &|_| {})?;
+                }
+            }
+        }
+        Ok(&self.inner)
+    }
+}
+
+impl Provider for PythonGate {
+    fn info(&self) -> &ProviderInfo {
+        &self.info
+    }
+
+    fn options(&self) -> &[OptionSpec] {
+        &self.options
+    }
+
+    fn translate(&self, host: &Host, req: &TranslateRequest) -> Result<Translation> {
+        self.provider(host)?.translate(host, req)
+    }
+
+    fn translate_stream(&self, host: &Host, req: &TranslateRequest, progress: &dyn Fn(&str)) -> Result<Translation> {
+        self.provider(host)?.translate_stream(host, req, progress)
+    }
+
+    fn list_models(&self, host: &Host) -> Result<Vec<String>> {
+        self.provider(host)?.list_models(host)
+    }
+
+    fn detect(&self, host: &Host, text: &str) -> Result<Detection> {
+        self.provider(host)?.detect(host, text)
+    }
+
+    fn dictionary(&self, host: &Host, req: &DictRequest) -> Result<Article> {
+        self.provider(host)?.dictionary(host, req)
+    }
+
+    fn speak(&self, host: &Host, req: &SpeakRequest) -> Result<Audio> {
+        self.provider(host)?.speak(host, req)
+    }
+
+    fn recognize(&self, host: &Host, req: &OcrRequest) -> Result<OcrResult> {
+        self.provider(host)?.recognize(host, req)
+    }
+
+    fn suspend(&self) {
+        self.inner.suspend();
+    }
+
+    fn warm_up(&self) {
+        // Only when nothing is missing: warming up must not start a
+        // download, nor a search that runs a program on this thread.
+        if self.env.state_now() == EnvState::Ready {
+            self.inner.warm_up();
+        }
+    }
+}
+
 // -- finding Python and the SDK ---------------------------------------------------
 
 /// The Python 3 interpreter modules would run with (the configured one, else
@@ -84,81 +204,15 @@ pub fn find_python(configured: &str) -> Option<OsString> {
     interpreter(configured).map(|(program, _)| program)
 }
 
-/// The interpreter to run: the configured one, else the first Python 3 found.
+/// The interpreter to run: the configured one, else the first Python 3.8+
+/// found. The keywords `auto`, `system` and `managed` are not paths: the
+/// first two search, the last finds nothing here (see [`PythonEnv`]).
 fn interpreter(configured: &str) -> Option<(OsString, Vec<String>)> {
-    let configured = configured.trim().trim_matches('"');
-    if !configured.is_empty() {
-        // A path to an executable, or a command line such as `py -3`.
-        if Path::new(configured).exists() {
-            return Some((configured.into(), Vec::new()));
-        }
-        let mut words = configured.split_whitespace();
-        let program = words.next()?;
-        return Some((program.into(), words.map(str::to_owned).collect()));
+    match PythonChoice::parse(configured) {
+        PythonChoice::Path(p) => parse_configured(&p),
+        PythonChoice::Managed => None,
+        PythonChoice::Auto | PythonChoice::System => system_python(),
     }
-    static FOUND: Mutex<Option<(OsString, Vec<String>)>> = Mutex::new(None);
-    if let Some(found) = FOUND.lock().clone() {
-        return Some(found);
-    }
-    let found = probe_python()?;
-    *FOUND.lock() = Some(found.clone());
-    Some(found)
-}
-
-/// Ask each candidate for its version and real executable. Going by the
-/// executable it reports skips launchers (`py`) and the Windows Store's
-/// `python.exe` alias, which opens the Store instead of running anything.
-fn probe_python() -> Option<(OsString, Vec<String>)> {
-    let mut candidates: Vec<(&str, Vec<String>)> = vec![("python3", vec![]), ("python", vec![])];
-    if cfg!(windows) {
-        candidates.push(("py", vec!["-3".into()]));
-        // Version managers (pyenv-win, conda's activation scripts) put
-        // `python.bat` / `python.cmd` shims on PATH, which CreateProcess does
-        // not run. cmd resolves them; the probe then reports the real
-        // python.exe, so modules themselves start without cmd.
-        candidates.push(("cmd", vec!["/d".into(), "/c".into(), "python3".into()]));
-        candidates.push(("cmd", vec!["/d".into(), "/c".into(), "python".into()]));
-    }
-    for (program, args) in candidates {
-        let mut cmd = Command::new(program);
-        cmd.args(&args)
-            .args(["-c", "import sys; print(sys.version_info[0]); print(sys.executable)"])
-            .stdin(Stdio::null())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::null());
-        hide_window(&mut cmd);
-        let Ok(mut child) = cmd.spawn() else { continue };
-        let deadline = Instant::now() + Duration::from_secs(10);
-        let status = loop {
-            match child.try_wait() {
-                Ok(Some(s)) => break Some(s),
-                Ok(None) if Instant::now() < deadline => std::thread::sleep(Duration::from_millis(10)),
-                _ => {
-                    let _ = child.kill();
-                    let _ = child.wait();
-                    break None;
-                }
-            }
-        };
-        if !status.is_some_and(|s| s.success()) {
-            continue;
-        }
-        let mut out = String::new();
-        if let Some(mut stdout) = child.stdout.take() {
-            let _ = stdout.read_to_string(&mut out);
-        }
-        let mut lines = out.lines();
-        if lines.next().map(str::trim) != Some("3") {
-            continue;
-        }
-        let exe = lines.next().map(str::trim).unwrap_or("");
-        return Some(if !exe.is_empty() && Path::new(exe).is_file() {
-            (exe.into(), Vec::new())
-        } else {
-            (program.into(), args)
-        });
-    }
-    None
 }
 
 /// Directories holding the bundled `glossa_module.py`, found the way
@@ -208,7 +262,9 @@ mod tests {
     use glossa_module_sdk::wire::Reply;
     use glossa_net::mock::MockHttp;
     use serde_json::Value;
+    use std::result::Result;
     use std::sync::mpsc;
+    use std::time::{Duration, Instant};
 
     fn have_python() -> bool {
         let ok = interpreter("").is_some();
@@ -220,6 +276,11 @@ mod tests {
 
     fn repo() -> PathBuf {
         Path::new(env!("CARGO_MANIFEST_DIR")).join("..").join("..")
+    }
+
+    fn load_plain(dir: &Path, manifest: Manifest, ctx: &RuntimeContext) -> Arc<dyn Provider> {
+        let env = Arc::new(env_for(dir, &manifest, ctx).unwrap());
+        load(dir, manifest, ctx, env).unwrap()
     }
 
     fn ctx(timeout: Duration) -> RuntimeContext {
@@ -272,7 +333,7 @@ mod tests {
         }
         let dir = repo().join("modules").join("python").join("example-reverse");
         let manifest = Manifest::load(&dir.join("module.toml")).unwrap();
-        let provider = load(&dir, manifest, &ctx(Duration::from_secs(20))).unwrap();
+        let provider = load_plain(&dir, manifest, &ctx(Duration::from_secs(20)));
         let http = MockHttp::new();
         let opts = OptionValues::new();
         with_test_host(&http, &opts, |host| {
@@ -408,7 +469,7 @@ mod.run()
         }
         let dir = repo().join("modules").join("python").join("ocr-space");
         let manifest = Manifest::load(&dir.join("module.toml")).unwrap();
-        let provider = load(&dir, manifest, &ctx(Duration::from_secs(20))).unwrap();
+        let provider = load_plain(&dir, manifest, &ctx(Duration::from_secs(20)));
         let reply = serde_json::json!({
             "ParsedResults": [{ "ParsedText": "Hello world\r\nBye\r\n", "TextOverlay": { "Lines": [
                 { "LineText": "Hello world", "Words": [

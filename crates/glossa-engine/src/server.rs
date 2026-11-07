@@ -166,7 +166,7 @@ impl Reply {
             Error::EmptyInput | Error::SameLanguage | Error::Config(_) => 400,
             Error::NoProvider(_) | Error::NoSuchModule(_) => 404,
             Error::NoTextRecognised | Error::LanguageNotDetected => 422,
-            Error::MissingCredential { .. } | Error::AssetsMissing { .. } => 412,
+            Error::MissingCredential { .. } | Error::AssetsMissing { .. } | Error::RuntimeMissing { .. } => 412,
             Error::RateLimited { .. } => 429,
             Error::Timeout(_) => 504,
             Error::Internal(_) => 500,
@@ -294,6 +294,9 @@ fn allowed_methods(path: &str) -> Option<&'static str> {
         p if p.starts_with("/v1/action/") => Some("GET, POST"),
         "/v1/assets" => Some("GET"),
         p if p.starts_with("/v1/assets/") => Some(if p.matches('/').count() == 3 { "GET" } else { "POST" }),
+        "/v1/python" => Some("GET"),
+        "/v1/python/install" | "/v1/python/cancel" => Some("POST"),
+        p if p.starts_with("/v1/python/") => Some(if p.matches('/').count() == 3 { "GET" } else { "POST" }),
         _ => None,
     }
 }
@@ -448,6 +451,47 @@ fn assets_route(engine: &Engine, rest: &str, url: &str) -> Reply {
     match result {
         Ok(report) => Reply::json(if op == "download" { 202 } else { 200 }, json!(report)),
         Err(e) => Reply::from_error(&e),
+    }
+}
+
+/// `/v1/python/install` and `/cancel` (POST) for the managed Python and `uv`
+/// themselves; `/v1/python/ID` (GET: a module's state), `/v1/python/ID/install`
+/// and `/cancel` (POST). An install runs in the background: the reply is
+/// the state as it starts, and polling the GET shows its progress.
+fn python_route(engine: &Engine, rest: &str) -> Reply {
+    let shared = |op: &str| -> Reply {
+        let started = match op {
+            "install" => engine.start_python_install(None),
+            _ => {
+                engine.cancel_python_install(crate::PYTHON_JOB);
+                Ok(())
+            }
+        };
+        match started {
+            Ok(()) => Reply::json(if op == "install" { 202 } else { 200 }, json!(engine.python_status())),
+            Err(e) => Reply::from_error(&e),
+        }
+    };
+    let (id, op) = match rest.split_once('/') {
+        None if rest == "install" || rest == "cancel" => return shared(rest),
+        None => (rest, ""),
+        Some(pair) => pair,
+    };
+    let started = match op {
+        "" => Ok(()),
+        "install" => engine.start_python_install(Some(id)),
+        "cancel" => {
+            engine.cancel_python_install(id);
+            Ok(())
+        }
+        other => return Reply::error(404, format!("no python operation {other:?} (install, cancel)")),
+    };
+    if let Err(e) = started {
+        return Reply::from_error(&e);
+    }
+    match engine.module_python(id) {
+        Some(m) => Reply::json(if op == "install" { 202 } else { 200 }, json!(m)),
+        None => Reply::error(404, format!("no Python module {id:?}")),
     }
 }
 
@@ -653,6 +697,8 @@ fn route(engine: &Engine, req: &mut Request) -> Reply {
         },
         "/v1/assets" => Reply::json(200, json!(engine.modules_with_assets())),
         p if p.starts_with("/v1/assets/") => assets_route(engine, &p["/v1/assets/".len()..], &url),
+        "/v1/python" => Reply::json(200, json!(engine.python_status())),
+        p if p.starts_with("/v1/python/") => python_route(engine, &p["/v1/python/".len()..]),
         _ => Reply::error(404, format!("no route {path}")),
     }
 }
@@ -728,6 +774,10 @@ mod tests {
         assert_eq!(get("/v1/assets/nope/download", "POST").0, 404);
         assert_eq!(get("/v1/assets/nope/download", "GET").0, 405);
         assert_eq!(get("/v1/assets/nope/teleport", "POST").0, 404);
+        assert_eq!(get("/v1/python", "GET").0, 200);
+        assert_eq!(get("/v1/python/nope", "GET").0, 404);
+        assert_eq!(get("/v1/python/nope/install", "POST").0, 404);
+        assert_eq!(get("/v1/python/nope/install", "GET").0, 405);
         server.stop();
         std::fs::remove_dir_all(&dir).ok();
     }

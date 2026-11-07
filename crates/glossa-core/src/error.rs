@@ -76,6 +76,14 @@ pub enum Error {
     )]
     AssetsMissing { module: String, missing: Vec<String> },
 
+    /// A Python module needs something Glossa downloads for it (a Python
+    /// build, `uv`, its packages) that is not there yet. Like
+    /// [`Error::AssetsMissing`], the front end offers the download.
+    #[error(
+        "module {module} needs {what} first: use Download in its settings, or run `glossa-cli python install {module}`"
+    )]
+    RuntimeMissing { module: String, what: String },
+
     /// A downloaded module file did not match the checksum its manifest
     /// gives. The file has been deleted; downloading again fetches it anew.
     #[error("file {asset} of module {module} is damaged or was changed on the server (SHA-256 {actual}, expected {expected}); it was deleted")]
