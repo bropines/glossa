@@ -112,15 +112,6 @@ inherits = "release"
 opt-level = 3
 strip = "debuginfo"
 
-# Dependencies slightly optimised and with line tables only: the debug app
-# and the tests run faster (the workspace tests 45 s instead of 56, a
-# screenshot run a third quicker) and the target folder is 20% smaller, for
-# about a minute more on a clean build. The workspace's own crates keep full
-# debug info and no optimisation, so rebuilds after an edit cost the same.
-[profile.dev.package."*"]
-opt-level = 1
-debug = "line-tables-only"
-
 # Local fixes to upstream crates; see third_party/README.md.
 [patch.crates-io]
 eframe = { path = "third_party/eframe" }

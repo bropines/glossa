@@ -40,6 +40,18 @@ is compiled and linted here through the `x86_64-pc-windows-gnu` target; CI's
 Windows job runs its tests. macOS code is built and tested on the author's
 Mac or in CI.
 
+A faster debug app and a smaller target directory, for your own machine
+only: put this in `~/.cargo/config.toml` (not the repository, where it
+would slow every CI cache miss). Measured on a Mac, the workspace tests ran
+in 45 s instead of 56 and the target directory was 3.6 GB instead of 4.5, for
+a clean build of 118 s instead of 65.
+
+```toml
+[profile.dev.package."*"]
+opt-level = 1
+debug = "line-tables-only"
+```
+
 `cargo test` does not rebuild a binary it does not test: after changing
 `glossa-cli` or `glossa-ui-egui`, build them explicitly before trying them.
 
