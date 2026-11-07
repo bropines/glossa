@@ -130,7 +130,8 @@ error with its message; the next call starts clean.
 - **Limits**, per call: **128 MB** of JavaScript heap and **10 seconds** of
   script time (time spent waiting for `host.fetch` and other host calls does
   not count; the network has its own timeouts), and a native stack deep
-  enough for about 500 nested calls. A script over a limit is stopped
+  enough for thousands of nested calls (several hundred in a debug build
+  made with MSVC). A script over a limit is stopped
   and the call fails with an `other` error: *the script ran for more than
   10 s and was stopped*, *the script used more than 128 MB of memory and was
   stopped*, or *the script recursed too deeply (stack overflow)*. A

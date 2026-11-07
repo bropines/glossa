@@ -66,6 +66,7 @@ image = { version = "0.25", default-features = false, features = ["png", "jpeg",
 
 # -- scripting --------------------------------------------------------------
 rquickjs = { version = "0.14", default-features = false, features = ["std"] }
+stacker = "0.1"
 libloading = "0.9"
 
 # -- ui / platform ----------------------------------------------------------

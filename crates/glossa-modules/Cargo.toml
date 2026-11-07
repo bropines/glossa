@@ -9,7 +9,7 @@ authors.workspace = true
 
 [features]
 default = ["js", "python", "process", "native", "image"]
-js = ["dep:rquickjs"]
+js = ["dep:rquickjs", "dep:stacker"]
 python = []
 # Any program over stdio (`runtime = "process"`) and Java modules (`runtime = "java"`).
 process = []
@@ -30,6 +30,7 @@ parking_lot = { workspace = true, features = ["arc_lock"] }
 base64 = { workspace = true }
 thiserror = { workspace = true }
 rquickjs = { workspace = true, optional = true }
+stacker = { workspace = true, optional = true }
 libloading = { workspace = true, optional = true }
 image = { workspace = true, optional = true }
 md-5 = "0.10"

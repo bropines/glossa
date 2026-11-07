@@ -49,10 +49,18 @@ pub const MEMORY_LIMIT: usize = 128 << 20;
 /// for the host.
 pub const TIME_LIMIT: Duration = Duration::from_secs(10);
 
-/// How much native stack the engine may use: about 500 nested JavaScript
-/// calls (boa allowed 400), well inside the smallest stack a call can run on
-/// (1 MB on the Windows main thread, where modules are probed).
-const STACK_LIMIT: usize = 512 << 10;
+/// Each call runs on a stack of its own, this big, rather than on whatever
+/// thread called it: scripts run on engine workers (8 MB), UI threads (2 MB),
+/// the control API's threads and, when modules are probed, the main thread
+/// (1 MB on Windows). Only the pages a call touches are ever committed, and
+/// host calls (HTTP, the image API) run on it too.
+const CALL_STACK: usize = 8 << 20;
+
+/// How much of that stack the engine may use. QuickJS's frames differ a lot
+/// by compiler (an MSVC frame is several times an Apple clang one), so this
+/// is generous: thousands of nested JavaScript calls on every target (boa
+/// allowed 400), with half the stack left for Rust and the host.
+const STACK_LIMIT: usize = 4 << 20;
 
 /// Common helpers every dialect gets: `console`, `atob`/`btoa`, `__call`.
 pub const PRELUDE: &str = include_str!("prelude.js");
@@ -147,6 +155,12 @@ pub fn with_context<R>(f: impl for<'js> FnOnce(&Ctx<'js>) -> R) -> Result<R, Str
 }
 
 fn with_runtime<R>(prelude: bool, f: impl for<'js> FnOnce(&Ctx<'js>) -> R) -> Result<R, String> {
+    // The runtime is created on the new stack, so QuickJS measures its limit
+    // from there. A panic unwinds back across the switch.
+    stacker::grow(CALL_STACK, move || run_on_this_stack(prelude, f))
+}
+
+fn run_on_this_stack<R>(prelude: bool, f: impl for<'js> FnOnce(&Ctx<'js>) -> R) -> Result<R, String> {
     let rt = Runtime::new().map_err(|e| format!("could not start the JavaScript engine: {e}"))?;
     rt.set_memory_limit(MEMORY_LIMIT);
     rt.set_max_stack_size(STACK_LIMIT);
@@ -762,8 +776,9 @@ mod tests {
         assert!(err.contains("stack overflow"), "{err}");
         let depth = run("var d = 0; function h() { d++; h(); } try { h(); } catch (e) {} d");
         eprintln!("maximum recursion depth: {depth}");
-        // At least the depth boa allowed (400), even in a debug build.
-        assert_eq!(run("function g(n) { return n ? g(n - 1) + 1 : 0; } g(400)"), 400);
+        // Past the depth boa allowed (400) on every target, debug builds
+        // included (MSVC's frames are the largest: about 850 deep there).
+        assert_eq!(run("function g(n) { return n ? g(n - 1) + 1 : 0; } g(600)"), 600);
     }
 
     #[test]
