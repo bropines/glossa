@@ -94,6 +94,8 @@ EOF
         printf '%-14s %-24s %4ss  %s\n' "$slug" "$t" "$(( $(date +%s) - start ))" "$(describe $code)"
         if [ $code -ne 0 ]; then
             sed 's/^/    /' "$home/err.txt" | tail -n 20
+            # Panics and warnings go to the log, not to stderr.
+            [ -f "$home/cache/glossa.log" ] && grep -E "ERROR|WARN|panic" "$home/cache/glossa.log" | tail -n 15 | sed 's/^/    log: /'
             echo "$slug/$t: $(describe $code)" >> "$scratch/failed"
         elif [ ! -s "$file" ]; then
             echo "$slug/$t: no picture written" >> "$scratch/failed"
