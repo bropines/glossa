@@ -46,9 +46,11 @@ pub fn apply(ns_view: NonNull<c_void>, kind: Backdrop, dark: bool) -> Result<App
     let Some(parent) = (unsafe { content.superview() }) else {
         return Err("the window's content view has no superview".into());
     };
-    let identifier = NSString::from_str(IDENTIFIER);
+    // Compared as Rust strings, not with `isEqualToString:`: on macOS 15 the
+    // string may be a Swift one whose BOOL return objc2's debug checks
+    // reject ('B', not 'c'), aborting debug builds.
     let existing: Option<Retained<NSView>> =
-        parent.subviews().iter().find(|v| v.identifier().is_some_and(|id| id.isEqualToString(&identifier)));
+        parent.subviews().iter().find(|v| v.identifier().is_some_and(|id| id.to_string() == IDENTIFIER));
     let material = match kind {
         Backdrop::None => {
             if let Some(old) = existing {
@@ -76,7 +78,7 @@ pub fn apply(ns_view: NonNull<c_void>, kind: Backdrop, dark: bool) -> Result<App
             effect.setAutoresizingMask(
                 NSAutoresizingMaskOptions::ViewWidthSizable | NSAutoresizingMaskOptions::ViewHeightSizable,
             );
-            effect.setIdentifier(Some(&identifier));
+            effect.setIdentifier(Some(&NSString::from_str(IDENTIFIER)));
             insert_keeping_title_bar(&parent, &effect, content);
             effect
         }
@@ -142,7 +144,8 @@ fn bounce_when_shown(window: Retained<NSWindow>, tries: u32) {
 
 fn is_dark(window: &NSWindow) -> bool {
     // SAFETY: AppKit's own constant.
-    window.effectiveAppearance().name().isEqualToString(unsafe { NSAppearanceNameDarkAqua })
+    // As Rust strings: see `apply` on `isEqualToString:`.
+    window.effectiveAppearance().name().to_string() == unsafe { NSAppearanceNameDarkAqua }.to_string()
 }
 
 /// Run `f` on the main thread, at the main queue's next turn or after
