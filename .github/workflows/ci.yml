@@ -42,6 +42,36 @@ jobs:
           components: rustfmt
       - run: cargo fmt --all -- --check
 
+  doc:
+    # Broken intra-doc links and malformed doc comments. Only the
+    # workspace's own crates; the dependencies' docs are not built.
+    name: rustdoc
+    runs-on: ubuntu-latest
+    env:
+      RUSTDOCFLAGS: -D warnings
+    steps:
+      - uses: actions/checkout@v4
+      - name: Linux build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends libgtk-3-dev libasound2-dev
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo doc --workspace --no-deps --document-private-items --locked
+
+  machete:
+    # Dependencies a crate declares but no longer uses: they cost build time
+    # and, in the binaries, size. A false positive goes into the crate's
+    # `[package.metadata.cargo-machete] ignored`.
+    name: unused dependencies
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-machete
+      - run: cargo machete
+
   clippy:
     name: clippy (linux)
     runs-on: ubuntu-latest
@@ -85,6 +115,20 @@ jobs:
           (cd modules/native/example-c && cc -shared -fPIC -std=c99 -I ../../../include -o libshout.so shout.c)
           (cd modules/java/example-upper && ./build.sh)
           target/debug/glossa-cli module test --strict --require-runtimes modules
+      # Every window drawn to a PNG under Xvfb, with Mesa's llvmpipe as the
+      # OpenGL driver: no GPU on the runner, and none needed.
+      - name: Screenshot smoke test
+        run: |
+          sudo apt-get install -y --no-install-recommends xvfb xauth libgl1 libglx-mesa0 libegl1 libgl1-mesa-dri libxkbcommon-x11-0
+          cargo build -p glossa-ui-egui --locked
+          xvfb-run -a -s "-screen 0 1600x1000x24" scripts/screenshot-smoke.sh target/debug/glossa target/screenshots
+      - name: Upload screenshots
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: screenshots-linux
+          path: target/screenshots
+          if-no-files-found: ignore
       # The Tesseract provider against the real program, on a picture the
       # test draws itself.
       - name: Tesseract live test
@@ -106,6 +150,19 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       - run: cargo clippy --workspace --all-targets --locked -- -D warnings
       - run: cargo test --workspace --locked
+      # Every window drawn to a PNG (the runner has a window server). A
+      # debug build: its dependencies are already built for the tests.
+      - name: Screenshot smoke test
+        run: |
+          cargo build -p glossa-ui-egui --locked
+          scripts/screenshot-smoke.sh target/debug/glossa target/screenshots
+      - name: Upload screenshots
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: screenshots-macos
+          path: target/screenshots
+          if-no-files-found: ignore
       # Vision ships with macOS, so the live test can run on the runner; it is
       # informative rather than gating while the runners' Vision behaviour is
       # unproven.
@@ -128,6 +185,23 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       - run: cargo clippy --workspace --all-targets --locked -- -D warnings
       - run: cargo test --workspace --locked
+      # Every window drawn to a PNG. The runner has no GPU and no OpenGL
+      # beyond 1.1, so the software renderer (WARP) draws. A debug build
+      # has a console, so the script sees the program's messages.
+      - name: Screenshot smoke test
+        shell: bash
+        env:
+          GLOSSA_RENDERER: software
+        run: |
+          cargo build -p glossa-ui-egui --locked
+          scripts/screenshot-smoke.sh target/debug/glossa.exe target/screenshots
+      - name: Upload screenshots
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: screenshots-windows
+          path: target/screenshots
+          if-no-files-found: ignore
 
   msrv:
     # The oldest compiler the workspace claims to support: rust-version in

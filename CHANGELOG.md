@@ -53,6 +53,11 @@ the notes of its GitHub release.
   through the new `assets` host call, `host.assetPath` in JavaScript,
   `asset_path` / `assetPath` in the Python and Java SDKs, and
   `GLOSSA_ASSET_*` / `${ASSETS_DIR}` for process modules.
+- `glossa --screenshot WHAT FILE` now saves the picture and exits (it only
+  opened the window before), and fails on a blank picture or a string with
+  no text. `--screenshot-list` names every window it can draw, and
+  `scripts/screenshot-smoke.sh` renders them all in several themes; CI runs
+  it on Linux, macOS and Windows and keeps the pictures.
 
 ### Fixed
 
