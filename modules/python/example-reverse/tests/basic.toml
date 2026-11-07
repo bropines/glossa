@@ -1,0 +1,15 @@
+# Cases for `glossa-cli module test`. Each [[case]] is one call; [case.expect]
+# says what must come back. See docs/modules/testing.md.
+
+[[case]]
+name = "writes the text backwards"
+op = "translate"
+text = "Hello, world"
+to = "ru"
+expect = { text = "dlrow ,olleH" }
+
+[[case]]
+name = "keeps every character"
+op = "translate"
+text = "привет 👋"
+expect = { text = "👋 тевирп" }

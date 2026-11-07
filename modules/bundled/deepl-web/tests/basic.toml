@@ -1,0 +1,31 @@
+# Recorded answers from crates/glossa-engine/src/bundled/tests.rs.
+
+[[case]]
+name = "translates and reads the detected language"
+op = "translate"
+text = "Hello, world"
+from = "auto"
+to = "ru"
+[case.expect]
+text = "Привет, мир"
+detected = "en"
+
+[[case.http]]
+method = "POST"
+url = "https://oneshot-free.www.deepl.com/v1/translate"
+body = '{"translations":[{"detected_source_language":"EN","text":"Привет, мир"}]}'
+
+[[case]]
+name = "a rate limit is typed"
+op = "translate"
+text = "Hello"
+from = "en"
+to = "ru"
+[case.expect]
+error = "rate_limited"
+
+[[case.http]]
+method = "POST"
+url = "https://oneshot-free.www.deepl.com/v1/translate"
+status = 429
+body = '{ "code": 429, "message": "Too many requests. Please slow down and try again later." }'

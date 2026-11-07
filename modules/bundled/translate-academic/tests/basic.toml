@@ -1,0 +1,35 @@
+# Recorded answers from crates/glossa-engine/src/bundled/tests.rs.
+
+[[case]]
+name = "passes entries on as HTML with absolute links"
+op = "dictionary"
+text = "lamp"
+from = "en"
+to = "ru"
+[case.expect]
+headword = "lamp"
+contains = ["лампа", "светильник", 'href="https://translate.academic.ru/light/en/ru/"', 'href="https://other.academic.ru"']
+
+[[case.http]]
+url = "https://translate.academic.ru/lamp/en/ru/"
+body = '''<html><div id="article"><ul class="terms-list">
+<li><p><span class="item">1</span><strong>lamp</strong><span class="sound" data-term="lamp" onClick="x()"></span></p>
+<div class="translate_definition"><div><strong>1.</strong> лампа; <a href="/light/en/ru/">light</a></div></div>
+<p class="src"><a href="https://eng_rus.academic.ru">Англо-русский словарь</a></p></li>
+<li><p><span class="item">2</span><strong>lamp</strong></p>
+<div class="translate_definition"><div>светильник</div></div><p class="src"><a href="//other.academic.ru">Другой словарь</a></p></li>
+</ul></div><script>ads()</script></html>'''
+
+[[case]]
+name = "nothing found is not found"
+op = "dictionary"
+text = "qwzxv"
+from = "en"
+to = "ru"
+[case.expect]
+error = "not_found"
+error_contains = "qwzxv"
+
+[[case.http]]
+url = "https://translate.academic.ru/"
+body = "<html>Ничего не найдено</html>"

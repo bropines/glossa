@@ -1,0 +1,52 @@
+# Recorded answers from crates/glossa-engine/src/bundled/tests.rs.
+
+# The capitalised page is missing, so the module falls back to the lower-case one.
+[[http]]
+url = "https://en.wiktionary.org/api/rest_v1/page/definition/Lamp"
+status = 404
+body = '{"status":404}'
+
+[[http]]
+url = "https://en.wiktionary.org/api/rest_v1/page/definition/lamp"
+body = '''{"en":[{"partOfSpeech":"Noun","language":"English","definitions":[
+    {"definition":""},
+    {"definition":"A device producing <a href=\"/wiki/light\">light</a>.<style>.x{}</style><ol><li>A sub-sense</li></ol>",
+     "examples":["Turn on the <b>lamp</b>."]}]}],
+  "de":[{"partOfSpeech":"Noun","language":"German","definitions":[{"definition":"lamb (in some dialects)"}]}]}'''
+
+[[case]]
+name = "shows the source language section"
+op = "dictionary"
+text = "Lamp"
+from = "en"
+to = "ru"
+exact = false
+[case.expect]
+headword = "lamp"
+contains = ["A device producing light.", "Turn on the lamp."]
+result = { link = "https://en.wiktionary.org/wiki/lamp", explanations = [{ trait = "noun", explains = ["A device producing light."] }] }
+
+[[case]]
+name = "an unknown source shows every language, labelled"
+op = "dictionary"
+text = "lamp"
+from = "auto"
+to = "ru"
+[case.expect]
+headword = "lamp"
+contains = ["English, noun", "German, noun", "lamb (in some dialects)"]
+
+[[case]]
+name = "an unknown word is not found"
+op = "dictionary"
+text = "qwzxv"
+from = "en"
+to = "ru"
+[case.expect]
+error = "not_found"
+error_contains = "qwzxv"
+
+[[case.http]]
+url = "https://en.wiktionary.org/api/rest_v1/page/definition/"
+status = 404
+body = "{}"

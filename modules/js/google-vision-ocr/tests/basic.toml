@@ -1,0 +1,49 @@
+# Cases for `glossa-cli module test`. The answers are recorded, so no key
+# and no network are needed; the key below is an obvious fake. Run against
+# the real service with
+#   glossa-cli module test --live --set api_key=<your key> modules/js/google-vision-ocr
+# See docs/modules/testing.md.
+
+options = { api_key = "test-key" }
+
+[[case]]
+name = "reads two words with their boxes"
+op = "ocr"
+image = { width = 200, height = 60 }
+[case.expect]
+text = "Hello world"
+detected = "en"
+# The layout survives the trip: block > paragraph > line > word.
+result = { blocks = [{ level = "block", children = [{ level = "paragraph", children = [{ level = "line", text = "Hello world", children = [{ text = "Hello" }, { text = "world" }] }] }] }] }
+[[case.http]]
+method = "POST"
+url = "https://vision.googleapis.com/v1/images:annotate"
+body_file = "responses/hello-world.json"
+
+[[case]]
+name = "no key, no call"
+op = "ocr"
+image = { width = 200, height = 60 }
+options = { api_key = "" }
+expect = { error = "missing_credential" }
+
+[[case]]
+name = "a rejected key asks for a new one"
+op = "ocr"
+image = { width = 200, height = 60 }
+expect = { error = "missing_credential" }
+[[case.http]]
+method = "POST"
+url = "https://vision.googleapis.com/v1/images:annotate"
+status = 400
+body = '{"error": {"code": 400, "message": "API key not valid. Please pass a valid API key.", "status": "INVALID_ARGUMENT"}}'
+
+[[case]]
+name = "a picture without text is not found"
+op = "ocr"
+image = { width = 200, height = 60 }
+expect = { error = "not_found" }
+[[case.http]]
+method = "POST"
+url = "https://vision.googleapis.com/v1/images:annotate"
+body = '{"responses": [{}]}'

@@ -1,0 +1,31 @@
+# Recorded answers from crates/glossa-engine/src/bundled/tests.rs.
+
+[[case]]
+name = "translates and reads the detected language"
+op = "translate"
+text = "Hello, world"
+from = "auto"
+to = "ru"
+[case.expect]
+text = "Привет, мир"
+detected = "en"
+
+[[case.http]]
+method = "POST"
+url = "https://webapi.laratranslate.com/translate"
+body = '{"status":200,"content":{"source_language":"en","translation":"Привет, мир"}}'
+
+[[case]]
+name = "an unsupported language is a target language error"
+op = "translate"
+text = "Hello"
+from = "en"
+to = "tt"
+[case.expect]
+error = "target_language"
+
+[[case.http]]
+method = "POST"
+url = "https://webapi.laratranslate.com/translate"
+status = 400
+body = '{"status":400,"error":{"type":"UnsupportedLanguageError","message":"Unsupported language: tt"}}'

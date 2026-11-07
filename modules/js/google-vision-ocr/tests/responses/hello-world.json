@@ -1,0 +1,46 @@
+{
+  "responses": [
+    {
+      "fullTextAnnotation": {
+        "text": "Hello world\n",
+        "pages": [
+          {
+            "property": { "detectedLanguages": [{ "languageCode": "en", "confidence": 1 }] },
+            "width": 200,
+            "height": 60,
+            "blocks": [
+              {
+                "boundingBox": { "vertices": [{ "x": 20, "y": 15 }, { "x": 180, "y": 15 }, { "x": 180, "y": 45 }, { "x": 20, "y": 45 }] },
+                "confidence": 0.98,
+                "paragraphs": [
+                  {
+                    "boundingBox": { "vertices": [{ "x": 20, "y": 15 }, { "x": 180, "y": 15 }, { "x": 180, "y": 45 }, { "x": 20, "y": 45 }] },
+                    "confidence": 0.98,
+                    "words": [
+                      {
+                        "boundingBox": { "vertices": [{ "x": 20, "y": 15 }, { "x": 95, "y": 15 }, { "x": 95, "y": 45 }, { "x": 20, "y": 45 }] },
+                        "confidence": 0.99,
+                        "symbols": [
+                          { "text": "H" }, { "text": "e" }, { "text": "l" }, { "text": "l" },
+                          { "text": "o", "property": { "detectedBreak": { "type": "SPACE" } } }
+                        ]
+                      },
+                      {
+                        "boundingBox": { "vertices": [{ "x": 105, "y": 15 }, { "x": 180, "y": 15 }, { "x": 180, "y": 45 }, { "x": 105, "y": 45 }] },
+                        "confidence": 0.97,
+                        "symbols": [
+                          { "text": "w" }, { "text": "o" }, { "text": "r" }, { "text": "l" },
+                          { "text": "d", "property": { "detectedBreak": { "type": "LINE_BREAK" } } }
+                        ]
+                      }
+                    ]
+                  }
+                ]
+              }
+            ]
+          }
+        ]
+      }
+    }
+  ]
+}

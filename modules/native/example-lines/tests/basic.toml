@@ -1,0 +1,16 @@
+# Cases for `glossa-cli module test`. Build the library and copy it beside
+# module.toml first (see the comment there). The harness draws the picture:
+# dark bars on white, one per line. See docs/modules/testing.md.
+
+[[case]]
+name = "finds three lines"
+op = "ocr"
+image = { width = 320, height = 140, lines = 3 }
+granularity = "lines"
+expect = { text = "line 1\nline 2\nline 3" }
+
+[[case]]
+name = "a blank picture has no text"
+op = "ocr"
+image = { width = 100, height = 40, lines = 0 }
+expect = { error = "not_found" }

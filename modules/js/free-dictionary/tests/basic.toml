@@ -1,0 +1,39 @@
+# Cases for `glossa-cli module test`. The module calls dictionaryapi.dev;
+# the [[case.http]] entries are what the service answered, so the cases run
+# offline. Refresh them with `glossa-cli module test --record` (it writes
+# tests/recorded/) and compare. See docs/modules/testing.md.
+
+# One definition per part of speech, to check the option is honoured.
+options = { max_definitions = 1 }
+
+[[case]]
+name = "looks up a word"
+op = "dictionary"
+text = "Hello"
+from = "en"
+to = "ru"
+[case.expect]
+headword = "hello"
+contains = ["greeting (salutation)", "/həˈləʊ/", "She gave me a cheery hello."]
+result = { pronunciations = [{ region = "UK" }, { region = "US" }], link = "https://en.wiktionary.org/wiki/hello" }
+[[case.http]]
+url = "https://api.dictionaryapi.dev/api/v2/entries/en/hello"
+body_file = "responses/hello.json"
+
+[[case]]
+name = "an unknown word is not found"
+op = "dictionary"
+text = "qwzxv"
+from = "en"
+expect = { error = "not_found", error_contains = "qwzxv" }
+[[case.http]]
+url = "https://api.dictionaryapi.dev/api/v2/entries/en/qwzxv"
+status = 404
+body = '{"title": "No Definitions Found"}'
+
+[[case]]
+name = "only English is offered"
+op = "dictionary"
+text = "Haus"
+from = "de"
+expect = { error = "source_language" }

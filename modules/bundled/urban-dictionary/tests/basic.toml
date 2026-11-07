@@ -1,0 +1,33 @@
+# Recorded answers from crates/glossa-engine/src/bundled/tests.rs.
+
+[[case]]
+name = "sorts by votes and drops link brackets"
+op = "dictionary"
+text = "yeet"
+from = "en"
+to = "ru"
+exact = false
+[case.expect]
+headword = "Yeet"
+contains = ["To throw hard.", "A shout.", "He yeeted the can."]
+result = { explanations = [{ explains = ["To throw hard.", "A shout."] }], examples = [{ source = "He yeeted the can." }] }
+
+[[case.http]]
+url = "https://api.urbandictionary.com/v0/define?term=yeet"
+body = '''{"list":[
+  {"word":"yeet","definition":"A [shout].","example":"","thumbs_up":3,"thumbs_down":1},
+  {"word":"Yeet","definition":"To [throw] hard.","example":"He [yeeted] the can.","thumbs_up":90,"thumbs_down":5}]}'''
+
+[[case]]
+name = "an unknown word is not found"
+op = "dictionary"
+text = "qwzxv"
+from = "en"
+to = "ru"
+[case.expect]
+error = "not_found"
+error_contains = "qwzxv"
+
+[[case.http]]
+url = "https://api.urbandictionary.com/"
+body = '{"list":[]}'

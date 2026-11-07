@@ -1,0 +1,34 @@
+# Recorded answers from crates/glossa-engine/src/bundled/tests.rs.
+
+[[case]]
+name = "reads an entry and the same word in another part of speech"
+op = "dictionary"
+text = "lamp"
+from = "en"
+to = "ru"
+[case.expect]
+headword = "lamp"
+contains = ["a device that uses electricity, oil or gas to produce light", "to hit somebody hard", "He lamped him."]
+result = { pronunciations = [{ region = "UK", symbol = "/læmp/" }, { audio_url = "https://www.oxfordlearnersdictionaries.com/media/us/lamp.mp3" }], explanations = [{ trait = "noun", explains = ["a device that uses electricity, oil or gas to produce light", "an electrical device that produces rays of heat"] }, { trait = "verb", explains = ["to hit somebody hard"] }], examples = [{ source = "to switch on a lamp" }, { source = "a table lamp" }, { source = "He lamped him." }], associations = ["lamplight"] }
+
+[[case.http]]
+url = "https://www.oxfordlearnersdictionaries.com/search/english/?q=lamp"
+body_file = "responses/lamp.html"
+
+[[case.http]]
+url = "https://www.oxfordlearnersdictionaries.com/definition/english/lamp_2"
+body_file = "responses/lamp_2.html"
+
+[[case]]
+name = "spelling suggestions mean not found"
+op = "dictionary"
+text = "lammp"
+from = "en"
+to = "ru"
+[case.expect]
+error = "not_found"
+error_contains = "lammp"
+
+[[case.http]]
+url = "https://www.oxfordlearnersdictionaries.com/"
+body = '<html><div id="spellcheck">Did you mean: <a>lamb</a></div></html>'

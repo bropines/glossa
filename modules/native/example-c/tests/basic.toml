@@ -1,0 +1,9 @@
+# Cases for `glossa-cli module test`. Compile shout.c beside module.toml
+# first (the commands are at the top of shout.c). See docs/modules/testing.md.
+
+[[case]]
+name = "shouts"
+op = "translate"
+text = "quiet please"
+to = "en"
+expect = { text = "QUIET PLEASE" }
