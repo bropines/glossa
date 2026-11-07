@@ -62,16 +62,19 @@ impl Engine {
     }
 
     fn report(&self, assets: &ModuleAssets) -> AssetReport {
-        let statuses = assets.status();
+        // The job first, the files after: a download finishing in between
+        // then shows as running with the files not there yet, never as
+        // finished with them missing.
+        let job = self.inner.asset_jobs.lock().get(&assets.module).map(|j| j.state.lock().clone());
+        let busy = assets.is_busy() || job.as_ref().is_some_and(|j| j.running);
         AssetReport {
             module: assets.module.clone(),
             dir: assets.root.clone(),
+            assets: assets.status(),
             ready: assets.ready(),
-            busy: assets.is_busy()
-                || self.inner.asset_jobs.lock().get(&assets.module).is_some_and(|j| j.state.lock().running),
-            assets: statuses,
+            busy,
             total_size: assets.total_size(),
-            job: self.inner.asset_jobs.lock().get(&assets.module).map(|j| j.state.lock().clone()),
+            job,
         }
     }
 

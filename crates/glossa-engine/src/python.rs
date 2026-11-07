@@ -133,6 +133,9 @@ impl Engine {
     }
 
     fn read_module_python(&self, env: &PythonEnv) -> ModulePython {
+        // The job before the state, as for assets: an install finishing in
+        // between must not show as finished with things still missing.
+        let job = self.job_state(&env.module);
         let (state, missing) = match env.state_now() {
             EnvState::Ready => ("ready", Vec::new()),
             EnvState::Missing(m) => ("missing", m),
@@ -142,7 +145,6 @@ impl Engine {
             }
             EnvState::Impossible(why) => ("impossible", vec![why]),
         };
-        let job = self.job_state(&env.module);
         ModulePython {
             module: env.module.clone(),
             requirements: env.requirements.as_ref().map(|r| r.describe()),
