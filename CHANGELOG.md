@@ -14,6 +14,12 @@ the notes of its GitHub release.
 
 ### Fixed
 
+- macOS: the popup's Replace button did not replace the selected text:
+  clicking the popup made Glossa the active application, so the paste went
+  to Glossa. The focus now goes back to the program the text was selected
+  in before pasting.
+- macOS: the main window's tooltips named the shortcuts Ctrl+Enter, Ctrl+N
+  and Ctrl+I; on macOS they are Cmd+Enter, Cmd+N and Cmd+I.
 - macOS: with the main window open behind other windows, the popup did not
   show (selection translation, the control API) until Glossa was switched
   to with Cmd+Tab. It now shows at once.

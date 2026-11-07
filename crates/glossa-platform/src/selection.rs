@@ -277,6 +277,9 @@ fn wait_until(deadline: Instant, mut done: impl FnMut() -> bool) -> bool {
 pub fn replace_selection(text: &str) -> Result<()> {
     #[cfg(any(windows, target_os = "macos"))]
     {
+        // The popup's Replace button activated Glossa on macOS; the paste
+        // must go to the program the text was selected in.
+        crate::window::give_focus_back(Duration::from_millis(500));
         let mut cb = Clipboard::new()?;
         let snapshot = cb.snapshot();
         cb.set_text(text)?;
