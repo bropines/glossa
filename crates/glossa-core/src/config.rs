@@ -1510,6 +1510,10 @@ pub struct ModulesConfig {
     pub call_timeout_ms: u64,
     /// Module ids switched off.
     pub disabled: Vec<String>,
+    /// Download the files a module declares (models, dictionaries) on its
+    /// first use without asking. Off: the module's options offer the
+    /// download instead.
+    pub auto_download_assets: bool,
 }
 
 impl Default for ModulesConfig {
@@ -1522,6 +1526,7 @@ impl Default for ModulesConfig {
             allow_legacy_scripts: true,
             call_timeout_ms: 30_000,
             disabled: Vec::new(),
+            auto_download_assets: false,
         }
     }
 }

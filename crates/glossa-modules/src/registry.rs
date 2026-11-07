@@ -294,52 +294,51 @@ impl Registry {
 
         Ok(None)
     }
-
 }
 
 /// Start the runtime for a module with a manifest.
 fn instantiate(dir: &Path, manifest: Manifest, ctx: &RuntimeContext) -> Result<Arc<dyn Provider>, Skip> {
-        match manifest.module.runtime {
-            Runtime::Js => runtime_js_glossa(dir, manifest, ctx),
-            Runtime::Qtranslate => runtime_js_qtranslate(dir, ctx),
-            Runtime::Pot => runtime_js_pot(dir, ctx),
-            Runtime::Python => {
-                #[cfg(feature = "python")]
-                {
-                    runtime::python::load(dir, manifest, ctx).map_err(Skip::Failed)
-                }
-                #[cfg(not(feature = "python"))]
-                {
-                    let _ = (dir, manifest);
-                    Err(Skip::Reason("this build has no Python runtime".into()))
-                }
+    match manifest.module.runtime {
+        Runtime::Js => runtime_js_glossa(dir, manifest, ctx),
+        Runtime::Qtranslate => runtime_js_qtranslate(dir, ctx),
+        Runtime::Pot => runtime_js_pot(dir, ctx),
+        Runtime::Python => {
+            #[cfg(feature = "python")]
+            {
+                runtime::python::load(dir, manifest, ctx).map_err(Skip::Failed)
             }
-            Runtime::Process | Runtime::Java => {
-                #[cfg(feature = "process")]
-                {
-                    runtime::process::load(dir, manifest, ctx).map_err(Skip::Failed)
-                }
-                #[cfg(not(feature = "process"))]
-                {
-                    let _ = (dir, manifest);
-                    Err(Skip::Reason("this build has no process runtime".into()))
-                }
-            }
-            Runtime::Native => {
-                if !ctx.allow_native {
-                    return Err(Skip::Reason("native modules are switched off".into()));
-                }
-                #[cfg(feature = "native")]
-                {
-                    runtime::native::load(dir, manifest, ctx).map_err(Skip::Failed)
-                }
-                #[cfg(not(feature = "native"))]
-                {
-                    let _ = (dir, manifest);
-                    Err(Skip::Reason("this build has no native runtime".into()))
-                }
+            #[cfg(not(feature = "python"))]
+            {
+                let _ = (dir, manifest);
+                Err(Skip::Reason("this build has no Python runtime".into()))
             }
         }
+        Runtime::Process | Runtime::Java => {
+            #[cfg(feature = "process")]
+            {
+                runtime::process::load(dir, manifest, ctx).map_err(Skip::Failed)
+            }
+            #[cfg(not(feature = "process"))]
+            {
+                let _ = (dir, manifest);
+                Err(Skip::Reason("this build has no process runtime".into()))
+            }
+        }
+        Runtime::Native => {
+            if !ctx.allow_native {
+                return Err(Skip::Reason("native modules are switched off".into()));
+            }
+            #[cfg(feature = "native")]
+            {
+                runtime::native::load(dir, manifest, ctx).map_err(Skip::Failed)
+            }
+            #[cfg(not(feature = "native"))]
+            {
+                let _ = (dir, manifest);
+                Err(Skip::Reason("this build has no native runtime".into()))
+            }
+        }
+    }
 }
 
 /// Tell a module with assets where they are: `${ASSETS_DIR}` in its command
@@ -358,7 +357,8 @@ fn point_at_assets(manifest: &mut Manifest, assets: &ModuleAssets) {
         Some(crate::manifest::CommandSpec::Line(line)) => line.iter_mut().for_each(expand),
         Some(crate::manifest::CommandSpec::Program(p)) => expand(p),
         Some(crate::manifest::CommandSpec::PerPlatform(p)) => {
-            for line in [&mut p.windows, &mut p.macos, &mut p.linux, &mut p.unix, &mut p.default].into_iter().flatten() {
+            for line in [&mut p.windows, &mut p.macos, &mut p.linux, &mut p.unix, &mut p.default].into_iter().flatten()
+            {
                 line.iter_mut().for_each(expand);
             }
         }
@@ -540,5 +540,4 @@ size = 11
         assert!(r.entry("needs-model").unwrap().assets.as_ref().unwrap().ready());
         std::fs::remove_dir_all(&root).ok();
     }
-
 }

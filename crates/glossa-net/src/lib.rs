@@ -519,11 +519,8 @@ impl Http for HttpClient {
         // The whole transfer may take as long as the request says; the
         // server still has to start answering within the usual timeout, so
         // a dead host is given up on early.
-        let req = agent
-            .configure_request(req)
-            .timeout_global(Some(whole))
-            .timeout_recv_response(Some(self.timeout))
-            .build();
+        let req =
+            agent.configure_request(req).timeout_global(Some(whole)).timeout_recv_response(Some(self.timeout)).build();
         let mut response = agent.run(req).map_err(|e| match e {
             ureq::Error::Timeout(_) => Error::Timeout(self.timeout.as_millis() as u64),
             other => Error::Network(format!("{provider}: {other}")),

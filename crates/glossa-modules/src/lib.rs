@@ -26,8 +26,8 @@ pub mod provider;
 pub mod registry;
 pub mod runtime;
 
-pub use glossa_module_sdk::PROTOCOL_VERSION;
 pub use assets::{AssetState, AssetStatus, ModuleAssets};
+pub use glossa_module_sdk::PROTOCOL_VERSION;
 pub use manifest::{Manifest, Runtime};
 pub use provider::{CancelToken, Host, OptionKind, OptionSpec, OptionValues, Provider};
 pub use registry::{Entry, LoadReport, Origin, Registry, RuntimeContext};

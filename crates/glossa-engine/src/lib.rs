@@ -12,6 +12,7 @@
 //! overwrite a newer one.
 
 #[cfg(feature = "js")]
+pub mod assets;
 pub mod bundled;
 pub mod catalog;
 pub mod dbus;
@@ -43,8 +44,10 @@ use glossa_modules::{
 use glossa_net::HttpClient;
 use parking_lot::{Mutex, RwLock};
 
+pub use assets::{AssetJobState, AssetReport};
 pub use catalog::{LocaleCatalog, LocaleEntry, ThemeCatalog, ThemeEntry};
 pub use export::ExportFormat;
+pub use glossa_modules::assets::{AssetState, AssetStatus, Progress as AssetProgress};
 pub use ocr::{TranslatedBlock, TranslatedLine};
 pub use pipeline::{Pipeline, Progress, TranslateOptions, TranslateReport, TranslationOutcome};
 
@@ -115,6 +118,11 @@ pub enum Event {
     HistoryChanged,
     ConfigChanged,
     ModulesReloaded,
+    /// A module's files changed state: a download started, moved on,
+    /// finished or failed, or they were checked or deleted.
+    AssetsChanged {
+        module: String,
+    },
     /// Someone outside the UI (the control API) asked for an action, with
     /// optional text to act on instead of the selection.
     Action {
@@ -250,6 +258,8 @@ struct Inner {
     /// [`Engine::set_system_dark`]); `None` when it cannot tell.
     system_dark: RwLock<Option<bool>>,
     secret_sync: Mutex<SecretSync>,
+    /// Background downloads of module files, by module id.
+    asset_jobs: Mutex<HashMap<String, assets::AssetJob>>,
 }
 
 /// Something that went wrong at start without stopping it
@@ -353,6 +363,7 @@ impl Engine {
             secret_store: RwLock::new(None),
             system_dark: RwLock::new(None),
             secret_sync: Mutex::new(SecretSync::new()),
+            asset_jobs: Mutex::new(HashMap::new()),
         };
         let engine = Engine { inner: Arc::new(inner) };
         engine.reload_modules();
@@ -509,6 +520,8 @@ impl Engine {
             call_timeout: Duration::from_millis(cfg.modules.call_timeout_ms),
             cache: self.inner.module_cache.clone(),
             cache_dir: paths.cache_dir.join("modules"),
+            models_dir: paths.models_dir(),
+            auto_download_assets: cfg.modules.auto_download_assets,
             disabled: cfg.modules.disabled.clone(),
             preferred_domain: cfg.advanced.preferred_domain.clone(),
             ui_language_code: self.locale().code.clone(),

@@ -128,9 +128,7 @@ impl AssetSpec {
     pub fn validate(&self) -> std::result::Result<(), String> {
         let n = &self.name;
         if !valid_name(n) {
-            return Err(format!(
-                "asset name {n:?} must be letters, digits, '.', '-' or '_', and not start with '.'"
-            ));
+            return Err(format!("asset name {n:?} must be letters, digits, '.', '-' or '_', and not start with '.'"));
         }
         if self.sha256.len() != 64 || !self.sha256.chars().all(|c| c.is_ascii_hexdigit()) {
             return Err(format!("asset {n}: sha256 must be 64 hex digits"));
@@ -166,11 +164,7 @@ fn valid_name(n: &str) -> bool {
 /// The entries of `specs` that apply to `os` / `arch`. Two entries with the
 /// same name may both apply only if one is more specific, which is a
 /// manifest error, so the first one wins and the clash is reported.
-pub fn select<'a>(
-    specs: &'a [AssetSpec],
-    os: &str,
-    arch: &str,
-) -> std::result::Result<Vec<&'a AssetSpec>, String> {
+pub fn select<'a>(specs: &'a [AssetSpec], os: &str, arch: &str) -> std::result::Result<Vec<&'a AssetSpec>, String> {
     let mut out: Vec<&AssetSpec> = Vec::new();
     for s in specs.iter().filter(|s| s.applies_to(os, arch)) {
         if out.iter().any(|o| o.name == s.name) {
@@ -562,9 +556,10 @@ impl ModuleAssets {
             Unpack::None => Ok(sha256_file(&path)?.eq_ignore_ascii_case(&spec.sha256)),
             _ => {
                 let Some(marker) = self.read_marker(&spec.name) else { return Ok(false) };
-                Ok(marker.files.iter().all(|(rel, size)| {
-                    fs::metadata(path.join(rel)).is_ok_and(|m| m.is_file() && m.len() == *size)
-                }))
+                Ok(marker
+                    .files
+                    .iter()
+                    .all(|(rel, size)| fs::metadata(path.join(rel)).is_ok_and(|m| m.is_file() && m.len() == *size)))
             }
         }
     }
@@ -1012,9 +1007,12 @@ mod tests {
         let tmp = Temp::new("resume");
         let a = assets(&tmp, &one("\"https://dl.test/data.bin\"", HELLO_SHA, HELLO.len(), ""));
         // The connection drops after six bytes, then the server resumes.
-        let http = MockHttp::new()
-            .on_once(Method::Get, "https://dl.test/", 200, "hello ")
-            .on_once(Method::Get, "https://dl.test/", 206, "world");
+        let http = MockHttp::new().on_once(Method::Get, "https://dl.test/", 200, "hello ").on_once(
+            Method::Get,
+            "https://dl.test/",
+            206,
+            "world",
+        );
         let err = a.download(&http, &CancelToken::new(), &|_| {}).unwrap_err();
         assert!(matches!(err, Error::Network(ref m) if m.contains("6 of 11")), "{err}");
         assert_eq!(a.status()[0].state, AssetState::Partial { have: 6 });
@@ -1186,10 +1184,9 @@ mod tests {
 
     #[test]
     fn archives_cannot_write_outside_their_folder() {
-        for (kind, bytes) in [
-            ("zip", zip_bytes(&[("../escape.txt", b"x")])),
-            ("tar.gz", tar_gz_bytes(&[("../escape.txt", b"x")])),
-        ] {
+        for (kind, bytes) in
+            [("zip", zip_bytes(&[("../escape.txt", b"x")])), ("tar.gz", tar_gz_bytes(&[("../escape.txt", b"x")]))]
+        {
             let tmp = Temp::new(&format!("escape-{}", kind.replace('.', "")));
             let toml = one("\"https://dl.test/a\"", &sha_hex(&bytes), bytes.len(), &format!("unpack = \"{kind}\""));
             let a = assets(&tmp, &toml);
@@ -1242,7 +1239,9 @@ mod tests {
         let g = gate(&tmp, false, made.clone());
         assert_eq!(g.info().id, "m");
         match translate(&g, &MockHttp::new()).unwrap_err() {
-            Error::AssetsMissing { module, missing } => assert_eq!((module.as_str(), missing), ("m", vec!["data.bin".into()])),
+            Error::AssetsMissing { module, missing } => {
+                assert_eq!((module.as_str(), missing), ("m", vec!["data.bin".into()]))
+            }
             other => panic!("expected AssetsMissing, got {other:?}"),
         }
         assert_eq!(made.load(std::sync::atomic::Ordering::SeqCst), 0);
