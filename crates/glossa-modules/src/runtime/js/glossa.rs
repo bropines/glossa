@@ -367,6 +367,95 @@ mod tests {
         });
     }
 
+    /// Every web-standard name Glossa provides can be declared again by a
+    /// module, with `const` or `class`, as in a browser.
+    #[test]
+    fn modules_may_declare_the_provided_web_names() {
+        let names = [
+            "URL",
+            "URLSearchParams",
+            "Headers",
+            "AbortController",
+            "queueMicrotask",
+            "fetch",
+            "console",
+            "btoa",
+            "atob",
+            "TextEncoder",
+            "TextDecoder",
+            "setTimeout",
+            "clearTimeout",
+            "escape",
+            "unescape",
+        ];
+        let http = MockHttp::new();
+        let opts = OptionValues::new();
+        for name in names {
+            for decl in [format!("const {name} = 'mine';"), format!("class {name} {{}}")] {
+                let source = format!("{decl}\nfunction translate() {{ return typeof {name}; }}");
+                let p = provider(&source, "");
+                with_test_host(&http, &opts, |host| {
+                    let t = p
+                        .translate(host, &TranslateRequest::new("x", LangPair::new(LangId::ENGLISH, LangId::RUSSIAN)))
+                        .unwrap_or_else(|e| panic!("{decl}: {e}"));
+                    let want = if decl.starts_with("const") { "string" } else { "function" };
+                    assert_eq!(t.text, want, "{decl}");
+                });
+            }
+        }
+    }
+
+    #[test]
+    fn fetch_keeps_working_when_a_module_shadows_its_helpers() {
+        let p = provider(
+            r#"
+            class URL {}
+            class Headers {}
+            const URLSearchParams = null, btoa = null, atob = null;
+            async function translate(req) {
+                const r = await fetch("https://api.test/t", { method: "POST", body: "x", headers: { A: "1" } });
+                const h = r.headers;
+                return (await r.json()).out + " " + (h.get("content-type") !== null);
+            }
+            "#,
+            "\"api.test\"",
+        );
+        let http = MockHttp::new().on(Method::Post, "https://api.test/t", 200, r#"{"out":"ok"}"#);
+        let opts = OptionValues::new();
+        with_test_host(&http, &opts, |host| {
+            let t = p
+                .translate(host, &TranslateRequest::new("x", LangPair::new(LangId::ENGLISH, LangId::RUSSIAN)))
+                .unwrap();
+            assert_eq!(t.text, "ok true");
+        });
+    }
+
+    #[test]
+    fn header_names_that_look_like_object_keys_are_plain_names() {
+        let p = provider(
+            r#"
+            function translate() {
+                const h = new Headers();
+                const out = [h.has("constructor"), h.get("toString"), h.has("__proto__")];
+                h.set("Constructor", "a");
+                h.append("__proto__", "b");
+                h.set("toString", "c");
+                out.push(h.get("constructor"), h.get("__proto__"), h.get("tostring"), [...h.keys()].join(","));
+                return out.join("|");
+            }
+            "#,
+            "",
+        );
+        let http = MockHttp::new();
+        let opts = OptionValues::new();
+        with_test_host(&http, &opts, |host| {
+            let t = p
+                .translate(host, &TranslateRequest::new("x", LangPair::new(LangId::ENGLISH, LangId::RUSSIAN)))
+                .unwrap();
+            assert_eq!(t.text, "false||false|a|b|c|__proto__,constructor,tostring");
+        });
+    }
+
     #[test]
     fn missing_entry_points_are_unsupported_not_crashes() {
         let p = provider("function translate() { return 'x'; }", "");

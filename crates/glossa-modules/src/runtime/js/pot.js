@@ -43,7 +43,9 @@ function __formEncode(obj) {
 }
 
 /** Tauri v1's `fetch`: resolves with {url, status, ok, headers, rawHeaders, data}. */
-async function fetch(url, options) {
+// A global property rather than a declaration, so a plugin may declare its
+// own `fetch` (see web.js).
+globalThis.fetch = async function fetch(url, options) {
   options = options || {};
   var method = String(options.method || "GET").toUpperCase();
   var headers = {};
@@ -102,7 +104,10 @@ async function fetch(url, options) {
     rawHeaders: rawHeaders,
     data: data
   };
-}
+};
+// What utils.http.fetch hands out, fixed now: a plugin's own `fetch` (a
+// declaration replaces the global one) must not stand in for pot's.
+var __potFetch = globalThis.fetch;
 
 /** The part of CryptoJS plugins use: hashes, HMACs, and the encoders. */
 var CryptoJS = (function () {
@@ -168,7 +173,7 @@ function __potOptions(config, detect) {
     detect: detect,
     setResult: function (value) { __potResult = value; },
     utils: {
-      http: { fetch: fetch, Body: Body, ResponseType: ResponseType },
+      http: { fetch: __potFetch, Body: Body, ResponseType: ResponseType },
       CryptoJS: CryptoJS,
       readTextFile: async function (path) { return __call("local:read_text", { path: path }); },
       readBinaryFile: async function (path) {

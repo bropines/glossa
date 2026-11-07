@@ -1,14 +1,19 @@
 // Small stand-ins for the web APIs npm libraries and pot-app plugins expect:
-// URLSearchParams, URL, Headers, AbortController, queueMicrotask. Evaluated for Glossa
-// modules and pot-app plugins (which ran in a browser view), not for classic
-// scripts. These cover what request-building code uses; they are not full
-// WHATWG implementations (no IDNA, no special-scheme quirks).
+// URLSearchParams, URL, Headers, AbortController, queueMicrotask. Evaluated
+// for Glossa modules and pot-app plugins (which ran in a browser view), not
+// for classic scripts. These cover what request-building code uses; they are
+// not full WHATWG implementations (no IDNA, no special-scheme quirks).
+//
+// Each is a plain property of the global object, as in a browser, not a
+// top-level `var` or `function`: those would be non-configurable, and a
+// script's own top-level `const URL = …` or `class Headers {}` would then
+// fail with a redeclaration error.
 
 if (typeof queueMicrotask !== "function") {
-  var queueMicrotask = function (fn) { Promise.resolve().then(fn); };
+  globalThis.queueMicrotask = function queueMicrotask(fn) { Promise.resolve().then(fn); };
 }
 
-var URLSearchParams = (function () {
+if (typeof URLSearchParams !== "function") globalThis.URLSearchParams = (function () {
   function decode(s) { return decodeURIComponent(String(s).replace(/\+/g, " ")); }
   function encode(s) {
     return encodeURIComponent(String(s)).replace(/%20/g, "+").replace(/[!'()~]/g, function (c) {
@@ -61,7 +66,7 @@ var URLSearchParams = (function () {
   return USP;
 })();
 
-var URL = (function () {
+if (typeof URL !== "function") globalThis.URL = (function () {
   var RE = /^([a-zA-Z][a-zA-Z0-9+.-]*:)(?:\/\/(?:([^:@\/?#]*)(?::([^@\/?#]*))?@)?(\[[^\]]*\]|[^:\/?#]*)(?::(\d*))?)?([^?#]*)(\?[^#]*)?(#.*)?$/;
   var DEFAULT_PORT = { "http:": "80", "https:": "443", "ws:": "80", "wss:": "443", "ftp:": "21" };
   function normalize(path) {
@@ -101,7 +106,7 @@ var URL = (function () {
     this.pathname = hier ? normalize(m[6] || "/") || "/" : m[6];
     this._search = m[7] && m[7] !== "?" ? m[7] : "";
     this.hash = m[8] && m[8] !== "#" ? m[8] : "";
-    this.searchParams = new URLSearchParams(this._search);
+    this.searchParams = new globalThis.URLSearchParams(this._search);
     this.searchParams._url = this;
   }
   URLCtor.prototype = {
@@ -117,7 +122,7 @@ var URL = (function () {
       set: function (v) {
         v = String(v);
         this._search = v && v !== "?" ? (v.charAt(0) === "?" ? v : "?" + v) : "";
-        this.searchParams = new URLSearchParams(this._search);
+        this.searchParams = new globalThis.URLSearchParams(this._search);
         this.searchParams._url = this;
       }
     },
@@ -132,9 +137,11 @@ var URL = (function () {
   return URLCtor;
 })();
 
-var Headers = (function () {
+if (typeof Headers !== "function") globalThis.Headers = (function () {
   function H(init) {
-    this._map = {};
+    // No prototype: header names such as "constructor" or "__proto__" are
+    // plain keys here.
+    this._map = Object.create(null);
     if (!init) return;
     if (init instanceof H) init = init._map;
     if (typeof init[Symbol.iterator] === "function") {
@@ -161,7 +168,7 @@ var Headers = (function () {
 // Requests finish synchronously, so there is never anything to abort; the
 // controller exists because libraries create one and pass its signal along.
 if (typeof AbortController !== "function") {
-  var AbortController = function () {
+  globalThis.AbortController = function AbortController() {
     this.signal = { aborted: false, reason: undefined, onabort: null,
       addEventListener: function () {}, removeEventListener: function () {},
       throwIfAborted: function () { if (this.aborted) throw this.reason; } };

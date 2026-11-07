@@ -121,7 +121,10 @@ error with its message; the next call starts clean.
   same network permissions; the request runs synchronously and the promise is
   already settled), `Headers`, `URL`, `URLSearchParams` and an
   `AbortController` that never aborts. They cover what request-building code
-  uses, not every corner of the web standards.
+  uses, not every corner of the web standards. Like the browser's, these and
+  the globals above are ordinary properties of the global object, so a
+  module may declare its own `fetch`, `URL` or `console` with `const` or
+  `class`.
 - **Not available**: the DOM, `XMLHttpRequest`, Node's `require` and built-in
   modules (`fs`, `crypto`, `buffer`), timers that wait, the file system.
 - **Limits**, per call: **128 MB** of JavaScript heap and **10 seconds** of
@@ -179,7 +182,7 @@ npx esbuild src/index.js --bundle --format=cjs --platform=neutral   --main-field
   are reachable. Its response body is text; pass `binary: true` in the
   options when you need the exact bytes from `arrayBuffer()`.
 - Each call starts fresh, so the bundle runs its top-level code every time.
-  A script over 16 KB is compiled once, on its first call, and kept as
+  A script over 16 KB is compiled once, when the module loads, and kept as
   bytecode (about one and a half times the minified size) while the module
   is loaded; smaller scripts are parsed each call and keep nothing. Size is
   still speed: `--minify`, and prefer small libraries. A 170 KB bundle

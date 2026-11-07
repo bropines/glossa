@@ -39,7 +39,7 @@ const MAX_HOPS: usize = 8;
 
 pub struct LegacyScript {
     /// The installation's own `Common.js`, when there is one.
-    pub common: Option<engine::Script>,
+    pub common: Option<Arc<engine::Script>>,
     pub service: engine::Script,
     /// Folder name, for ids and messages.
     pub folder: String,
@@ -63,10 +63,9 @@ impl LegacyScript {
         let common = [dir.join("Common.js"), dir.join("..").join("Common.js"), dir.join("../..").join("Common.js")]
             .into_iter()
             .find(|p| p.is_file())
-            .map(|p| read_text(&p))
+            .map(|p| shared_common(&p))
             .transpose()?;
         let folder = dir.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_else(|| "service".into());
-        let common = common.map(|c| engine::Script::new("Common.js", c));
         let service = engine::Script::new(format!("{folder}/Service.js"), service);
         Ok(LegacyScript { common, service, folder })
     }
@@ -698,6 +697,27 @@ fn slug(name: &str) -> String {
     }
 }
 
+/// The installation's `Common.js`, one copy (and, once compiled, one
+/// bytecode) for all of its services rather than one per service. The table
+/// holds weak references, so the script goes when the last service using it
+/// is unloaded; a changed file (a reload after editing) gets a fresh entry.
+fn shared_common(path: &Path) -> Result<Arc<engine::Script>, String> {
+    static TABLE: parking_lot::Mutex<Vec<(std::path::PathBuf, std::sync::Weak<engine::Script>)>> =
+        parking_lot::Mutex::new(Vec::new());
+    let text = read_text(path)?;
+    let key = path.canonicalize().unwrap_or_else(|_| path.to_owned());
+    let mut table = TABLE.lock();
+    table.retain(|(_, weak)| weak.strong_count() > 0);
+    if let Some(script) = table.iter().filter(|(p, _)| *p == key).find_map(|(_, weak)| weak.upgrade()) {
+        if script.source == text {
+            return Ok(script);
+        }
+    }
+    let script = Arc::new(engine::Script::new("Common.js", text));
+    table.push((key, Arc::downgrade(&script)));
+    Ok(script)
+}
+
 fn read_text(path: &Path) -> Result<String, String> {
     let bytes = std::fs::read(path).map_err(|e| format!("{}: {e}", path.display()))?;
     // Classic scripts are usually UTF-8, sometimes with a BOM, occasionally
@@ -872,6 +892,28 @@ mod tests {
             let msg = err.to_string();
             assert!(msg.contains("serviceTranslateResponse") && msg.contains("undefinedFunction"), "{msg}");
         });
+    }
+
+    #[test]
+    fn services_of_one_installation_share_its_common_js() {
+        let root = std::env::temp_dir().join(format!("glossa-classic-common-{}", std::process::id()));
+        let service = |name: &str| {
+            let dir = root.join("Services").join(name);
+            std::fs::create_dir_all(&dir).unwrap();
+            std::fs::write(dir.join("Service.js"), "function serviceHeader() { return {}; }").unwrap();
+            dir
+        };
+        let (a, b) = (service("A"), service("B"));
+        std::fs::write(root.join("Common.js"), "var shared = 1;").unwrap();
+        let sa = LegacyScript::from_dir(&a).unwrap();
+        let sb = LegacyScript::from_dir(&b).unwrap();
+        assert!(Arc::ptr_eq(sa.common.as_ref().unwrap(), sb.common.as_ref().unwrap()));
+        // Edited on disk: a reload reads the new text instead of reusing.
+        std::fs::write(root.join("Common.js"), "var shared = 2;").unwrap();
+        let sc = LegacyScript::from_dir(&a).unwrap();
+        assert_eq!(sc.common.as_ref().unwrap().source, "var shared = 2;");
+        assert!(!Arc::ptr_eq(sa.common.as_ref().unwrap(), sc.common.as_ref().unwrap()));
+        std::fs::remove_dir_all(&root).ok();
     }
 
     #[test]

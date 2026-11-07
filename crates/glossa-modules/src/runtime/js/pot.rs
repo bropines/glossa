@@ -67,6 +67,7 @@ impl PotPlugin {
         let info: Info =
             serde_json::from_str(info_text.trim_start_matches('\u{feff}')).map_err(|e| format!("info.json: {e}"))?;
         let main = std::fs::read_to_string(dir.join("main.js")).map_err(|e| format!("main.js: {e}"))?;
+        let main = engine::Script::new("main.js", main.trim_start_matches('\u{feff}'));
         let kind = probe_kind(&main)?;
 
         let mut language_map = std::collections::BTreeMap::new();
@@ -113,7 +114,6 @@ impl PotPlugin {
             assets_dir: None,
         };
         manifest.validate()?;
-        let main = engine::Script::new("main.js", main.trim_start_matches('\u{feff}'));
         Ok(PotPlugin { dir: dir.to_owned(), main, manifest, kind })
     }
 }
@@ -146,13 +146,14 @@ fn need_to_option(n: &Need) -> OptionSpec {
     spec
 }
 
-/// Which entry point the plugin defines.
-fn probe_kind(main: &str) -> Result<PotKind, String> {
+/// Which entry point the plugin defines. Evaluating `main` here also
+/// compiles it, once, if it is large enough to be kept compiled.
+fn probe_kind(main: &engine::Script) -> Result<PotKind, String> {
     engine::with_context(|ctx| {
         engine::eval(ctx, "var __potOsType = 'Windows_NT';", "os")?;
         engine::shared::WEB.eval(ctx)?;
         engine::shared::POT.eval(ctx)?;
-        engine::eval(ctx, main, "main.js")?;
+        main.eval(ctx)?;
         if engine::has_function(ctx, "translate") {
             Ok(PotKind::Translate)
         } else if engine::has_function(ctx, "recognize") {
@@ -396,7 +397,11 @@ mod tests {
     }"#;
 
     fn plugin_dir(main: &str) -> PathBuf {
-        let dir = std::env::temp_dir().join(format!("glossa-pot-{}-{}", std::process::id(), main.len()));
+        // One folder per call: tests run in parallel, and two plugins of the
+        // same length used to share (and overwrite) a folder.
+        static NEXT: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+        let n = NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let dir = std::env::temp_dir().join(format!("glossa-pot-{}-{n}-{}", std::process::id(), main.len()));
         std::fs::create_dir_all(&dir).unwrap();
         std::fs::write(dir.join("info.json"), INFO).unwrap();
         std::fs::write(dir.join("main.js"), main).unwrap();
@@ -478,6 +483,29 @@ mod tests {
             assert_eq!(parts[1], "ungWv48Bz+pBQUDeXa4iI7ADYaOWF3qctBD/YfIAFa0=");
             assert_eq!(parts[2], "104152c5bfdca07bc633eebd46199f0255c9f49d");
             assert_eq!(parts[3], "0L/RgNC40LLQtdGC");
+        });
+    }
+
+    #[test]
+    fn a_plugin_may_declare_fetch_and_the_web_names_itself() {
+        let main = r#"
+            const fetch = "mine";
+            class URL {}
+            class URLSearchParams {}
+            async function translate(text, from, to, options) {
+                const { http } = options.utils;
+                const r = await http.fetch("https://pot.test/t", { method: "GET" });
+                return r.data.out + " " + typeof fetch + " " + typeof Headers;
+            }
+        "#;
+        let p = provider(main);
+        let http = MockHttp::new().on(Method::Get, "https://pot.test/t", 200, r#"{"out":"ok"}"#);
+        let opts = OptionValues::new();
+        with_test_host(&http, &opts, |host| {
+            let t = p
+                .translate(host, &TranslateRequest::new("x", LangPair::new(LangId::ENGLISH, LangId::RUSSIAN)))
+                .unwrap();
+            assert_eq!(t.text, "ok string function");
         });
     }
 

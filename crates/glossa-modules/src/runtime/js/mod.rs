@@ -28,7 +28,7 @@ use crate::registry::RuntimeContext;
 
 pub fn load_glossa(dir: &Path, manifest: Manifest, ctx: &RuntimeContext) -> Result<Arc<dyn Provider>, String> {
     let script = glossa::GlossaScript::from_dir(dir, &manifest.module.entry)?;
-    engine::check_syntax(&script.script.source, &script.script.name)?;
+    script.script.check()?;
     Ok(Arc::new(ProtocolProvider::new(
         manifest,
         glossa::GlossaTransport { script: Arc::new(script) },

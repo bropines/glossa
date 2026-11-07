@@ -167,23 +167,23 @@ var host = {
  * its charset; pass `binary: true` (a Glossa extension) to get exact bytes
  * from `arrayBuffer()`. Only hosts in `permissions.network` are reachable.
  */
-function fetch(input, init) {
+globalThis.fetch = function fetch(input, init) {
   try {
     init = init || {};
-    var isRequest = input && typeof input === "object" && !(input instanceof URL);
+    var isRequest = input && typeof input === "object" && !(input instanceof globalThis.URL);
     var url = isRequest ? input.url : String(input);
-    var headers = new Headers(init.headers || (isRequest ? input.headers : undefined));
+    var headers = new globalThis.Headers(init.headers || (isRequest ? input.headers : undefined));
     var req = { method: String(init.method || (isRequest && input.method) || "GET").toUpperCase(), url: url, headers: {} };
     var body = init.body;
     if (body != null) {
-      if (body instanceof URLSearchParams) {
+      if (body instanceof globalThis.URLSearchParams) {
         if (!headers.has("content-type")) headers.set("content-type", "application/x-www-form-urlencoded;charset=UTF-8");
         req.body = body.toString();
       } else if (body instanceof ArrayBuffer || ArrayBuffer.isView(body)) {
         var bytes = new Uint8Array(body instanceof ArrayBuffer ? body : body.buffer, body.byteOffset || 0, body.byteLength);
         var bin = "";
         for (var i = 0; i < bytes.length; i++) bin += String.fromCharCode(bytes[i]);
-        req.body_base64 = btoa(bin);
+        req.body_base64 = globalThis.btoa(bin);
       } else {
         if (!headers.has("content-type")) headers.set("content-type", "text/plain;charset=UTF-8");
         req.body = String(body);
@@ -196,7 +196,7 @@ function fetch(input, init) {
   } catch (e) {
     return Promise.reject(e);
   }
-}
+};
 
 function __Response(r, url, binary) {
   this._r = r;
@@ -204,7 +204,7 @@ function __Response(r, url, binary) {
   this.status = r.status;
   this.ok = r.status >= 200 && r.status < 300;
   this.statusText = "";
-  this.headers = new Headers(r.headers || {});
+  this.headers = new globalThis.Headers(r.headers || {});
   this.url = url;
   this.redirected = false;
   this.type = "basic";
@@ -213,7 +213,7 @@ function __Response(r, url, binary) {
 __Response.prototype = {
   _bytes: function () {
     if (!this._binary) return new Uint8Array(__utf8Bytes(this._r.body || ""));
-    var bin = atob(this._r.body_base64 || "");
+    var bin = globalThis.atob(this._r.body_base64 || "");
     var out = new Uint8Array(bin.length);
     for (var i = 0; i < bin.length; i++) out[i] = bin.charCodeAt(i);
     return out;

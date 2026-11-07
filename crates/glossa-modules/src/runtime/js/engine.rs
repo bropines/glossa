@@ -310,13 +310,27 @@ impl Script {
         Script { always_compile: true, ..Script::new(name, source) }
     }
 
+    fn keeps_bytecode(&self) -> bool {
+        self.always_compile || self.source.len() >= COMPILE_ABOVE
+    }
+
+    /// Check the syntax now (when the module loads) rather than on first
+    /// use. The compile this takes is kept for a script that is kept
+    /// compiled, so it is not done again on the first call.
+    pub fn check(&self) -> Result<(), String> {
+        if self.bytecode.get().is_some() {
+            return Ok(());
+        }
+        let bytecode = compile(&self.source, &self.name)?;
+        let _ = self.bytecode.set(self.keeps_bytecode().then_some(bytecode));
+        Ok(())
+    }
+
     /// Evaluate the script in `ctx`, from bytecode when it is large.
     pub fn eval<'js>(&self, ctx: &Ctx<'js>) -> Result<Value<'js>, String> {
         let bytecode = self.bytecode.get_or_init(|| {
             // A failed compile is left to `eval` below, which reports it.
-            (self.always_compile || self.source.len() >= COMPILE_ABOVE)
-                .then(|| compile(&self.source, &self.name).ok())
-                .flatten()
+            self.keeps_bytecode().then(|| compile(&self.source, &self.name).ok()).flatten()
         });
         match bytecode {
             Some(b) => eval_compiled(ctx, b, &self.name),

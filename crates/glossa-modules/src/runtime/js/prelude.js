@@ -22,7 +22,7 @@ if (typeof String.prototype.substr !== "function") {
 // Annex B escape/unescape. Old crypto code (CryptoJS's UTF-8 codec among it)
 // converts strings with `unescape(encodeURIComponent(s))`.
 if (typeof escape !== "function") {
-  var escape = function (s) {
+  globalThis.escape = function escape(s) {
     s = String(s);
     var out = "";
     for (var i = 0; i < s.length; i++) {
@@ -35,7 +35,7 @@ if (typeof escape !== "function") {
   };
 }
 if (typeof unescape !== "function") {
-  var unescape = function (s) {
+  globalThis.unescape = function unescape(s) {
     return String(s).replace(/%u([0-9A-Fa-f]{4})|%([0-9A-Fa-f]{2})/g, function (m, u, b) {
       return String.fromCharCode(parseInt(u || b, 16));
     });
@@ -62,7 +62,9 @@ function __call(method, params) {
   return reply ? reply.result : null;
 }
 
-var console = (function () {
+// The web-standard names below are global properties, not declarations, so a
+// script may declare its own (see web.js).
+globalThis.console = (function () {
   function join(args) {
     var parts = [];
     for (var i = 0; i < args.length; i++) {
@@ -83,8 +85,8 @@ var console = (function () {
   };
 })();
 
-function btoa(s) { return __b64encode(String(s)); }
-function atob(s) { return __b64decode(String(s)); }
+globalThis.btoa = function btoa(s) { return __b64encode(String(s)); };
+globalThis.atob = function atob(s) { return __b64decode(String(s)); };
 
 /** UTF-8 bytes of a string, as an array of numbers. */
 function __utf8Bytes(str) {
@@ -138,17 +140,17 @@ function __hexToBytes(hex) {
 }
 
 if (typeof TextEncoder === "undefined") {
-  var TextEncoder = function () {};
+  globalThis.TextEncoder = function TextEncoder() {};
   TextEncoder.prototype.encode = function (s) { return new Uint8Array(__utf8Bytes(s)); };
-  var TextDecoder = function () {};
+  globalThis.TextDecoder = function TextDecoder() {};
   TextDecoder.prototype.decode = function (b) { return __utf8Decode(Array.prototype.slice.call(b || [])); };
 }
 
-function setTimeout(fn) {
+globalThis.setTimeout = function setTimeout(fn) {
   // There is no event loop between calls; run the callback on the next
   // microtask so code that defers work still makes progress.
   var args = Array.prototype.slice.call(arguments, 2);
   Promise.resolve().then(function () { fn.apply(null, args); });
   return 0;
-}
-function clearTimeout() {}
+};
+globalThis.clearTimeout = function clearTimeout() {};
