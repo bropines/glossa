@@ -24,7 +24,8 @@
 //! file written for the old program no longer leaves Glossa's newer strings
 //! in English.
 
-use std::collections::HashMap;
+use std::collections::{BTreeSet, HashMap};
+use std::sync::Mutex;
 
 use serde::Deserialize;
 use serde_json::Value;
@@ -130,7 +131,10 @@ impl Locale {
         if let Some(s) = self.strings.get(key) {
             return s;
         }
-        english(key).unwrap_or(key)
+        english(key).unwrap_or_else(|| {
+            note_missing(key);
+            key
+        })
     }
 
     /// `get`, with `%s` replaced by `arg` — the classic placeholder.
@@ -1181,6 +1185,23 @@ pub static STRINGS: &[(&str, &str, Option<&str>)] = &[
     ("limitation.no_display", "No graphical session was found (neither WAYLAND_DISPLAY nor DISPLAY is set): clipboard, hotkeys and screen capture are unavailable.", None),
 ];
 
+/// Keys asked for that no locale, English included, has. A lookup that
+/// misses shows the bare key; the screenshot smoke test reads this list to
+/// fail on such a string even where no one would spot it in a picture.
+static MISSING: Mutex<BTreeSet<String>> = Mutex::new(BTreeSet::new());
+
+fn note_missing(key: &str) {
+    let mut missing = MISSING.lock().unwrap_or_else(|e| e.into_inner());
+    if !missing.contains(key) {
+        missing.insert(key.to_owned());
+    }
+}
+
+/// Every key looked up so far that had no text in any language, sorted.
+pub fn missing_keys() -> Vec<String> {
+    MISSING.lock().unwrap_or_else(|e| e.into_inner()).iter().cloned().collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1360,5 +1381,158 @@ mod tests {
         }
         assert!(Locale::builtin("ru-RU").is_some(), "a regional code finds its base pack");
         assert!(Locale::builtin("xx").is_none());
+    }
+
+    #[test]
+    fn a_key_no_language_has_is_recorded_as_missing() {
+        // The list is process-wide and other tests look keys up in
+        // parallel, so these keys are unique to this test.
+        let key = "test.missing_keys.nowhere";
+        assert_eq!(Locale::english().get(key), key, "shown bare");
+        let ru = Locale::builtin("ru").unwrap();
+        assert_eq!(ru.get("test.missing_keys.nowhere_ru"), "test.missing_keys.nowhere_ru");
+        let missing = missing_keys();
+        assert!(missing.iter().any(|k| k == key), "{missing:?}");
+        assert!(missing.iter().any(|k| k == "test.missing_keys.nowhere_ru"), "missed through a pack too");
+        // Asked twice, listed once.
+        Locale::english().get(key);
+        assert_eq!(missing_keys().iter().filter(|k| *k == key).count(), 1);
+        // Through the formatting helpers as well.
+        Locale::english().fmt("test.missing_keys.fmt", "x");
+        Locale::english().fmt_args("test.missing_keys.fmt_args", &["x"]);
+        let missing = missing_keys();
+        assert!(missing.iter().any(|k| k == "test.missing_keys.fmt"));
+        assert!(missing.iter().any(|k| k == "test.missing_keys.fmt_args"));
+        let mut sorted = missing.clone();
+        sorted.sort();
+        assert_eq!(missing, sorted, "sorted");
+    }
+
+    #[test]
+    fn keys_english_or_the_locale_has_are_not_recorded() {
+        Locale::english().get("main.translate");
+        // A key only a user's pack has (no English text) is found, so it is
+        // not missing either.
+        let own = Locale::parse(r#"{"code":"xx","strings":{"test.missing_keys.own":"mine"}}"#).unwrap();
+        assert_eq!(own.get("test.missing_keys.own"), "mine");
+        let missing = missing_keys();
+        assert!(!missing.iter().any(|k| k == "main.translate"), "{missing:?}");
+        assert!(!missing.iter().any(|k| k == "test.missing_keys.own"));
+        // `has` is a question, not a lookup to record.
+        assert!(!Locale::english().has("test.missing_keys.has"));
+        assert!(!missing_keys().iter().any(|k| k == "test.missing_keys.has"));
+    }
+
+    #[test]
+    fn fmt_fills_only_the_first_placeholder_and_leaves_text_without_one_alone() {
+        let l = Locale::parse(r#"{"code":"xx","strings":{"a":"%s and %s","b":"plain","c":"100%"}}"#).unwrap();
+        assert_eq!(l.fmt("a", "x"), "x and %s");
+        assert_eq!(l.fmt("b", "x"), "plain");
+        assert_eq!(l.fmt("c", "x"), "100%", "a lone percent sign is not a placeholder");
+        // The argument is inserted verbatim, never expanded.
+        assert_eq!(l.fmt("a", "%s"), "%s and %s");
+        assert_eq!(l.fmt_args("a", &[]), "%s and %s", "no arguments: placeholders stay visible");
+        assert_eq!(l.fmt_args("b", &["x"]), "plain");
+        assert_eq!(l.fmt_args("a", &["", "y"]), " and y", "an empty argument still uses up its slot");
+    }
+
+    #[test]
+    fn placeholders_at_the_edges_are_filled() {
+        let l = Locale::parse(r#"{"code":"xx","strings":{"e":"%s%s","s":"%s!"}}"#).unwrap();
+        assert_eq!(l.fmt_args("e", &["a", "b"]), "ab");
+        assert_eq!(l.fmt("s", "hi"), "hi!");
+    }
+
+    #[test]
+    fn merging_an_unnamed_pack_keeps_the_names_below() {
+        let mut ru = Locale::builtin("ru").unwrap();
+        ru.merge(Locale::parse(r#"{"code":"ru","strings":{"main.translate":"Перевод!"}}"#).unwrap());
+        assert_eq!(ru.native_name, "Русский", "an empty name does not blank it");
+        assert_eq!(ru.get("main.translate"), "Перевод!");
+        // The last pack laid on wins.
+        ru.merge(Locale::parse(r#"{"code":"ru","name":"Mine","strings":{"main.translate":"Второй"}}"#).unwrap());
+        assert_eq!(ru.get("main.translate"), "Второй");
+        assert_eq!(ru.name, "Mine");
+        assert_eq!(ru.code, "ru", "the code is not replaced by a merge");
+    }
+
+    #[test]
+    fn classic_files_are_recognised_by_windows_alone_and_name_falls_back() {
+        let l = Locale::parse(
+            r#"{"LanguageName":"Deutsch","LanguageCode":"de",
+                "Windows":[{"Id":1,"Caption":"x","Controls":[[1004,"Übersetzen"]]}]}"#,
+        )
+        .unwrap();
+        assert!(l.classic);
+        assert_eq!(l.native_name, "Deutsch", "no native name: the plain one");
+        assert_eq!(l.get("main.translate"), "Übersetzen");
+        // A native file is not classic.
+        assert!(!Locale::parse(r#"{"code":"de"}"#).unwrap().classic);
+    }
+
+    #[test]
+    fn empty_classic_strings_fall_back_to_english() {
+        let l = Locale::parse(r#"{"LanguageCode":"xx","Windows":[{"Id":1,"Controls":[[1004,""]]}]}"#).unwrap();
+        assert!(!l.has("main.translate"), "an empty translation is no translation");
+        assert_eq!(l.get("main.translate"), "Translate");
+    }
+
+    #[test]
+    fn locale_files_tolerate_comments_and_report_real_errors() {
+        let l = Locale::parse(
+            "// a user's notes\n{ \"code\": \"xx\", /* inline */ \"strings\": { \"main.translate\": \"T\" } }",
+        )
+        .unwrap();
+        assert_eq!(l.get("main.translate"), "T");
+        assert!(Locale::parse("{ not json").is_err());
+        assert!(Locale::parse(r#"{"name":"no code"}"#).is_err(), "a native file must name its code");
+        assert!(Locale::parse(r#"{"code":"xx","strings":{"a":1}}"#).is_err(), "strings are strings");
+    }
+
+    #[test]
+    fn classic_addresses_cover_every_kind_of_entry() {
+        let flat = flatten_classic(&serde_json::from_str::<Value>(&jsonc::strip(CLASSIC_RU)).unwrap());
+        assert_eq!(flat["s:172"], "Перевести (Ctrl+Enter)");
+        assert_eq!(flat["w:1:caption"], "QTranslate");
+        assert_eq!(flat["w:1:1004"], "Перевести");
+        assert_eq!(flat["w:16:1165:1"], "Показать всплывающее окно");
+        assert_eq!(flat["w:5:s:10"], "Нет результатов для '%s'.");
+        assert_eq!(flat["m:1:120"], "&Настройки", "flattening keeps the mnemonic; loading strips it");
+        // Malformed entries are skipped, not fatal.
+        let odd = serde_json::json!({
+            "Strings": [[1], ["x", "y"], [2, 3], [4, "ok"]],
+            "Windows": [{"Caption": "no id"}, {"Id": 9, "Controls": [[1, [[0]]]]}],
+            "Menus": [{"Items": [[1, "no id"]]}]
+        });
+        let flat = flatten_classic(&odd);
+        assert_eq!(flat.len(), 1, "{flat:?}");
+        assert_eq!(flat["s:4"], "ok");
+    }
+
+    #[test]
+    fn mnemonic_stripping_handles_the_edges() {
+        assert_eq!(unmnemonic("&File"), "File");
+        assert_eq!(unmnemonic("Save &As…"), "Save As…");
+        assert_eq!(unmnemonic("trailing&"), "trailing");
+        assert_eq!(unmnemonic("&&&x"), "&x");
+        assert_eq!(unmnemonic("A && B && C"), "A & B & C");
+    }
+
+    #[test]
+    fn built_in_packs_are_found_by_any_spelling_of_their_code() {
+        for code in ["ru", "RU", "ru_RU", "ru-Latn-RU"] {
+            assert_eq!(Locale::builtin(code).map(|l| l.code), Some("ru".to_owned()), "{code}");
+        }
+        assert!(Locale::builtin("").is_none());
+        assert!(Locale::builtin("en").is_none(), "English needs no pack");
+    }
+
+    #[test]
+    fn coverage_counts_only_known_keys() {
+        let (have, total) = Locale::english().coverage();
+        assert_eq!(have, 0, "English is the table, not a pack");
+        assert_eq!(total, STRINGS.len());
+        let l = Locale::parse(r#"{"code":"xx","strings":{"main.translate":"T","not.a.key":"N"}}"#).unwrap();
+        assert_eq!(l.coverage().0, 1);
     }
 }

@@ -1352,6 +1352,19 @@ fn render_immediate_viewport(
         }
     }
 
+    // Glossa patch: answer `ViewportCommand::Screenshot` sent to an immediate
+    // viewport. Upstream leaves it in `actions_requested`, which only the
+    // deferred path drains, so the callback never ran.
+    let mut screenshot_commands = vec![];
+    viewport.actions_requested.retain(|cmd| {
+        if let ActionRequested::Screenshot(callback) = cmd {
+            screenshot_commands.push(callback.clone());
+            false
+        } else {
+            true
+        }
+    });
+
     let clipped_primitives = egui_ctx.tessellate(shapes, pixels_per_point);
     painter.paint_and_update_textures(
         ids.this,
@@ -1359,7 +1372,7 @@ fn render_immediate_viewport(
         [0.0, 0.0, 0.0, 0.0],
         &clipped_primitives,
         &mut viewport.pending_delta,
-        vec![],
+        screenshot_commands,
         window,
     );
 

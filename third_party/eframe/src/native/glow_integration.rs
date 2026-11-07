@@ -1999,6 +1999,26 @@ fn render_immediate_viewport(
         &mut viewport.pending_delta,
     );
 
+    // Glossa patch: answer `ViewportCommand::Screenshot` sent to an immediate
+    // viewport, read back before the swap as the deferred path does. Upstream
+    // leaves it in `actions_requested`, which only the deferred path drains,
+    // so the callback never ran.
+    let mut screenshot_callbacks = Vec::new();
+    viewport.actions_requested.retain(|action| {
+        if let egui_winit::ActionRequested::Screenshot(callback) = action {
+            screenshot_callbacks.push(callback.clone());
+            false
+        } else {
+            true
+        }
+    });
+    if !screenshot_callbacks.is_empty() {
+        let screenshot = Arc::new(painter.borrow().read_screen_rgba(screen_size_in_pixels));
+        for callback in screenshot_callbacks {
+            callback.complete(Arc::clone(&screenshot));
+        }
+    }
+
     {
         profiling::scope!("swap_buffers");
         if *paced

@@ -299,6 +299,12 @@ enum AiReply {
     Test(Result<(String, std::time::Duration), String>),
 }
 
+/// Every page's short name (`basics`, `appearance`, `server`…), as
+/// `--screenshot options:NAME` takes it, in the list's order.
+pub fn page_names() -> Vec<&'static str> {
+    Page::ALL.into_iter().map(|p| p.key().trim_start_matches("options.")).collect()
+}
+
 /// Open the options on the page whose key ends in `name` (`appearance`,
 /// `ocr`…), for `--screenshot options:NAME`.
 pub fn open_at(app: &mut GlossaApp, name: &str) {

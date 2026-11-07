@@ -29,6 +29,7 @@ mod options;
 mod popup;
 mod preview;
 mod rich;
+mod screenshot;
 mod spell;
 mod style;
 mod text_menu;
@@ -67,6 +68,13 @@ fn parse_args() -> Launch {
             // --home=DIR, as glossa-cli takes it too.
             a if a.starts_with("--home=") => l.home = Some(a["--home=".len()..].into()),
             "--popup" => l.popup_text = it.next(),
+            // For the smoke test: every window --screenshot can draw.
+            "--screenshot-list" => {
+                for t in screenshot::targets() {
+                    println!("{t}");
+                }
+                std::process::exit(0);
+            }
             "--screenshot" => {
                 let what = it.next().unwrap_or_else(|| "main".into());
                 let to = it.next().unwrap_or_else(|| format!("glossa-{what}.png"));
