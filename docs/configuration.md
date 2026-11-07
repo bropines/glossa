@@ -383,10 +383,31 @@ Mouse mode*.
 
 | key | type | default | what it does |
 |---|---|---|---|
-| `enabled` | bool | `false` | Mouse mode on. Also toggled by a click on the tray icon and by the `toggle_mouse_mode` action. |
+| `enabled` | bool | `false` | Mouse mode on. Also toggled by the `toggle_mouse_mode` action, which a tray click runs by default (see [`[tray]`](#tray)). |
 | `behaviour` | `"show_icon"`, `"show_translation"`, `"show_translation_and_read"` | `"show_icon"` | After a selection: show a small button by the pointer, show the translation straight away, or show it and read it aloud. |
 | `ctrl_only` | bool | `false` | React only while Ctrl is held. |
-| `tray_click_toggles` | bool | `true` | A click on the tray icon toggles mouse mode instead of opening the main window. |
+| `tray_click_toggles` | bool | — | Old: read from older files and moved into `[tray] click` (`false` becomes `"show_main_window"`), then dropped. |
+
+### `[tray]`
+
+What clicks on the tray icon (the menu-bar icon on macOS) do. Set in
+*Options → Advanced → Tray icon*. Each value is an action id, the same ones
+`[hotkeys]` binds (`show_main_window`, `show_popup`,
+`translate_clipboard_in_popup`, `text_recognition`, `show_dictionary`,
+`show_history`, `toggle_mouse_mode`…), or `"menu"` (open the tray menu) or
+`"none"`. A value that names nothing falls back to that click's default,
+with a warning in the log. Actions that work on the selection read it from
+the program that was in front before the click: on Windows the click
+activates the taskbar (or the overflow flyout is in front), so Glossa gives
+the focus back to the last window that was neither the shell nor Glossa;
+on macOS a menu-bar click leaves it in front. Linux indicators report no clicks at all, so
+these settings do nothing there: any click opens the menu.
+
+| key | type | default | what it does |
+|---|---|---|---|
+| `click` | action | `"toggle_mouse_mode"`; `"menu"` on macOS | A single left click. `show_main_window` here hides the window again when it is showing. Where mouse mode cannot run, `toggle_mouse_mode` shows the main window instead. |
+| `double_click` | action | `"show_main_window"`; `"none"` while `click` is `"menu"` (so on macOS) | A double left click. While it is anything but `"none"`, a single click waits out the system's double-click time before it acts. Not told apart while `click` is `"menu"`. |
+| `middle_click` | action | `"none"` | A click with the middle button (the wheel). |
 
 ### `[ocr]`
 

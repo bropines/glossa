@@ -467,6 +467,75 @@ fn distance_sq(r: Rect, x: f32, y: f32) -> f32 {
     dx * dx + dy * dy
 }
 
+/// A window to give the keyboard focus back to; see [`focus_mark`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct FocusMark(#[allow(dead_code)] isize);
+
+/// Start remembering the last window the user worked in (Windows: a hook on
+/// foreground changes), for [`focus_mark`]. Call once, on a thread that
+/// pumps window messages for the life of the process (the tray's). Does
+/// nothing elsewhere.
+pub fn track_foreground() {
+    #[cfg(windows)]
+    win::track_foreground();
+}
+
+/// The window the user is working in, to give the focus back to after a
+/// click elsewhere took it: a click on a Windows tray icon activates the
+/// taskbar, and opening the overflow flyout makes the flyout the foreground,
+/// so the selection a tray action should read is no longer in front. Take it
+/// at the click: while the shell is in front this is the last window before
+/// it (from [`track_foreground`]), while that window still exists. `None`
+/// when nothing will need giving back — on macOS (a click on a menu-bar
+/// item leaves the active app active), on Linux, or before any window was
+/// seen.
+pub fn focus_mark() -> Option<FocusMark> {
+    #[cfg(windows)]
+    {
+        win::focus_mark().map(FocusMark)
+    }
+    #[cfg(not(windows))]
+    {
+        None
+    }
+}
+
+/// Bring a window marked by [`focus_mark`] back to the foreground. `false`
+/// when it is gone or the system refused.
+pub fn refocus(mark: FocusMark) -> bool {
+    #[cfg(windows)]
+    {
+        win::refocus(mark.0)
+    }
+    #[cfg(not(windows))]
+    {
+        let _ = mark;
+        false
+    }
+}
+
+/// The longest gap between the two clicks of a double click, as the user
+/// set it in the system (500 ms on Windows by default; macOS lets the
+/// accessibility settings stretch it). 400 ms where the system will not tell.
+pub fn double_click_time() -> std::time::Duration {
+    #[cfg(windows)]
+    {
+        win::double_click_time()
+    }
+    #[cfg(target_os = "macos")]
+    {
+        let secs = objc2_app_kit::NSEvent::doubleClickInterval();
+        if secs.is_finite() && secs > 0.05 {
+            return std::time::Duration::from_secs_f64(secs.min(5.0));
+        }
+        std::time::Duration::from_millis(400)
+    }
+    #[cfg(not(any(windows, target_os = "macos")))]
+    {
+        std::time::Duration::from_millis(400)
+    }
+}
+
 #[cfg(target_os = "macos")]
 mod mac;
 #[cfg(windows)]

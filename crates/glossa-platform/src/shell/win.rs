@@ -24,6 +24,7 @@ pub const SHELL: Shell = Shell {
     modifier_names: super::ModifierNames { ctrl: "Ctrl", alt: "Alt", shift: "Shift", meta: "Win" },
     window_classes: true,
     program_example: "program.exe",
+    tray_clicks: true,
 };
 
 pub fn open(target: &str) -> std::io::Result<()> {

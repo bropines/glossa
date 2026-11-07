@@ -90,7 +90,7 @@ pub struct GlossaApp {
     pub clipboard: Option<Clipboard>,
     pub audio: AudioPlayer,
     pub session: Session,
-    tray: Option<crate::tray::Tray>,
+    pub(crate) tray: Option<crate::tray::Tray>,
     /// macOS: the menu bar's commands.
     pub app_menu: crate::app_menu::AppMenu,
     mouse: Option<crate::mouse::MouseHub>,
@@ -710,6 +710,7 @@ impl GlossaApp {
             let c = self.look.theme.accent;
             let accent = [c.r as f32 / 255.0, c.g as f32 / 255.0, c.b as f32 / 255.0];
             t.set_look(accent, self.look.theme.dark, self.mouse_running());
+            t.set_clicks(&self.cfg.tray);
         }
         if before_hotkeys != self.cfg.hotkeys {
             self.register_hotkeys();

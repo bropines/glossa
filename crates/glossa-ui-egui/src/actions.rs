@@ -172,6 +172,40 @@ pub fn read_selection(cfg: &glossa_core::Config, action: Action) -> Option<Task>
     Some(Task::Selection { action, text, cursor, error })
 }
 
+/// [`read_selection`] for an action a click started where the click took
+/// the focus (a Windows tray icon activates the taskbar): the window marked
+/// before the click gets it back first, so the selection is read from it.
+pub fn read_selection_after_click(
+    cfg: &glossa_core::Config,
+    action: Action,
+    mark: Option<glossa_platform::window::FocusMark>,
+) -> Option<Task> {
+    if let Some(m) = mark {
+        if glossa_platform::window::refocus(m) {
+            // Give the window a moment to take the focus before the copy
+            // keystroke goes to it.
+            std::thread::sleep(std::time::Duration::from_millis(80));
+        } else {
+            tracing::debug!("could not give the focus back before reading the selection");
+        }
+    }
+    read_selection(cfg, action)
+}
+
+/// [`read_selection_after_click`] on a worker thread, for a tray click
+/// while the GUI is up.
+pub fn capture_after_click(app: &mut GlossaApp, action: Action, mark: Option<glossa_platform::window::FocusMark>) {
+    let cfg = app.cfg.clone();
+    let tx = app.tasks_tx.clone();
+    let ctx = app.ctx.clone();
+    std::thread::spawn(move || {
+        if let Some(task) = read_selection_after_click(&cfg, action, mark) {
+            let _ = tx.send(task);
+            ctx.request_repaint();
+        }
+    });
+}
+
 /// Read the selection on a worker thread.
 fn capture(app: &mut GlossaApp, action: Action) {
     let cfg = app.cfg.clone();

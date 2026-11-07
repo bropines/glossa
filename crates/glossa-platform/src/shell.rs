@@ -71,6 +71,10 @@ pub struct Shell {
     /// A program name as the exceptions list wants it, for the hint in the
     /// empty field: an executable's file name, or an app's name on macOS.
     pub program_example: &'static str,
+    /// The tray icon reports clicks (Windows, the macOS menu bar), so what
+    /// they do can be chosen. Linux indicators (AppIndicator) report none:
+    /// a click there always opens the menu.
+    pub tray_clicks: bool,
 }
 
 /// Names of the modifier keys, in the order a hotkey shows them (the order
