@@ -179,6 +179,9 @@ pub struct OptionsState {
     /// A running "load models" / "test" request, and the last outcome.
     ai_task: Option<std::sync::mpsc::Receiver<AiReply>>,
     ai_status: Option<(String, bool)>,
+    /// A running check of a module's files, and the last outcome.
+    assets_check: Option<std::sync::mpsc::Receiver<Result<String, String>>>,
+    assets_note: Option<(String, bool)>,
     /// The installed font families, for the font picker.
     fonts: FontList,
 }
@@ -343,6 +346,8 @@ pub fn open(app: &mut GlossaApp) {
             ai_models: Default::default(),
             ai_task: None,
             ai_status: None,
+            assets_check: None,
+            assets_note: None,
             fonts: FontList::default(),
         });
     }
@@ -1041,6 +1046,7 @@ fn service_details(
             .small()
             .color(look.weak_text()),
         );
+        module_assets(app, ui, st, &id);
         if p.options.is_empty() {
             ui.label(RichText::new(app.t("options.services.no_settings")).color(look.weak_text()));
         } else {
@@ -1054,6 +1060,160 @@ fn service_details(
             }
         }
     });
+}
+
+/// The files a module declares (models, dictionaries): where each stands,
+/// the download with its progress, and checking or deleting them. The work
+/// runs in the engine on worker threads; this only draws and dispatches.
+fn module_assets(app: &mut GlossaApp, ui: &mut egui::Ui, st: &mut OptionsState, id: &str) {
+    let Ok(report) = app.engine.module_assets(id) else { return };
+    if let Some(rx) = &st.assets_check {
+        if let Ok(r) = rx.try_recv() {
+            st.assets_note = Some(match r {
+                Ok(m) => (m, false),
+                Err(m) => (m, true),
+            });
+            st.assets_check = None;
+        }
+    }
+    let look = app.look.clone();
+    ui.add_space(4.0);
+    ui.label(RichText::new(app.t("options.assets.title")).strong());
+    ui.label(RichText::new(app.t("options.assets.hint")).small().color(look.weak_text()));
+    let running = report.job.as_ref().is_some_and(|j| j.running);
+    let mut fetch_one = None;
+    for a in &report.assets {
+        let (state, bad) = match &a.state {
+            glossa_engine::AssetState::Ready => (app.t("options.assets.ready"), false),
+            glossa_engine::AssetState::Missing => (app.t("options.assets.missing"), !a.optional),
+            glossa_engine::AssetState::Partial { have } => {
+                (app.locale.fmt("options.assets.partial", &human_size(*have)), !a.optional)
+            }
+            glossa_engine::AssetState::Outdated => (app.t("options.assets.outdated"), true),
+            glossa_engine::AssetState::Corrupt => (app.t("options.assets.corrupt"), true),
+        };
+        ui.horizontal_wrapped(|ui| {
+            ui.label(RichText::new(&a.name).small());
+            ui.label(RichText::new(human_size(a.size)).small().color(look.weak_text()));
+            if a.optional {
+                ui.label(RichText::new(app.t("options.assets.optional")).small().color(look.weak_text()));
+            }
+            ui.label(RichText::new(state).small().color(if bad { look.error() } else { look.weak_text() }));
+            // Optional files (one model of many) are fetched one by one.
+            if a.optional
+                && !report.busy
+                && a.state != glossa_engine::AssetState::Ready
+                && ui.small_button(app.t("options.assets.get")).clicked()
+            {
+                fetch_one = Some(a.name.clone());
+            }
+        });
+    }
+    if let Some(name) = fetch_one {
+        st.assets_note = None;
+        if let Err(e) = app.engine.start_asset_download(id, &[name]) {
+            st.assets_note = Some((e.to_string(), true));
+        }
+    }
+    if let Some(job) = &report.job {
+        if job.running {
+            let p = &job.progress;
+            let fraction = if p.total > 0 { p.done as f32 / p.total as f32 } else { 0.0 };
+            let text = app.locale.fmt_args("options.assets.progress", &[&human_size(p.done), &human_size(p.total)]);
+            ui.add(egui::ProgressBar::new(fraction).text(text).desired_width(320.0));
+        } else if !job.error.is_empty() {
+            ui.label(RichText::new(&job.error).small().color(look.error()));
+        }
+    }
+    ui.horizontal_wrapped(|ui| {
+        // A delete runs as a job too, with nothing to count and nothing
+        // to cancel.
+        let downloading = running && report.job.as_ref().is_some_and(|j| j.progress.total > 0);
+        if downloading {
+            if ui.button(app.t("options.assets.cancel")).clicked() {
+                app.engine.cancel_asset_download(id);
+            }
+        } else if report.busy {
+            ui.add(egui::Spinner::new().size(14.0));
+            ui.label(RichText::new(app.t("options.assets.busy")).small().color(look.weak_text()));
+        } else if !report.ready {
+            let label = app.locale.fmt("options.assets.download", &human_size(report.total_size));
+            if ui.button(label).clicked() {
+                st.assets_note = None;
+                if let Err(e) = app.engine.start_asset_download(id, &[]) {
+                    st.assets_note = Some((e.to_string(), true));
+                }
+            }
+        }
+        let checking = st.assets_check.is_some();
+        if report.ready
+            && !report.busy
+            && ui.add_enabled(!checking, egui::Button::new(app.t("options.assets.verify"))).clicked()
+        {
+            let (tx, rx) = std::sync::mpsc::channel();
+            let (engine, ctx, id, ok) =
+                (app.engine.clone(), app.ctx.clone(), id.to_owned(), app.t("options.assets.verified"));
+            std::thread::spawn(move || {
+                let r = engine.verify_module_assets(&id).map_err(|e| e.to_string()).and_then(|r| {
+                    if r.assets.iter().all(|a| a.state == glossa_engine::AssetState::Ready) {
+                        Ok(ok)
+                    } else {
+                        let bad: Vec<&str> = r
+                            .assets
+                            .iter()
+                            .filter(|a| a.state != glossa_engine::AssetState::Ready)
+                            .map(|a| a.name.as_str())
+                            .collect();
+                        Err(bad.join(", "))
+                    }
+                });
+                let _ = tx.send(r);
+                ctx.request_repaint();
+            });
+            st.assets_check = Some(rx);
+        }
+        if checking {
+            ui.add(egui::Spinner::new().size(14.0));
+        }
+        if ui.button(app.t("options.assets.open_folder")).clicked() {
+            let _ = std::fs::create_dir_all(&report.dir);
+            let _ = crate::app::open_with_system(&report.dir.to_string_lossy());
+        }
+        let any_on_disk = report.assets.iter().any(|a| a.state != glossa_engine::AssetState::Missing);
+        if any_on_disk && ui.add_enabled(!report.busy, egui::Button::new(app.t("options.assets.remove"))).clicked() {
+            st.assets_note = None;
+            if let Err(e) = app.engine.start_asset_removal(id) {
+                st.assets_note = Some((e.to_string(), true));
+            }
+        }
+    });
+    if let Some((text, error)) = &st.assets_note {
+        let color = if *error { look.error() } else { look.weak_text() };
+        ui.label(RichText::new(text).small().color(color));
+    }
+    ui.add_space(4.0);
+}
+
+/// A byte count for people: 512 B, 4.5 MB, 1.2 GB.
+fn human_size(bytes: u64) -> String {
+    const UNITS: [&str; 4] = ["KB", "MB", "GB", "TB"];
+    if bytes < 1024 {
+        return format!("{bytes} B");
+    }
+    let mut v = bytes as f64 / 1024.0;
+    let mut unit = UNITS[0];
+    for u in &UNITS[1..] {
+        if v < 1024.0 {
+            break;
+        }
+        v /= 1024.0;
+        unit = u;
+    }
+    if v < 10.0 {
+        format!("{v:.1} {unit}")
+    } else {
+        format!("{v:.0} {unit}")
+    }
 }
 
 /// A backdrop picker, greyed out where backdrops cannot show.
@@ -2172,6 +2332,7 @@ fn modules(app: &mut GlossaApp, ui: &mut egui::Ui, st: &mut OptionsState) {
         row(ui, &app.t("options.modules.call_timeout"), |ui| {
             ui.add(egui::DragValue::new(&mut d.modules.call_timeout_ms).range(1000..=600000));
         });
+        ui.checkbox(&mut d.modules.auto_download_assets, app.t("options.modules.auto_download"));
     });
     group(ui, &look, &app.t("options.modules.classic"), |ui| {
         ui.horizontal(|ui| {

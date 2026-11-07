@@ -5,7 +5,7 @@ use std::path::{Path, PathBuf};
 
 use glossa_core::LangId;
 use glossa_modules::manifest::{Manifest, Runtime};
-use glossa_modules::{OptionKind, RuntimeContext};
+use glossa_modules::{ModuleAssets, OptionKind, RuntimeContext};
 
 use crate::{Finding, Severity};
 
@@ -66,7 +66,25 @@ pub fn check(dir: &Path, ctx: &RuntimeContext) -> Lint {
     check_languages(&manifest, &mut lint.findings);
     check_options(&manifest, &mut lint.findings);
     check_permissions(&manifest, &mut lint.findings);
-    lint.missing = check_entry(dir, &manifest, ctx, &mut lint.findings);
+    // A module with assets: its command line may name them (`${ASSETS_DIR}`),
+    // so it is resolved the way the registry resolves it, and only once
+    // they are there. Until then the entry file is all there is to check.
+    match ModuleAssets::for_manifest(&manifest, &ctx.models_dir) {
+        Ok(Some(assets)) => {
+            let mut runnable = manifest.clone();
+            assets.apply_to(&mut runnable);
+            if assets.ready() {
+                lint.missing = check_entry(dir, &runnable, ctx, &mut lint.findings);
+            } else if matches!(runnable.module.runtime, Runtime::Js | Runtime::Python) {
+                // The interpreter is the module's business only once it runs.
+                let mut ignored = Vec::new();
+                check_entry(dir, &runnable, ctx, &mut ignored);
+                lint.findings.extend(ignored.into_iter().filter(|f| f.message.contains("entry")));
+            }
+        }
+        Ok(None) => lint.missing = check_entry(dir, &manifest, ctx, &mut lint.findings),
+        Err(e) => lint.findings.push(Finding::error(format!("module.toml: {e}"))),
+    }
 
     let mut files = Vec::new();
     walk(dir, &mut files);

@@ -24,6 +24,7 @@ glossa-cli doctor                             # what works on this machine
 - [Commands](#commands): [`translate`](#translate), [`detect`](#detect),
   [`dict`](#dict), [`ocr`](#ocr), [`speak`](#speak),
   [`services`](#services), [`modules`](#modules), [`module`](#module),
+  [`assets`](#assets),
   [`history`](#history),
   [`import-classic`](#import-classic), [`theme`](#theme),
   [`locale`](#locale), [`config`](#config), [`serve`](#serve),
@@ -424,7 +425,7 @@ empty. `--json`:
 
 ```
 glossa-cli module test [--live | --record] [--case NAME] [--set-from-env KEY=VAR]… [--set KEY=VALUE]…
-                       [--timeout SECS] [--strict] [--require-runtimes] [--ignore-recordings] DIR…
+                       [--timeout SECS] [--strict] [--require-runtimes] [--ignore-recordings] [--download] DIR…
 glossa-cli module check [--strict] DIR…
 ```
 
@@ -447,7 +448,8 @@ check are described in [modules/testing.md](modules/testing.md).
 | `--set KEY=VALUE` | none | An option value over the fixtures' own (a number or `true`/`false` is passed as one). Repeatable. |
 | `--timeout SECS` | 30 | The budget for one call. |
 | `--strict` | off | Warnings fail a module too, not only errors. |
-| `--require-runtimes` | off | A module that cannot run here (no interpreter, not built) fails instead of being skipped. |
+| `--require-runtimes` | off | A module that cannot run here (no interpreter, not built, its files not downloaded) fails instead of being skipped. |
+| `--download` | off | Download a module's missing required files ([assets](modules/README.md#assets)) before running it; without it such a module is skipped with the `module assets download` command to run. |
 
 The text report has one line per module (`PASS`, `FAIL` or `SKIP`, its id,
 runtime, folder, load time and size), its findings (`error:`, `warning:`,
@@ -457,6 +459,39 @@ prints `{"modules": [...], "passed": N, "failed": N, "skipped": N}`, each
 module with `dir`, `id`, `runtime`, `status`, `skipped`, `size_bytes`,
 `load_ms`, `findings` and `cases`. The exit code is 1 when any module
 failed.
+
+### assets
+
+```
+glossa-cli assets [list]
+glossa-cli assets status ID
+glossa-cli assets download ID [NAME…]
+glossa-cli assets verify ID
+glossa-cli assets remove ID
+```
+
+The files modules declare in `[[assets]]` (models, dictionaries, helper
+programs; see [modules/README.md](modules/README.md#assets)).
+`glossa-cli module assets …` (or `modules assets …`) is the same command.
+
+- `list` (the default) shows every module that declares files, `status`
+  one module: each file with its size and state (`ready`, `missing`,
+  `partial`, `out of date`), and the folder they go to.
+- `download` fetches the required files that are missing, or the files
+  named (optional ones, such as one language pair of many). It resumes a
+  partial download, checks each file's SHA-256 before putting it in place
+  and shows progress on stderr when it is a terminal.
+- `verify` hashes the files again and deletes damaged ones; it exits with
+  1 if anything is missing or damaged.
+- `remove` deletes the module's files.
+
+`--json` prints the same report the [control API](control-api.md#v1assets)
+returns:
+
+```json
+{"module": "my-ocr", "dir": "…/models/my-ocr", "ready": true, "total_size": 4718592,
+ "assets": [{"name": "det", "path": "…/models/my-ocr/det", "size": 4718592, "sha256": "…", "optional": false, "state": "ready"}]}
+```
 
 ### history
 

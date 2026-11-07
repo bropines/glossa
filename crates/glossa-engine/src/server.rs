@@ -166,7 +166,7 @@ impl Reply {
             Error::EmptyInput | Error::SameLanguage | Error::Config(_) => 400,
             Error::NoProvider(_) | Error::NoSuchModule(_) => 404,
             Error::NoTextRecognised | Error::LanguageNotDetected => 422,
-            Error::MissingCredential { .. } => 412,
+            Error::MissingCredential { .. } | Error::AssetsMissing { .. } => 412,
             Error::RateLimited { .. } => 429,
             Error::Timeout(_) => 504,
             Error::Internal(_) => 500,
@@ -292,6 +292,8 @@ fn allowed_methods(path: &str) -> Option<&'static str> {
         "/v1/translate" | "/v1/dictionary" => Some("GET, POST"),
         "/v1/detect" | "/v1/ocr" | "/v1/speak" | "/translate" => Some("POST"),
         p if p.starts_with("/v1/action/") => Some("GET, POST"),
+        "/v1/assets" => Some("GET"),
+        p if p.starts_with("/v1/assets/") => Some(if p.matches('/').count() == 3 { "GET" } else { "POST" }),
         _ => None,
     }
 }
@@ -418,6 +420,34 @@ fn host_allowed(host: Option<&str>, listening_beyond_loopback: bool) -> bool {
     match name.parse::<std::net::IpAddr>() {
         Ok(ip) => ip.is_loopback() || listening_beyond_loopback,
         Err(_) => false,
+    }
+}
+
+/// `/v1/assets/ID` (GET: the state) and `/v1/assets/ID/download`
+/// (`?names=a,b` for optional files), `/cancel`, `/verify`, `/remove`
+/// (POST). A download runs in the
+/// background: the reply is the state as it starts, and polling the GET
+/// shows its progress.
+fn assets_route(engine: &Engine, rest: &str, url: &str) -> Reply {
+    let (id, op) = rest.split_once('/').unwrap_or((rest, ""));
+    // `?names=a,b` picks optional files; without it, the required ones.
+    let names: Vec<String> = query_param(url, "names")
+        .map(|n| n.split(',').map(str::trim).filter(|n| !n.is_empty()).map(str::to_owned).collect())
+        .unwrap_or_default();
+    let result = match op {
+        "" => engine.module_assets(id),
+        "download" => engine.start_asset_download(id, &names).and_then(|()| engine.module_assets(id)),
+        "cancel" => {
+            engine.cancel_asset_download(id);
+            engine.module_assets(id)
+        }
+        "verify" => engine.verify_module_assets(id),
+        "remove" => engine.remove_module_assets(id).and_then(|()| engine.module_assets(id)),
+        other => return Reply::error(404, format!("no assets operation {other:?} (download, cancel, verify, remove)")),
+    };
+    match result {
+        Ok(report) => Reply::json(if op == "download" { 202 } else { 200 }, json!(report)),
+        Err(e) => Reply::from_error(&e),
     }
 }
 
@@ -621,6 +651,8 @@ fn route(engine: &Engine, req: &mut Request) -> Reply {
             Ok(b) => pot_action(engine, Action::ShowPopup, Some(String::from_utf8_lossy(&b).into_owned())),
             Err(r) => r,
         },
+        "/v1/assets" => Reply::json(200, json!(engine.modules_with_assets())),
+        p if p.starts_with("/v1/assets/") => assets_route(engine, &p["/v1/assets/".len()..], &url),
         _ => Reply::error(404, format!("no route {path}")),
     }
 }
@@ -677,6 +709,27 @@ mod tests {
         let status = out.split_whitespace().nth(1).and_then(|c| c.parse().ok()).unwrap_or(0);
         let body = out.split_once("\r\n\r\n").map(|(_, b)| b.to_owned()).unwrap_or_default();
         (status, body)
+    }
+
+    #[test]
+    fn module_files_are_listed_and_unknown_modules_are_404() {
+        let (e, dir) = engine();
+        let server = start(e.clone()).unwrap();
+        let get = |path: &str, method: &str| {
+            request(
+                server.addr,
+                &format!(
+                    "{method} {path} HTTP/1.1\r\nHost: 127.0.0.1\r\nAuthorization: Bearer secret\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
+                ),
+            )
+        };
+        assert_eq!(get("/v1/assets", "GET"), (200, "[]".into()));
+        assert_eq!(get("/v1/assets/nope", "GET").0, 404);
+        assert_eq!(get("/v1/assets/nope/download", "POST").0, 404);
+        assert_eq!(get("/v1/assets/nope/download", "GET").0, 405);
+        assert_eq!(get("/v1/assets/nope/teleport", "POST").0, 404);
+        server.stop();
+        std::fs::remove_dir_all(&dir).ok();
     }
 
     #[test]

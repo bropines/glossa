@@ -80,6 +80,7 @@ throws `ModuleError` with Glossa's error kind when it fails.
 | `http(map)` | the `http` host call with every protocol field (`body_base64`, `timeout_ms`, `binary`). |
 | `log(level, msg)`, `debug`, `info`, `warn` | Glossa's log, tagged with the module id. |
 | `cacheGet(key)`, `cacheSet(key, value, ttlSecs)` | a small store in Glossa's memory that outlives this process (which stops when idle). |
+| `assetPath(name)`, `assets()` | where a file from the manifest's `[[assets]]` is (a model, a dictionary), or all of them with `missing` for optional ones not downloaded; also `GLOSSA_ASSET_<NAME>` in the environment ([assets](../../docs/modules/README.md#assets)). |
 | `call(method, params)` | **any host call by name**, returning the parsed result. Host calls added to Glossa after this SDK work through it before they get a typed method. |
 
 **`ModuleError(kind, message)`**: a failure Glossa can explain. Kinds:

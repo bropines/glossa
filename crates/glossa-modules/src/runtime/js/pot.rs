@@ -110,6 +110,8 @@ impl PotPlugin {
             // pot-app plugins always had unrestricted network access.
             permissions: Permissions::allow_all(),
             options: info.needs.iter().map(need_to_option).collect(),
+            assets: Vec::new(),
+            assets_dir: None,
         };
         manifest.validate()?;
         Ok(PotPlugin { dir: dir.to_owned(), main, manifest, kind })

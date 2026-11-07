@@ -109,6 +109,20 @@ impl Paths {
         self.data_dir.join("modules")
     }
 
+    /// Where module assets (models, dictionaries) are downloaded, one
+    /// folder per module id. Beside the rest of the data in a portable
+    /// layout; otherwise in the local (not roaming) data folder, since a
+    /// model can be hundreds of megabytes and need not follow the user
+    /// between machines.
+    pub fn models_dir(&self) -> PathBuf {
+        if self.portable {
+            return self.data_dir.join("models");
+        }
+        dirs::data_local_dir()
+            .map(|d| d.join(app_dir_name()).join("models"))
+            .unwrap_or_else(|| self.data_dir.join("models"))
+    }
+
     pub fn user_theme_dir(&self) -> PathBuf {
         self.data_dir.join("themes")
     }

@@ -43,12 +43,20 @@ pub struct ProtocolProvider<T: Transport> {
     info: ProviderInfo,
     transport: T,
     cache: Arc<ModuleCache>,
+    /// The module's assets, for the `assets` host call.
+    assets: Option<crate::assets::ModuleAssets>,
 }
 
 impl<T: Transport> ProtocolProvider<T> {
     pub fn new(manifest: Manifest, transport: T, cache: Arc<ModuleCache>) -> Self {
         let info = manifest.provider_info();
-        Self { manifest, info, transport, cache }
+        // The registry sets `assets_dir` to `<models>/<id>`.
+        let assets = manifest
+            .assets_dir
+            .as_ref()
+            .and_then(|dir| dir.parent())
+            .and_then(|models| crate::assets::ModuleAssets::for_manifest(&manifest, models).ok().flatten());
+        Self { manifest, info, transport, cache, assets }
     }
 
     pub fn manifest(&self) -> &Manifest {
@@ -84,7 +92,8 @@ impl<T: Transport> ProtocolProvider<T> {
                 module_id: &self.manifest.module.id,
             },
             &self.cache,
-        );
+        )
+        .with_assets(self.assets.as_ref());
         let params = serde_json::to_value(params(&api)).map_err(|e| Error::module(&self.info.id, e))?;
         let started = Instant::now();
         let value = self.transport.call(method, params, &|m, p| api.handle(m, p)).map_err(|e| match e.kind {

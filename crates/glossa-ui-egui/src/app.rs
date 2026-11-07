@@ -792,6 +792,9 @@ impl GlossaApp {
                 }
             }
             Event::Action { action, text } => self.perform(action, text),
+            // The waker has already asked for a frame; the options page
+            // reads the new state when it draws.
+            Event::AssetsChanged { .. } => {}
             Event::Started { .. } | Event::Translated { .. } | Event::Progress { .. } => {}
         }
     }
@@ -809,6 +812,7 @@ impl GlossaApp {
             E::Network(_) => Some("msg.no_connection"),
             E::Unsupported { .. } => Some("msg.capability_unsupported"),
             E::NoTextRecognised => Some("msg.no_text_in_image"),
+            E::AssetsMissing { .. } => Some("msg.assets_missing"),
             _ => None,
         };
         match key {
@@ -816,7 +820,7 @@ impl GlossaApp {
             Some(k) => {
                 let head = self.t(k);
                 match e {
-                    E::Network(_) | E::Unsupported { .. } => format!("{head}\n{e}"),
+                    E::Network(_) | E::Unsupported { .. } | E::AssetsMissing { .. } => format!("{head}\n{e}"),
                     _ => head,
                 }
             }

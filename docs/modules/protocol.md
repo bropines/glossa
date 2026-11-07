@@ -21,7 +21,8 @@ bumps `api`.
   [`dictionary`](#dictionary), [`speak`](#speak), [`recognize`](#recognize)
 - [Errors](#errors)
 - [Host calls](#host-calls): [`http`](#http), [`log`](#log),
-  [`cache_get` / `cache_set`](#cache_get--cache_set), [`image`](#image)
+  [`cache_get` / `cache_set`](#cache_get--cache_set), [`assets`](#assets),
+  [`image`](#image)
 - [Versioning](#versioning)
 
 ## Conventions
@@ -226,6 +227,31 @@ process. Use it for session tokens and other things worth not fetching on
 every call: a JavaScript module gets a fresh context each call and a Python
 process is stopped when idle, so module-level variables do not last. `ttl_secs`
 of 0 keeps the value until Glossa exits.
+
+### `assets`
+
+Takes no parameters (`null`). Returns where the files from the manifest's
+`[[assets]]` are ([README](README.md#assets)):
+
+```json
+{ "dir": "/home/me/.local/share/glossa/models/my-ocr",
+  "files": { "det": "/home/me/.local/share/glossa/models/my-ocr/det",
+             "ru-en": "/home/me/.local/share/glossa/models/my-ocr/ru-en" },
+  "missing": ["ru-en"] }
+```
+
+- `files` holds the assets that are downloaded and verified against the
+  hash the manifest names now, by name: a file, or the folder an archive
+  was unpacked into.
+- `missing` lists the rest: optional assets not downloaded yet, or a file
+  left from an older version of the module. Glossa starts a module only
+  when its required assets are all verified.
+- A module without assets gets `{"dir": "", "files": {}}`.
+- Process modules also find their required assets in the environment
+  (`GLOSSA_ASSETS_DIR`, `GLOSSA_ASSET_<NAME>`), so they can load a model
+  before the first request.
+
+A Glossa older than this call answers it with `unsupported`.
 
 ### `image`
 

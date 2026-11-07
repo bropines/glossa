@@ -70,6 +70,12 @@ type ModuleFreeFn = unsafe extern "C" fn(*mut c_char);
 type EntryFn = unsafe extern "C" fn() -> *const ModuleVTable;
 
 /// Load the native module in `dir` described by `manifest`.
+///
+/// The library is opened and its entry point checked here, so a broken
+/// one is reported when the modules load rather than on the first call.
+/// That is cheap: the module's own setup (a model, a session) belongs in
+/// its first `call`. A module whose library or model comes from its
+/// `[[assets]]` is not opened at all until they are downloaded.
 pub fn load(dir: &Path, manifest: Manifest, ctx: &RuntimeContext) -> Result<Arc<dyn Provider>, String> {
     let stem = if manifest.module.entry.trim().is_empty() { &manifest.module.id } else { &manifest.module.entry };
     let path = resolve_library(dir, stem)?;

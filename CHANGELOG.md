@@ -40,6 +40,19 @@ the notes of its GitHub release.
   Google Translate did not answer", the reason on hover), and its title
   names the service that answered. `glossa-cli translate` prints the same
   on stderr.
+- Module files: a module can declare the files it needs (ML models,
+  dictionaries, helper programs) as `[[assets]]` in `module.toml`, with
+  mirror URLs, SHA-256, size, zip / tar.gz / gz unpacking, per-system
+  selectors and optional entries. Glossa never downloads them at start-up:
+  the module's settings show their state with Download, progress, Cancel,
+  Check files and Delete; `glossa-cli assets` and the control API's
+  `/v1/assets` do the same, and `[modules] auto_download_assets` fetches
+  them on first use. Downloads resume, are checked against their hash
+  before use, and go to the local data folder (`models/`). A module whose
+  files are missing is listed but not started. Modules find the files
+  through the new `assets` host call, `host.assetPath` in JavaScript,
+  `asset_path` / `assetPath` in the Python and Java SDKs, and
+  `GLOSSA_ASSET_*` / `${ASSETS_DIR}` for process modules.
 
 ### Fixed
 

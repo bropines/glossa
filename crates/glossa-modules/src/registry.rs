@@ -19,6 +19,7 @@ use std::time::Duration;
 
 use glossa_core::{Capabilities, ProviderInfo};
 
+use crate::assets::{AssetGate, ModuleAssets};
 use crate::host_api::ModuleCache;
 use crate::manifest::{Manifest, Runtime};
 use crate::provider::Provider;
@@ -40,6 +41,8 @@ pub enum Origin {
 pub struct Entry {
     pub provider: Arc<dyn Provider>,
     pub origin: Origin,
+    /// The files the module declares for this system, if any.
+    pub assets: Option<Arc<ModuleAssets>>,
 }
 
 impl Entry {
@@ -62,6 +65,11 @@ pub struct RuntimeContext {
     pub cache: Arc<ModuleCache>,
     /// Where `.potext` archives are unpacked.
     pub cache_dir: PathBuf,
+    /// Where module assets are downloaded to, one folder per module.
+    pub models_dir: PathBuf,
+    /// Download a module's missing assets on its first call instead of
+    /// failing with [`glossa_core::Error::AssetsMissing`].
+    pub auto_download_assets: bool,
     /// Module ids the user switched off.
     pub disabled: Vec<String>,
     /// The Google domain and interface language some classic scripts read
@@ -80,6 +88,8 @@ impl Default for RuntimeContext {
             call_timeout: Duration::from_secs(30),
             cache: ModuleCache::new(),
             cache_dir: std::env::temp_dir().join("glossa-modules"),
+            models_dir: std::env::temp_dir().join("glossa-models"),
+            auto_download_assets: false,
             disabled: Vec::new(),
             preferred_domain: "com".into(),
             ui_language_code: "en".into(),
@@ -114,13 +124,13 @@ impl Registry {
 
     /// Add a provider compiled into the program.
     pub fn add_builtin(&mut self, provider: Arc<dyn Provider>) {
-        self.insert(Entry { provider, origin: Origin::Builtin });
+        self.insert(Entry { provider, origin: Origin::Builtin, assets: None });
     }
 
     /// Add a module compiled into the program. Add these before loading the
     /// module directories, so a module there with the same id wins.
     pub fn add_bundled(&mut self, provider: Arc<dyn Provider>) {
-        self.insert(Entry { provider, origin: Origin::Bundled });
+        self.insert(Entry { provider, origin: Origin::Bundled, assets: None });
     }
 
     /// Add or replace by id. The provider is put behind a panic barrier
@@ -231,11 +241,34 @@ impl Registry {
 
         let manifest_path = path.join("module.toml");
         if manifest_path.is_file() {
-            let manifest = Manifest::load(&manifest_path).map_err(|e| Skip::Failed(e.to_string()))?;
+            let mut manifest = Manifest::load(&manifest_path).map_err(|e| Skip::Failed(e.to_string()))?;
             let version = manifest.module.version.clone();
             let runtime = manifest.module.runtime;
-            let provider = self.instantiate(path, manifest, ctx)?;
-            return Ok(Some(Entry { provider, origin: Origin::Module { dir: path.to_owned(), runtime, version } }));
+            let origin = Origin::Module { dir: path.to_owned(), runtime, version };
+            let assets = ModuleAssets::for_manifest(&manifest, &ctx.models_dir)
+                .map_err(|e| Skip::Failed(format!("{}: {e}", manifest_path.display())))?
+                .map(Arc::new);
+            let Some(assets) = assets else {
+                let provider = instantiate(path, manifest, ctx)?;
+                return Ok(Some(Entry { provider, origin, assets: None }));
+            };
+            assets.apply_to(&mut manifest);
+            // Ready files: load as usual, so a broken module is reported
+            // now. Missing ones: list the module, start nothing; the gate
+            // loads it once the files are there.
+            let provider: Arc<dyn Provider> = if assets.ready() {
+                instantiate(path, manifest, ctx)?
+            } else {
+                tracing::debug!(module = %manifest.module.id, missing = ?assets.missing(), "module waits for its files");
+                let (dir, m, c) = (path.to_owned(), manifest.clone(), ctx.clone());
+                let make: crate::assets::MakeProvider = Box::new(move || {
+                    instantiate(&dir, m.clone(), &c).map_err(|s| match s {
+                        Skip::Reason(r) | Skip::Failed(r) => r,
+                    })
+                });
+                Arc::new(AssetGate::new(&manifest, assets.clone(), ctx.auto_download_assets, make))
+            };
+            return Ok(Some(Entry { provider, origin, assets: Some(assets) }));
         }
 
         if path.join("Service.js").is_file() {
@@ -246,6 +279,7 @@ impl Registry {
             return Ok(Some(Entry {
                 provider,
                 origin: Origin::Module { dir: path.to_owned(), runtime: Runtime::Qtranslate, version: String::new() },
+                assets: None,
             }));
         }
 
@@ -254,52 +288,54 @@ impl Registry {
             return Ok(Some(Entry {
                 provider,
                 origin: Origin::Module { dir: path.to_owned(), runtime: Runtime::Pot, version: String::new() },
+                assets: None,
             }));
         }
 
         Ok(None)
     }
+}
 
-    fn instantiate(&self, dir: &Path, manifest: Manifest, ctx: &RuntimeContext) -> Result<Arc<dyn Provider>, Skip> {
-        match manifest.module.runtime {
-            Runtime::Js => runtime_js_glossa(dir, manifest, ctx),
-            Runtime::Qtranslate => runtime_js_qtranslate(dir, ctx),
-            Runtime::Pot => runtime_js_pot(dir, ctx),
-            Runtime::Python => {
-                #[cfg(feature = "python")]
-                {
-                    runtime::python::load(dir, manifest, ctx).map_err(Skip::Failed)
-                }
-                #[cfg(not(feature = "python"))]
-                {
-                    let _ = (dir, manifest);
-                    Err(Skip::Reason("this build has no Python runtime".into()))
-                }
+/// Start the runtime for a module with a manifest.
+fn instantiate(dir: &Path, manifest: Manifest, ctx: &RuntimeContext) -> Result<Arc<dyn Provider>, Skip> {
+    match manifest.module.runtime {
+        Runtime::Js => runtime_js_glossa(dir, manifest, ctx),
+        Runtime::Qtranslate => runtime_js_qtranslate(dir, ctx),
+        Runtime::Pot => runtime_js_pot(dir, ctx),
+        Runtime::Python => {
+            #[cfg(feature = "python")]
+            {
+                runtime::python::load(dir, manifest, ctx).map_err(Skip::Failed)
             }
-            Runtime::Process | Runtime::Java => {
-                #[cfg(feature = "process")]
-                {
-                    runtime::process::load(dir, manifest, ctx).map_err(Skip::Failed)
-                }
-                #[cfg(not(feature = "process"))]
-                {
-                    let _ = (dir, manifest);
-                    Err(Skip::Reason("this build has no process runtime".into()))
-                }
+            #[cfg(not(feature = "python"))]
+            {
+                let _ = (dir, manifest);
+                Err(Skip::Reason("this build has no Python runtime".into()))
             }
-            Runtime::Native => {
-                if !ctx.allow_native {
-                    return Err(Skip::Reason("native modules are switched off".into()));
-                }
-                #[cfg(feature = "native")]
-                {
-                    runtime::native::load(dir, manifest, ctx).map_err(Skip::Failed)
-                }
-                #[cfg(not(feature = "native"))]
-                {
-                    let _ = (dir, manifest);
-                    Err(Skip::Reason("this build has no native runtime".into()))
-                }
+        }
+        Runtime::Process | Runtime::Java => {
+            #[cfg(feature = "process")]
+            {
+                runtime::process::load(dir, manifest, ctx).map_err(Skip::Failed)
+            }
+            #[cfg(not(feature = "process"))]
+            {
+                let _ = (dir, manifest);
+                Err(Skip::Reason("this build has no process runtime".into()))
+            }
+        }
+        Runtime::Native => {
+            if !ctx.allow_native {
+                return Err(Skip::Reason("native modules are switched off".into()));
+            }
+            #[cfg(feature = "native")]
+            {
+                runtime::native::load(dir, manifest, ctx).map_err(Skip::Failed)
+            }
+            #[cfg(not(feature = "native"))]
+            {
+                let _ = (dir, manifest);
+                Err(Skip::Reason("this build has no native runtime".into()))
             }
         }
     }
@@ -406,5 +442,70 @@ mod tests {
         assert_eq!(report.failed.len(), 1, "{report:?}");
         assert!(report.loaded.is_empty());
         std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[cfg(feature = "js")]
+    #[test]
+    fn a_module_waiting_for_its_files_is_listed_but_not_loaded() {
+        use glossa_net::Method;
+        let root = std::env::temp_dir().join(format!("glossa-reg-assets-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        let module = root.join("modules").join("needs-model");
+        std::fs::create_dir_all(&module).unwrap();
+        std::fs::write(
+            module.join("module.toml"),
+            r#"capabilities = ["translate"]
+[module]
+id = "needs-model"
+name = "Needs a model"
+runtime = "js"
+env = { OWN = "${ASSETS_DIR}/x" }
+
+[permissions]
+network = ["dl.test"]
+
+[[assets]]
+name = "model.bin"
+url = "https://dl.test/model.bin"
+sha256 = "b94d27b9934d3e08a52e52d7da7dabfac484efe37a5380ee9088f7ace2efcde9"
+size = 11
+"#,
+        )
+        .unwrap();
+        std::fs::write(module.join("main.js"), "function translate(req) { return host.assetPath('model.bin'); }")
+            .unwrap();
+        let ctx = RuntimeContext { models_dir: root.join("models"), ..Default::default() };
+        let mut r = Registry::new();
+        let report = r.load_dir(&root.join("modules"), &ctx);
+        assert_eq!(report.loaded, ["needs-model"], "{report:?}");
+        let entry = r.entry("needs-model").unwrap();
+        let assets = entry.assets.clone().expect("assets are known");
+        assert_eq!(assets.missing(), ["model.bin"]);
+
+        let req = glossa_core::TranslateRequest::new(
+            "hi",
+            glossa_core::LangPair::new(glossa_core::LangId::AUTO, glossa_core::LangId::ENGLISH),
+        );
+        let http = glossa_net::mock::MockHttp::new().on(Method::Get, "https://dl.test/", 200, "hello world");
+        let p = entry.provider.clone();
+        let err = crate::provider::with_test_host(&http, &Default::default(), |h| p.translate(h, &req)).unwrap_err();
+        assert!(matches!(err, glossa_core::Error::AssetsMissing { .. }), "{err:?}");
+
+        assets.download(&http, &crate::provider::CancelToken::new(), &|_| {}).unwrap();
+        let out = crate::provider::with_test_host(&http, &Default::default(), |h| p.translate(h, &req)).unwrap();
+        assert_eq!(std::path::PathBuf::from(out.text), root.join("models").join("needs-model").join("model.bin"));
+
+        // Loaded again with the files there, it starts as usual, and a
+        // process runtime would see the paths in its environment.
+        let mut manifest = Manifest::load(&module.join("module.toml")).unwrap();
+        assets.apply_to(&mut manifest);
+        let dir = root.join("models").join("needs-model");
+        assert_eq!(manifest.module.env["GLOSSA_ASSETS_DIR"], dir.to_string_lossy());
+        assert_eq!(manifest.module.env["GLOSSA_ASSET_MODEL_BIN"], dir.join("model.bin").to_string_lossy());
+        assert_eq!(manifest.module.env["OWN"], format!("{}/x", dir.to_string_lossy()));
+        let mut r = Registry::new();
+        r.load_dir(&root.join("modules"), &ctx);
+        assert!(r.entry("needs-model").unwrap().assets.as_ref().unwrap().ready());
+        std::fs::remove_dir_all(&root).ok();
     }
 }

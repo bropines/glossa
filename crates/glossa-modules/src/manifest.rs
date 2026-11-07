@@ -28,6 +28,12 @@
 //! type = "secret"
 //! label = "API key"
 //! required = true
+//!
+//! [[assets]]                     # files fetched on first use; see `assets`
+//! name = "model"
+//! url = "https://example.com/model.onnx"
+//! sha256 = "…64 hex digits…"
+//! size = 4718592
 //! ```
 //!
 //! Classic QTranslate scripts and pot-app plugins carry no `module.toml`; the
@@ -40,6 +46,7 @@ use std::path::{Path, PathBuf};
 use glossa_core::{Capabilities, LangId, ProviderInfo};
 use serde::{Deserialize, Serialize};
 
+use crate::assets::AssetSpec;
 use crate::provider::OptionSpec;
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -57,6 +64,14 @@ pub struct Manifest {
     pub permissions: Permissions,
     #[serde(default)]
     pub options: Vec<OptionSpec>,
+    /// Files the module needs that are downloaded on demand (models,
+    /// dictionaries, helper programs); see [`crate::assets`].
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub assets: Vec<AssetSpec>,
+    /// Set by the registry: the folder this module's assets live in, which
+    /// the `assets` host call reports. `None` for a module without assets.
+    #[serde(skip)]
+    pub assets_dir: Option<PathBuf>,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
@@ -288,6 +303,10 @@ impl Manifest {
         {
             return Err(format!("module id {id:?} must be lowercase letters, digits, '-', '_' or '.'"));
         }
+        if id.chars().all(|c| c == '.') {
+            // It names folders (the module's files go to `models/<id>`).
+            return Err(format!("module id {id:?} must contain a letter or a digit"));
+        }
         if self.module.api != crate::PROTOCOL_VERSION {
             return Err(format!(
                 "module speaks protocol {}, this build speaks {}",
@@ -305,6 +324,21 @@ impl Manifest {
         }
         if self.module.runtime == Runtime::Process && self.module.command.is_none() {
             return Err("runtime = \"process\" needs a command, e.g. command = [\"node\", \"main.mjs\"]".into());
+        }
+        for asset in &self.assets {
+            asset.validate()?;
+            // Downloads stay within the hosts the module declares, like its
+            // own requests, so the permissions list says everything the
+            // module may reach.
+            for url in asset.url.list() {
+                if !self.permissions.allows_url(url) {
+                    let host = url_host(url).unwrap_or_else(|| url.to_owned());
+                    return Err(format!(
+                        "asset {}: {host} is not in [permissions] network; add it to download from there",
+                        asset.name
+                    ));
+                }
+            }
         }
         Ok(())
     }

@@ -97,6 +97,7 @@ source may be `auto`.
 | `host.http_json(method, url, ...)` | The same, requiring 2xx, returning parsed JSON. |
 | `host.log(level, message)` | Glossa's log (`trace` … `error`). |
 | `host.cache_get(key, default)` / `host.cache_set(key, value, ttl_secs=)` | A small in-memory cache kept by Glossa, so tokens survive the process being stopped for idleness. |
+| `host.asset_path(name)` / `host.assets()` | Where a file from the manifest's `[[assets]]` is (a model, a dictionary), or all of them with `"missing"` for optional ones not downloaded. Also in the environment as `GLOSSA_ASSET_<NAME>` ([assets](../../docs/modules/README.md#assets)). |
 | `host.option(key, default)` | A setting. |
 | `host.image.<op>(image, **params)` | The image API: `crop`, `resize`, `rotate`, `grayscale`, `threshold`, `deskew`, `pad`, `split_tiles`… on a handle (`req["image_handle"]`), an info dict or encoded bytes; `host.image.from_bytes(data)`, `host.image.to_bytes(img, "png"\|"jpeg"\|"webp", quality=)`. |
 | `map_box_back(box, img)` | (module-level) A box found in a prepared image, mapped back onto the original through `img["transform"]`. |
@@ -165,7 +166,7 @@ One JSON object per line, UTF-8. Glossa sends
 `{"id": 1, "method": "translate", "params": {…}}`; the module answers
 `{"id": 1, "result": …}` or `{"id": 1, "error": {"kind": …, "message": …}}`.
 While working, the module may send `{"id": "h1", "method": "http", "params":
-{…}}` (also `log`, `cache_get`, `cache_set`, `image.<op>`) and reads back `{"id": "h1",
+{…}}` (also `log`, `cache_get`, `cache_set`, `assets`, `image.<op>`) and reads back `{"id": "h1",
 "result" | "error": …}`. The SDK does all of this. The full rules are in
 [process-modules.md](../../docs/modules/process-modules.md#framing), for
 debugging and for a module that does without the SDK.
