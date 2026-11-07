@@ -7,7 +7,7 @@
 //! `translate.google.<domain>` (`client=gtx`). Each keeps its own count of
 //! how hard it is being asked, so when one starts refusing (HTTP 429, or a
 //! redirect to the `google.com/sorry` captcha) the next one usually still
-//! answers. A refusing address is left alone for a cooling-off period that
+//! answers; the next one is also asked when the first cannot be reached. A refusing address is left alone for a cooling-off period that
 //! doubles with each refusal (see [`crate::backoff`]); when all of them are
 //! cooling off the provider says so at once, with the wait, and the engine
 //! moves on to the next service. `docs/research/google-translate.md` has
@@ -146,31 +146,53 @@ fn browser_headers(req: HttpRequest, host: &Host) -> HttpRequest {
     req.header("Accept", "*/*").header("Accept-Language", languages).no_retry_when_limited()
 }
 
-/// A refusal in disguise: the `google.com/sorry` captcha page. It normally
-/// arrives with status 429 after the redirect, but has been seen with 200,
-/// and none of these endpoints answers HTML otherwise.
-fn is_captcha(resp: &HttpResponse) -> bool {
+/// A web page where JSON or audio was expected: by its content type, or a
+/// body that opens with a tag. Only the body's start is looked at, so a
+/// translation that merely quotes HTML is not one.
+fn is_web_page(resp: &HttpResponse) -> bool {
     let html = resp.header("content-type").is_some_and(|ct| ct.trim_start().starts_with("text/html"));
-    let head = String::from_utf8_lossy(&resp.body[..resp.body.len().min(4096)]).to_ascii_lowercase();
-    html || head.contains("/sorry/index") || head.contains("unusual traffic")
+    html || resp.body.iter().find(|b| !b.is_ascii_whitespace()) == Some(&b'<')
 }
 
-/// Check a response for a refusal, then for any other error status.
+/// The `google.com/sorry` captcha page: a web page that links to `/sorry/`
+/// or says it saw "unusual traffic". It normally arrives with status 429
+/// after the redirect, but has been seen with 200 and with 403.
+fn is_captcha(resp: &HttpResponse) -> bool {
+    if !is_web_page(resp) {
+        return false;
+    }
+    let page = String::from_utf8_lossy(&resp.body[..resp.body.len().min(64 * 1024)]).to_ascii_lowercase();
+    page.contains("/sorry/") || page.contains("unusual traffic")
+}
+
+/// Check a response for a refusal, then for any other error status, then
+/// for some other web page in place of the answer (a consent or block page,
+/// which one address can show while another answers).
 fn checked(resp: HttpResponse, provider: &str) -> Result<HttpResponse> {
-    let resp = check_status(resp, provider)?;
     if is_captcha(&resp) {
         return Err(Error::RateLimited { provider: provider.to_owned(), retry_after_secs: None });
+    }
+    let resp = check_status(resp, provider)?;
+    if is_web_page(&resp) {
+        return Err(Error::bad_response(provider, WEB_PAGE));
     }
     Ok(resp)
 }
 
+/// The detail of the error for an unexpected web page, which also marks it
+/// as worth asking the next address about.
+const WEB_PAGE: &str = "answered with a web page instead of a translation";
+
 /// Ask `endpoints` in order, skipping those cooling off, until one answers.
 ///
-/// A refusal puts the endpoint in the cooling-off table and moves on; so
-/// does a server error or a 403, which one address can give while another
-/// works. Any other failure from the first endpoint asked (no network, a
-/// timeout, an unreadable answer) is reported as is, since asking the next
-/// address would fail the same way and only make the user wait longer.
+/// A refusal puts the endpoint in the cooling-off table and moves on. A
+/// server error, a 403 or an unexpected web page also moves on, without the
+/// cooling-off: one address can give those while another works. So does a
+/// failure to reach the address (a firewall or DNS can block one host), but
+/// a second such failure in a row ends the search: then it is the network,
+/// and every further address would only make the user wait longer. Any
+/// other failure from the first endpoint asked (an unreadable answer, a
+/// 4xx) is reported as is, since the next address would fail the same way.
 fn first_answer<T>(
     limits: &Backoff,
     host: &Host,
@@ -183,6 +205,7 @@ fn first_answer<T>(
     let mut limited = false;
     let mut first_error: Option<Error> = None;
     let mut asked = 0;
+    let mut unreachable = 0;
     for ep in endpoints {
         if let Some(wait) = limits.cooling(ep.key, Instant::now()) {
             tracing::debug!(endpoint = ep.key, secs = ceil_secs(wait), "skipped: still cooling off after a refusal");
@@ -205,15 +228,29 @@ fn first_answer<T>(
                 tracing::info!(endpoint = ep.key, secs = wait.as_secs(), "rate-limited; leaving it alone for a while");
                 limited = true;
                 note_wait(wait);
+                unreachable = 0;
             }
-            Err(e @ (Error::Cancelled | Error::Timeout(_))) => return Err(e),
+            Err(e @ Error::Cancelled) => return Err(e),
+            Err(e @ (Error::Network(_) | Error::Timeout(_))) => {
+                unreachable += 1;
+                tracing::debug!(endpoint = ep.key, error = %e, "could not reach it");
+                first_error.get_or_insert(e);
+                if unreachable >= 2 {
+                    break;
+                }
+            }
             Err(e) => {
-                let switchable = matches!(&e, Error::HttpStatus { status, .. } if *status == 403 || *status >= 500);
+                let switchable = match &e {
+                    Error::HttpStatus { status, .. } => *status == 403 || *status >= 500,
+                    Error::BadResponse { detail, .. } => detail == WEB_PAGE,
+                    _ => false,
+                };
                 if asked == 1 && !limited && !switchable {
                     return Err(e);
                 }
                 tracing::debug!(endpoint = ep.key, error = %e, "failed; trying the next endpoint");
                 first_error.get_or_insert(e);
+                unreachable = 0;
             }
         }
     }
@@ -254,8 +291,11 @@ fn query(
 
 /// Cut `text` into pieces of at most `max` characters that join back into
 /// `text` exactly: after a line break if there is one in the second half of
-/// the window, else after a sentence end there, else after any whitespace,
-/// else at the limit.
+/// the window, else after the space that follows a sentence end there (or
+/// right after a CJK full stop, which has none), else after any whitespace,
+/// else at the limit. Cutting after the space rather than the full stop
+/// keeps it with the piece before, where it is put back on joining; Google
+/// trims a piece's leading space, which would glue the sentences together.
 fn split_keeping(text: &str, max: usize) -> Vec<&str> {
     let max = max.max(1);
     let mut out = Vec::new();
@@ -268,7 +308,7 @@ fn split_keeping(text: &str, max: usize) -> Vec<&str> {
             .rfind('\n')
             .map(after)
             .filter(late)
-            .or_else(|| window.rfind(['.', '!', '?', '\u{3002}', '\u{FF01}', '\u{FF1F}']).map(after).filter(late))
+            .or_else(|| sentence_cut(window).filter(late))
             .or_else(|| window.rfind(char::is_whitespace).map(after).filter(|c| *c > 0))
             .unwrap_or(limit);
         out.push(&rest[..cut]);
@@ -278,6 +318,33 @@ fn split_keeping(text: &str, max: usize) -> Vec<&str> {
         out.push(rest);
     }
     out
+}
+
+/// Where the last sentence in `window` ends, counting the space after it.
+fn sentence_cut(window: &str) -> Option<usize> {
+    let mut best = None;
+    let mut prev = None;
+    for (i, c) in window.char_indices() {
+        if c.is_whitespace() && matches!(prev, Some('.' | '!' | '?')) {
+            best = Some(i + c.len_utf8());
+        }
+        if matches!(c, '\u{3002}' | '\u{FF01}' | '\u{FF1F}') {
+            best = Some(i + c.len_utf8());
+        }
+        prev = Some(c);
+    }
+    best
+}
+
+/// The whitespace to put between two translated pieces for `gap`, the
+/// whitespace the source had there: its line breaks if it had any, else a
+/// single space.
+fn joining_space(gap: &str) -> &str {
+    match gap.find('\n') {
+        Some(i) => gap[i..].trim_end_matches(|c: char| c != '\n' && c.is_whitespace()),
+        None if gap.is_empty() => "",
+        None => " ",
+    }
 }
 
 /// The translated text: every segment's `[0]`, concatenated.
@@ -491,15 +558,21 @@ impl Provider for Google {
             let part = parse_translation(&v, &self.info.name)?;
             match out.as_mut() {
                 None => out = Some(part),
-                Some(whole) => append_chunk(whole, part),
+                Some(whole) => {
+                    // Google trims each request's answer: put back the
+                    // whitespace the source had between the pieces, whether
+                    // the cut left it at the end of one or the start of the
+                    // next.
+                    let lead = &chunk[..chunk.len() - chunk.trim_start().len()];
+                    if !whole.text.ends_with(char::is_whitespace) {
+                        whole.text.push_str(joining_space(lead));
+                    }
+                    append_chunk(whole, part);
+                }
             }
             if chunks.len() > 1 {
-                // Google trims each request's answer; put back the line
-                // breaks the text was cut after (or the space, for a cut
-                // inside a line).
                 let tail = &chunk[chunk.trim_end().len()..];
-                let tail = tail.find('\n').map_or(tail, |i| &tail[i..]);
-                out.as_mut().expect("set above").text.push_str(tail);
+                out.as_mut().expect("set above").text.push_str(joining_space(tail));
             }
         }
         let mut t = out.ok_or(Error::EmptyInput)?;
@@ -1090,12 +1163,88 @@ mod tests {
     }
 
     #[test]
-    fn no_network_is_reported_at_once() {
-        // No route at all: the mock answers with a network error.
+    fn an_unreachable_host_tries_the_next_without_a_cooling_off() {
+        // No route for the first address: the mock answers with a network
+        // error, as a firewall or DNS blocking that one host would.
+        let limits = Arc::new(Backoff::default());
+        let http = MockHttp::new().on(Method::Get, SECOND, 200, OK);
+        assert_eq!(tr(&Google::sharing(limits.clone()), &http).unwrap().text, "ok");
+        assert_eq!(hosts(&http), vec![API, SECOND]);
+        assert_eq!(limits.cooling("clients5.google.com", Instant::now()), None);
+        assert_eq!(limits.cooling("translate.googleapis.com", Instant::now()), None);
+    }
+
+    #[test]
+    fn no_network_gives_up_after_two_addresses() {
         let http = MockHttp::new();
         let r = tr(&Google::new(), &http);
         assert!(matches!(r, Err(Error::Network(_))), "{r:?}");
-        assert_eq!(http.requests().len(), 1, "the other endpoints would fail the same way");
+        assert_eq!(http.requests().len(), 2, "a second failure in a row is the network, not the host");
+    }
+
+    #[test]
+    fn a_translation_that_mentions_the_captcha_is_not_a_refusal() {
+        let echo = r#"[[["Наши системы обнаружили необычный трафик, см. /sorry/index","Our systems have detected unusual traffic, see /sorry/index",null,null,1]],null,"en"]"#;
+        let limits = Arc::new(Backoff::default());
+        let http = MockHttp::new().on(Method::Get, API, 200, echo);
+        let out = tr(&Google::sharing(limits.clone()), &http).unwrap();
+        assert!(out.text.starts_with("Наши системы"));
+        assert_eq!(http.requests().len(), 1);
+        assert_eq!(limits.cooling("clients5.google.com", Instant::now()), None);
+    }
+
+    #[test]
+    fn another_web_page_is_its_own_error_and_tries_the_next_address() {
+        let consent = "<!doctype html><html><head><title>Before you continue to Google</title></head>\
+                       <body><form action=\"https://consent.google.com/save\">Accept all</form></body></html>";
+        let limits = Arc::new(Backoff::default());
+        let http = MockHttp::new().on(Method::Get, API, 200, consent).on(Method::Get, SECOND, 200, OK);
+        assert_eq!(tr(&Google::sharing(limits.clone()), &http).unwrap().text, "ok");
+        assert_eq!(limits.cooling("clients5.google.com", Instant::now()), None, "not a refusal");
+
+        // Everywhere: reported as an unexpected page, not as a rate limit.
+        let http = MockHttp::new().on(Method::Get, "https://", 200, consent);
+        let r = tr(&Google::new(), &http);
+        assert!(matches!(&r, Err(Error::BadResponse { detail, .. }) if detail == WEB_PAGE), "{r:?}");
+        assert_eq!(http.requests().len(), 3);
+    }
+
+    #[test]
+    fn the_captcha_with_a_403_is_a_refusal_too() {
+        let captcha = "<html><body>unusual traffic from your computer network</body></html>";
+        let http = MockHttp::new().on(Method::Get, API, 403, captcha).on(Method::Get, SECOND, 200, OK);
+        let limits = Arc::new(Backoff::default());
+        tr(&Google::sharing(limits.clone()), &http).unwrap();
+        assert!(limits.cooling("clients5.google.com", Instant::now()).is_some());
+    }
+
+    #[test]
+    fn a_long_paragraph_keeps_the_space_between_its_pieces() {
+        // One paragraph, no line breaks: the cuts fall between sentences.
+        let text = "The cat sat on the mat. ".repeat(900); // 21 600 characters
+        let parts = split_keeping(&text, CHUNK);
+        assert!(parts.len() == 3 && parts[..2].iter().all(|p| p.ends_with(". ")), "cut after the space");
+        let http = MockHttp::new()
+            .on_once(Method::Post, API, 200, r#"[[["one.","x",null,null,1]],null,"en"]"#)
+            .on_once(Method::Post, API, 200, r#"[[["two.","x",null,null,1]],null,"en"]"#)
+            .on_once(Method::Post, API, 200, r#"[[["three.","x",null,null,1]],null,"en"]"#);
+        let out = with_test_host(&http, &OptionValues::new(), |h| {
+            Google::new().translate(h, &TranslateRequest::new(text.clone(), LangPair::new(LangId::ENGLISH, ru())))
+        })
+        .unwrap();
+        assert_eq!(out.text, "one. two. three.");
+    }
+
+    #[test]
+    fn whitespace_at_the_start_of_a_piece_is_put_back() {
+        assert_eq!(joining_space(" "), " ");
+        assert_eq!(joining_space("  \n\n  "), "\n\n");
+        assert_eq!(joining_space(""), "");
+        // No break anywhere but a space right at the limit: the next piece
+        // starts with it.
+        let text = format!("{} {}", "x".repeat(100), "y".repeat(50));
+        let parts = split_keeping(&text, 100);
+        assert_eq!(parts[1], format!(" {}", "y".repeat(50)));
     }
 
     #[test]

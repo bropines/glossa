@@ -15,9 +15,12 @@ treat them as a snapshot.
 `https://www.google.com/sorry/index?continue=…`, the "unusual traffic"
 captcha page, which itself answers **429** with `text/html`. The HTTP
 client follows redirects, so the provider sees the 429. The captcha has
-also been reported to come back with status 200; none of these endpoints
-answers HTML otherwise, so an HTML body (or one mentioning `/sorry/index`
-or "unusual traffic") is treated as the same refusal.
+also been reported to come back with status 200 or 403, so a web page
+(HTML content type, or a body opening with `<`) that links to `/sorry/` or
+says "unusual traffic" is treated as the same refusal, whatever its status.
+Only a web page is searched: the JSON answer echoes the source text, which
+may well contain those words. Any other web page in place of the answer
+(the EU consent interstitial, for one) is a separate error.
 
 Before this change two things made it worse:
 
@@ -80,9 +83,12 @@ In `crates/glossa-services/src/google.rs` and `backoff.rs`:
 - A 429 or the captcha moves on to the next address and leaves the refusing
   one alone for 30 s, doubling with each consecutive refusal up to 10
   minutes, or for the server's `Retry-After` if longer. An answer clears
-  it. A 403 or 5xx also moves on, without the cooling-off. No network, a
-  timeout or an unreadable answer from the first address is reported at
-  once: the next would fail the same way.
+  it. A 403, a 5xx or another web page also moves on, without the
+  cooling-off. So does an address that cannot be reached (a firewall, DNS
+  or DPI may block one host), but a second such failure in a row ends the
+  search, since then it is the network. An unreadable answer or another
+  4xx from the first address is reported at once: the next would fail the
+  same way.
 - These requests are not retried by the HTTP client on 429
   (`HttpRequest::no_retry_when_limited`).
 - When every address is cooling off, the provider answers at once with
@@ -94,8 +100,10 @@ In `crates/glossa-services/src/google.rs` and `backoff.rs`:
   in the shared ureq agent's pool (15 s idle), so a burst of popups reuses
   one TLS connection per host.
 - Long text: up to 10 000 characters per request (POST past 1 800 bytes of
-  encoded text), cut after a line break where possible, at most five
-  requests (50 000 characters). The old cap was 5 000 characters with the
+  encoded text), cut after a line break where possible, else after the
+  space following a sentence end, at most five requests (50 000
+  characters). Google trims each piece's answer, so the whitespace between
+  pieces is put back on joining. The old cap was 5 000 characters with the
   rest cut off.
 
 ## Other clients
