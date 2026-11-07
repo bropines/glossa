@@ -83,9 +83,12 @@ finds most of it for you; the rest needs a moment's thought.
   keychain when they choose that.
 - Fixtures use obvious fakes (`api_key = "test-key"`). The harness scans
   every file for things that look like keys and fails the module.
-- `--record` cuts secret option values out of what it writes, but read a
-  recording before committing it all the same: a service can echo a key or
-  personal data back in its answer.
+- For a live run, pass a real key from an environment variable
+  (`--set-from-env api_key=MY_SERVICE_KEY`), not with `--set` on the command
+  line, where it lands in the shell's history.
+- `--record` cuts every value given with `--set` or `--set-from-env` out of
+  what it writes, but read a recording before committing it all the same: a
+  service can echo a key or personal data back in its answer.
 
 **Network**
 
@@ -120,7 +123,9 @@ glossa-cli --json module test .                  # the report as JSON, for scrip
 |---|---|
 | `--live` | Call the real service instead of the recordings. |
 | `--record` | Call the real service and write what it answered to `tests/recorded/` (see [below](#recorded-http)). |
-| `--set KEY=VALUE` | An option value over the fixtures' own, for a live run with a real key. Repeatable. |
+| `--set-from-env KEY=VAR` | An option value from the environment variable `VAR`, over the fixtures' own: the way to pass a real key for a live run. Repeatable. |
+| `--set KEY=VALUE` | An option value over the fixtures' own. Not for keys: the command line ends up in the shell's history. Repeatable. |
+| `--ignore-recordings` | Replay only the hand-written `[[case.http]]` entries, ignoring `tests/recorded/`. |
 | `--timeout SECS` | The budget for one call (default 30). |
 | `--strict` | Warnings fail the module too. CI runs with it. |
 | `--require-runtimes` | A module that cannot run here (no Python, no Node, no JDK, a native library not built) fails instead of being skipped. |
@@ -215,7 +220,7 @@ All are optional; the [shape checks](#what-is-checked) run regardless.
 | `detected` | The detected language (translate, detect, ocr). |
 | `headword` | The article's headword. |
 | `mime` | The audio's MIME type. |
-| `error` | The call must fail with this kind: `missing_credential`, `unsupported`, `source_language`, `target_language`, `rate_limited`, `network`, `http`, `bad_response`, `not_found`, `timeout` or `module` (any other module error). A dictionary's `not_found` reaches the program as a module error carrying your message, so both `not_found` and `module` accept it. |
+| `error` | The call must fail with this kind: `missing_credential`, `unsupported`, `source_language`, `target_language`, `rate_limited`, `network`, `http`, `bad_response`, `not_found`, `timeout` or `module` (any other module error). A dictionary's `not_found` reaches the program as a plain module error carrying your message, the same as a crash would, so a `not_found` expectation that meets a module error also needs `error_contains` with words from your not_found message; without it the case fails. |
 | `error_contains` | The error message must contain this. |
 | `max_ms` | The call must finish within this many milliseconds. Leave room: the first call to a process module includes starting it. |
 | `result` | A partial match on the result as JSON: every key given must be there with an equal value, and arrays match element by element for as many elements as are given. The names are the program's serialised ones (`trait` and `explains` in an article's explanations, `bounds` for an OCR box); when a key is missing, the report lists the ones that are there. |
@@ -234,17 +239,20 @@ content_type = "application/json"    # guessed from the body when left out
 ```
 
 Each request is matched by method and URL prefix against the case's
-entries, then the file's, then the case's recording, in order. An entry
+recording first (if `--record` has written one), then the case's entries,
+then the file's, in order. A recording is the service's newer answer, so
+it wins over a hand-written entry for the same URL;
+`--ignore-recordings` pins the hand-written entries instead. An entry
 answers once; when every match has been used, the last one keeps
 answering, so a module that asks twice for the same thing needs one entry.
 A request that matches nothing fails with "no recorded response for …",
 naming it, which is also how you find out what a module calls.
 
-**Recording.** `glossa-cli module test --record --set api_key=… .` runs the
-cases against the real service and writes what came back to
-`tests/recorded/<fixture file>/<case name>.json`. Replays use those files
-automatically when a case has no entry of its own that matches. Secret
-option values are cut out of URLs (everything from the secret on, so the
+**Recording.** `glossa-cli module test --record --set-from-env api_key=MY_KEY .`
+runs the cases against the real service and writes what came back to
+`tests/recorded/<fixture file>/<case name>.json`. Later replays use those
+files before the fixture's own entries. Every value given with `--set` or
+`--set-from-env` is cut out of URLs (everything from the value on, so the
 rest still matches as a prefix) and replaced in bodies. Read the files
 before committing them; trim big pages to what the parser needs.
 
@@ -267,7 +275,7 @@ fails before it reaches the recordings, exactly as in the program.
   credentials (`api_key`, `token`…) typed as `secret`;
 - `[permissions] network` holds host names, not URLs, and not `"*"`;
 - the entry exists (`main.js`, `main.py`), and what the runtime needs is
-  here: the process command, Java and the jar, the native library;
+  here: Python, the process command, Java and the jar, the native library;
 - every case's operation is a declared capability, and every declared
   capability has a case;
 - no file looks like it holds a key, token or private key;
@@ -355,8 +363,8 @@ An AI agent writing or changing a module must:
   and a case for each error the module raises (missing key, unknown word,
   unsupported language, rate limit);
 - record real answers with `--record` only when the user has given it a
-  key for that purpose in the conversation, and never write the key into
-  any file; otherwise build the recorded answers from the service's
+  key for that purpose, passed through an environment variable
+  (`--set-from-env`), and never write the key into any file; otherwise build the recorded answers from the service's
   documented examples;
 - run `glossa-cli module test --strict .` and show its output before saying
   the work is done; a module that only "should work" is not done;

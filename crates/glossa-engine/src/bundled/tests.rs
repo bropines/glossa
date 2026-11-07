@@ -1,6 +1,15 @@
 //! The bundled modules against canned answers. The fixtures are written by
 //! hand in the shape each service answers with (see the comment at the top of
 //! each module's `main.js`), cut down to what the module reads.
+//!
+//! The same answers also live in each module's `tests/basic.toml`, run by
+//! `glossa-cli module test` (and `glossa-module-test`'s own test), which
+//! checks the results as a module author would. These tests stay for what
+//! fixtures cannot express: the requests a module sends (URLs, form bodies,
+//! headers, which language codes go out), exact counts, and what must *not*
+//! appear in a result. A test whose every assertion a fixture already makes
+//! is removed rather than kept twice (DeepL's rate limit, Yandex's error
+//! kinds).
 
 use std::sync::Arc;
 
@@ -167,27 +176,6 @@ fn yandex_cuts_long_text_and_keeps_the_gaps() {
 }
 
 #[test]
-fn yandex_reports_unsupported_directions_and_bad_answers() {
-    let http = MockHttp::new().on(
-        Method::Post,
-        "https://translate.yandex.net/api/v1/tr.json/translate",
-        400,
-        r#"{"code":501,"message":"The specified translation direction is not supported"}"#,
-    );
-    let e = translate("yandex-web", &http, "a long sentence here", "en", "ru").unwrap_err();
-    assert!(matches!(e, Error::TargetLanguageUnsupported { .. }), "{e:?}");
-
-    let http = MockHttp::new().on(
-        Method::Post,
-        "https://translate.yandex.net/api/v1/tr.json/translate",
-        200,
-        "<html>captcha</html>",
-    );
-    let e = translate("yandex-web", &http, "a long sentence here", "en", "ru").unwrap_err();
-    assert!(matches!(e, Error::BadResponse { .. }), "{e:?}");
-}
-
-#[test]
 fn yandex_detects_and_looks_up() {
     let http = MockHttp::new()
         .on(Method::Get, "https://translate.yandex.net/api/v1/tr.json/detect", 200, r#"{"code":200,"lang":"de"}"#)
@@ -250,18 +238,6 @@ fn deepl_sends_the_app_request_and_reads_the_detected_language() {
         a["app_information"]["instance_id"], sent["app_information"]["instance_id"],
         "one instance id per run, kept in the cache"
     );
-}
-
-#[test]
-fn deepl_rate_limits_are_typed() {
-    let http = MockHttp::new().on(
-        Method::Post,
-        "https://oneshot-free.www.deepl.com/v1/translate",
-        429,
-        r#"{ "code": 429, "message": "Too many requests. Please slow down and try again later." }"#,
-    );
-    let e = translate("deepl-web", &http, "Hello", "en", "ru").unwrap_err();
-    assert!(matches!(e, Error::RateLimited { .. }), "{e:?}");
 }
 
 // -- Lara ---------------------------------------------------------------------

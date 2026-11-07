@@ -71,10 +71,12 @@ COMMANDS
     speak      [-l LANG] [--slow] -o OUT.mp3 TEXT…
     services   [-c CAPABILITY]        translate | dictionary | listen | ocr | detect_language
     modules                           what loaded, what failed and why
-    module test [--live|--record] [--case NAME] [--set KEY=VALUE] [--timeout SECS]
-                [--strict] [--require-runtimes] DIR…
+    module test [--live|--record] [--case NAME] [--set-from-env KEY=VAR] [--set KEY=VALUE]
+                [--timeout SECS] [--strict] [--require-runtimes] [--ignore-recordings] DIR…
                                       check a module folder (or every module below DIR), load it
-                                      and run its fixtures (tests/*.toml) with recorded HTTP
+                                      and run its fixtures (tests/*.toml) with recorded HTTP;
+                                      --record writes tests/recorded/, which replays then prefer
+                                      over the fixtures' own answers (--ignore-recordings: not)
     module check [--strict] DIR…      the same checks without loading or running anything
     history    [--search Q] [--favorites] [--export FILE.{txt,csv,html,json}]
     import-classic DIR                settings, history, and use its services/themes/locales
@@ -134,6 +136,7 @@ const VALUED: &[&str] = &[
     "--translate-with",
     "--case",
     "--set",
+    "--set-from-env",
     "--timeout",
 ];
 
@@ -157,6 +160,7 @@ const SWITCHES: &[&str] = &[
     "--record",
     "--strict",
     "--require-runtimes",
+    "--ignore-recordings",
 ];
 
 /// Flags every command takes.
@@ -186,7 +190,17 @@ fn command_flags(command: &str) -> Option<&'static [&'static str]> {
         "speak" => &["-o", "--out", "-l", "--lang", "--slow"],
         "services" => &["-c", "--capability"],
         "history" => &["--search", "--favorites", "--export"],
-        "module" => &["--live", "--record", "--case", "--set", "--timeout", "--strict", "--require-runtimes"],
+        "module" => &[
+            "--live",
+            "--record",
+            "--case",
+            "--set",
+            "--set-from-env",
+            "--timeout",
+            "--strict",
+            "--require-runtimes",
+            "--ignore-recordings",
+        ],
         "detect" | "modules" | "import-classic" | "theme" | "locale" | "config" | "serve" | "action" | "doctor"
         | "" | "help" | "version" => &[],
         _ => return None,
@@ -406,6 +420,7 @@ fn module_command(args: &Args) -> Result<(), Fail> {
         strict: args.has(&["--strict"]),
         require_runtimes: args.has(&["--require-runtimes"]),
         case_filter: args.flag(&["--case"]).map(str::to_owned),
+        ignore_recordings: args.has(&["--ignore-recordings"]),
         ..Settings::default()
     };
     if let Some(t) = args.flag(&["--timeout"]) {
@@ -413,13 +428,26 @@ fn module_command(args: &Args) -> Result<(), Fail> {
         settings.timeout = std::time::Duration::from_secs(secs.max(1));
     }
     for (name, value) in &args.flags {
-        if name != "--set" {
-            continue;
-        }
         let pair = value.as_deref().unwrap_or_default();
-        let (k, v) = pair.split_once('=').ok_or_else(|| Fail::Usage(format!("--set {pair:?}: use KEY=VALUE")))?;
+        let (k, v) = match name.as_str() {
+            "--set" => {
+                let (k, v) =
+                    pair.split_once('=').ok_or_else(|| Fail::Usage(format!("--set {pair:?}: use KEY=VALUE")))?;
+                (k, v.to_owned())
+            }
+            // A key from the environment stays out of the shell's history.
+            "--set-from-env" => {
+                let (k, var) = pair
+                    .split_once('=')
+                    .ok_or_else(|| Fail::Usage(format!("--set-from-env {pair:?}: use KEY=VARIABLE")))?;
+                let v = std::env::var(var.trim())
+                    .map_err(|_| Fail::Usage(format!("--set-from-env: the variable {var} is not set")))?;
+                (k, v)
+            }
+            _ => continue,
+        };
         // A number or a boolean is passed as one, anything else as text.
-        let value = serde_json::from_str::<serde_json::Value>(v)
+        let value = serde_json::from_str::<serde_json::Value>(&v)
             .ok()
             .filter(|j| j.is_number() || j.is_boolean())
             .unwrap_or_else(|| json!(v));

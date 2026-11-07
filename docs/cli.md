@@ -414,8 +414,8 @@ empty. `--json`:
 ### module
 
 ```
-glossa-cli module test [--live | --record] [--case NAME] [--set KEY=VALUE]… [--timeout SECS]
-                       [--strict] [--require-runtimes] DIR…
+glossa-cli module test [--live | --record] [--case NAME] [--set-from-env KEY=VAR]… [--set KEY=VALUE]…
+                       [--timeout SECS] [--strict] [--require-runtimes] [--ignore-recordings] DIR…
 glossa-cli module check [--strict] DIR…
 ```
 
@@ -431,7 +431,9 @@ check are described in [modules/testing.md](modules/testing.md).
 | option | default | meaning |
 |---|---|---|
 | `--live` | off | Call the real services instead of the recorded answers. |
-| `--record` | off | Call the real services and write their answers to `tests/recorded/`, without secret option values. |
+| `--record` | off | Call the real services and write their answers to `tests/recorded/`, without the values given by `--set` or `--set-from-env`. Later replays prefer these recordings over the fixtures' own `[[case.http]]` entries. |
+| `--ignore-recordings` | off | Replay only the fixtures' own entries, ignoring `tests/recorded/`. |
+| `--set-from-env KEY=VAR` | none | An option value read from the environment variable `VAR`; use this for keys, which `--set` would leave in the shell's history. Repeatable. |
 | `--case NAME` | all | Only the cases whose name contains `NAME`. |
 | `--set KEY=VALUE` | none | An option value over the fixtures' own (a number or `true`/`false` is passed as one). Repeatable. |
 | `--timeout SECS` | 30 | The budget for one call. |

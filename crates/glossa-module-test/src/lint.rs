@@ -252,7 +252,9 @@ fn check_entry(dir: &Path, m: &Manifest, ctx: &RuntimeContext, out: &mut Vec<Fin
             if !dir.join(file).is_file() {
                 out.push(Finding::error(format!("the entry {file} is missing")));
             }
-            // Whether Python itself is installed shows on the first call.
+            if glossa_modules::runtime::python::find_python(&ctx.python).is_none() {
+                return Some("no Python 3 interpreter found (install Python 3.8 or newer)".into());
+            }
             None
         }
         Runtime::Process => glossa_modules::runtime::process::process_launch(dir, m, ctx).err(),

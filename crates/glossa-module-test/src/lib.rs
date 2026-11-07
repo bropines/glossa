@@ -27,7 +27,7 @@ use std::time::{Duration, Instant};
 use glossa_core::ocr::{ImageSource, OcrGranularity};
 use glossa_core::{DictRequest, LangId, LangPair, OcrRequest, SpeakRequest, TranslateRequest};
 use glossa_modules::provider::resolve_options;
-use glossa_modules::{CancelToken, Host, OptionKind, OptionValues, Provider, Registry, RuntimeContext};
+use glossa_modules::{CancelToken, Host, OptionValues, Provider, Registry, RuntimeContext};
 use serde::Serialize;
 
 use checks::Outcome;
@@ -62,7 +62,11 @@ pub struct Settings {
     pub strict: bool,
     /// Only the cases whose name contains this.
     pub case_filter: Option<String>,
+    /// Replay the hand-written `[[case.http]]` / `[[http]]` entries only,
+    /// ignoring `tests/recorded/`.
+    pub ignore_recordings: bool,
     /// Option values over every fixture's, for live runs with a real key.
+    /// Every text value among them is kept out of recordings.
     pub options: OptionValues,
     pub python: String,
     pub java: String,
@@ -77,6 +81,7 @@ impl Default for Settings {
             require_runtimes: false,
             strict: false,
             case_filter: None,
+            ignore_recordings: false,
             options: OptionValues::new(),
             python: String::new(),
             java: String::new(),
@@ -354,30 +359,18 @@ pub fn test_module(dir: &Path, s: &Settings) -> ModuleReport {
     };
     report.load_ms = Some(started.elapsed().as_millis() as u64);
     let provider = entry.provider;
-    let secrets: Vec<String> = provider
-        .options()
-        .iter()
-        .filter(|o| o.kind == OptionKind::Secret)
-        .filter_map(|o| s.options.get(&o.key).and_then(|v| v.as_str()).map(str::to_owned))
-        .collect();
+    // Everything given on the command line is treated as secret, whatever
+    // the option's type: a key in a `text` option is still a key.
+    let secrets: Vec<String> = s.options.values().filter_map(|v| v.as_str()).map(str::to_owned).collect();
 
-    'files: for (path, file) in &fixtures {
+    for (path, file) in &fixtures {
         let shown = path.strip_prefix(dir).unwrap_or(path).display().to_string();
         for case in &file.cases {
             if s.case_filter.as_deref().is_some_and(|f| !case.name.contains(f)) {
                 continue;
             }
             let r = run_case(provider.as_ref(), path, file, case, s, &secrets);
-            let interpreter_missing =
-                r.problems.iter().any(|p| p.contains("no Python 3 interpreter found")) && r.status == Status::Fail;
-            let mut r = CaseReport { file: shown.clone(), ..r };
-            if interpreter_missing {
-                report.skipped = Some("no Python 3 interpreter found".into());
-                r.status = Status::Skip;
-                report.cases.push(r);
-                break 'files;
-            }
-            report.cases.push(r);
+            report.cases.push(CaseReport { file: shown.clone(), ..r });
         }
     }
     provider.suspend();
@@ -418,17 +411,22 @@ fn run_case(
     let recording = fixture::recording_path(fixture_path, &case.name);
     let replay = match s.network {
         Network::Replay => {
-            let mut exchanges: Vec<Exchange> = case.http.clone();
-            exchanges.extend(file.http.iter().cloned());
-            if let Ok(text) = std::fs::read_to_string(&recording) {
-                match serde_json::from_str::<fixture::Recording>(&text) {
-                    Ok(r) => exchanges.extend(r.exchanges),
-                    Err(e) => {
-                        report.problems.push(format!("{}: {e}", recording.display()));
-                        return report;
+            // A recording is the service's own, newer answer, so it is tried
+            // first; the hand-written entries answer what it does not cover.
+            let mut exchanges: Vec<Exchange> = Vec::new();
+            if !s.ignore_recordings {
+                if let Ok(text) = std::fs::read_to_string(&recording) {
+                    match serde_json::from_str::<fixture::Recording>(&text) {
+                        Ok(r) => exchanges.extend(r.exchanges),
+                        Err(e) => {
+                            report.problems.push(format!("{}: {e}", recording.display()));
+                            return report;
+                        }
                     }
                 }
             }
+            exchanges.extend(case.http.iter().cloned());
+            exchanges.extend(file.http.iter().cloned());
             match net::Replay::new(&exchanges, base) {
                 Ok(r) => Some(r),
                 Err(e) => {
@@ -493,6 +491,16 @@ fn run_case(
             match &e.error {
                 Some(want) if checks::error_matches(&err, want) => {
                     report.result = Some(format!("error {kind}: {err}"));
+                    if want == "not_found" && kind == "module" && e.error_contains.is_none() {
+                        // A dictionary's not_found reaches the program as a
+                        // plain module error, the same as a crash; only the
+                        // message tells them apart.
+                        report.problems.push(
+                            "a dictionary's not_found arrives as a plain module error, like a crash; add \
+                             error_contains with words from the module's not_found message"
+                                .into(),
+                        );
+                    }
                     if let Some(part) = &e.error_contains {
                         if !err.to_string().contains(part.as_str()) {
                             report.problems.push(format!("expected the error to mention {part:?}"));
@@ -712,6 +720,72 @@ mod tests {
         assert_eq!(r.cases[0].requests, ["GET https://api.test/t"]);
         assert_eq!(r.status, Status::Fail);
         assert_eq!(r.count(Severity::Error), 0, "{}", r.render());
+        let _ = std::fs::remove_dir_all(&d);
+    }
+
+    #[test]
+    fn a_crash_does_not_pass_for_not_found_and_recordings_win() {
+        let d = temp("nf");
+        write(
+            &d,
+            "module.toml",
+            "capabilities = [\"dictionary\"]\n[module]\nid = \"d\"\nname = \"D\"\nversion = \"1.0.0\"\nruntime = \"js\"\nmax_input_chars = 9\n[permissions]\nnetwork = [\"api.test\"]\n",
+        );
+        write(
+            &d,
+            "main.js",
+            r#"function dictionary(req, host) {
+                 if (req.text === "crash") return undefined.boom;
+                 var r = host.fetch("https://api.test/" + req.text).json();
+                 if (!r.def) throw new ModuleError("not_found", "no entry for " + req.text);
+                 return { headword: req.text, explanations: [{ part_of_speech: "n", definitions: [r.def] }] };
+               }"#,
+        );
+        write(
+            &d,
+            "tests/basic.toml",
+            r#"
+            [[case]]
+            name = "crash"
+            op = "dictionary"
+            text = "crash"
+            expect = { error = "not_found" }
+
+            [[case]]
+            name = "miss"
+            op = "dictionary"
+            text = "zz"
+            expect = { error = "not_found", error_contains = "no entry for zz" }
+            [[case.http]]
+            url = "https://api.test/zz"
+            body = '{}'
+
+            [[case]]
+            name = "fresh"
+            op = "dictionary"
+            text = "lamp"
+            expect = { contains = "recorded" }
+            [[case.http]]
+            url = "https://api.test/lamp"
+            body = '{"def": "hand-written"}'
+            "#,
+        );
+        let recording = fixture::recording_path(&d.join("tests/basic.toml"), "fresh");
+        std::fs::create_dir_all(recording.parent().unwrap()).unwrap();
+        std::fs::write(
+            &recording,
+            r#"{"exchanges": [{"url": "https://api.test/lamp", "body": "{\"def\": \"recorded\"}"}]}"#,
+        )
+        .unwrap();
+
+        let r = test_module(&d, &Settings::default());
+        let status: Vec<_> = r.cases.iter().map(|c| c.status).collect();
+        assert_eq!(status, [Status::Fail, Status::Pass, Status::Pass], "{}", r.render());
+        assert!(r.cases[0].problems.iter().any(|p| p.contains("add error_contains")), "{}", r.render());
+
+        // Pinned to the hand-written entries, the recording is ignored.
+        let pinned = test_module(&d, &Settings { ignore_recordings: true, ..Settings::default() });
+        assert_eq!(pinned.cases[2].status, Status::Fail, "{}", pinned.render());
         let _ = std::fs::remove_dir_all(&d);
     }
 

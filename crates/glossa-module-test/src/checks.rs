@@ -300,8 +300,10 @@ pub fn error_kind(e: &Error) -> &'static str {
 }
 
 /// Whether an error is the expected one. `not_found` from a dictionary
-/// arrives as a module error carrying the module's message, so `module`
-/// and `not_found` both accept it.
+/// arrives as a module error carrying the module's message (the kind is
+/// dropped in `glossa_modules::protocol`), so `not_found` accepts a module
+/// error too; the caller then insists on `error_contains`, since a crash is
+/// a module error as well.
 pub fn error_matches(e: &Error, want: &str) -> bool {
     let got = error_kind(e);
     got == want || (want == "not_found" && got == "module")

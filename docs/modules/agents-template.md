@@ -82,7 +82,8 @@ You must:
 - run `glossa-cli module test --strict .` after every change and show its
   output before calling the work done;
 - record real answers (`--record`) only with a key the user gave you for
-  that purpose, and never write that key into a file.
+  that purpose, passed with `--set-from-env` (never `--set`, which lands in
+  the shell's history), and never write that key into a file.
 
 You must not:
 
@@ -104,7 +105,9 @@ glossa-cli module check .               # the manifest and files only
 glossa-cli module test .                # load, run the fixtures, check the answers
 glossa-cli module test --strict .       # warnings fail too; run this before a commit
 glossa-cli -v module test --case "unknown word" .   # one case, with the module's log
-glossa-cli module test --record --set api_key=KEY . # refresh tests/recorded/ from the real service
+MY_KEY=… glossa-cli module test --record --set-from-env api_key=MY_KEY .
+                                        # write tests/recorded/ from the real service;
+                                        # replays then prefer it over the [[case.http]] entries
 glossa-cli --json module test .         # the report as JSON
 ```
 
