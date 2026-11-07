@@ -1,8 +1,10 @@
 # Writing Glossa modules in JavaScript
 
 A JavaScript module is a directory with a `module.toml` and a script. It runs
-inside Glossa (the [boa](https://boajs.dev) engine), so there is nothing to
-install, no process to start, and no toolchain to build with.
+inside Glossa (the [QuickJS](https://github.com/quickjs-ng/quickjs) engine),
+so there is nothing to install, no process to start, and no toolchain to
+build with. Libraries from npm can be used by bundling them into the one
+script ([below](#using-npm-packages)).
 
 ```
 free-dictionary/
@@ -106,21 +108,85 @@ error with its message; the next call starts clean.
 - **A fresh context per call.** Globals and module-level variables do not
   survive from one call to the next. Keep tokens and other state in
   `host.cache`.
-- **Modern JavaScript**: `let`/`const`, arrow functions, classes,
-  destructuring, template literals, `async`/`await`, `Map`/`Set`, regular
-  expressions with Unicode, `JSON`.
+- **Modern JavaScript** (ES2023): `let`/`const`, arrow functions, classes
+  with private fields, destructuring, template literals, `async`/`await`,
+  `Map`/`Set`, typed arrays, `BigInt`, regular expressions with Unicode,
+  `JSON`. No `Intl`.
 - **Provided globals**: `ModuleError`, `console`, `btoa`/`atob`,
-  `TextEncoder`/`TextDecoder` (UTF-8), `encodeURIComponent` and friends, and a
-  `setTimeout` that runs its callback on the next microtask (there is no event
-  loop between calls, so it does not wait).
-- **Not available**: the DOM, `XMLHttpRequest`, the browser `fetch` (use
-  `host.fetch`), Node's `require` and modules, timers that wait, the file
-  system.
-- **Limits**: 50 million loop iterations and a recursion depth of 400 per
-  call, so a runaway loop fails the call instead of hanging Glossa. Glossa's
-  module timeout also applies.
+  `TextEncoder`/`TextDecoder` (UTF-8), `encodeURIComponent` and friends,
+  `queueMicrotask`, and a `setTimeout` that runs its callback on the next
+  microtask (there is no event loop between calls, so it does not wait).
+- **Web stand-ins**, for code written for the browser (see
+  [npm packages](#using-npm-packages)): `fetch` (over `host.http`, with the
+  same network permissions; the request runs synchronously and the promise is
+  already settled), `Headers`, `URL`, `URLSearchParams` and an
+  `AbortController` that never aborts. They cover what request-building code
+  uses, not every corner of the web standards.
+- **Not available**: the DOM, `XMLHttpRequest`, Node's `require` and built-in
+  modules (`fs`, `crypto`, `buffer`), timers that wait, the file system.
+- **Limits**, per call: **128 MB** of JavaScript heap and **10 seconds** of
+  script time (time spent waiting for `host.fetch` and other host calls does
+  not count; the network has its own timeouts), and a native stack deep
+  enough for about 500 nested calls. A script over a limit is stopped
+  and the call fails with an `other` error: *the script ran for more than
+  10 s and was stopped*, *the script used more than 128 MB of memory and was
+  stopped*, or *the script recursed too deeply (stack overflow)*. A
+  `try`/`catch` cannot swallow the time limit.
 - The script is read when modules load. After editing it, use *Options →
   Modules → Reload modules* (or restart).
+
+## Using npm packages
+
+Glossa runs one file, with no `require` and no `node_modules`. To use a
+library from npm, bundle the module and its dependencies into that file with
+[esbuild](https://esbuild.github.io) (any bundler that writes CommonJS works;
+`bun build --format=cjs` too):
+
+```
+my-module/
+├── module.toml          # entry = "main.js" (the default)
+├── main.js              # the bundle: what Glossa runs
+├── package.json         # for npm; not read by Glossa
+└── src/index.js         # your code
+```
+
+```js
+// src/index.js
+import { decode } from "he";                 // HTML entities
+import queryString from "query-string";
+
+export async function translate(req, host) {
+  const url = "https://api.example.com/t?" + queryString.stringify({ q: req.text, to: req.to });
+  const r = await fetch(url, { headers: { "X-Key": req.options.api_key } });
+  if (!r.ok) throw new ModuleError("http", "status " + r.status);
+  return { text: decode((await r.json()).translation) };
+}
+```
+
+```bash
+npm install he query-string
+npx esbuild src/index.js --bundle --format=cjs --platform=neutral   --main-fields=module,main --target=es2022 --minify --outfile=main.js
+```
+
+- `--format=cjs` makes the bundle assign its exports to `module.exports`,
+  where Glossa finds `translate` and the other entry points.
+- `--platform=neutral` keeps Node's built-ins out. A library that needs
+  `fs`, `crypto`, `buffer` or `process` will not work; look for a browser
+  build of it, or one written in plain JavaScript.
+- Glossa's `fetch`, `URL`, `URLSearchParams`, `Headers`, `TextEncoder` and
+  `atob`/`btoa` are there for libraries that expect a browser. `fetch` goes
+  through `host.http`, so `permissions.network` still decides which hosts
+  are reachable. Its response body is text; pass `binary: true` in the
+  options when you need the exact bytes from `arrayBuffer()`.
+- Each call starts fresh, so the bundle runs its top-level code every time.
+  A script over 16 KB is compiled once, on its first call, and kept as
+  bytecode (about one and a half times the minified size) while the module
+  is loaded; smaller scripts are parsed each call and keep nothing. Size is
+  still speed: `--minify`, and prefer small libraries. A 170 KB bundle
+  (`he`, `query-string`, `crypto-js`) costs about 4 ms per call on an Apple
+  silicon Mac; the network round trip usually costs more. In a compiled
+  script, `Function.prototype.toString` does not return the source.
+- Ship `main.js`; `node_modules` stays out of the module folder.
 
 ## Testing
 

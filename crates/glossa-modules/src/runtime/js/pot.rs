@@ -12,7 +12,6 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use base64::Engine as _;
-use boa_engine::JsValue;
 use glossa_module_sdk::wire::{ErrorKind, ModuleError, Reply};
 use serde::Deserialize;
 
@@ -50,7 +49,7 @@ struct Need {
 
 pub struct PotPlugin {
     pub dir: PathBuf,
-    pub main: String,
+    pub main: engine::Script,
     pub manifest: Manifest,
     pub kind: PotKind,
 }
@@ -114,6 +113,7 @@ impl PotPlugin {
             assets_dir: None,
         };
         manifest.validate()?;
+        let main = engine::Script::new("main.js", main.trim_start_matches('\u{feff}'));
         Ok(PotPlugin { dir: dir.to_owned(), main, manifest, kind })
     }
 }
@@ -148,19 +148,21 @@ fn need_to_option(n: &Need) -> OptionSpec {
 
 /// Which entry point the plugin defines.
 fn probe_kind(main: &str) -> Result<PotKind, String> {
-    let mut ctx = engine::new_context()?;
-    engine::eval(&mut ctx, "var __potOsType = 'Windows_NT';", "os")?;
-    engine::eval(&mut ctx, POT_JS, "pot.js")?;
-    engine::eval(&mut ctx, main, "main.js")?;
-    if engine::has_function(&mut ctx, "translate") {
-        Ok(PotKind::Translate)
-    } else if engine::has_function(&mut ctx, "recognize") {
-        Ok(PotKind::Recognize)
-    } else if engine::has_function(&mut ctx, "tts") {
-        Ok(PotKind::Tts)
-    } else {
-        Err("main.js defines none of translate, recognize or tts".into())
-    }
+    engine::with_context(|ctx| {
+        engine::eval(ctx, "var __potOsType = 'Windows_NT';", "os")?;
+        engine::shared::WEB.eval(ctx)?;
+        engine::shared::POT.eval(ctx)?;
+        engine::eval(ctx, main, "main.js")?;
+        if engine::has_function(ctx, "translate") {
+            Ok(PotKind::Translate)
+        } else if engine::has_function(ctx, "recognize") {
+            Ok(PotKind::Recognize)
+        } else if engine::has_function(ctx, "tts") {
+            Ok(PotKind::Tts)
+        } else {
+            Err("main.js defines none of translate, recognize or tts".into())
+        }
+    })?
 }
 
 /// pot-app's own language keys, to BCP 47.
@@ -228,7 +230,6 @@ impl Transport for PotTransport {
             |m: &str, p: serde_json::Value| if m.starts_with("local:") { self.local(m, &p) } else { host(m, p) };
         let _bridge = Bridge::install(&routed);
 
-        let mut ctx = engine::new_context().map_err(ModuleError::other)?;
         let os = if cfg!(windows) {
             "Windows_NT"
         } else if cfg!(target_os = "macos") {
@@ -236,83 +237,76 @@ impl Transport for PotTransport {
         } else {
             "Linux"
         };
-        engine::eval(&mut ctx, &format!("var __potOsType = '{os}';"), "os").map_err(ModuleError::other)?;
-        engine::eval(&mut ctx, POT_JS, "pot.js").map_err(ModuleError::other)?;
-        engine::eval(&mut ctx, &self.plugin.main, "main.js").map_err(engine::script_error)?;
-
         let config = params.get("options").cloned().unwrap_or_else(|| serde_json::json!({}));
         let s = |k: &str| params.get(k).and_then(|v| v.as_str()).unwrap_or("").to_owned();
-        let options = |ctx: &mut boa_engine::Context, detect: &str| -> Result<JsValue, ModuleError> {
-            let config_js = engine::from_json(ctx, &config).map_err(ModuleError::other)?;
-            let build = engine::get_global(ctx, "__potOptions");
-            build
-                .as_callable()
-                .ok_or_else(|| ModuleError::other("pot.js is missing __potOptions"))?
-                .call(&JsValue::undefined(), &[config_js, JsValue::from(js(detect))], ctx)
-                .map_err(|e| ModuleError::other(engine::describe(&e, ctx)))
-        };
 
-        match (method, self.plugin.kind) {
-            ("translate", PotKind::Translate) => {
-                let (text, from, to) = (s("text"), s("from"), s("to"));
-                let opts = options(&mut ctx, &from)?;
-                let out = engine::call_global(
-                    &mut ctx,
-                    "translate",
-                    &[JsValue::from(js(&text)), JsValue::from(js(&from)), JsValue::from(js(&to)), opts],
-                )
-                .map_err(engine::script_error)?;
-                let mut value = engine::to_json(&mut ctx, &out).map_err(ModuleError::other)?;
-                if value.is_null() {
-                    // Streaming plugins report through setResult and return
-                    // nothing.
-                    let last = engine::get_global(&mut ctx, "__potResult");
-                    value = engine::to_json(&mut ctx, &last).map_err(ModuleError::other)?;
+        engine::with_context(|ctx| -> Result<serde_json::Value, ModuleError> {
+            engine::eval(ctx, &format!("var __potOsType = '{os}';"), "os").map_err(ModuleError::other)?;
+            engine::shared::WEB.eval(ctx).map_err(ModuleError::other)?;
+            engine::shared::POT.eval(ctx).map_err(ModuleError::other)?;
+            self.plugin.main.eval(ctx).map_err(engine::script_error)?;
+
+            let options = |detect: &str| {
+                let config_js = engine::from_json(ctx, &config).map_err(ModuleError::other)?;
+                let build = engine::get_global(ctx, "__potOptions");
+                if !build.is_function() {
+                    return Err(ModuleError::other("pot.js is missing __potOptions"));
                 }
-                translate_result(value)
-            }
-            ("recognize", PotKind::Recognize) => {
-                let lang = s("lang");
-                let opts = options(&mut ctx, &lang)?;
-                let out = engine::call_global(
-                    &mut ctx,
-                    "recognize",
-                    &[JsValue::from(js(&s("image_base64"))), JsValue::from(js(&lang)), opts],
-                )
-                .map_err(engine::script_error)?;
-                let text = engine::to_string(&mut ctx, &out);
-                if text.trim().is_empty() {
-                    return Err(ModuleError::new(ErrorKind::NotFound, "no text recognised"));
-                }
-                Ok(serde_json::json!({ "text": text }))
-            }
-            ("speak", PotKind::Tts) => {
-                let lang = s("lang");
-                let opts = options(&mut ctx, &lang)?;
-                let out = engine::call_global(
-                    &mut ctx,
-                    "tts",
-                    &[JsValue::from(js(&s("text"))), JsValue::from(js(&lang)), opts],
-                )
-                .map_err(engine::script_error)?;
-                let value = engine::to_json(&mut ctx, &out).map_err(ModuleError::other)?;
-                let bytes: Vec<u8> = match value {
-                    serde_json::Value::Array(a) => a.iter().filter_map(|v| v.as_u64()).map(|b| b as u8).collect(),
-                    serde_json::Value::String(b64) => {
-                        base64::engine::general_purpose::STANDARD.decode(b64).unwrap_or_default()
+                engine::call(ctx, &build, &[config_js, engine::str(ctx, detect)]).map_err(ModuleError::other)
+            };
+            let js = |v: &str| engine::str(ctx, v);
+
+            match (method, self.plugin.kind) {
+                ("translate", PotKind::Translate) => {
+                    let (text, from, to) = (s("text"), s("from"), s("to"));
+                    let opts = options(&from)?;
+                    let out = engine::call_global(ctx, "translate", &[js(&text), js(&from), js(&to), opts])
+                        .map_err(engine::script_error)?;
+                    let mut value = engine::to_json(ctx, &out).map_err(ModuleError::other)?;
+                    if value.is_null() {
+                        // Streaming plugins report through setResult and return
+                        // nothing.
+                        let last = engine::get_global(ctx, "__potResult");
+                        value = engine::to_json(ctx, &last).map_err(ModuleError::other)?;
                     }
-                    _ => Vec::new(),
-                };
-                if bytes.is_empty() {
-                    return Err(ModuleError::new(ErrorKind::BadResponse, "the plugin returned no audio"));
+                    translate_result(value)
                 }
-                Ok(serde_json::json!({
-                    "audio_base64": base64::engine::general_purpose::STANDARD.encode(&bytes),
-                    "mime": if bytes.starts_with(b"RIFF") { "audio/wav" } else { "audio/mpeg" },
-                }))
+                ("recognize", PotKind::Recognize) => {
+                    let lang = s("lang");
+                    let opts = options(&lang)?;
+                    let out = engine::call_global(ctx, "recognize", &[js(&s("image_base64")), js(&lang), opts])
+                        .map_err(engine::script_error)?;
+                    let text = engine::to_string(ctx, &out);
+                    if text.trim().is_empty() {
+                        return Err(ModuleError::new(ErrorKind::NotFound, "no text recognised"));
+                    }
+                    Ok(serde_json::json!({ "text": text }))
+                }
+                ("speak", PotKind::Tts) => {
+                    let lang = s("lang");
+                    let opts = options(&lang)?;
+                    let out = engine::call_global(ctx, "tts", &[js(&s("text")), js(&lang), opts])
+                        .map_err(engine::script_error)?;
+                    let value = engine::to_json(ctx, &out).map_err(ModuleError::other)?;
+                    let bytes: Vec<u8> = match value {
+                        serde_json::Value::Array(a) => a.iter().filter_map(|v| v.as_u64()).map(|b| b as u8).collect(),
+                        serde_json::Value::String(b64) => {
+                            base64::engine::general_purpose::STANDARD.decode(b64).unwrap_or_default()
+                        }
+                        _ => Vec::new(),
+                    };
+                    if bytes.is_empty() {
+                        return Err(ModuleError::new(ErrorKind::BadResponse, "the plugin returned no audio"));
+                    }
+                    Ok(serde_json::json!({
+                        "audio_base64": base64::engine::general_purpose::STANDARD.encode(&bytes),
+                        "mime": if bytes.starts_with(b"RIFF") { "audio/wav" } else { "audio/mpeg" },
+                    }))
+                }
+                (other, _) => Err(ModuleError::unsupported(other)),
             }
-            (other, _) => Err(ModuleError::unsupported(other)),
-        }
+        })
+        .map_err(ModuleError::other)?
     }
 }
 
@@ -357,10 +351,6 @@ fn translate_result(value: serde_json::Value) -> Result<serde_json::Value, Modul
         }
         _ => Err(ModuleError::new(ErrorKind::BadResponse, "the plugin returned no translation")),
     }
-}
-
-fn js(s: &str) -> boa_engine::JsString {
-    boa_engine::JsString::from(s)
 }
 
 #[cfg(test)]

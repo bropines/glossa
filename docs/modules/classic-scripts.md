@@ -37,6 +37,10 @@ The services then appear as `qt-<folder name>` in *Options → Services* and in
 - the script's `SupportedLanguages` table mapped onto Glossa's languages, and
   legacy code pages (cp1251, latin-1) for old services.
 
+Scripts run in the same engine as JavaScript modules, with the same limits
+per call (128 MB of heap, 10 seconds of the script's own work; see
+[js-modules.md](js-modules.md#the-environment)).
+
 Classic scripts always had unrestricted network access, so they keep it.
 Their settings (keys some services ask for) appear on their settings page
 like any module's.
@@ -65,6 +69,8 @@ provides what they expect from pot's runtime:
 - the settings declared in `info.json` (`needs`), shown on the plugin's
   settings page and passed as `config`;
 - `info.json`'s language table, mapped onto Glossa's languages.
+- the browser globals plugins took from pot's web view: `URL`,
+  `URLSearchParams`, `Headers`, `TextEncoder`/`TextDecoder`, `atob`/`btoa`.
 
 Not provided: `utils.run` (running programs) and `utils.Database`; a plugin
 that needs them fails with a message saying so.

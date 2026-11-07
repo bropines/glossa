@@ -9,7 +9,7 @@ authors.workspace = true
 
 [features]
 default = ["js", "python", "process", "native", "image"]
-js = ["dep:boa_engine"]
+js = ["dep:rquickjs"]
 python = []
 # Any program over stdio (`runtime = "process"`) and Java modules (`runtime = "java"`).
 process = []
@@ -29,7 +29,7 @@ tracing = { workspace = true }
 parking_lot = { workspace = true, features = ["arc_lock"] }
 base64 = { workspace = true }
 thiserror = { workspace = true }
-boa_engine = { workspace = true, optional = true }
+rquickjs = { workspace = true, optional = true }
 libloading = { workspace = true, optional = true }
 image = { workspace = true, optional = true }
 md-5 = "0.10"

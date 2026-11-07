@@ -1,37 +1,65 @@
 //! The JavaScript engine glue shared by all three dialects.
 //!
-//! Each call runs in a **fresh** engine context: the scripts are evaluated,
-//! the entry function is called, the result is read out, and the context is
-//! dropped. Nothing stays resident between calls, which keeps memory flat no
-//! matter how many script modules are installed, and a script that corrupts
-//! its own globals cannot poison the next call. Parsing a service script
-//! takes a few milliseconds — small next to the network round trip that
-//! follows.
+//! The engine is QuickJS (through `rquickjs`), a small embeddable engine
+//! written in C. Each call runs in a **fresh** runtime and context: the
+//! scripts are evaluated, the entry function is called, the result is read
+//! out, and everything is dropped. Nothing stays resident between calls,
+//! which keeps memory flat no matter how many script modules are installed,
+//! and a script that corrupts its own globals cannot poison the next call.
+//! Creating a runtime and evaluating the preludes takes well under a
+//! millisecond — small next to the network round trip that follows.
+//!
+//! [`with_context`] is the only way in: it hands a closure a `Ctx`, and every
+//! JavaScript value the closure touches borrows from it, so no value can
+//! outlive the runtime it belongs to.
+//!
+//! Every call gets a heap limit ([`MEMORY_LIMIT`]) and a time limit
+//! ([`TIME_LIMIT`], enforced by the interrupt handler). Time spent inside host
+//! calls (a network request) does not count: the limit is on the script's own
+//! work, and the network has its own timeouts.
 //!
 //! Scripts reach the host through one native function, `__host_call(method,
 //! json)`, which returns a JSON reply envelope; the friendlier APIs each
 //! dialect expects (`host.http`, pot's `fetch`, the classic `RequestData`
 //! flow) are thin JavaScript preludes on top of it. During a call the native
 //! finds its way back to the Rust side through a thread-local [`Bridge`] that
-//! the call installs and removes — the context never outlives the call, so the
+//! the call installs and removes — the runtime never outlives the call, so the
 //! bridge can never dangle.
+//!
+//! A Rust panic inside a native (or inside the host callback it reaches) is
+//! caught by `rquickjs` at the C boundary and resumed once control is back in
+//! Rust, so the `catch_unwind` around every provider still sees it.
 
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
+use std::time::{Duration, Instant};
 
 use base64::Engine as _;
-use boa_engine::builtins::promise::PromiseState;
-use boa_engine::object::builtins::JsPromise;
-use boa_engine::property::Attribute;
-use boa_engine::{js_string, Context, JsError, JsNativeError, JsResult, JsValue, NativeFunction, Source};
 use glossa_module_sdk::wire::{ErrorKind, ModuleError, Reply};
+use rquickjs::context::EvalOptions;
+use rquickjs::function::{Args, Rest};
+use rquickjs::{qjs, Context, Ctx, Exception, Function, Runtime, Value};
 
-/// How far a script may run before it is stopped: generous for real work,
-/// fatal for an accidental infinite loop.
-const LOOP_LIMIT: u64 = 50_000_000;
-const RECURSION_LIMIT: usize = 400;
+/// The most memory one call's JavaScript heap may use. Generous for real
+/// work (a large screenshot travels through a pot-app plugin as a base64
+/// string, and gets copied a few times on the way), fatal for a runaway
+/// allocation.
+pub const MEMORY_LIMIT: usize = 128 << 20;
+
+/// How long a script may compute in one call, not counting the time it waits
+/// for the host.
+pub const TIME_LIMIT: Duration = Duration::from_secs(10);
+
+/// How much native stack the engine may use: about 500 nested JavaScript
+/// calls (boa allowed 400), well inside the smallest stack a call can run on
+/// (1 MB on the Windows main thread, where modules are probed).
+const STACK_LIMIT: usize = 512 << 10;
 
 /// Common helpers every dialect gets: `console`, `atob`/`btoa`, `__call`.
 pub const PRELUDE: &str = include_str!("prelude.js");
+
+/// `URL`, `URLSearchParams`, `Headers` and friends, for Glossa modules (and
+/// the npm libraries bundled into them) and pot-app plugins.
+pub const WEB_JS: &str = include_str!("web.js");
 
 type HostFn<'a> = dyn Fn(&str, serde_json::Value) -> Reply + 'a;
 
@@ -39,11 +67,40 @@ thread_local! {
     /// The host callback for the call running on this thread, as a raw fat
     /// pointer. Set by [`Bridge::install`] for exactly the duration of a call.
     static BRIDGE: RefCell<Option<*const HostFn<'static>>> = const { RefCell::new(None) };
+    /// Time spent in host calls during the current call, which the time limit
+    /// leaves out.
+    static HOST_TIME: Cell<Duration> = const { Cell::new(Duration::ZERO) };
+    /// Set by the interrupt handler when it stops a script, so the uncatchable
+    /// "interrupted" error can be told apart and reported as the time limit.
+    static TIMED_OUT: Cell<bool> = const { Cell::new(false) };
+    /// A panic caught in a native, to be resumed once control is back in Rust.
+    static PANIC: RefCell<Option<Box<dyn std::any::Any + Send>>> = const { RefCell::new(None) };
+}
+
+/// Run a native's body, turning a panic into a JavaScript exception and
+/// keeping the payload. [`describe`] (which every error path goes through)
+/// and [`with_context`] resume it, so the panic reaches the `catch_unwind`
+/// around the provider whichever way the engine was entered — rquickjs does
+/// this for its own entry points, but not for the bytecode path.
+fn guarded<'js>(ctx: &Ctx<'js>, f: impl FnOnce() -> rquickjs::Result<Value<'js>>) -> rquickjs::Result<Value<'js>> {
+    match std::panic::catch_unwind(std::panic::AssertUnwindSafe(f)) {
+        Ok(r) => r,
+        Err(payload) => {
+            PANIC.with(|p| *p.borrow_mut() = Some(payload));
+            Err(Exception::throw_internal(ctx, "panic in the host"))
+        }
+    }
+}
+
+fn resume_panic() {
+    if let Some(payload) = PANIC.with(|p| p.borrow_mut().take()) {
+        std::panic::resume_unwind(payload);
+    }
 }
 
 /// Scopes a host callback to the current call. Dropping it removes the
 /// callback, so a native invoked after the call (which cannot happen, since
-/// the context is dropped first) would find nothing rather than a dangling
+/// the runtime is dropped first) would find nothing rather than a dangling
 /// pointer.
 pub struct Bridge<'a> {
     _host: std::marker::PhantomData<&'a HostFn<'a>>,
@@ -69,131 +126,392 @@ impl Drop for Bridge<'_> {
 }
 
 fn host_call(method: &str, params: serde_json::Value) -> Reply {
-    BRIDGE.with(|b| match *b.borrow() {
-        // SAFETY: see `Bridge::install` — the pointer is valid while set.
-        Some(ptr) => unsafe { (*ptr)(method, params) },
-        None => Reply::err(ModuleError::other("host call outside of a module call")),
-    })
+    let ptr = BRIDGE.with(|b| *b.borrow());
+    let Some(ptr) = ptr else {
+        return Reply::err(ModuleError::other("host call outside of a module call"));
+    };
+    let started = Instant::now();
+    // SAFETY: see `Bridge::install` — the pointer is valid while set. The
+    // borrow of BRIDGE is released first, so a host callback that itself
+    // runs a script (none does today) would not hit a RefCell panic.
+    let reply = unsafe { (*ptr)(method, params) };
+    HOST_TIME.with(|t| t.set(t.get() + started.elapsed()));
+    reply
 }
 
-/// A context with limits and the host natives installed, and the common
-/// prelude evaluated.
-pub fn new_context() -> Result<Context, String> {
-    let mut ctx = Context::default();
-    ctx.runtime_limits_mut().set_loop_iteration_limit(LOOP_LIMIT);
-    ctx.runtime_limits_mut().set_recursion_limit(RECURSION_LIMIT);
+/// Run `f` in a fresh runtime and context with the limits set, the natives
+/// installed and the common prelude evaluated. The `Err` side is a failure
+/// to set the engine up; what the closure returns is passed through.
+pub fn with_context<R>(f: impl for<'js> FnOnce(&Ctx<'js>) -> R) -> Result<R, String> {
+    with_runtime(true, f)
+}
 
-    let natives: [(&str, usize, NativeFunction); 5] = [
-        ("__host_call", 2, NativeFunction::from_fn_ptr(native_host_call)),
-        ("__b64encode", 1, NativeFunction::from_fn_ptr(native_b64encode)),
-        ("__b64decode", 1, NativeFunction::from_fn_ptr(native_b64decode)),
-        ("__digest", 3, NativeFunction::from_fn_ptr(native_digest)),
-        ("__log", 2, NativeFunction::from_fn_ptr(native_log)),
+fn with_runtime<R>(prelude: bool, f: impl for<'js> FnOnce(&Ctx<'js>) -> R) -> Result<R, String> {
+    let rt = Runtime::new().map_err(|e| format!("could not start the JavaScript engine: {e}"))?;
+    rt.set_memory_limit(MEMORY_LIMIT);
+    rt.set_max_stack_size(STACK_LIMIT);
+
+    // The limit clock starts now and pauses during host calls. A script run
+    // from inside another call's host callback (none does) would share the
+    // counters; save and restore them so the outer call is unaffected.
+    let saved_host_time = HOST_TIME.with(|t| t.replace(Duration::ZERO));
+    let saved_timed_out = TIMED_OUT.with(|t| t.replace(false));
+    let started = Instant::now();
+    // QuickJS calls this every few thousand instructions, so reading the
+    // clock each time costs nothing measurable.
+    rt.set_interrupt_handler(Some(Box::new(move || {
+        let worked = started.elapsed().saturating_sub(HOST_TIME.with(Cell::get));
+        let stop = worked > TIME_LIMIT;
+        if stop {
+            TIMED_OUT.with(|t| t.set(true));
+        }
+        stop
+    })));
+
+    let result = (|| {
+        let ctx = Context::full(&rt).map_err(|e| format!("could not start the JavaScript engine: {e}"))?;
+        ctx.with(|ctx| {
+            if prelude {
+                install_natives(&ctx).map_err(|e| describe(&ctx, e))?;
+                shared::PRELUDE.eval(&ctx)?;
+            }
+            Ok(f(&ctx))
+        })
+    })();
+
+    HOST_TIME.with(|t| t.set(saved_host_time));
+    TIMED_OUT.with(|t| t.set(saved_timed_out));
+    // A script that caught the exception standing in for a panic does not
+    // get to hide it.
+    resume_panic();
+    result
+}
+
+type Native = for<'js> fn(Ctx<'js>, Rest<Value<'js>>) -> rquickjs::Result<Value<'js>>;
+
+fn install_natives(ctx: &Ctx<'_>) -> rquickjs::Result<()> {
+    let natives: [(&str, Native); 5] = [
+        ("__host_call", native_host_call),
+        ("__b64encode", native_b64encode),
+        ("__b64decode", native_b64decode),
+        ("__digest", native_digest),
+        ("__log", native_log),
     ];
-    for (name, len, f) in natives {
-        ctx.register_global_callable(js_string!(name), len, f).map_err(|e| e.to_string())?;
+    let g = ctx.globals();
+    for (name, f) in natives {
+        g.set(name, native(ctx, name, f)?)?;
     }
-    eval(&mut ctx, PRELUDE, "prelude.js")?;
-    Ok(ctx)
+    Ok(())
 }
 
-/// Evaluate `code`, naming it `name` in error messages.
-pub fn eval(ctx: &mut Context, code: &str, name: &str) -> Result<JsValue, String> {
-    ctx.eval(Source::from_bytes(code)).map_err(|e| format!("{name}: {}", describe(&e, ctx)))
+fn native<'js>(ctx: &Ctx<'js>, name: &str, f: Native) -> rquickjs::Result<Function<'js>> {
+    Function::new(ctx.clone(), move |ctx: Ctx<'js>, args: Rest<Value<'js>>| {
+        let c = ctx.clone();
+        guarded(&c, move || f(ctx, args))
+    })?
+    .with_name(name)
+}
+
+fn eval_options(name: &str) -> EvalOptions {
+    let mut options = EvalOptions::default();
+    // Classic and pot-app scripts are sloppy-mode code (implicit globals,
+    // `arguments.callee`), as browsers and Windows Script Host ran them.
+    options.strict = false;
+    options.filename = Some(name.to_owned());
+    options
+}
+
+/// Evaluate `code` as a global script, naming it `name` in error messages.
+pub fn eval<'js>(ctx: &Ctx<'js>, code: &str, name: &str) -> Result<Value<'js>, String> {
+    ctx.eval_with_options::<Value, _>(code, eval_options(name)).map_err(|e| format!("{name}: {}", describe(ctx, e)))
+}
+
+/// Compile a script to QuickJS bytecode without running it. Loading the
+/// bytecode in a later call ([`eval_compiled`]) skips the parse, which is
+/// most of the cost of a large script (a library bundled from npm).
+pub fn compile(code: &str, name: &str) -> Result<Vec<u8>, String> {
+    // Compiling runs nothing, so it needs neither the natives nor the prelude
+    // (and the prelude is itself compiled this way).
+    with_runtime(false, |ctx| {
+        let source =
+            std::ffi::CString::new(code).map_err(|_| format!("{name}: the script contains a NUL character"))?;
+        let file = std::ffi::CString::new(name).unwrap_or_default();
+        let flags = (qjs::JS_EVAL_TYPE_GLOBAL | qjs::JS_EVAL_FLAG_COMPILE_ONLY) as i32;
+        // SAFETY: `source` is NUL-terminated as JS_Eval requires and both
+        // strings outlive the call. The compiled function is owned by us and
+        // freed once written out; the written buffer is copied and freed.
+        // The functions' source text is left out (it would more than double
+        // the bytecode); only `Function.prototype.toString` misses it.
+        unsafe {
+            let raw = ctx.as_raw().as_ptr();
+            let f = qjs::JS_Eval(raw, source.as_ptr(), code.len() as _, file.as_ptr(), flags);
+            if qjs::JS_IsException(f) {
+                return Err(format!("{name}: {}", describe(ctx, rquickjs::Error::Exception)));
+            }
+            let mut size = 0;
+            let buf = qjs::JS_WriteObject(
+                raw,
+                &mut size,
+                f,
+                (qjs::JS_WRITE_OBJ_BYTECODE | qjs::JS_WRITE_OBJ_STRIP_SOURCE) as i32,
+            );
+            qjs::JS_FreeValue(raw, f);
+            if buf.is_null() {
+                return Err(format!("{name}: {}", describe(ctx, rquickjs::Error::Exception)));
+            }
+            let out = std::slice::from_raw_parts(buf, size as usize).to_vec();
+            qjs::js_free(raw, buf.cast());
+            Ok(out)
+        }
+    })?
+}
+
+/// Run bytecode made by [`compile`] as a global script.
+pub fn eval_compiled<'js>(ctx: &Ctx<'js>, bytecode: &[u8], name: &str) -> Result<Value<'js>, String> {
+    // SAFETY: the buffer came from `compile` in this process (same engine
+    // build); JS_EvalFunction takes ownership of the function it is given,
+    // and the value it returns is handed to rquickjs, which frees it.
+    unsafe {
+        let raw = ctx.as_raw().as_ptr();
+        let f = qjs::JS_ReadObject(raw, bytecode.as_ptr(), bytecode.len() as _, qjs::JS_READ_OBJ_BYTECODE as i32);
+        if qjs::JS_IsException(f) {
+            return Err(format!("{name}: {}", describe(ctx, rquickjs::Error::Exception)));
+        }
+        let v = qjs::JS_EvalFunction(raw, f);
+        if qjs::JS_IsException(v) {
+            return Err(format!("{name}: {}", describe(ctx, rquickjs::Error::Exception)));
+        }
+        Ok(Value::from_raw(ctx.clone(), v))
+    }
+}
+
+/// A script that is either parsed on every call or, past a size where the
+/// parse starts to cost more than a millisecond, compiled once and kept as
+/// bytecode. Small scripts stay text so an installed module that is not in
+/// use keeps costing nothing but its source.
+pub struct Script {
+    pub name: String,
+    pub source: String,
+    always_compile: bool,
+    bytecode: std::sync::OnceLock<Option<Vec<u8>>>,
+}
+
+/// Scripts at least this long are kept compiled.
+const COMPILE_ABOVE: usize = 16 << 10;
+
+impl Script {
+    pub fn new(name: impl Into<String>, source: impl Into<String>) -> Script {
+        Script { name: name.into(), source: source.into(), always_compile: false, bytecode: std::sync::OnceLock::new() }
+    }
+
+    /// A script every call evaluates (the preludes): compiled on first use
+    /// whatever its size, and kept for the life of the process.
+    pub fn shared(name: &str, source: &str) -> Script {
+        Script { always_compile: true, ..Script::new(name, source) }
+    }
+
+    /// Evaluate the script in `ctx`, from bytecode when it is large.
+    pub fn eval<'js>(&self, ctx: &Ctx<'js>) -> Result<Value<'js>, String> {
+        let bytecode = self.bytecode.get_or_init(|| {
+            // A failed compile is left to `eval` below, which reports it.
+            (self.always_compile || self.source.len() >= COMPILE_ABOVE)
+                .then(|| compile(&self.source, &self.name).ok())
+                .flatten()
+        });
+        match bytecode {
+            Some(b) => eval_compiled(ctx, b, &self.name),
+            None => eval(ctx, &self.source, &self.name),
+        }
+    }
+}
+
+/// The preludes, compiled once per process.
+pub mod shared {
+    use super::Script;
+    use std::sync::LazyLock;
+
+    pub static PRELUDE: LazyLock<Script> = LazyLock::new(|| Script::shared("prelude.js", super::PRELUDE));
+    pub static WEB: LazyLock<Script> = LazyLock::new(|| Script::shared("web.js", super::WEB_JS));
+    pub static GLOSSA: LazyLock<Script> =
+        LazyLock::new(|| Script::shared("glossa.js", super::super::glossa::GLOSSA_JS));
+    pub static POT: LazyLock<Script> = LazyLock::new(|| Script::shared("pot.js", super::super::pot::POT_JS));
+    pub static LEGACY_HOST: LazyLock<Script> =
+        LazyLock::new(|| Script::shared("host objects", super::super::legacy::LEGACY_HOST));
+    pub static COMPAT: LazyLock<Script> = LazyLock::new(|| Script::shared("Common.js", super::super::legacy::COMPAT));
 }
 
 /// Parse a script without running it, so a syntax error is reported when the
 /// module loads (and in `glossa-cli modules`) instead of on its first use.
 pub fn check_syntax(code: &str, name: &str) -> Result<(), String> {
-    let mut ctx = Context::default();
-    boa_engine::Script::parse(Source::from_bytes(code), None, &mut ctx)
-        .map(|_| ())
-        .map_err(|e| format!("{name}: {}", describe(&e, &mut ctx)))
+    compile(code, name).map(|_| ())
 }
 
 /// Define a global property holding a JSON value.
-pub fn set_global_json(ctx: &mut Context, name: &str, value: &serde_json::Value) -> Result<(), String> {
-    let v = JsValue::from_json(value, ctx).map_err(|e| describe(&e, ctx))?;
-    ctx.register_global_property(js_string!(name), v, Attribute::all()).map_err(|e| describe(&e, ctx))
+pub fn set_global_json(ctx: &Ctx<'_>, name: &str, value: &serde_json::Value) -> Result<(), String> {
+    let v = from_json(ctx, value)?;
+    ctx.globals().set(name, v).map_err(|e| describe(ctx, e))
 }
 
 /// Whether a global function of this name exists.
-pub fn has_function(ctx: &mut Context, name: &str) -> bool {
-    ctx.global_object().get(js_string!(name), ctx).ok().is_some_and(|v| v.as_callable().is_some())
+pub fn has_function(ctx: &Ctx<'_>, name: &str) -> bool {
+    get_global(ctx, name).is_function()
 }
 
-pub fn get_global(ctx: &mut Context, name: &str) -> JsValue {
-    ctx.global_object().get(js_string!(name), ctx).unwrap_or_default()
+pub fn get_global<'js>(ctx: &Ctx<'js>, name: &str) -> Value<'js> {
+    ctx.globals().get::<_, Value>(name).unwrap_or_else(|_| Value::new_undefined(ctx.clone()))
+}
+
+/// A JavaScript string.
+pub fn str<'js>(ctx: &Ctx<'js>, s: &str) -> Value<'js> {
+    rquickjs::String::from_str(ctx.clone(), s)
+        .map(|s| s.into_value())
+        .unwrap_or_else(|_| Value::new_undefined(ctx.clone()))
+}
+
+/// A JavaScript number holding an integer.
+pub fn int<'js>(ctx: &Ctx<'js>, n: i32) -> Value<'js> {
+    Value::new_int(ctx.clone(), n)
+}
+
+pub fn bool<'js>(ctx: &Ctx<'js>, b: bool) -> Value<'js> {
+    Value::new_bool(ctx.clone(), b)
+}
+
+/// Call a function value with `this` undefined. A returned promise is driven
+/// to completion.
+pub fn call<'js>(ctx: &Ctx<'js>, f: &Value<'js>, args: &[Value<'js>]) -> Result<Value<'js>, String> {
+    let Some(f) = f.as_function() else {
+        return Err("not a function".into());
+    };
+    let mut a = Args::new(ctx.clone(), args.len());
+    for v in args {
+        a.push_arg(v.clone()).map_err(|e| describe(ctx, e))?;
+    }
+    let value = f.call_arg::<Value>(a).map_err(|e| describe(ctx, e))?;
+    settle(ctx, value)
 }
 
 /// Call a global function. A returned promise is driven to completion.
-pub fn call_global(ctx: &mut Context, name: &str, args: &[JsValue]) -> Result<JsValue, String> {
+pub fn call_global<'js>(ctx: &Ctx<'js>, name: &str, args: &[Value<'js>]) -> Result<Value<'js>, String> {
     let f = get_global(ctx, name);
-    let Some(callable) = f.as_callable() else {
+    if !f.is_function() {
         return Err(format!("the script has no function `{name}`"));
-    };
-    let value =
-        callable.call(&JsValue::undefined(), args, ctx).map_err(|e| format!("{name}: {}", describe(&e, ctx)))?;
-    settle(ctx, value).map_err(|e| format!("{name}: {e}"))
+    }
+    call(ctx, &f, args).map_err(|e| format!("{name}: {e}"))
 }
 
 /// If `value` is a promise, run the job queue until it settles.
-pub fn settle(ctx: &mut Context, value: JsValue) -> Result<JsValue, String> {
-    let Some(obj) = value.as_object() else { return Ok(value) };
-    let Ok(promise) = JsPromise::from_object(obj.clone()) else { return Ok(value) };
+pub fn settle<'js>(ctx: &Ctx<'js>, value: Value<'js>) -> Result<Value<'js>, String> {
+    let Some(promise) = value.as_promise().cloned() else { return Ok(value) };
     // Every host operation completes synchronously, so the queue drains in a
-    // bounded number of turns; the cap only guards against a script that
-    // keeps scheduling work forever.
-    for _ in 0..10_000 {
-        match promise.state() {
-            PromiseState::Fulfilled(v) => return Ok(v),
-            PromiseState::Rejected(reason) => {
-                let err = JsError::from_opaque(reason);
-                return Err(describe(&err, ctx));
-            }
-            PromiseState::Pending => {
-                ctx.run_jobs().map_err(|e| describe(&e, ctx))?;
+    // bounded number of turns; the time limit stops a script that keeps
+    // scheduling work forever.
+    loop {
+        match promise.result::<Value>() {
+            Some(Ok(v)) => return Ok(v),
+            Some(Err(e)) => return Err(describe(ctx, e)),
+            None => {
+                if !ctx.execute_pending_job() {
+                    // A failing job leaves its exception behind; report the
+                    // time limit if that is what stopped it.
+                    if TIMED_OUT.with(Cell::get) {
+                        return Err(time_limit_message());
+                    }
+                    return Err("the script's promise never settled".into());
+                }
             }
         }
     }
-    Err("the script's promise never settled".into())
 }
 
-pub fn to_json(ctx: &mut Context, value: &JsValue) -> Result<serde_json::Value, String> {
+pub fn to_json<'js>(ctx: &Ctx<'js>, value: &Value<'js>) -> Result<serde_json::Value, String> {
     if value.is_undefined() {
         return Ok(serde_json::Value::Null);
     }
-    value.to_json(ctx).map(|v| v.unwrap_or(serde_json::Value::Null)).map_err(|e| describe(&e, ctx))
+    let text = ctx.json_stringify(value.clone()).map_err(|e| describe(ctx, e))?;
+    match text {
+        None => Ok(serde_json::Value::Null),
+        Some(s) => {
+            let s = s.to_string().map_err(|e| e.to_string())?;
+            serde_json::from_str(&s).map_err(|e| e.to_string())
+        }
+    }
 }
 
-pub fn from_json(ctx: &mut Context, value: &serde_json::Value) -> Result<JsValue, String> {
-    JsValue::from_json(value, ctx).map_err(|e| describe(&e, ctx))
+pub fn from_json<'js>(ctx: &Ctx<'js>, value: &serde_json::Value) -> Result<Value<'js>, String> {
+    let text = serde_json::to_string(value).map_err(|e| e.to_string())?;
+    ctx.json_parse(text).map_err(|e| describe(ctx, e))
 }
 
-pub fn to_string(ctx: &mut Context, value: &JsValue) -> String {
-    if value.is_null_or_undefined() {
+/// `String(value)`, with `null` and `undefined` as the empty string.
+pub fn to_string<'js>(ctx: &Ctx<'js>, value: &Value<'js>) -> String {
+    if value.is_null() || value.is_undefined() {
         return String::new();
     }
-    value.to_string(ctx).map(|s| s.to_std_string_escaped()).unwrap_or_default()
+    js_to_string(ctx, value).unwrap_or_default()
+}
+
+/// JavaScript's ToString, decoded leniently: a lone surrogate (which UTF-8
+/// cannot hold) becomes U+FFFD instead of failing the conversion.
+fn js_to_string<'js>(ctx: &Ctx<'js>, value: &Value<'js>) -> rquickjs::Result<String> {
+    // SAFETY: JS_ToCStringLen returns a buffer owned by the context (or null
+    // with an exception pending), freed below before returning.
+    unsafe {
+        let raw = ctx.as_raw().as_ptr();
+        let mut len = 0;
+        let ptr = rquickjs::qjs::JS_ToCStringLen(raw, &mut len, value.as_raw());
+        if ptr.is_null() {
+            return Err(rquickjs::Error::Exception);
+        }
+        let bytes = std::slice::from_raw_parts(ptr as *const u8, len);
+        let s = String::from_utf8_lossy(bytes).into_owned();
+        rquickjs::qjs::JS_FreeCString(raw, ptr);
+        Ok(s)
+    }
+}
+
+fn time_limit_message() -> String {
+    format!("the script ran for more than {} s and was stopped", TIME_LIMIT.as_secs())
 }
 
 /// A readable message for a script error: the thrown message, or the thrown
-/// value itself when it is not an Error object.
-pub fn describe(err: &JsError, ctx: &mut Context) -> String {
-    let opaque = match err.clone().into_opaque(ctx) {
-        Ok(v) => v,
-        Err(e) => return e.to_string(),
+/// value itself when it is not an Error object. Hitting a limit is reported
+/// as such, and a syntax error carries its line.
+pub fn describe(ctx: &Ctx<'_>, err: rquickjs::Error) -> String {
+    resume_panic();
+    if TIMED_OUT.with(Cell::get) {
+        // Clear the uncatchable "interrupted" exception.
+        let _ = ctx.catch();
+        return time_limit_message();
+    }
+    let rquickjs::Error::Exception = err else {
+        return err.to_string();
     };
-    if let Some(obj) = opaque.as_object() {
-        let message = obj.get(js_string!("message"), ctx).ok().filter(|v| !v.is_undefined());
-        let name = obj.get(js_string!("name"), ctx).ok().filter(|v| !v.is_undefined());
-        if let Some(m) = message {
-            let m = to_string(ctx, &m);
-            let n = name.map(|n| to_string(ctx, &n)).unwrap_or_default();
-            return if n.is_empty() || n == "Error" { m } else { format!("{n}: {m}") };
+    let thrown = ctx.catch();
+    let Some(obj) = thrown.as_object() else {
+        return to_string(ctx, &thrown);
+    };
+    let get = |k: &str| obj.get::<_, Value>(k).ok().filter(|v| !v.is_undefined()).map(|v| to_string(ctx, &v));
+    let Some(message) = get("message") else {
+        return to_string(ctx, &thrown);
+    };
+    let name = get("name").unwrap_or_default();
+    if name == "InternalError" && message == "out of memory" {
+        return format!("the script used more than {} MB of memory and was stopped", MEMORY_LIMIT >> 20);
+    }
+    if (name == "RangeError" && message.contains("call stack")) || message == "stack overflow" {
+        return "the script recursed too deeply (stack overflow)".into();
+    }
+    let mut text = if name.is_empty() || name == "Error" { message } else { format!("{name}: {message}") };
+    if name == "SyntaxError" {
+        // QuickJS keeps the position in the stack ("    at main.js:3:14").
+        if let Some(at) =
+            get("stack").and_then(|s| s.lines().find_map(|l| l.trim().strip_prefix("at ").map(str::to_owned)))
+        {
+            text = format!("{text} (at {at})");
         }
     }
-    to_string(ctx, &opaque)
+    text
 }
 
 /// Turn a module error thrown by a script (via the prelude's `ModuleError`)
@@ -213,81 +531,78 @@ pub fn script_error(message: String) -> ModuleError {
 
 // -- natives ---------------------------------------------------------------
 
-fn arg_string(args: &[JsValue], i: usize, ctx: &mut Context) -> JsResult<String> {
+fn arg_string<'js>(ctx: &Ctx<'js>, args: &[Value<'js>], i: usize) -> rquickjs::Result<String> {
     match args.get(i) {
-        Some(v) if !v.is_null_or_undefined() => Ok(v.to_string(ctx)?.to_std_string_escaped()),
+        Some(v) if !v.is_null() && !v.is_undefined() => js_to_string(ctx, v),
         _ => Ok(String::new()),
     }
 }
 
+fn type_error(ctx: &Ctx<'_>, message: &str) -> rquickjs::Error {
+    Exception::throw_type(ctx, message)
+}
+
 /// `__host_call(method, paramsJson) -> replyJson`
-fn native_host_call(_: &JsValue, args: &[JsValue], ctx: &mut Context) -> JsResult<JsValue> {
-    let method = arg_string(args, 0, ctx)?;
-    let params_text = arg_string(args, 1, ctx)?;
+fn native_host_call<'js>(ctx: Ctx<'js>, args: Rest<Value<'js>>) -> rquickjs::Result<Value<'js>> {
+    let method = arg_string(&ctx, &args, 0)?;
+    let params_text = arg_string(&ctx, &args, 1)?;
     let params: serde_json::Value = if params_text.is_empty() {
         serde_json::Value::Null
     } else {
-        serde_json::from_str(&params_text)
-            .map_err(|e| JsNativeError::typ().with_message(format!("__host_call: bad params: {e}")))?
+        serde_json::from_str(&params_text).map_err(|e| type_error(&ctx, &format!("__host_call: bad params: {e}")))?
     };
     let reply = host_call(&method, params);
     let text =
         serde_json::to_string(&reply).unwrap_or_else(|_| r#"{"error":{"kind":"other","message":"bad reply"}}"#.into());
-    Ok(JsValue::from(js_string!(text)))
+    Ok(str(&ctx, &text))
 }
 
 /// `__b64encode(binaryString) -> base64`. The input is a "binary string"
 /// (each char code 0–255 is one byte), as `btoa` takes.
-fn native_b64encode(_: &JsValue, args: &[JsValue], ctx: &mut Context) -> JsResult<JsValue> {
-    let s = match args.first() {
-        Some(v) => v.to_string(ctx)?,
-        None => return Ok(JsValue::from(js_string!(""))),
-    };
+fn native_b64encode<'js>(ctx: Ctx<'js>, args: Rest<Value<'js>>) -> rquickjs::Result<Value<'js>> {
+    let s = arg_string(&ctx, &args, 0)?;
     let mut bytes = Vec::with_capacity(s.len());
-    for unit in s.iter() {
-        if unit > 0xff {
-            return Err(JsNativeError::typ().with_message("btoa: character outside Latin-1").into());
+    for c in s.chars() {
+        if c as u32 > 0xff {
+            return Err(type_error(&ctx, "btoa: character outside Latin-1"));
         }
-        bytes.push(unit as u8);
+        bytes.push(c as u8);
     }
-    Ok(JsValue::from(js_string!(base64::engine::general_purpose::STANDARD.encode(bytes))))
+    Ok(str(&ctx, &base64::engine::general_purpose::STANDARD.encode(bytes)))
 }
 
 /// `__b64decode(base64) -> binaryString`
-fn native_b64decode(_: &JsValue, args: &[JsValue], ctx: &mut Context) -> JsResult<JsValue> {
-    let s = arg_string(args, 0, ctx)?;
+fn native_b64decode<'js>(ctx: Ctx<'js>, args: Rest<Value<'js>>) -> rquickjs::Result<Value<'js>> {
+    let s = arg_string(&ctx, &args, 0)?;
     let cleaned: String = s.chars().filter(|c| !c.is_whitespace()).collect();
+    let unpadded = cleaned.trim_end_matches('=');
     let bytes = base64::engine::general_purpose::STANDARD
-        .decode(
-            cleaned.trim_end_matches('=').to_owned() + &"=".repeat((4 - cleaned.trim_end_matches('=').len() % 4) % 4),
-        )
-        .map_err(|e| JsNativeError::typ().with_message(format!("atob: {e}")))?;
-    let units: Vec<u16> = bytes.into_iter().map(u16::from).collect();
-    Ok(JsValue::from(boa_engine::JsString::from(&units[..])))
+        .decode(unpadded.to_owned() + &"=".repeat((4 - unpadded.len() % 4) % 4))
+        .map_err(|e| type_error(&ctx, &format!("atob: {e}")))?;
+    // Each byte becomes the character with that code (U+0000–U+00FF).
+    let binary: String = bytes.into_iter().map(char::from).collect();
+    Ok(str(&ctx, &binary))
 }
 
 /// `__digest(algorithm, dataHex, keyHex?) -> hex`. Data and key travel as hex
 /// so the JavaScript side decides the text encoding (CryptoJS uses UTF-8).
-fn native_digest(_: &JsValue, args: &[JsValue], ctx: &mut Context) -> JsResult<JsValue> {
+fn native_digest<'js>(ctx: Ctx<'js>, args: Rest<Value<'js>>) -> rquickjs::Result<Value<'js>> {
     use hmac::{Hmac, Mac};
     use md5::Md5;
     use sha1::Sha1;
     use sha2::{Digest, Sha256, Sha512};
 
-    let alg = arg_string(args, 0, ctx)?.to_ascii_lowercase();
-    let data = hex_decode(&arg_string(args, 1, ctx)?)
-        .ok_or_else(|| JsNativeError::typ().with_message("__digest: data is not hex"))?;
+    let alg = arg_string(&ctx, &args, 0)?.to_ascii_lowercase();
+    let data = hex_decode(&arg_string(&ctx, &args, 1)?).ok_or_else(|| type_error(&ctx, "__digest: data is not hex"))?;
     let key = match args.get(2) {
-        Some(v) if !v.is_null_or_undefined() => Some(
-            hex_decode(&v.to_string(ctx)?.to_std_string_escaped())
-                .ok_or_else(|| JsNativeError::typ().with_message("__digest: key is not hex"))?,
-        ),
+        Some(v) if !v.is_null() && !v.is_undefined() => {
+            Some(hex_decode(&js_to_string(&ctx, v)?).ok_or_else(|| type_error(&ctx, "__digest: key is not hex"))?)
+        }
         _ => None,
     };
     macro_rules! hmac_with {
         ($h:ty, $k:expr) => {{
-            let mut m =
-                <Hmac<$h> as Mac>::new_from_slice($k).map_err(|e| JsNativeError::typ().with_message(e.to_string()))?;
+            let mut m = <Hmac<$h> as Mac>::new_from_slice($k).map_err(|e| type_error(&ctx, &e.to_string()))?;
             m.update(&data);
             m.finalize().into_bytes().to_vec()
         }};
@@ -301,18 +616,16 @@ fn native_digest(_: &JsValue, args: &[JsValue], ctx: &mut Context) -> JsResult<J
         ("sha1", Some(k)) => hmac_with!(Sha1, k),
         ("sha256", Some(k)) => hmac_with!(Sha256, k),
         ("sha512", Some(k)) => hmac_with!(Sha512, k),
-        (other, _) => {
-            return Err(JsNativeError::typ().with_message(format!("__digest: unsupported algorithm {other}")).into())
-        }
+        (other, _) => return Err(type_error(&ctx, &format!("__digest: unsupported algorithm {other}"))),
     };
-    Ok(JsValue::from(js_string!(hex_encode(&out))))
+    Ok(str(&ctx, &hex_encode(&out)))
 }
 
-fn native_log(_: &JsValue, args: &[JsValue], ctx: &mut Context) -> JsResult<JsValue> {
-    let level = arg_string(args, 0, ctx)?;
-    let message = arg_string(args, 1, ctx)?;
+fn native_log<'js>(ctx: Ctx<'js>, args: Rest<Value<'js>>) -> rquickjs::Result<Value<'js>> {
+    let level = arg_string(&ctx, &args, 0)?;
+    let message = arg_string(&ctx, &args, 1)?;
     let _ = host_call("log", serde_json::json!({ "level": level, "message": message }));
-    Ok(JsValue::undefined())
+    Ok(Value::new_undefined(ctx))
 }
 
 pub fn hex_encode(bytes: &[u8]) -> String {
@@ -337,10 +650,16 @@ mod tests {
     use super::*;
 
     fn run(code: &str) -> serde_json::Value {
-        let mut ctx = new_context().unwrap();
-        let v = eval(&mut ctx, code, "test").unwrap();
-        let v = settle(&mut ctx, v).unwrap();
-        to_json(&mut ctx, &v).unwrap()
+        with_context(|ctx| {
+            let v = eval(ctx, code, "test").unwrap();
+            let v = settle(ctx, v).unwrap();
+            to_json(ctx, &v).unwrap()
+        })
+        .unwrap()
+    }
+
+    fn run_err(code: &str) -> String {
+        with_context(|ctx| eval(ctx, code, "t").and_then(|v| settle(ctx, v)).map(|_| ()).unwrap_err()).unwrap()
     }
 
     #[test]
@@ -348,6 +667,7 @@ mod tests {
         assert_eq!(run("btoa('hello')"), "aGVsbG8=");
         assert_eq!(run("atob('aGVsbG8=')"), "hello");
         assert_eq!(run("atob(btoa(String.fromCharCode(0, 200, 255)))"), "\u{0}\u{c8}\u{ff}");
+        assert!(run_err("btoa('ж')").contains("Latin-1"));
     }
 
     #[test]
@@ -373,38 +693,134 @@ mod tests {
         };
         {
             let _bridge = Bridge::install(&host);
-            let mut ctx = new_context().unwrap();
-            let v = eval(&mut ctx, "__call('ping', {a: 1}).echo.a", "t").unwrap();
-            assert_eq!(to_json(&mut ctx, &v).unwrap(), 1);
+            assert_eq!(run("__call('ping', {a: 1}).echo.a"), 1);
         }
         assert_eq!(seen.borrow()[0].0, "ping");
         // After the bridge is dropped, host calls fail cleanly.
-        let mut ctx = new_context().unwrap();
-        let err = eval(&mut ctx, "__call('ping', {})", "t").unwrap_err();
+        let err = run_err("__call('ping', {})");
         assert!(err.contains("outside of a module call"), "{err}");
     }
 
     #[test]
     fn promises_settle_and_rejections_surface() {
         assert_eq!(run("(async () => { await null; return 5; })()"), 5);
-        let mut ctx = new_context().unwrap();
-        let v = eval(&mut ctx, "(async () => { throw new Error('boom'); })()", "t").unwrap();
-        assert!(settle(&mut ctx, v).unwrap_err().contains("boom"));
+        assert!(run_err("(async () => { throw new Error('boom'); })()").contains("boom"));
     }
 
     #[test]
-    fn runaway_loops_are_stopped() {
-        let mut ctx = new_context().unwrap();
-        assert!(eval(&mut ctx, "while (true) {}", "t").is_err());
+    fn runaway_loops_hit_the_time_limit() {
+        // A shorter wait would need a configurable limit; ten seconds of a
+        // test is acceptable for the one place that proves the limit works.
+        let started = Instant::now();
+        let err = run_err("while (true) {}");
+        assert!(err.contains("was stopped"), "{err}");
+        assert!(started.elapsed() < TIME_LIMIT + Duration::from_secs(5));
+        // A script cannot catch its way past the limit.
+        let err = run_err("for (;;) { try { while (true) {} } catch (e) {} }");
+        assert!(err.contains("was stopped"), "{err}");
+        // The next call starts with a clean slate.
+        assert_eq!(run("1 + 1"), 2);
+    }
+
+    #[test]
+    fn time_in_host_calls_does_not_count() {
+        let host = |_: &str, _: serde_json::Value| {
+            HOST_TIME.with(|t| t.set(t.get() + TIME_LIMIT));
+            Reply::ok(serde_json::Value::Null)
+        };
+        let _bridge = Bridge::install(&host);
+        // Pretend the host call took the whole limit; the script still runs.
+        assert_eq!(run("__call('slow', null); var s = 0; for (var i = 0; i < 1e5; i++) s += i; s"), 4999950000i64);
+    }
+
+    #[test]
+    fn runaway_allocation_hits_the_memory_limit() {
+        let err = run_err("var a = []; for (;;) a.push(new Array(1e5).fill(1));");
+        assert!(err.contains("memory"), "{err}");
+        let err = run_err("var s = 'x'; for (;;) s += s;");
+        assert!(err.contains("memory") || err.contains("too long"), "{err}");
+        assert_eq!(run("'still ' + 'fine'"), "still fine");
+    }
+
+    #[test]
+    fn deep_recursion_fails_the_call() {
+        let err = run_err("function f(n) { return f(n + 1) + 1; } f(0)");
+        assert!(err.contains("stack overflow"), "{err}");
+        let depth = run("var d = 0; function h() { d++; h(); } try { h(); } catch (e) {} d");
+        eprintln!("maximum recursion depth: {depth}");
+        // At least the depth boa allowed (400), even in a debug build.
+        assert_eq!(run("function g(n) { return n ? g(n - 1) + 1 : 0; } g(400)"), 400);
+    }
+
+    #[test]
+    fn a_panicking_host_unwinds_through_the_engine() {
+        let host = |_: &str, _: serde_json::Value| -> Reply { panic!("host bug") };
+        let _bridge = Bridge::install(&host);
+        let caught = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| run("__call('x', null)")));
+        assert!(caught.is_err());
+        // The engine is usable afterwards.
+        drop(_bridge);
+        assert_eq!(run("2 * 3"), 6);
+    }
+
+    #[test]
+    fn large_scripts_run_from_bytecode_like_from_source() {
+        // Past the size where scripts are kept compiled.
+        let filler = "// padding\n".repeat(COMPILE_ABOVE / 10);
+        let source = format!("{filler}var big = 1;\nfunction answer() {{ return big + 41; }}\nimplicit = 'sloppy';");
+        let script = Script::new("big.js", source);
+        for _ in 0..2 {
+            let v = with_context(|ctx| {
+                script.eval(ctx).unwrap();
+                let v = call_global(ctx, "answer", &[]).unwrap();
+                (to_json(ctx, &v).unwrap(), to_string(ctx, &get_global(ctx, "implicit")))
+            })
+            .unwrap();
+            assert_eq!(v, (serde_json::json!(42), "sloppy".to_owned()));
+        }
+        assert!(script.bytecode.get().is_some_and(Option::is_some), "kept compiled");
+        // A small script stays source.
+        let small = Script::new("small.js", "1");
+        with_context(|ctx| small.eval(ctx).map(|_| ()).unwrap()).unwrap();
+        assert!(small.bytecode.get().is_some_and(Option::is_none));
+        // Errors from bytecode carry the script's name and the same message.
+        let failing = Script::new("bad.js", format!("{filler}throw new ModuleError('not_found', 'x');"));
+        let err = with_context(|ctx| failing.eval(ctx).map(|_| ()).unwrap_err()).unwrap();
+        assert!(err.starts_with("bad.js: "), "{err}");
+        assert_eq!(script_error(err).kind, ErrorKind::NotFound);
+    }
+
+    #[test]
+    fn a_panicking_host_unwinds_through_bytecode_too() {
+        let host = |_: &str, _: serde_json::Value| -> Reply { panic!("host bug") };
+        let _bridge = Bridge::install(&host);
+        let bytecode = compile("try { __call('x', null); } catch (e) { 'swallowed' }", "p.js").unwrap();
+        let caught = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            with_context(|ctx| eval_compiled(ctx, &bytecode, "p.js").map(|_| ())).unwrap()
+        }));
+        assert!(caught.is_err(), "a script cannot catch a host panic away");
     }
 
     #[test]
     fn typed_module_errors_survive_the_trip() {
-        let mut ctx = new_context().unwrap();
-        let err = eval(&mut ctx, "throw new ModuleError('missing_credential', 'api_key')", "t").unwrap_err();
+        let err = run_err("throw new ModuleError('missing_credential', 'api_key')");
         let e = script_error(err);
         assert_eq!(e.kind, ErrorKind::MissingCredential);
         assert_eq!(e.message, "api_key");
+    }
+
+    #[test]
+    fn syntax_errors_name_the_file_and_line() {
+        let err = check_syntax("var a = 1;\nfunction f( { }", "main.js").unwrap_err();
+        assert!(err.starts_with("main.js: SyntaxError"), "{err}");
+        assert!(err.contains("main.js:2"), "{err}");
+        assert!(check_syntax("while (true) {}", "loop.js").is_ok(), "nothing runs");
+    }
+
+    #[test]
+    fn scripts_run_in_sloppy_mode() {
+        assert_eq!(run("implicitGlobal = 3; implicitGlobal"), 3);
+        assert_eq!(run("(function () { return typeof arguments.callee; })()"), "function");
     }
 
     #[test]
@@ -421,6 +837,16 @@ mod tests {
         // The idiom old crypto code uses to get a UTF-8 "binary string".
         assert_eq!(run("unescape(encodeURIComponent('ж'))"), "\u{d0}\u{b6}");
         assert_eq!(run("decodeURIComponent(escape(unescape(encodeURIComponent('жук'))))"), "жук");
+    }
+
+    #[test]
+    fn lone_surrogates_do_not_break_strings() {
+        let s = with_context(|ctx| {
+            let v = eval(ctx, "'a' + '\\ud800' + 'b'", "t").unwrap();
+            to_string(ctx, &v)
+        })
+        .unwrap();
+        assert!(s.starts_with('a') && s.ends_with('b') && s.contains('\u{fffd}'), "{s:?}");
     }
 
     #[test]

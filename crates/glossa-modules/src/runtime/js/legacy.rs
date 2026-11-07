@@ -15,10 +15,10 @@ use std::path::Path;
 use std::sync::Arc;
 
 use base64::Engine as _;
-use boa_engine::{Context, JsValue};
 use glossa_core::{Capabilities, LangId};
 use glossa_module_sdk::wire::{ErrorKind, ModuleError, Reply};
 use glossa_net::Codepage;
+use rquickjs::{Ctx, Value};
 
 use super::engine::{self, Bridge};
 use crate::manifest::{Manifest, ModuleSection, Permissions, Runtime};
@@ -39,8 +39,8 @@ const MAX_HOPS: usize = 8;
 
 pub struct LegacyScript {
     /// The installation's own `Common.js`, when there is one.
-    pub common: Option<String>,
-    pub service: String,
+    pub common: Option<engine::Script>,
+    pub service: engine::Script,
     /// Folder name, for ids and messages.
     pub folder: String,
 }
@@ -66,26 +66,30 @@ impl LegacyScript {
             .map(|p| read_text(&p))
             .transpose()?;
         let folder = dir.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_else(|| "service".into());
+        let common = common.map(|c| engine::Script::new("Common.js", c));
+        let service = engine::Script::new(format!("{folder}/Service.js"), service);
         Ok(LegacyScript { common, service, folder })
     }
 
-    /// A context with the helper library and the service evaluated, and
+    /// Evaluate the helper library and the service in a fresh context, with
     /// `Options` set.
-    fn context(&self, options: &serde_json::Value) -> Result<Context, String> {
-        let mut ctx = engine::new_context()?;
-        engine::eval(&mut ctx, LEGACY_HOST, "host objects")?;
-        engine::eval(&mut ctx, self.common.as_deref().unwrap_or(COMPAT), "Common.js")?;
-        engine::set_global_json(&mut ctx, "__hostOptions", options)?;
+    fn setup(&self, ctx: &Ctx<'_>, options: &serde_json::Value) -> Result<(), String> {
+        engine::shared::LEGACY_HOST.eval(ctx)?;
+        match &self.common {
+            Some(common) => common.eval(ctx)?,
+            None => engine::shared::COMPAT.eval(ctx)?,
+        };
+        engine::set_global_json(ctx, "__hostOptions", options)?;
         // Merge rather than replace, so options a script declared at load
         // time with addOption keep their defaults.
         engine::eval(
-            &mut ctx,
+            ctx,
             "if (typeof Options !== 'object' || Options === null) { Options = {}; } \
              for (var __k in __hostOptions) { Options[__k] = __hostOptions[__k]; }",
             "options",
         )?;
-        engine::eval(&mut ctx, &self.service, &format!("{}/Service.js", self.folder))?;
-        Ok(ctx)
+        self.service.eval(ctx)?;
+        Ok(())
     }
 
     /// Whether the script reads the Bing session values the classic host
@@ -93,7 +97,7 @@ impl LegacyScript {
     fn needs_bing_session(&self) -> bool {
         ["Options.BingToken", "Options.BingKey", "Options.BingCookie", "Options.IG"]
             .iter()
-            .any(|k| self.service.contains(k))
+            .any(|k| self.service.source.contains(k))
     }
 
     pub fn probe(&self) -> Result<LegacyMeta, String> {
@@ -105,45 +109,47 @@ impl LegacyScript {
             _ => Reply::ok(serde_json::Value::Null),
         };
         let _bridge = Bridge::install(&fake);
-        let mut ctx = self.context(&serde_json::json!({ "LanguageCode": "en" }))?;
-        let header = engine::call_global(&mut ctx, "serviceHeader", &[])?;
-        let header = engine::to_json(&mut ctx, &header)?;
-        let codes_value = engine::get_global(&mut ctx, "SupportedLanguages");
-        let codes_json = engine::to_json(&mut ctx, &codes_value).unwrap_or_default();
-        let codes = codes_json
-            .as_array()
-            .map(|a| {
-                a.iter()
-                    .map(|v| match v {
-                        serde_json::Value::String(s) if !s.is_empty() => Some(s.clone()),
-                        // Some scripts (Multitran) use numeric codes.
-                        serde_json::Value::Number(n) if n.as_i64().is_some_and(|x| x >= 0) => Some(n.to_string()),
-                        _ => None,
-                    })
-                    .collect()
+        engine::with_context(|ctx| {
+            self.setup(ctx, &serde_json::json!({ "LanguageCode": "en" }))?;
+            let header = engine::call_global(ctx, "serviceHeader", &[])?;
+            let header = engine::to_json(ctx, &header)?;
+            let codes_value = engine::get_global(ctx, "SupportedLanguages");
+            let codes_json = engine::to_json(ctx, &codes_value).unwrap_or_default();
+            let codes = codes_json
+                .as_array()
+                .map(|a| {
+                    a.iter()
+                        .map(|v| match v {
+                            serde_json::Value::String(s) if !s.is_empty() => Some(s.clone()),
+                            // Some scripts (Multitran) use numeric codes.
+                            serde_json::Value::Number(n) if n.as_i64().is_some_and(|x| x >= 0) => Some(n.to_string()),
+                            _ => None,
+                        })
+                        .collect()
+                })
+                .unwrap_or_default();
+            let declared = engine::get_global(ctx, "__declaredOptions");
+            let declared = engine::to_json(ctx, &declared).unwrap_or_default();
+            let declared_options = declared
+                .as_array()
+                .map(|a| {
+                    a.iter()
+                        .filter_map(|pair| {
+                            let p = pair.as_array()?;
+                            Some((p.first()?.as_str()?.to_owned(), p.get(1).cloned().unwrap_or_default()))
+                        })
+                        .collect()
+                })
+                .unwrap_or_default();
+            Ok(LegacyMeta {
+                legacy_id: header.get("id").and_then(|v| v.as_i64()).unwrap_or(0),
+                name: header.get("name").and_then(|v| v.as_str()).unwrap_or(&self.folder).to_owned(),
+                info: header.get("info").and_then(|v| v.as_str()).unwrap_or("").replace("\r\n", "\n"),
+                capabilities: header.get("capabilities").and_then(|v| v.as_u64()).unwrap_or(0) as u32,
+                codes,
+                declared_options,
             })
-            .unwrap_or_default();
-        let declared = engine::get_global(&mut ctx, "__declaredOptions");
-        let declared = engine::to_json(&mut ctx, &declared).unwrap_or_default();
-        let declared_options = declared
-            .as_array()
-            .map(|a| {
-                a.iter()
-                    .filter_map(|pair| {
-                        let p = pair.as_array()?;
-                        Some((p.first()?.as_str()?.to_owned(), p.get(1).cloned().unwrap_or_default()))
-                    })
-                    .collect()
-            })
-            .unwrap_or_default();
-        Ok(LegacyMeta {
-            legacy_id: header.get("id").and_then(|v| v.as_i64()).unwrap_or(0),
-            name: header.get("name").and_then(|v| v.as_str()).unwrap_or(&self.folder).to_owned(),
-            info: header.get("info").and_then(|v| v.as_str()).unwrap_or("").replace("\r\n", "\n"),
-            capabilities: header.get("capabilities").and_then(|v| v.as_u64()).unwrap_or(0) as u32,
-            codes,
-            declared_options,
-        })
+        })?
     }
 }
 
@@ -303,111 +309,122 @@ impl LegacyTransport {
             })?;
             user.extend(session);
         }
-        let mut ctx = self.script.context(&self.host_options(&user)).map_err(engine::script_error)?;
-        let text = params.get("text").and_then(|v| v.as_str()).unwrap_or("").to_owned();
-        let slot = |key: &str| -> i32 {
-            let code = params.get(key).and_then(|v| v.as_str()).unwrap_or("auto");
-            LangId::from_code(code).map(|l| l.0 as i32).unwrap_or(0)
-        };
+        let options = self.host_options(&user);
+        engine::with_context(|ctx| -> Result<serde_json::Value, ModuleError> {
+            self.script.setup(ctx, &options).map_err(engine::script_error)?;
+            let text = params.get("text").and_then(|v| v.as_str()).unwrap_or("").to_owned();
+            let slot = |key: &str| -> i32 {
+                let code = params.get(key).and_then(|v| v.as_str()).unwrap_or("auto");
+                LangId::from_code(code).map(|l| l.0 as i32).unwrap_or(0)
+            };
 
-        match method {
-            "translate" => {
-                let (from, to) = (slot("from"), slot("to"));
-                let args = [JsValue::from(js(&text)), JsValue::from(from), JsValue::from(to)];
-                let resp = self.flow(
-                    &mut ctx,
-                    host,
-                    cap::TRANSLATE,
-                    "serviceTranslateRequest",
-                    "serviceTranslateResponse",
-                    &args,
-                )?;
-                let translation = resp.get("translation").and_then(|v| v.as_str()).unwrap_or("").replace("\r\n", "\n");
-                if translation.trim().is_empty() {
-                    // Some scripts explain a failure in the `data` slot.
-                    let reason = resp
-                        .get("data")
-                        .and_then(|v| v.as_str())
-                        .map(str::trim)
-                        .filter(|s| !s.is_empty() && !has_scheme(s))
-                        .map(|s| format!(" ({s})"))
-                        .unwrap_or_default();
-                    return Err(ModuleError::new(
-                        ErrorKind::BadResponse,
-                        format!("the script returned no translation{reason}"),
-                    ));
+            match method {
+                "translate" => {
+                    let (from, to) = (slot("from"), slot("to"));
+                    let args = [engine::str(ctx, &text), engine::int(ctx, from), engine::int(ctx, to)];
+                    let resp = self.flow(
+                        ctx,
+                        host,
+                        cap::TRANSLATE,
+                        "serviceTranslateRequest",
+                        "serviceTranslateResponse",
+                        &args,
+                    )?;
+                    let translation =
+                        resp.get("translation").and_then(|v| v.as_str()).unwrap_or("").replace("\r\n", "\n");
+                    if translation.trim().is_empty() {
+                        // Some scripts explain a failure in the `data` slot.
+                        let reason = resp
+                            .get("data")
+                            .and_then(|v| v.as_str())
+                            .map(str::trim)
+                            .filter(|s| !s.is_empty() && !has_scheme(s))
+                            .map(|s| format!(" ({s})"))
+                            .unwrap_or_default();
+                        return Err(ModuleError::new(
+                            ErrorKind::BadResponse,
+                            format!("the script returned no translation{reason}"),
+                        ));
+                    }
+                    let detected = resp
+                        .get("sourceLanguage")
+                        .and_then(|v| v.as_i64())
+                        .filter(|n| *n > 1)
+                        .map(|n| LangId(n as u16));
+                    Ok(serde_json::json!({
+                        "text": translation.trim_end(),
+                        "detected_from": detected.filter(|l| l.is_language()).map(|l| l.bcp47()),
+                    }))
                 }
-                let detected =
-                    resp.get("sourceLanguage").and_then(|v| v.as_i64()).filter(|n| *n > 1).map(|n| LangId(n as u16));
-                Ok(serde_json::json!({
-                    "text": translation.trim_end(),
-                    "detected_from": detected.filter(|l| l.is_language()).map(|l| l.bcp47()),
-                }))
-            }
-            "dictionary" => {
-                let (from, to) = (slot("from"), slot("to"));
-                let args = [JsValue::from(js(&text)), JsValue::from(from), JsValue::from(to)];
-                let resp = self.flow(
-                    &mut ctx,
-                    host,
-                    cap::DICTIONARY,
-                    "serviceDictionaryRequest",
-                    "serviceDictionaryResponse",
-                    &args,
-                )?;
-                let html = resp.get("translation").and_then(|v| v.as_str()).unwrap_or("").to_owned();
-                if html.trim().is_empty() {
-                    return Err(ModuleError::new(ErrorKind::NotFound, format!("no article for {text:?}")));
+                "dictionary" => {
+                    let (from, to) = (slot("from"), slot("to"));
+                    let args = [engine::str(ctx, &text), engine::int(ctx, from), engine::int(ctx, to)];
+                    let resp = self.flow(
+                        ctx,
+                        host,
+                        cap::DICTIONARY,
+                        "serviceDictionaryRequest",
+                        "serviceDictionaryResponse",
+                        &args,
+                    )?;
+                    let html = resp.get("translation").and_then(|v| v.as_str()).unwrap_or("").to_owned();
+                    if html.trim().is_empty() {
+                        return Err(ModuleError::new(ErrorKind::NotFound, format!("no article for {text:?}")));
+                    }
+                    let link =
+                        resp.get("data").and_then(|v| v.as_str()).filter(|s| s.starts_with("http")).map(str::to_owned);
+                    Ok(serde_json::json!({ "headword": text, "html": html, "link": link }))
                 }
-                let link =
-                    resp.get("data").and_then(|v| v.as_str()).filter(|s| s.starts_with("http")).map(str::to_owned);
-                Ok(serde_json::json!({ "headword": text, "html": html, "link": link }))
-            }
-            "detect" => {
-                let rd = engine::call_global(&mut ctx, "serviceDetectLanguageRequest", &[JsValue::from(js(&text))])
+                "detect" => {
+                    let rd = engine::call_global(ctx, "serviceDetectLanguageRequest", &[engine::str(ctx, &text)])
+                        .map_err(engine::script_error)?;
+                    let rd = read_request(ctx, &rd)?;
+                    let fetched = self.perform(ctx, host, &rd, cap::DETECT_LANGUAGE, 1, 0, false)?;
+                    let handler = if rd.response_handler.is_empty() {
+                        "serviceDetectLanguageResponse"
+                    } else {
+                        &rd.response_handler
+                    };
+                    let lang = engine::call_global(ctx, handler, &[engine::str(ctx, &fetched.text)])
+                        .map_err(|e| script_failure(&fetched, e))?;
+                    let n = engine::to_json(ctx, &lang).ok().and_then(|v| v.as_i64()).unwrap_or(0);
+                    let lang = LangId(n.max(0) as u16);
+                    if !lang.is_language() && !fetched.succeeded() {
+                        return Err(fetched.http_error(None));
+                    }
+                    if !lang.is_language() {
+                        return Err(ModuleError::new(ErrorKind::NotFound, "the script could not detect the language"));
+                    }
+                    Ok(serde_json::json!({ "lang": lang.bcp47(), "confidence": 1.0 }))
+                }
+                "speak" => {
+                    let lang = LangId::from_code(params.get("lang").and_then(|v| v.as_str()).unwrap_or("en"))
+                        .unwrap_or(LangId::ENGLISH);
+                    let slow = params.get("slow").and_then(|v| v.as_bool()).unwrap_or(false);
+                    let rd = engine::call_global(
+                        ctx,
+                        "serviceListenRequest",
+                        &[engine::str(ctx, &text), engine::int(ctx, lang.0 as i32), engine::bool(ctx, slow)],
+                    )
                     .map_err(engine::script_error)?;
-                let rd = read_request(&mut ctx, &rd)?;
-                let fetched = self.perform(&mut ctx, host, &rd, cap::DETECT_LANGUAGE, 1, 0, false)?;
-                let handler =
-                    if rd.response_handler.is_empty() { "serviceDetectLanguageResponse" } else { &rd.response_handler };
-                let lang = engine::call_global(&mut ctx, handler, &[JsValue::from(js(&fetched.text))])
-                    .map_err(|e| script_failure(&fetched, e))?;
-                let n = engine::to_json(&mut ctx, &lang).ok().and_then(|v| v.as_i64()).unwrap_or(0);
-                let lang = LangId(n.max(0) as u16);
-                if !lang.is_language() && !fetched.succeeded() {
-                    return Err(fetched.http_error(None));
+                    let rd = read_request(ctx, &rd)?;
+                    let fetched = self.perform(ctx, host, &rd, cap::LISTEN, lang.0 as i32, lang.0 as i32, true)?;
+                    if !fetched.succeeded() {
+                        return Err(fetched.http_error(None));
+                    }
+                    let bytes = fetched.bytes;
+                    if bytes.is_empty() {
+                        return Err(ModuleError::new(ErrorKind::BadResponse, "the service returned no audio"));
+                    }
+                    Ok(serde_json::json!({
+                        "audio_base64": base64::engine::general_purpose::STANDARD.encode(&bytes),
+                        "mime": sniff_audio(&bytes),
+                    }))
                 }
-                if !lang.is_language() {
-                    return Err(ModuleError::new(ErrorKind::NotFound, "the script could not detect the language"));
-                }
-                Ok(serde_json::json!({ "lang": lang.bcp47(), "confidence": 1.0 }))
+                other => Err(ModuleError::unsupported(other)),
             }
-            "speak" => {
-                let lang = LangId::from_code(params.get("lang").and_then(|v| v.as_str()).unwrap_or("en"))
-                    .unwrap_or(LangId::ENGLISH);
-                let slow = params.get("slow").and_then(|v| v.as_bool()).unwrap_or(false);
-                let rd = engine::call_global(
-                    &mut ctx,
-                    "serviceListenRequest",
-                    &[JsValue::from(js(&text)), JsValue::from(lang.0 as i32), JsValue::from(slow)],
-                )
-                .map_err(engine::script_error)?;
-                let rd = read_request(&mut ctx, &rd)?;
-                let fetched = self.perform(&mut ctx, host, &rd, cap::LISTEN, lang.0 as i32, lang.0 as i32, true)?;
-                if !fetched.succeeded() {
-                    return Err(fetched.http_error(None));
-                }
-                let bytes = fetched.bytes;
-                if bytes.is_empty() {
-                    return Err(ModuleError::new(ErrorKind::BadResponse, "the service returned no audio"));
-                }
-                Ok(serde_json::json!({
-                    "audio_base64": base64::engine::general_purpose::STANDARD.encode(&bytes),
-                    "mime": sniff_audio(&bytes),
-                }))
-            }
-            other => Err(ModuleError::unsupported(other)),
-        }
+        })
+        .map_err(ModuleError::other)?
     }
 
     /// request -> HTTP -> response handler, following `nextRequestHandler`.
@@ -420,14 +437,14 @@ impl LegacyTransport {
     /// over into the next hop, and a `nextRequestHandler` that names no
     /// function ends the chain with what has been collected — some scripts
     /// put other values in that slot.
-    fn flow(
+    fn flow<'js>(
         &self,
-        ctx: &mut Context,
+        ctx: &Ctx<'js>,
         host: &dyn Fn(&str, serde_json::Value) -> Reply,
         capability: i32,
         request_fn: &str,
         response_fn: &str,
-        args: &[JsValue; 3],
+        args: &[Value<'js>; 3],
     ) -> Result<serde_json::Value, ModuleError> {
         if !engine::has_function(ctx, request_fn) {
             return Err(ModuleError::unsupported(request_fn));
@@ -445,7 +462,7 @@ impl LegacyTransport {
             let resp_value = engine::call_global(
                 ctx,
                 &handler,
-                &[args[0].clone(), JsValue::from(js(&fetched.text)), JsValue::from(from), JsValue::from(to)],
+                &[args[0].clone(), engine::str(ctx, &fetched.text), engine::int(ctx, from), engine::int(ctx, to)],
             )
             .map_err(|e| script_failure(&fetched, e))?;
             let mut resp = engine::to_json(ctx, &resp_value).map_err(ModuleError::other)?;
@@ -471,9 +488,12 @@ impl LegacyTransport {
                 }
                 return Ok(resp);
             }
-            rd_value =
-                engine::call_global(ctx, &next, &[args[0].clone(), JsValue::from(from), JsValue::from(to), resp_value])
-                    .map_err(engine::script_error)?;
+            rd_value = engine::call_global(
+                ctx,
+                &next,
+                &[args[0].clone(), engine::int(ctx, from), engine::int(ctx, to), resp_value],
+            )
+            .map_err(engine::script_error)?;
         }
         Err(ModuleError::new(ErrorKind::BadResponse, "the script chained too many requests"))
     }
@@ -482,7 +502,7 @@ impl LegacyTransport {
     #[allow(clippy::too_many_arguments)]
     fn perform(
         &self,
-        ctx: &mut Context,
+        ctx: &Ctx<'_>,
         host: &dyn Fn(&str, serde_json::Value) -> Reply,
         rd: &RequestData,
         capability: i32,
@@ -501,7 +521,7 @@ impl LegacyTransport {
             let base = engine::call_global(
                 ctx,
                 "serviceHost",
-                &[JsValue::from(capability), JsValue::from(from), JsValue::from(to)],
+                &[engine::int(ctx, capability), engine::int(ctx, from), engine::int(ctx, to)],
             )
             .map(|v| engine::to_string(ctx, &v))
             .map_err(engine::script_error)?;
@@ -634,7 +654,7 @@ fn between<'a>(s: &'a str, start: &str, end: &str) -> Option<&'a str> {
     Some(&s[from..from + len])
 }
 
-fn read_request(ctx: &mut Context, value: &JsValue) -> Result<RequestData, ModuleError> {
+fn read_request<'js>(ctx: &Ctx<'js>, value: &Value<'js>) -> Result<RequestData, ModuleError> {
     let v = engine::to_json(ctx, value).map_err(ModuleError::other)?;
     if !v.is_object() {
         return Err(ModuleError::new(ErrorKind::BadResponse, "the script did not return a RequestData"));
@@ -659,10 +679,6 @@ fn join_url(base: &str, path: &str) -> String {
         (false, false) if !path.starts_with('?') => format!("{base}/{path}"),
         _ => format!("{base}{path}"),
     }
-}
-
-fn js(s: &str) -> boa_engine::JsString {
-    boa_engine::JsString::from(s)
 }
 
 fn slug(name: &str) -> String {
@@ -746,7 +762,11 @@ mod tests {
     "#;
 
     fn provider(service: &str) -> ProtocolProvider<LegacyTransport> {
-        let script = Arc::new(LegacyScript { common: None, service: service.into(), folder: "Test Service".into() });
+        let script = Arc::new(LegacyScript {
+            common: None,
+            service: engine::Script::new("Test Service/Service.js", service),
+            folder: "Test Service".into(),
+        });
         let meta = script.probe().unwrap();
         let manifest = meta.manifest(&script.folder);
         ProtocolProvider::new(
@@ -856,28 +876,32 @@ mod tests {
 
     #[test]
     fn compat_helpers_behave_like_the_classic_ones() {
-        let mut ctx = engine::new_context().unwrap();
-        engine::eval(&mut ctx, COMPAT, "compat").unwrap();
-        let check = |ctx: &mut Context, expr: &str| -> serde_json::Value {
-            let v = engine::eval(ctx, expr, "t").unwrap();
-            engine::to_json(ctx, &v).unwrap()
-        };
-        assert_eq!(check(&mut ctx, "format('{0}-{1}-{0}', 'a', 'b')"), "a-b-a");
-        assert_eq!(check(&mut ctx, "stringFindSub('xx<b>bold</b>yy', '<b>', false, '</b>', false)"), "bold");
-        assert_eq!(check(&mut ctx, "stringFindSub('xx<b>bold</b>yy', '<b>', true, '</b>', true)"), "<b>bold</b>");
-        assert_eq!(check(&mut ctx, "stripHtml('<p>a&nbsp;<b>b</b></p><br/><script>x</script>c')"), "a b\r\nc");
-        assert_eq!(check(&mut ctx, "trimString('  x  ')"), "x");
-        assert_eq!(check(&mut ctx, "unquoteHtml('&lt;a&gt; &amp; &quot;q&quot; &#39;')"), "<a> & \"q\" '");
-        assert_eq!(check(&mut ctx, "removeEmptyLines('a\\n\\n\\n\\nb\\n')"), "a\r\n\r\nb");
+        engine::with_context(compat_helpers).unwrap();
+    }
+
+    fn check(ctx: &Ctx<'_>, expr: &str) -> serde_json::Value {
+        let v = engine::eval(ctx, expr, "t").unwrap();
+        engine::to_json(ctx, &v).unwrap()
+    }
+
+    fn compat_helpers(ctx: &Ctx<'_>) {
+        engine::eval(ctx, COMPAT, "compat").unwrap();
+        assert_eq!(check(ctx, "format('{0}-{1}-{0}', 'a', 'b')"), "a-b-a");
+        assert_eq!(check(ctx, "stringFindSub('xx<b>bold</b>yy', '<b>', false, '</b>', false)"), "bold");
+        assert_eq!(check(ctx, "stringFindSub('xx<b>bold</b>yy', '<b>', true, '</b>', true)"), "<b>bold</b>");
+        assert_eq!(check(ctx, "stripHtml('<p>a&nbsp;<b>b</b></p><br/><script>x</script>c')"), "a b\r\nc");
+        assert_eq!(check(ctx, "trimString('  x  ')"), "x");
+        assert_eq!(check(ctx, "unquoteHtml('&lt;a&gt; &amp; &quot;q&quot; &#39;')"), "<a> & \"q\" '");
+        assert_eq!(check(ctx, "removeEmptyLines('a\\n\\n\\n\\nb\\n')"), "a\r\n\r\nb");
         assert_eq!(
-            check(&mut ctx, "updateHtmlLinks('<a href=\"/x\"><img src=\"//cdn/y\">', 'https://site.org')"),
+            check(ctx, "updateHtmlLinks('<a href=\"/x\"><img src=\"//cdn/y\">', 'https://site.org')"),
             "<a href=\"https://site.org/x\"><img src=\"https://cdn/y\">"
         );
         // A long query is cut at the last encoded space.
-        let cut = check(&mut ctx, "encodeGetParam(new Array(400).join('word ')).length");
+        let cut = check(ctx, "encodeGetParam(new Array(400).join('word ')).length");
         assert!(cut.as_u64().unwrap() <= 1800);
-        assert_eq!(check(&mut ctx, "new RequestData(HttpMethod.GET, '/x').headers.indexOf('Accept: */*') === 0"), true);
-        assert_eq!(check(&mut ctx, "parseJSON(\"{a: 'single quotes'}\").a"), "single quotes");
+        assert_eq!(check(ctx, "new RequestData(HttpMethod.GET, '/x').headers.indexOf('Accept: */*') === 0"), true);
+        assert_eq!(check(ctx, "parseJSON(\"{a: 'single quotes'}\").a"), "single quotes");
     }
 
     #[test]
@@ -1083,22 +1107,21 @@ mod tests {
 
     #[test]
     fn host_utils_and_the_htmlfile_document() {
-        let mut ctx = engine::new_context().unwrap();
-        engine::eval(&mut ctx, LEGACY_HOST, "host").unwrap();
-        engine::eval(&mut ctx, COMPAT, "compat").unwrap();
-        let check = |ctx: &mut Context, expr: &str| -> serde_json::Value {
-            let v = engine::eval(ctx, expr, "t").unwrap();
-            engine::to_json(ctx, &v).unwrap()
-        };
-        assert_eq!(check(&mut ctx, "Utils.md5('')"), "d41d8cd98f00b204e9800998ecf8427e");
-        assert_eq!(check(&mut ctx, "Utils.md5('привет')"), "608333adc72f545078ede3aad71bfe74");
+        engine::with_context(host_utils).unwrap();
+    }
+
+    fn host_utils(ctx: &Ctx<'_>) {
+        engine::eval(ctx, LEGACY_HOST, "host").unwrap();
+        engine::eval(ctx, COMPAT, "compat").unwrap();
+        assert_eq!(check(ctx, "Utils.md5('')"), "d41d8cd98f00b204e9800998ecf8427e");
+        assert_eq!(check(ctx, "Utils.md5('привет')"), "608333adc72f545078ede3aad71bfe74");
 
         let page = r#"<html><body><div id="header"><div>logo</div><div>menu</div></div>
             <div id="content" class="c"><p>article <img src="x.png"> text</p></div>
             <div id='page'><textarea id="out">a &amp; b</textarea></div><div id="footer">foot</div></body></html>"#;
-        engine::set_global_json(&mut ctx, "page", &serde_json::json!(page)).unwrap();
+        engine::set_global_json(ctx, "page", &serde_json::json!(page)).unwrap();
         let out = check(
-            &mut ctx,
+            ctx,
             r#"var doc = new ActiveXObject("htmlfile"); doc.write(page);
                var h = doc.getElementById("header"); if (h) h.parentNode.removeChild(h);
                var f = doc.getElementById("footer"); f.parentNode.removeChild(f);

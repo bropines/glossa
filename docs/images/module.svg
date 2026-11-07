@@ -102,7 +102,7 @@
   </g>
 
   <text class="b" x="36" y="442">JavaScript</text>
-  <text class="s" x="36" y="464">Runs inside Glossa (boa), in a</text>
+  <text class="s" x="36" y="464">Runs inside Glossa (QuickJS), in a</text>
   <text class="s" x="36" y="481">fresh context for each call.</text>
   <text class="s mono" x="36" y="503">translate(req, host)</text>
   <text class="s mono" x="36" y="521">host.fetch, host.cache, host.image</text>

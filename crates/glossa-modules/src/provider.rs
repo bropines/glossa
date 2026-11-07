@@ -179,7 +179,7 @@ pub trait Provider: Send + Sync {
 
 /// A provider behind a panic barrier. JavaScript, classic and pot-app
 /// scripts, native modules, the image code and the built-in services all run
-/// in this process; a panic in any of them (a bug in boa, an out-of-range
+/// in this process; a panic in any of them (a bug in the JavaScript engine, an out-of-range
 /// index in a parser) fails that one call with [`Error::Module`] instead of
 /// taking the program down. The [`Registry`](crate::Registry) wraps every
 /// provider it holds in one, so callers never see an unguarded provider.

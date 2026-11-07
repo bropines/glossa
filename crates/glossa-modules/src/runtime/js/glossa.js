@@ -160,6 +160,74 @@ var host = {
   })()
 };
 
+/**
+ * The browser's `fetch`, made through host.http, for code written against it
+ * (libraries bundled from npm). The request runs synchronously, so the
+ * returned promise is already settled. The response body is text, decoded by
+ * its charset; pass `binary: true` (a Glossa extension) to get exact bytes
+ * from `arrayBuffer()`. Only hosts in `permissions.network` are reachable.
+ */
+function fetch(input, init) {
+  try {
+    init = init || {};
+    var isRequest = input && typeof input === "object" && !(input instanceof URL);
+    var url = isRequest ? input.url : String(input);
+    var headers = new Headers(init.headers || (isRequest ? input.headers : undefined));
+    var req = { method: String(init.method || (isRequest && input.method) || "GET").toUpperCase(), url: url, headers: {} };
+    var body = init.body;
+    if (body != null) {
+      if (body instanceof URLSearchParams) {
+        if (!headers.has("content-type")) headers.set("content-type", "application/x-www-form-urlencoded;charset=UTF-8");
+        req.body = body.toString();
+      } else if (body instanceof ArrayBuffer || ArrayBuffer.isView(body)) {
+        var bytes = new Uint8Array(body instanceof ArrayBuffer ? body : body.buffer, body.byteOffset || 0, body.byteLength);
+        var bin = "";
+        for (var i = 0; i < bytes.length; i++) bin += String.fromCharCode(bytes[i]);
+        req.body_base64 = btoa(bin);
+      } else {
+        if (!headers.has("content-type")) headers.set("content-type", "text/plain;charset=UTF-8");
+        req.body = String(body);
+      }
+    }
+    headers.forEach(function (v, k) { req.headers[k] = v; });
+    if (init.timeout) req.timeout_ms = init.timeout;
+    if (init.binary) req.binary = true;
+    return Promise.resolve(new __Response(__call("http", req), url, !!init.binary));
+  } catch (e) {
+    return Promise.reject(e);
+  }
+}
+
+function __Response(r, url, binary) {
+  this._r = r;
+  this._binary = binary;
+  this.status = r.status;
+  this.ok = r.status >= 200 && r.status < 300;
+  this.statusText = "";
+  this.headers = new Headers(r.headers || {});
+  this.url = url;
+  this.redirected = false;
+  this.type = "basic";
+  this.bodyUsed = false;
+}
+__Response.prototype = {
+  _bytes: function () {
+    if (!this._binary) return new Uint8Array(__utf8Bytes(this._r.body || ""));
+    var bin = atob(this._r.body_base64 || "");
+    var out = new Uint8Array(bin.length);
+    for (var i = 0; i < bin.length; i++) out[i] = bin.charCodeAt(i);
+    return out;
+  },
+  text: function () {
+    this.bodyUsed = true;
+    return Promise.resolve(this._binary ? __utf8Decode(this._bytes()) : this._r.body || "");
+  },
+  json: function () { return this.text().then(JSON.parse); },
+  arrayBuffer: function () { this.bodyUsed = true; return Promise.resolve(this._bytes().buffer); },
+  bytes: function () { this.bodyUsed = true; return Promise.resolve(this._bytes()); },
+  clone: function () { return new __Response(this._r, this.url, this._binary); }
+};
+
 function __glossaEntry(name) {
   if (module.exports && typeof module.exports[name] === "function") return module.exports[name];
   if (typeof globalThis[name] === "function") return globalThis[name];
