@@ -34,6 +34,8 @@ Everything about Glossa beyond the [README](../README.md), by topic.
 | page | what it covers |
 |---|---|
 | [Architecture](architecture.md) | The crates and how a translation flows through them, with a diagram. |
+| [RFC: declarative modules](design/declarative-modules.md) | Proposal, not built: module UIs declared in `module.toml` and drawn by Glossa, the choice of scripting language, an in-app module editor. |
+| [Module runtimes FAQ](design/runtimes-faq.md) | Is Python embedded? Is JavaScript? What embedding Python would take. |
 | [How the classic program behaved](research/classic-behaviour.md) | Clean-room notes on QTranslate's observed behaviour. |
 | [Fluent numbers](research/fluent.md) | Where the Fluent themes' sizes and colours come from. |
 | [AGENTS.md](../AGENTS.md) | Rules for changing the repository, human or agent. |
