@@ -254,7 +254,7 @@ pub struct SettingsPage {
     pub options: Vec<OptionSpec>,
     pub nodes: Vec<Node>,
     conds: Vec<Conds>,
-    patterns: Vec<Option<regex_lite::Regex>>,
+    patterns: Vec<Option<validate::Pattern>>,
 }
 
 /// Where each field stands, for drawing.
@@ -303,7 +303,7 @@ impl SettingsPage {
         let conds = options.iter().map(|o| Conds::parse(&o.visible_if, &o.enabled_if)).collect();
         let patterns = options
             .iter()
-            .map(|o| (!o.pattern.is_empty()).then(|| regex_lite::Regex::new(&o.pattern).ok()).flatten())
+            .map(|o| (!o.pattern.is_empty()).then(|| validate::Pattern::new(&o.pattern).ok()).flatten())
             .collect();
 
         let empty = SettingsLayout::default();
@@ -313,7 +313,8 @@ impl SettingsPage {
             items: &layout.items,
             tr: &|key: String, fallback: &str| tr(key, fallback),
             used: BTreeSet::new(),
-            stack: Vec::new(),
+            placed: BTreeSet::new(),
+            depth: 0,
         };
         let mut nodes: Vec<Node> = layout.layout.iter().filter_map(|id| b.resolve(id)).collect();
         for (i, option) in options.iter().enumerate() {
@@ -440,25 +441,34 @@ struct Builder<'a> {
     items: &'a [LayoutItem],
     tr: &'a dyn Fn(String, &str) -> String,
     used: BTreeSet<usize>,
-    /// Items being resolved, to stop at a cycle.
-    stack: Vec<String>,
+    /// Items and actions already placed. Each is drawn once: a second
+    /// reference would clash with the first's egui ids, a container inside
+    /// itself would never end, and items that each list the next twice
+    /// would otherwise build 2^N nodes.
+    placed: BTreeSet<String>,
+    /// How deep the item being resolved is nested.
+    depth: usize,
 }
+
+/// Containers nested deeper than this are left out: the page is drawn and
+/// walked recursively, every frame, on the UI thread.
+pub const MAX_DEPTH: usize = 16;
 
 impl Builder<'_> {
     fn resolve(&mut self, id: &str) -> Option<Node> {
         let id = id.trim();
         if let Some(action) = id.strip_prefix('@') {
-            return Some(Node::Action(action.to_owned()));
+            return self.placed.insert(id.to_owned()).then(|| Node::Action(action.to_owned()));
         }
         if let Some(i) = self.options.iter().position(|o| o.key == id) {
             // Listed twice: the second would clash with the first's widget.
             return self.used.insert(i).then_some(Node::Option(i));
         }
         let item = self.items.iter().find(|it| it.id == id)?;
-        if self.stack.iter().any(|s| s == id) {
+        if self.depth >= MAX_DEPTH || !self.placed.insert(id.to_owned()) {
             return None;
         }
-        self.stack.push(id.to_owned());
+        self.depth += 1;
         let label = (self.tr)(format!("settings.items.{id}.label"), &item.label);
         let help = (self.tr)(format!("settings.items.{id}.help"), &item.help);
         let conds = Conds::parse(&item.visible_if, &item.enabled_if);
@@ -501,7 +511,7 @@ impl Builder<'_> {
             ItemKind::Separator => Node::Separator,
             ItemKind::Unknown => Node::Unknown { id: id.to_owned(), kind: item.kind.clone() },
         };
-        self.stack.pop();
+        self.depth -= 1;
         Some(node)
     }
 }
@@ -573,17 +583,17 @@ pub fn lint(m: &Manifest, strings: &ModuleStrings, load_problems: &[String]) -> 
 
     for o in &m.options {
         let what = format!("option {:?}", o.key);
-        if o.kind == OptionKind::Unknown {
+        if let OptionKind::Unknown(name) = &o.kind {
             out.push(issue(
                 Level::Error,
-                format!("{what}: unknown type (text, secret, url, bool, number, select, multiselect, multiline, lang, file)"),
+                format!("{what}: unknown type {name:?} (text, secret, url, bool, number, select, multiselect, multiline, lang, file); older and newer builds may differ"),
             ));
         }
         check_cond(&what, "visible_if", &o.visible_if, &mut out);
         check_cond(&what, "enabled_if", &o.enabled_if, &mut out);
         let mut pattern = None;
         if !o.pattern.is_empty() {
-            match regex_lite::Regex::new(&o.pattern) {
+            match validate::Pattern::new(&o.pattern) {
                 Ok(re) => pattern = Some(re),
                 Err(e) => out.push(issue(
                     Level::Error,
@@ -646,7 +656,7 @@ pub fn lint(m: &Manifest, strings: &ModuleStrings, load_problems: &[String]) -> 
         // and bool defaults are checked by the older option lint in
         // glossa-module-test, as errors.
         let checked_elsewhere = matches!(o.kind, OptionKind::Number | OptionKind::Select | OptionKind::Bool);
-        if !o.default.is_null() && o.kind != OptionKind::Unknown && !checked_elsewhere {
+        if !o.default.is_null() && !matches!(o.kind, OptionKind::Unknown(_)) && !checked_elsewhere {
             if let Some(e) = validate::check(o, pattern.as_ref(), &o.default) {
                 if e.key != "field.required" {
                     out.push(issue(
@@ -756,29 +766,57 @@ pub fn lint(m: &Manifest, strings: &ModuleStrings, load_problems: &[String]) -> 
             }
         }
         // A cycle: a container that contains itself.
+        // Each item is visited once per search, so a layout that lists the
+        // same items many times costs no more than one that does not.
+        let children = |id: &str| -> &[String] {
+            layout.items.iter().find(|x| x.id == id).map(|x| x.children.as_slice()).unwrap_or(&[])
+        };
         for it in &layout.items {
-            let mut stack = vec![(it.id.as_str(), 0usize)];
+            let mut seen = BTreeSet::new();
+            let mut todo: Vec<&str> = children(&it.id).iter().map(|c| c.trim()).collect();
             let mut cyclic = false;
-            while let Some((id, depth)) = stack.pop() {
-                if depth > layout.items.len() {
+            while let Some(id) = todo.pop() {
+                if id == it.id {
                     cyclic = true;
                     break;
                 }
-                if let Some(x) = layout.items.iter().find(|x| x.id == id) {
-                    for c in &x.children {
-                        if c == &it.id {
-                            cyclic = true;
-                        }
-                        stack.push((c.as_str(), depth + 1));
-                    }
-                }
-                if cyclic {
-                    break;
+                if seen.insert(id) {
+                    todo.extend(children(id).iter().map(|c| c.trim()));
                 }
             }
             if cyclic {
                 out.push(issue(Level::Error, format!("[ui.settings] item {:?} contains itself", it.id)));
             }
+        }
+        // Nesting depth, longest chain first; a cycle counts as a dead end.
+        fn depth<'a>(
+            id: &'a str,
+            children: &dyn Fn(&str) -> &'a [String],
+            memo: &mut BTreeMap<&'a str, usize>,
+            open: &mut BTreeSet<&'a str>,
+        ) -> usize {
+            if let Some(d) = memo.get(id) {
+                return *d;
+            }
+            if open.len() > MAX_DEPTH {
+                // Too deep already; no need to recurse further to say so.
+                return MAX_DEPTH + 1;
+            }
+            if !open.insert(id) {
+                return 0;
+            }
+            let d = 1 + children(id).iter().map(|c| depth(c.trim(), children, memo, open)).max().unwrap_or(0);
+            open.remove(id);
+            memo.insert(id, d);
+            d
+        }
+        let mut memo = BTreeMap::new();
+        let deepest = layout.items.iter().map(|it| depth(&it.id, &children, &mut memo, &mut BTreeSet::new())).max();
+        if deepest.is_some_and(|d| d > MAX_DEPTH) {
+            out.push(issue(
+                Level::Error,
+                format!("[ui.settings]: containers nest more than {MAX_DEPTH} deep; the deeper ones are left out"),
+            ));
         }
     }
 
@@ -927,6 +965,36 @@ mod tests {
             shape(&page),
             "c tabs:box[group:first[label:line row:pair[b]] group:second[--- ?carousel:future] group:[a]] @test group:more[d] e"
         );
+    }
+
+    #[test]
+    fn repeated_and_deep_layouts_stay_small_and_bounded() {
+        // Forty groups that each list the next twice: 2^40 nodes if items
+        // were not placed once.
+        let n = 40;
+        let mut text = String::from("[[options]]\nkey = \"x\"\n[ui.settings]\nlayout = [\"g0\", \"g0\"]\n");
+        for i in 0..n {
+            let next = if i + 1 < n { format!("\"g{}\", \"g{}\"", i + 1, i + 1) } else { "\"x\"".into() };
+            text += &format!("[[ui.settings.items]]\nid = \"g{i}\"\ntype = \"group\"\nchildren = [{next}]\n");
+        }
+        let m = manifest(&text);
+        let start = std::time::Instant::now();
+        let page = SettingsPage::for_manifest(&m, "en");
+        fn count(n: &Node) -> usize {
+            match n {
+                Node::Group(c) | Node::Row(c) | Node::Tabs(c) => 1 + c.children.iter().map(count).sum::<usize>(),
+                _ => 1,
+            }
+        }
+        let total: usize = page.nodes.iter().map(count).sum();
+        // Nested no deeper than MAX_DEPTH; `x`, past the cut, goes to the end.
+        assert_eq!(total, MAX_DEPTH + 1, "{}", shape(&page));
+        assert!(matches!(page.nodes.last(), Some(Node::Option(0))));
+        let issues = lint(&m, &ModuleStrings::default(), &[]);
+        assert!(start.elapsed() < std::time::Duration::from_secs(2));
+        assert!(issues.iter().any(|i| i.message.contains("nest more than")), "{issues:?}");
+        assert!(issues.iter().any(|i| i.message.contains("placed 2 times")));
+        assert!(!issues.iter().any(|i| i.message.contains("contains itself")));
     }
 
     #[test]

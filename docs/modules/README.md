@@ -290,6 +290,23 @@ The types added for richer pages:
 A type this Glossa does not know (from a newer release) does not stop the
 module: the field shows a "needs a newer version" line.
 
+> **Older builds.** Glossa releases before these settings pages refuse to
+> load a module that uses `multiselect`, `lang` or `file`: they do not know
+> the types, and fail the whole manifest with a parse error. The other keys
+> on this page are ignored there, which is harmless. Those releases do not
+> know `min_glossa` either, so for them the only remedy is not to use the
+> new types (a `select` or `text` works everywhere). Still set `min_glossa`
+> to the release you need: every build from this one on honours it, and
+> says "needs Glossa x.y.z or newer" instead of drawing a page it does not
+> fully understand.
+
+Patterns use ASCII classes: `\d`, `\w`, `[a-z]` and case-insensitive
+matching cover ASCII only, while literal text in any script (`^ключ-`)
+matches as written. A pattern is limited to 1,000 characters and a modest
+compiled size. Conditions are limited to 1,000 characters and 32 levels of
+`!` and parentheses. Layouts nest at most 16 containers deep, and each item
+is drawn once even if it is listed twice.
+
 #### Checks
 
 Glossa checks values as the user types and shows a message under a field

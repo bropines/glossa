@@ -25,6 +25,10 @@
 use std::collections::BTreeMap;
 use std::path::Path;
 
+/// The largest locale file read, in bytes. Translations of a settings page
+/// are a few kilobytes; every module's are read when modules load.
+const MAX_FILE: u64 = 256 * 1024;
+
 /// Every locale file of one module, flattened.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct ModuleStrings {
@@ -39,7 +43,15 @@ impl ModuleStrings {
     pub fn load(dir: &Path) -> (ModuleStrings, Vec<String>) {
         let mut out = ModuleStrings::default();
         let mut problems = Vec::new();
-        let Ok(read) = std::fs::read_dir(dir.join("locales")) else { return (out, problems) };
+        let folder = dir.join("locales");
+        let Ok(read) = std::fs::read_dir(&folder) else { return (out, problems) };
+        // Links may point anywhere; a module's translations stay inside its
+        // own folder.
+        let Some(root) = folder.canonicalize().ok().filter(|f| dir.canonicalize().is_ok_and(|d| f.starts_with(d)))
+        else {
+            problems.push("locales/ points outside the module's folder; it is not read".into());
+            return (out, problems);
+        };
         let mut files: Vec<_> = read.flatten().map(|e| e.path()).collect();
         files.sort();
         for path in files {
@@ -48,6 +60,14 @@ impl ModuleStrings {
             }
             let Some(lang) = path.file_stem().and_then(|s| s.to_str()) else { continue };
             let shown = format!("locales/{}", path.file_name().unwrap_or_default().to_string_lossy());
+            if !path.canonicalize().is_ok_and(|p| p.starts_with(&root)) {
+                problems.push(format!("{shown}: a link to outside the module's folder; not read"));
+                continue;
+            }
+            if std::fs::metadata(&path).is_ok_and(|m| m.len() > MAX_FILE) {
+                problems.push(format!("{shown}: larger than {} KB; not read", MAX_FILE / 1024));
+                continue;
+            }
             match std::fs::read_to_string(&path) {
                 Ok(text) => match parse(&text) {
                     Ok((map, bad)) => {
@@ -171,5 +191,25 @@ mod tests {
         let (none, problems) = ModuleStrings::load(&dir.join("absent"));
         assert!(none.is_empty() && problems.is_empty());
         std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn stays_inside_the_module_and_skips_huge_files() {
+        let base = std::env::temp_dir().join(format!("glossa-strings-guard-{}", std::process::id()));
+        let module = base.join("module");
+        let locales = module.join("locales");
+        std::fs::create_dir_all(&locales).unwrap();
+        std::fs::write(locales.join("big.toml"), "x = \"".to_owned() + &"y".repeat(300 * 1024) + "\"\n").unwrap();
+        #[cfg(unix)]
+        {
+            std::fs::write(base.join("outside.toml"), "[options.k]\nlabel = 'leak'\n").unwrap();
+            std::os::unix::fs::symlink(base.join("outside.toml"), locales.join("de.toml")).unwrap();
+        }
+        let (s, problems) = ModuleStrings::load(&module);
+        assert!(s.is_empty(), "{s:?}");
+        assert!(problems.iter().any(|p| p.contains("big.toml") && p.contains("larger than")), "{problems:?}");
+        #[cfg(unix)]
+        assert!(problems.iter().any(|p| p.contains("de.toml") && p.contains("outside")), "{problems:?}");
+        std::fs::remove_dir_all(&base).ok();
     }
 }

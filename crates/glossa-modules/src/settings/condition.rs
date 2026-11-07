@@ -16,6 +16,12 @@
 
 use serde_json::Value;
 
+/// Longest condition accepted, in bytes. It also bounds how long a chain of
+/// `&&` and `||` can get, and so how deep evaluating it recurses.
+pub const MAX_LEN: usize = 1000;
+/// Deepest nesting of `!` and parentheses accepted.
+pub const MAX_NESTING: usize = 32;
+
 /// Where a path looks its value up.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Scope {
@@ -57,8 +63,11 @@ pub struct Context<'a> {
 impl Condition {
     /// Parse `src`. The error says what was expected and where.
     pub fn parse(src: &str) -> Result<Condition, String> {
+        if src.len() > MAX_LEN {
+            return Err(format!("longer than {MAX_LEN} characters; move the logic into fewer, simpler conditions"));
+        }
         let tokens = tokenize(src)?;
-        let mut p = Parser { tokens, at: 0 };
+        let mut p = Parser { tokens, at: 0, depth: 0 };
         let c = p.or()?;
         match p.peek() {
             None => Ok(c),
@@ -324,9 +333,21 @@ fn tokenize(src: &str) -> Result<Vec<Token>, String> {
 struct Parser {
     tokens: Vec<Token>,
     at: usize,
+    /// How many `!` and `(` enclose the current point.
+    depth: usize,
 }
 
 impl Parser {
+    /// Go one level deeper, refusing past [`MAX_NESTING`]: the parser, the
+    /// evaluator and dropping the tree all recurse.
+    fn enter(&mut self) -> Result<(), String> {
+        self.depth += 1;
+        if self.depth > MAX_NESTING {
+            return Err(format!("nested more than {MAX_NESTING} levels of `!` and `(`"));
+        }
+        Ok(())
+    }
+
     fn peek(&self) -> Option<&Token> {
         self.tokens.get(self.at)
     }
@@ -372,7 +393,10 @@ impl Parser {
 
     fn unary(&mut self) -> Result<Condition, String> {
         if self.eat(&Kind::Not) {
-            return Ok(Condition::Not(Box::new(self.unary()?)));
+            self.enter()?;
+            let inner = self.unary()?;
+            self.depth -= 1;
+            return Ok(Condition::Not(Box::new(inner)));
         }
         self.primary()
     }
@@ -386,7 +410,9 @@ impl Parser {
             Kind::Path(s, steps) => Ok(Condition::Path(s, steps)),
             Kind::Literal(v) => Ok(Condition::Literal(v)),
             Kind::Open => {
+                self.enter()?;
                 let inner = self.or()?;
+                self.depth -= 1;
                 if !self.eat(&Kind::Close) {
                     return Err(format!("the `(` at character {} is not closed", t.pos + 1));
                 }
@@ -481,6 +507,25 @@ mod tests {
             let err = Condition::parse(src).unwrap_err();
             assert!(err.contains(want), "{src}: {err}");
         }
+    }
+
+    #[test]
+    fn huge_or_deep_conditions_are_refused_not_overflowed() {
+        // Without limits these recurse until the stack overflows, which
+        // aborts the program instead of panicking.
+        for src in ["!".repeat(100_000) + "options.a", "(".repeat(100_000) + "options.a"] {
+            assert!(Condition::parse(&src).unwrap_err().contains("longer than"));
+        }
+        let deep_not = "!".repeat(MAX_NESTING + 1) + "options.a";
+        assert!(Condition::parse(&deep_not).unwrap_err().contains("nested more than"));
+        let deep_paren = "(".repeat(MAX_NESTING + 1) + "options.a" + &")".repeat(MAX_NESTING + 1);
+        assert!(Condition::parse(&deep_paren).unwrap_err().contains("nested more than"));
+        let ok = "!".repeat(MAX_NESTING) + "options.a";
+        assert!(Condition::parse(&ok).is_ok());
+        // The longest chain allowed parses and evaluates.
+        let chain = vec!["options.a"; MAX_LEN / 13].join(" && ");
+        let options = Default::default();
+        assert!(!Condition::parse(&chain).unwrap().eval(&Context { options: &options, state: None }));
     }
 
     #[test]

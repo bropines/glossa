@@ -52,6 +52,10 @@ fn tabs_id(salt: &str, tabs: &str) -> egui::Id {
     egui::Id::unique(("module-tabs", salt, tabs))
 }
 
+/// A file dialog's answer on its way back from the worker: `None` while it
+/// is open, then `Some(None)` for cancelled or `Some(Some(path))`.
+type PickSlot = std::sync::Arc<parking_lot::Mutex<Option<Option<String>>>>;
+
 struct Cx<'a> {
     look: &'a Look,
     locale: &'a Locale,
@@ -308,17 +312,36 @@ impl Cx<'_> {
             }
             OptionKind::File => {
                 let mut s = current.as_str().unwrap_or("").to_owned();
+                // The dialog runs on a worker so the UI keeps drawing; its
+                // answer waits in a slot this field reads on later frames.
+                let slot_id = egui::Id::unique(("module-file-pick", self.salt, &spec.key));
+                let slot = ui.data(|d| d.get_temp::<PickSlot>(slot_id));
+                if let Some(slot) = &slot {
+                    if let Some(picked) = slot.lock().take() {
+                        ui.data_mut(|d| d.remove::<PickSlot>(slot_id));
+                        if let Some(path) = picked {
+                            self.set(&spec.key, path.into());
+                            return;
+                        }
+                    }
+                }
                 // Right to left: the button first, then the path takes the rest.
-                if ui.button(self.t("field.browse")).clicked() {
-                    let mut dialog = rfd::FileDialog::new();
-                    if !spec.filters.is_empty() {
-                        let exts: Vec<&str> = spec.filters.iter().map(|f| f.trim_start_matches('.')).collect();
-                        dialog = dialog.add_filter(if spec.label.is_empty() { &spec.key } else { &spec.label }, &exts);
-                    }
-                    if let Some(path) = dialog.pick_file() {
-                        self.set(&spec.key, path.display().to_string().into());
-                        return;
-                    }
+                let waiting = ui.data(|d| d.get_temp::<PickSlot>(slot_id)).is_some();
+                if ui.add_enabled(!waiting, egui::Button::new(self.t("field.browse"))).clicked() {
+                    let slot = PickSlot::default();
+                    ui.data_mut(|d| d.insert_temp(slot_id, slot.clone()));
+                    let title = if spec.label.is_empty() { spec.key.clone() } else { spec.label.clone() };
+                    let exts: Vec<String> = spec.filters.iter().map(|f| f.trim_start_matches('.').to_owned()).collect();
+                    let ctx = ui.ctx().clone();
+                    std::thread::spawn(move || {
+                        let mut dialog = rfd::FileDialog::new();
+                        if !exts.is_empty() {
+                            dialog = dialog.add_filter(&title, &exts);
+                        }
+                        let picked = dialog.pick_file().map(|p| p.display().to_string());
+                        *slot.lock() = Some(picked);
+                        ctx.request_repaint();
+                    });
                 }
                 let edit = egui::TextEdit::singleline(&mut s)
                     .desired_width((ui.available_width() - 4.0).max(40.0))
@@ -345,7 +368,7 @@ impl Cx<'_> {
                     self.set(&spec.key, s.into());
                 }
             }
-            OptionKind::Unknown => {
+            OptionKind::Unknown(_) => {
                 ui.label(RichText::new(self.t("field.needs_newer")).small().color(self.look.weak_text()));
             }
         }

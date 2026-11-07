@@ -414,8 +414,8 @@ impl OptionSpec {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
+/// An option's `type`, written in the manifest as a lowercase name.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub enum OptionKind {
     #[default]
     Text,
@@ -433,19 +433,60 @@ pub enum OptionKind {
     /// A path, typed or picked with a file dialog. The module gets the path,
     /// not the file.
     File,
-    /// A type from a newer format. The module still loads; the settings page
-    /// says the field needs a newer Glossa.
-    #[serde(other)]
-    Unknown,
+    /// A type from a newer format, with its name as written. The module
+    /// still loads, the settings page says the field needs a newer Glossa,
+    /// and the name is written back unchanged (the module editor rewrites
+    /// manifests).
+    Unknown(String),
 }
 
 impl OptionKind {
+    const NAMES: [(&'static str, OptionKind); 10] = [
+        ("text", OptionKind::Text),
+        ("secret", OptionKind::Secret),
+        ("url", OptionKind::Url),
+        ("bool", OptionKind::Bool),
+        ("number", OptionKind::Number),
+        ("select", OptionKind::Select),
+        ("multiline", OptionKind::Multiline),
+        ("multiselect", OptionKind::Multiselect),
+        ("lang", OptionKind::Lang),
+        ("file", OptionKind::File),
+    ];
+
+    /// The name as `module.toml` writes it.
+    pub fn name(&self) -> &str {
+        match self {
+            OptionKind::Unknown(name) => name,
+            known => Self::NAMES.iter().find(|(_, k)| k == known).map_or("text", |(n, _)| n),
+        }
+    }
+
+    pub fn from_name(name: &str) -> OptionKind {
+        Self::NAMES
+            .iter()
+            .find(|(n, _)| *n == name)
+            .map_or_else(|| OptionKind::Unknown(name.to_owned()), |(_, k)| k.clone())
+    }
+
     /// Whether the value is a string the user types.
-    pub fn is_text(self) -> bool {
+    pub fn is_text(&self) -> bool {
         matches!(
             self,
             OptionKind::Text | OptionKind::Secret | OptionKind::Url | OptionKind::Multiline | OptionKind::File
         )
+    }
+}
+
+impl Serialize for OptionKind {
+    fn serialize<S: serde::Serializer>(&self, s: S) -> std::result::Result<S::Ok, S::Error> {
+        s.serialize_str(self.name())
+    }
+}
+
+impl<'de> Deserialize<'de> for OptionKind {
+    fn deserialize<D: serde::Deserializer<'de>>(d: D) -> std::result::Result<Self, D::Error> {
+        Ok(OptionKind::from_name(&String::deserialize(d)?))
     }
 }
 

@@ -52,10 +52,52 @@ pub fn is_empty(v: &Value) -> bool {
     }
 }
 
+/// Longest `pattern` accepted, in bytes.
+const MAX_PATTERN_LEN: usize = 1000;
+/// Memory a compiled pattern may take (NFA, DFA and determinizing each).
+/// Ordinary patterns need a few kilobytes; this stops one like `\w{1000}`
+/// from eating memory on the UI thread.
+const PATTERN_SIZE_LIMIT: usize = 1 << 20;
+
+/// A compiled `pattern`.
+///
+/// It runs on `regex-automata`'s dense DFA, which Glossa already links for
+/// its log filter, without Unicode tables: classes such as `\d`, `\w` and
+/// `[a-z]` are ASCII, case-insensitive matching is ASCII, and `.` matches one
+/// byte. Literal non-ASCII text (`^ключ-`) matches as written.
+#[derive(Debug, Clone)]
+pub struct Pattern(regex_automata::dfa::regex::Regex);
+
+impl Pattern {
+    pub fn new(src: &str) -> Result<Pattern, String> {
+        use regex_automata::dfa::{dense, regex::Regex};
+        use regex_automata::nfa::thompson;
+        use regex_automata::util::syntax;
+        if src.len() > MAX_PATTERN_LEN {
+            return Err(format!("longer than {MAX_PATTERN_LEN} characters"));
+        }
+        Regex::builder()
+            .syntax(syntax::Config::new().unicode(false).utf8(false))
+            .thompson(thompson::Config::new().utf8(false).nfa_size_limit(Some(PATTERN_SIZE_LIMIT)))
+            .dense(
+                dense::Config::new()
+                    .dfa_size_limit(Some(PATTERN_SIZE_LIMIT))
+                    .determinize_size_limit(Some(PATTERN_SIZE_LIMIT)),
+            )
+            .build(src)
+            .map(Pattern)
+            .map_err(|e| e.to_string())
+    }
+
+    pub fn is_match(&self, text: &str) -> bool {
+        self.0.is_match(text)
+    }
+}
+
 /// Check `value` against `spec`. `pattern` is the compiled `spec.pattern`
 /// (`None` when absent or invalid: the lint reports an invalid one, and the
 /// page does not punish the user for the author's mistake).
-pub fn check(spec: &OptionSpec, pattern: Option<&regex_lite::Regex>, value: &Value) -> Option<FieldError> {
+pub fn check(spec: &OptionSpec, pattern: Option<&Pattern>, value: &Value) -> Option<FieldError> {
     if is_empty(value) {
         if spec.required {
             return Some(FieldError::new("field.required", vec![]));
@@ -122,7 +164,7 @@ pub fn check(spec: &OptionSpec, pattern: Option<&regex_lite::Regex>, value: &Val
             };
             (!ok).then(|| FieldError::new("field.not_language", vec![]))
         }
-        OptionKind::Bool | OptionKind::Unknown => None,
+        OptionKind::Bool | OptionKind::Unknown(_) => None,
         OptionKind::Text | OptionKind::Secret | OptionKind::Url | OptionKind::Multiline | OptionKind::File => {
             let s = value.as_str()?;
             let len = s.chars().count();
@@ -164,7 +206,7 @@ mod tests {
     }
 
     fn err(s: &OptionSpec, v: Value) -> Option<String> {
-        let re = (!s.pattern.is_empty()).then(|| regex_lite::Regex::new(&s.pattern).unwrap());
+        let re = (!s.pattern.is_empty()).then(|| Pattern::new(&s.pattern).unwrap());
         check(s, re.as_ref(), &v).map(|e| e.to_string())
     }
 
@@ -190,6 +232,18 @@ mod tests {
         assert_eq!(err(&s, json!("nope")).as_deref(), Some("Does not match the expected format."));
         let s = spec("pattern = '^ak-'\npattern_message = 'Starts with ak-.'");
         assert_eq!(err(&s, json!("x")).as_deref(), Some("Starts with ak-."));
+    }
+
+    #[test]
+    fn patterns_are_ascii_and_bounded() {
+        let p = Pattern::new(r"^ak-[A-Za-z0-9_\-]{4}$").unwrap();
+        assert!(p.is_match("ak-ab_1") && !p.is_match("ak-abc"));
+        assert!(Pattern::new("^ключ-").unwrap().is_match("ключ-1"), "literal non-ASCII text matches");
+        assert!(Pattern::new(r"\d+").unwrap().is_match("x42"), "unanchored patterns match anywhere");
+        assert!(Pattern::new("([a-").is_err());
+        assert!(Pattern::new(&"a".repeat(1001)).unwrap_err().contains("longer than"));
+        // A pattern whose automaton would be huge is refused, not built.
+        assert!(Pattern::new("(?:a{1000}){1000}").is_err());
     }
 
     #[test]

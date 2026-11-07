@@ -581,9 +581,16 @@ mod tests {
         for new in ["min_glossa", "[ui", "pattern", "visible_if", "widget", "group", "allow_auto"] {
             assert!(!back.contains(new), "{new} in {back}");
         }
-        // A type from a newer format still loads the module.
+        // A type from a newer format still loads the module, and is written
+        // back as it was, not as "unknown".
         let newer = SAMPLE.replace("type = \"secret\"", "type = \"colour\"");
-        assert_eq!(Manifest::parse(&newer).unwrap().options[0].kind, crate::OptionKind::Unknown);
+        let m = Manifest::parse(&newer).unwrap();
+        assert_eq!(m.options[0].kind, crate::OptionKind::Unknown("colour".into()));
+        let back: serde_json::Value = serde_json::to_value(&m.options[0]).unwrap();
+        assert_eq!(back["type"], "colour");
+        let spec: crate::OptionSpec = toml::from_str("key = \"k\"\ntype = \"multiselect\"").unwrap();
+        assert_eq!(serde_json::to_value(&spec).unwrap()["type"], "multiselect");
+        assert_eq!(crate::OptionSpec::default().kind.name(), "text");
     }
 
     #[test]
