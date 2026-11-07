@@ -57,6 +57,8 @@ pub struct ModulePython {
     /// Its own environment, when it has dependencies.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub venv: Option<PathBuf>,
+    /// The environment's folder is on disk (made, or left half made).
+    pub venv_exists: bool,
     /// `ready`, `missing`, `unknown` (a system Python not searched for yet)
     /// or `impossible`.
     pub state: &'static str,
@@ -83,12 +85,14 @@ pub(crate) struct PythonJob {
 const PROGRESS_EVERY: Duration = Duration::from_millis(250);
 
 /// Where the managed Python, `uv`, the modules' environments and `uv`'s
-/// cache go for the data folders `paths`.
+/// cache go for the data folders `paths`. The proxy is left out: [`Engine::python_dirs`]
+/// adds the one the network settings call for.
 pub fn python_dirs(paths: &glossa_core::Paths) -> python_env::PythonDirs {
     python_env::PythonDirs {
         runtimes: paths.runtimes_dir(),
         venvs: paths.venvs_dir(),
         uv_cache: paths.cache_dir.join("uv"),
+        proxy: None,
     }
 }
 
@@ -110,7 +114,25 @@ impl Engine {
         self.inner.python_jobs.lock().get(key).map(|j| j.state.lock().clone())
     }
 
+    /// [`Self::read_module_python`], from the cache while nothing changed.
     fn module_python_report(&self, env: &PythonEnv) -> ModulePython {
+        if let Some(m) = self.inner.python_cache.lock().get(&env.module) {
+            return m.clone();
+        }
+        let m = self.read_module_python(env);
+        self.inner.python_cache.lock().insert(env.module.clone(), m.clone());
+        m
+    }
+
+    /// Stop module `id`'s process, so its environment can be deleted or
+    /// made again (Windows keeps a running `python.exe`'s folder locked).
+    fn stop_module(&self, id: &str) {
+        if let Some(p) = self.registry().get(id) {
+            p.suspend();
+        }
+    }
+
+    fn read_module_python(&self, env: &PythonEnv) -> ModulePython {
         let (state, missing) = match env.state_now() {
             EnvState::Ready => ("ready", Vec::new()),
             EnvState::Missing(m) => ("missing", m),
@@ -124,6 +146,7 @@ impl Engine {
         ModulePython {
             module: env.module.clone(),
             requirements: env.requirements.as_ref().map(|r| r.describe()),
+            venv_exists: env.venv_dir().is_some_and(|v| v.exists()),
             venv: env.venv_dir(),
             state,
             missing,
@@ -200,9 +223,14 @@ impl Engine {
     ) -> Result<PythonReport> {
         let http = self.inner.http.read().clone();
         match module {
-            Some(id) => self.python_env_of(id)?.install(http.as_ref(), cancel, progress)?,
+            Some(id) => {
+                let env = self.python_env_of(id)?;
+                self.stop_module(id);
+                env.install(http.as_ref(), cancel, progress)?;
+            }
             None => self.toolchain().download(true, true, http.as_ref(), cancel, progress)?,
         }
+        self.emit(Event::AssetsChanged { module: module.unwrap_or(PYTHON_JOB).to_owned() });
         Ok(self.python_status())
     }
 
@@ -235,7 +263,10 @@ impl Engine {
                 }
             };
             let result = match &env {
-                Some(env) => env.install(http.as_ref(), &cancel, &progress),
+                Some(env) => {
+                    engine.stop_module(&env.module);
+                    env.install(http.as_ref(), &cancel, &progress)
+                }
                 None => engine.toolchain().download(true, true, http.as_ref(), &cancel, &progress),
             };
             {
@@ -265,7 +296,9 @@ impl Engine {
 
     /// Delete module `id`'s environment; the shared Python stays.
     pub fn remove_module_python(&self, id: &str) -> Result<()> {
-        self.python_env_of(id)?.remove_venv()?;
+        let env = self.python_env_of(id)?;
+        self.stop_module(id);
+        env.remove_venv()?;
         self.inner.python_jobs.lock().remove(id);
         self.emit(Event::AssetsChanged { module: id.to_owned() });
         Ok(())

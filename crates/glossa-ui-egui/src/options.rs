@@ -1244,10 +1244,12 @@ fn module_assets(app: &mut GlossaApp, ui: &mut egui::Ui, st: &mut OptionsState, 
 /// work runs in the engine on worker threads; this only draws and
 /// dispatches.
 fn module_python(app: &mut GlossaApp, ui: &mut egui::Ui, id: &str) {
+    // Cached in the engine and refreshed when it reports a change, so
+    // drawing this every frame reads nothing from disk.
     let Some(m) = app.engine.module_python(id) else { return };
     let look = app.look.clone();
     let failed = m.job.as_ref().is_some_and(|j| !j.running && !j.error.is_empty());
-    let has_venv = m.venv.as_ref().is_some_and(|v| v.exists());
+    let has_venv = m.venv_exists;
     if m.state == "ready" && !failed && !has_venv && !m.busy {
         return;
     }

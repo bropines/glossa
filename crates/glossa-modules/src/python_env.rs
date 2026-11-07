@@ -52,6 +52,30 @@ pub const UV_VERSION: &str = "0.13.7";
 /// unpacks wheels, which on a slow line takes a while, but must not hang.
 const INSTALL_BUDGET: Duration = Duration::from_secs(20 * 60);
 
+/// The environment variables `uv` keeps from Glossa's; everything else is
+/// cleared. On Windows a program needs `SYSTEMROOT` and friends to start at
+/// all; `SSL_CERT_*` point at certificates a company network may require.
+const KEPT_ENV: &[&str] = &[
+    "PATH",
+    "HOME",
+    "USERPROFILE",
+    "HOMEDRIVE",
+    "HOMEPATH",
+    "SYSTEMROOT",
+    "SYSTEMDRIVE",
+    "WINDIR",
+    "COMSPEC",
+    "PATHEXT",
+    "TEMP",
+    "TMP",
+    "TMPDIR",
+    "APPDATA",
+    "LOCALAPPDATA",
+    "PROGRAMDATA",
+    "SSL_CERT_FILE",
+    "SSL_CERT_DIR",
+];
+
 /// The marker inside a module's environment recording what it was made
 /// from.
 const VENV_MARKER: &str = ".glossa-requirements";
@@ -203,12 +227,15 @@ pub struct PythonDirs {
     pub venvs: PathBuf,
     /// `uv`'s download cache.
     pub uv_cache: PathBuf,
+    /// The proxy `uv` goes through, from Glossa's network settings (a URL,
+    /// credentials included); `None` for a direct connection.
+    pub proxy: Option<String>,
 }
 
 impl Default for PythonDirs {
     fn default() -> Self {
         let tmp = std::env::temp_dir().join("glossa-python");
-        Self { runtimes: tmp.join("runtimes"), venvs: tmp.join("venvs"), uv_cache: tmp.join("uv-cache") }
+        Self { runtimes: tmp.join("runtimes"), venvs: tmp.join("venvs"), uv_cache: tmp.join("uv-cache"), proxy: None }
     }
 }
 
@@ -491,68 +518,158 @@ fn probe_python() -> Option<Interpreter> {
 
 // -- requirements -------------------------------------------------------------------
 
-/// What a module declares it needs installed.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum Requirements {
+/// Where a module's requirements were written.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Source {
     /// `requirements = [...]` in `module.toml`.
-    Inline(Vec<String>),
+    Inline,
     /// A `requirements.txt` beside it.
-    File(PathBuf),
-    /// A `pyproject.toml` beside it, with `[project] dependencies`.
-    Project(PathBuf),
+    File,
+    /// `[project] dependencies` in a `pyproject.toml` beside it.
+    Project,
 }
 
-/// Check one `requirements = [...]` entry: a requirement, not a pip option
-/// or several lines.
+/// What a module declares it needs installed: package requirements only,
+/// each checked by [`check_requirement`], whichever file they came from.
+/// Glossa writes them to a file of its own for `uv`, so nothing in the
+/// module's files (`-r`, `--index-url`, `[tool.uv.sources]`) reaches it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Requirements {
+    pub source: Source,
+    pub lines: Vec<String>,
+    /// The package index, `https://pypi.org/simple` unless the module names
+    /// another with `python_index` (whose host it must declare in
+    /// `[permissions] network`).
+    pub index: String,
+}
+
+/// PyPI's simple index, where packages come from unless a module names
+/// another.
+pub const DEFAULT_INDEX: &str = "https://pypi.org/simple";
+
+/// Check one requirement: a package from the index by name, with optional
+/// extras, version specifiers and environment markers
+/// (`"requests[socks]>=2.31; python_version >= '3.9'"`). Refused: pip
+/// options (`-r`, `--index-url`, `-e`, `--hash`), direct references
+/// (`pkg @ https://…`, `pkg @ file:///…`), URLs and paths, which would
+/// fetch or build code from somewhere other than the index.
 pub fn check_requirement(r: &str) -> std::result::Result<(), String> {
+    let bad = |why: &str| {
+        Err(format!("requirement {r:?} {why}; give a package name and version, such as \"requests>=2.31\""))
+    };
+    if r.contains(['\n', '\r', '\0']) {
+        return bad("spans several lines");
+    }
     let t = r.trim();
-    if t.is_empty() || t.starts_with('-') || r.contains(['\n', '\r', '\0']) {
-        return Err(format!("requirement {r:?} must be one package requirement, such as \"requests>=2.31\""));
+    if t.is_empty() {
+        return bad("is empty");
+    }
+    if t.starts_with('-') {
+        return bad("is a pip option, which modules cannot pass");
+    }
+    // Markers after `;` are evaluated, never fetched.
+    let spec = t.split_once(';').map_or(t, |(s, _)| s).trim();
+    let name_end =
+        spec.find(|c: char| !(c.is_ascii_alphanumeric() || matches!(c, '.' | '-' | '_'))).unwrap_or(spec.len());
+    let (name, rest) = spec.split_at(name_end);
+    if name.is_empty() || !name.starts_with(|c: char| c.is_ascii_alphanumeric()) {
+        return bad("does not start with a package name (paths and URLs are not allowed)");
+    }
+    let rest = rest.trim_start();
+    let rest = match rest.strip_prefix('[') {
+        Some(extras) => {
+            let Some((inside, after)) = extras.split_once(']') else { return bad("has an unclosed [extras]") };
+            if !inside.chars().all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '-' | '_' | ',' | ' ')) {
+                return bad("has odd extras");
+            }
+            after
+        }
+        None => rest,
+    };
+    // Version specifiers only: no `@` (a direct reference), no `/` or `:`
+    // (a URL or a path).
+    if !rest.chars().all(|c| {
+        c.is_ascii_alphanumeric()
+            || matches!(c, '<' | '>' | '=' | '!' | '~' | '*' | '.' | ',' | '+' | '(' | ')' | ' ' | '\t')
+    }) {
+        return bad("is not a plain version requirement (direct URLs and paths are not allowed)");
     }
     Ok(())
 }
 
+/// The requirements in a `requirements.txt`: comments and blank lines
+/// dropped, `\` continuations joined, every line checked.
+fn parse_requirements_txt(text: &str, file: &Path) -> std::result::Result<Vec<String>, String> {
+    let mut out = Vec::new();
+    let mut pending = String::new();
+    for raw in text.lines() {
+        // A comment starts at `#` at the start of a line or after a space.
+        let line = match raw.find(" #").map(|i| i + 1).or_else(|| raw.trim_start().starts_with('#').then_some(0)) {
+            Some(i) => &raw[..i],
+            None => raw,
+        };
+        let line = line.trim_end();
+        if let Some(joined) = line.strip_suffix('\\') {
+            pending.push_str(joined.trim());
+            pending.push(' ');
+            continue;
+        }
+        pending.push_str(line.trim_start());
+        let req = std::mem::take(&mut pending).trim().to_owned();
+        if req.is_empty() {
+            continue;
+        }
+        check_requirement(&req).map_err(|e| format!("{}: {e}", file.display()))?;
+        out.push(req);
+    }
+    Ok(out)
+}
+
 impl Requirements {
-    /// What the module in `dir` declares, if anything.
+    /// What the module in `dir` declares, if anything. A requirement that
+    /// [`check_requirement`] refuses fails the module's loading.
     pub fn find(dir: &Path, manifest: &Manifest) -> std::result::Result<Option<Self>, String> {
+        let index = match manifest.module.python_index.trim() {
+            "" => DEFAULT_INDEX.to_owned(),
+            i => i.to_owned(),
+        };
+        let make =
+            |source, lines: Vec<String>| (!lines.is_empty()).then(|| Self { source, lines, index: index.clone() });
         if !manifest.module.requirements.is_empty() {
-            return Ok(Some(Self::Inline(manifest.module.requirements.clone())));
+            for r in &manifest.module.requirements {
+                check_requirement(r)?;
+            }
+            let lines = manifest.module.requirements.iter().map(|r| r.trim().to_owned()).collect();
+            return Ok(make(Source::Inline, lines));
         }
         let txt = dir.join("requirements.txt");
         if let Ok(text) = std::fs::read_to_string(&txt) {
-            let any = text.lines().map(str::trim).any(|l| !l.is_empty() && !l.starts_with('#'));
-            return Ok(any.then_some(Self::File(txt)));
+            return Ok(make(Source::File, parse_requirements_txt(&text, &txt)?));
         }
         let project = dir.join("pyproject.toml");
         if let Ok(text) = std::fs::read_to_string(&project) {
             let doc: toml::Table = text.parse().map_err(|e| format!("{}: {e}", project.display()))?;
-            let deps = doc
-                .get("project")
-                .and_then(|p| p.get("dependencies"))
-                .and_then(|d| d.as_array())
-                .is_some_and(|a| !a.is_empty());
-            return Ok(deps.then_some(Self::Project(project)));
+            let deps = doc.get("project").and_then(|p| p.get("dependencies")).and_then(|d| d.as_array());
+            let mut lines = Vec::new();
+            for d in deps.into_iter().flatten() {
+                let r = d.as_str().ok_or_else(|| format!("{}: a dependency is not a string", project.display()))?;
+                check_requirement(r).map_err(|e| format!("{}: {e}", project.display()))?;
+                lines.push(r.trim().to_owned());
+            }
+            return Ok(make(Source::Project, lines));
         }
         Ok(None)
     }
 
-    /// For people: the packages, or the file naming them.
+    /// For people: the packages.
     pub fn describe(&self) -> String {
-        match self {
-            Self::Inline(list) => list.join(", "),
-            Self::File(p) | Self::Project(p) => {
-                p.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default()
-            }
-        }
+        self.lines.join(", ")
     }
 
-    /// The bytes the environment's hash covers.
-    fn fingerprint(&self) -> Result<Vec<u8>> {
-        Ok(match self {
-            Self::Inline(list) => format!("inline\n{}", list.join("\n")).into_bytes(),
-            Self::File(p) => [b"requirements.txt\n".as_slice(), &std::fs::read(p)?].concat(),
-            Self::Project(p) => [b"pyproject.toml\n".as_slice(), &std::fs::read(p)?].concat(),
-        })
+    /// The bytes the environment's hash covers: exactly what is installed
+    /// and from where.
+    fn fingerprint(&self) -> Vec<u8> {
+        format!("index {}\n{}", self.index, self.lines.join("\n")).into_bytes()
     }
 }
 
@@ -708,7 +825,7 @@ impl PythonEnv {
         h.update(b"glossa-venv 1\n");
         h.update(base.describe().as_bytes());
         h.update(format!("\nuv {UV_VERSION}\n").as_bytes());
-        h.update(req.fingerprint()?);
+        h.update(req.fingerprint());
         Ok(h.finalize().iter().map(|b| format!("{b:02x}")).collect())
     }
 
@@ -793,6 +910,7 @@ impl PythonEnv {
     fn make_venv(&self, base: &Base, req: &Requirements, cancel: &CancelToken) -> Result<()> {
         let venvs = &self.toolchain.dirs.venvs;
         let _busy = assets::lock_folder(venvs, &self.module)?;
+        self.ready.store(false, Ordering::Relaxed);
         if self.venv_current(base) {
             return Ok(());
         }
@@ -821,18 +939,25 @@ impl PythonEnv {
         venv_cmd.arg("venv").arg("--python").arg(&program).arg(&venv);
         self.run_uv(venv_cmd, cancel)?;
 
+        // Only the checked lines, from a file of Glossa's own, from one index,
+        // ignoring `[tool.uv.sources]`, as wheels.
+        let file = venv.join("glossa-requirements.txt");
+        std::fs::write(&file, req.lines.join("\n") + "\n")?;
         let mut install = self.uv_command(&uv);
-        install.arg("pip").arg("install").arg("--python").arg(Self::venv_python(&venv)).arg("-r");
-        match req {
-            Requirements::Inline(list) => {
-                let file = venv.join("glossa-requirements.txt");
-                std::fs::write(&file, list.join("\n") + "\n")?;
-                install.arg(file);
-            }
-            Requirements::File(p) | Requirements::Project(p) => {
-                install.arg(p);
-            }
-        }
+        install
+            .arg("pip")
+            .arg("install")
+            .arg("--python")
+            .arg(Self::venv_python(&venv))
+            .arg("--index-url")
+            .arg(&req.index)
+            .arg("--no-sources")
+            // Wheels only: building a source distribution runs its build
+            // script on the user's machine, which may happen unasked on a
+            // first call with automatic downloads.
+            .arg("--no-build")
+            .arg("-r")
+            .arg(file);
         if let Err(e) = self.run_uv(install, cancel) {
             let _ = std::fs::remove_dir_all(&venv);
             return Err(e);
@@ -846,14 +971,25 @@ impl PythonEnv {
         let mut cmd = Command::new(uv);
         // No user or project configuration, no Python downloads of uv's own
         // (Glossa pins the interpreter), the cache in Glossa's cache folder.
-        cmd.args(["--no-config", "--no-python-downloads", "--quiet", "--color", "never"])
-            .current_dir(&self.dir)
-            .env("UV_CACHE_DIR", &self.toolchain.dirs.uv_cache)
-            .env("UV_NO_PROGRESS", "1")
-            .env_remove("VIRTUAL_ENV")
-            .env_remove("CONDA_PREFIX")
-            .env_remove("PYTHONHOME")
-            .env_remove("PYTHONPATH");
+        cmd.args(["--no-config", "--no-python-downloads", "--quiet", "--color", "never"]).current_dir(&self.dir);
+        // A cleared environment: `UV_INDEX_URL`, `PIP_FIND_LINKS`,
+        // `UV_INSECURE_HOST` and the like in the user's shell must not steer
+        // where packages come from. Only what finding programs, the home and
+        // temporary folders, and certificates need is kept.
+        cmd.env_clear();
+        for (k, v) in std::env::vars_os() {
+            if KEPT_ENV.iter().any(|keep| k.to_str().is_some_and(|k| k.eq_ignore_ascii_case(keep))) {
+                cmd.env(k, v);
+            }
+        }
+        cmd.env("UV_CACHE_DIR", &self.toolchain.dirs.uv_cache).env("UV_NO_PROGRESS", "1");
+        // Glossa's own proxy setting, as the proxy variables uv reads.
+        if let Some(proxy) = &self.toolchain.dirs.proxy {
+            for var in ["HTTPS_PROXY", "HTTP_PROXY", "ALL_PROXY"] {
+                cmd.env(var, proxy);
+            }
+            cmd.env("NO_PROXY", "localhost,127.0.0.1,::1");
+        }
         cmd
     }
 
@@ -920,7 +1056,12 @@ mod tests {
         }
 
         fn dirs(&self) -> PythonDirs {
-            PythonDirs { runtimes: self.0.join("runtimes"), venvs: self.0.join("venvs"), uv_cache: self.0.join("uv") }
+            PythonDirs {
+                runtimes: self.0.join("runtimes"),
+                venvs: self.0.join("venvs"),
+                uv_cache: self.0.join("uv"),
+                proxy: None,
+            }
         }
     }
 
@@ -1013,34 +1154,112 @@ mod tests {
     fn requirements_come_from_the_manifest_or_a_file_beside_it() {
         let tmp = Temp::new("req");
         let dir = &tmp.0;
-        assert_eq!(Requirements::find(dir, &manifest("")).unwrap(), None);
-        let m = manifest("requirements = [\"requests>=2\"]");
-        assert_eq!(Requirements::find(dir, &m).unwrap(), Some(Requirements::Inline(vec!["requests>=2".into()])));
+        let find = |extra: &str| Requirements::find(dir, &manifest(extra));
+        assert_eq!(find("").unwrap(), None);
+        let r = find("requirements = [\"requests>=2\"]").unwrap().unwrap();
+        assert_eq!(
+            (r.source, r.lines.clone(), r.index.as_str()),
+            (Source::Inline, vec!["requests>=2".into()], DEFAULT_INDEX)
+        );
 
         std::fs::write(dir.join("pyproject.toml"), "[project]\nname = \"x\"\ndependencies = []\n").unwrap();
-        assert_eq!(Requirements::find(dir, &manifest("")).unwrap(), None, "no dependencies, no environment");
-        std::fs::write(dir.join("pyproject.toml"), "[project]\nname = \"x\"\ndependencies = [\"idna\"]\n").unwrap();
-        assert!(matches!(Requirements::find(dir, &manifest("")).unwrap(), Some(Requirements::Project(_))));
+        assert_eq!(find("").unwrap(), None, "no dependencies, no environment");
+        std::fs::write(
+            dir.join("pyproject.toml"),
+            "[project]\nname = \"x\"\ndependencies = [\"idna\"]\n[tool.uv.sources]\nidna = { url = \"https://evil.test/x.whl\" }\n",
+        )
+        .unwrap();
+        let r = find("").unwrap().unwrap();
+        assert_eq!((r.source, r.lines), (Source::Project, vec!["idna".to_owned()]), "only the dependencies are read");
+        std::fs::write(dir.join("pyproject.toml"), "[project]\ndependencies = [\"x @ https://evil.test/x.whl\"]\n")
+            .unwrap();
+        assert!(find("").is_err());
 
         std::fs::write(dir.join("requirements.txt"), "# nothing\n\n").unwrap();
-        assert_eq!(Requirements::find(dir, &manifest("")).unwrap(), None);
-        std::fs::write(dir.join("requirements.txt"), "idna==3.10\n").unwrap();
-        assert!(matches!(Requirements::find(dir, &manifest("")).unwrap(), Some(Requirements::File(_))));
+        assert_eq!(find("").unwrap(), None);
+        std::fs::write(
+            dir.join("requirements.txt"),
+            "idna==3.10  # pinned\nrequests[socks] \\\n  >=2.31 ; python_version >= '3.8'\n",
+        )
+        .unwrap();
+        let r = find("").unwrap().unwrap();
+        assert_eq!(r.source, Source::File);
+        assert_eq!(r.lines, ["idna==3.10", "requests[socks] >=2.31 ; python_version >= '3.8'"]);
+        for bad in ["--index-url https://evil.test/simple", "-r ../other.txt", "-e .", "x @ file:///etc"] {
+            std::fs::write(dir.join("requirements.txt"), format!("idna\n{bad}\n")).unwrap();
+            assert!(find("").is_err(), "{bad:?}");
+        }
 
-        assert!(check_requirement("requests").is_ok());
-        for bad in ["", "--index-url=https://evil.test", "-r other.txt", "a\nb"] {
+        for good in
+            ["requests", "requests>=2.31", "a.b-c_d[x,y]~=1.0", "numpy==2.*; sys_platform == 'darwin'", "x (>=1)"]
+        {
+            assert!(check_requirement(good).is_ok(), "{good:?}");
+        }
+        for bad in [
+            "",
+            "--index-url=https://evil.test",
+            "-r other.txt",
+            "a\nb",
+            "pkg @ https://evil.test/pkg.whl",
+            "pkg@file:///tmp/pkg",
+            "./local",
+            "../up",
+            "/abs/path",
+            "https://evil.test/pkg.tar.gz",
+            "C:\\pkg",
+            "pkg --hash=sha256:00",
+        ] {
             assert!(check_requirement(bad).is_err(), "{bad:?}");
         }
-        let err = Manifest::parse(
-            "capabilities = [\"translate\"]\n[module]\nid = \"m\"\nname = \"M\"\nruntime = \"python\"\nrequirements = [\"-e .\"]",
-        )
-        .unwrap_err();
-        assert!(err.to_string().contains("one package requirement"), "{err}");
+        let parse = |extra: &str| {
+            Manifest::parse(&format!(
+                "capabilities = [\"translate\"]\n[module]\nid = \"m\"\nname = \"M\"\nruntime = \"python\"\n{extra}\n[permissions]\nnetwork = [\"pypi.example.org\"]"
+            ))
+        };
+        assert!(parse("requirements = [\"-e .\"]").unwrap_err().to_string().contains("pip option"));
         let err = Manifest::parse(
             "capabilities = [\"translate\"]\n[module]\nid = \"m\"\nname = \"M\"\nruntime = \"js\"\nrequirements = [\"x\"]",
         )
         .unwrap_err();
         assert!(err.to_string().contains("python"), "{err}");
+
+        // Another index only from a host the module declares.
+        let m = parse("requirements = [\"x\"]\npython_index = \"https://pypi.example.org/simple\"").unwrap();
+        assert_eq!(Requirements::find(dir, &m).unwrap().unwrap().index, "https://pypi.example.org/simple");
+        assert!(parse("python_index = \"https://elsewhere.test/simple\"")
+            .unwrap_err()
+            .to_string()
+            .contains("permissions"));
+        assert!(parse("python_index = \"http://pypi.example.org/simple\"").unwrap_err().to_string().contains("https"));
+    }
+
+    #[test]
+    fn uv_runs_with_a_cleared_environment() {
+        let tmp = Temp::new("uvenv");
+        let mut dirs = tmp.dirs();
+        dirs.proxy = Some("socks5://127.0.0.1:9050".into());
+        let tc = Arc::new(Toolchain::new(dirs));
+        let env = PythonEnv::new(&tmp.0, &manifest("requirements = [\"idna\"]"), PythonChoice::Managed, tc).unwrap();
+        let cmd = env.uv_command(Path::new("uv"));
+        let vars: std::collections::HashMap<String, Option<String>> = cmd
+            .get_envs()
+            .map(|(k, v)| (k.to_string_lossy().into_owned(), v.map(|v| v.to_string_lossy().into_owned())))
+            .collect();
+        assert_eq!(vars.get("UV_CACHE_DIR").cloned().flatten(), Some(tmp.0.join("uv").to_string_lossy().into_owned()));
+        assert_eq!(vars.get("HTTPS_PROXY").cloned().flatten().as_deref(), Some("socks5://127.0.0.1:9050"));
+        for k in vars.keys() {
+            let k = k.to_ascii_uppercase();
+            assert!(
+                !(k.starts_with("PIP_") || (k.starts_with("UV_") && k != "UV_CACHE_DIR" && k != "UV_NO_PROGRESS")),
+                "{k} leaks into uv"
+            );
+            assert!(
+                KEPT_ENV.contains(&k.as_str())
+                    || ["UV_CACHE_DIR", "UV_NO_PROGRESS", "HTTPS_PROXY", "HTTP_PROXY", "ALL_PROXY", "NO_PROXY"]
+                        .contains(&k.as_str()),
+                "{k}"
+            );
+        }
     }
 
     #[test]

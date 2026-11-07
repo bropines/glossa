@@ -27,7 +27,9 @@ the notes of its GitHub release.
   (python-build-standalone, about 25 MB, pinned by SHA-256) once and shares
   it between modules. A module lists packages with `requirements = [...]`
   in `module.toml` (or a `requirements.txt` / `pyproject.toml` beside it),
-  and Glossa installs them with uv into an environment of that module's own.
+  and Glossa installs them with uv into an environment of that module's own,
+  from PyPI (or an index whose host the module declares), name-and-version
+  requirements only.
   Nothing is downloaded at start-up: the module's settings offer *Download*
   with progress, or `[modules] auto_download_assets` installs on first use.
   `[modules] python` now takes `auto` (the default), `system`, `managed` or

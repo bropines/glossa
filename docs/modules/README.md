@@ -161,6 +161,7 @@ max_input_chars = 5000        # optional: longer text is cut at a word boundary
 idle_timeout_secs = 300       # Python, Java, process: stop the process after this long unused
 ready_to_use = true           # works with no key or setup: switched on when it first appears
 # requirements = ["requests>=2.31"]  # python: packages, installed for this module alone (see below)
+# python_index = "https://…/simple" # python: another package index than PyPI; its host in [permissions] network
 # Python, Java and process modules only (see process-modules.md):
 # command = ["node", "main.mjs"]   # process: the program; or command.windows / .macos / .linux / .unix / .default
 # args = ["--quiet"]               # appended after the command, script or jar
@@ -340,13 +341,24 @@ installs them for it; the user installs nothing, not even Python.
 ```toml
 [module]
 runtime = "python"
-requirements = ["requests>=2.31", "idna==3.10"]   # pip requirement lines
+requirements = ["requests>=2.31", "idna==3.10"]   # package requirements
+# python_index = "https://pypi.example.org/simple"  # optional: another index; its host must be in [permissions] network
 ```
 
 Instead of `requirements`, a `requirements.txt` beside `module.toml`, or a
 `pyproject.toml` with `[project] dependencies`, does the same (the first of
 the three that names any package wins). Pin versions: the environment is
 made again only when the list changes.
+
+Each line names a package from the index, with optional extras, version
+specifiers and environment markers (`requests[socks]>=2.31;
+python_version >= "3.9"`). Glossa reads the file itself and refuses the
+module, with the offending line, when a line is anything else: a pip
+option (`-r`, `-c`, `-e`, `--index-url`, `--extra-index-url`,
+`--find-links`, `--hash`…), a direct reference (`pkg @ https://…`,
+`pkg @ file:///…`), a URL or a path. Only the checked lines reach `uv`, from
+a file of Glossa's own; `[tool.uv.sources]` and the rest of a
+`pyproject.toml` are ignored.
 
 - **Which Python.** `[modules] python` ([configuration](../configuration.md#modules))
   is `auto` by default: a Python 3.8 or newer installed on the machine for
@@ -372,9 +384,17 @@ made again only when the list changes.
   version, URL and SHA-256 for each supported system (macOS arm64 and
   x86_64, Windows x86_64 and arm64, Linux x86_64 and aarch64), downloaded
   and unpacked by the same code as assets, with the same checks and limits.
-  Packages come from PyPI through `uv` (not through `[permissions]`, which
-  govern the module's own `host.http` requests). `uv` runs with no shell and
-  ignores user and project configuration (`--no-config`).
+  Packages come from one index: PyPI (`--index-url https://pypi.org/simple`)
+  unless the module names another with `python_index`, an `https://` URL
+  whose host must be in `[permissions] network`, as for asset downloads, so
+  the permissions list says everything the module may fetch from. `uv` runs
+  with no shell, with `--no-sources` and `--no-config`, and with a cleared
+  environment: `UV_*` and `PIP_*` variables in the user's shell do not
+  apply; the proxy is Glossa's own (*Options → Internet*). Packages are
+  installed from wheels only (`--no-build`): building a source distribution
+  would run its build script on the user's machine. A package (or a
+  dependency of one) without a wheel for the user's system and the managed
+  Python 3.13 fails to install, with uv's message.
 - **Where.** `runtimes/` and `venvs/` beside `models/`
   ([data folders](../configuration.md)). `glossa-cli python status` lists
   them; `glossa-cli python remove` deletes them all.

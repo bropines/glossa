@@ -701,6 +701,13 @@ fn proxy_spec(settings: &Network) -> Option<ProxySpec> {
     }
 }
 
+/// The proxy the settings call for right now, credentials included, for a
+/// program Glossa starts that should go the same way (`uv`); `None` for a
+/// direct connection.
+pub fn proxy_url(settings: &Network) -> Option<String> {
+    proxy_spec(settings).map(|(url, _)| url)
+}
+
 /// The proxy requests go through right now, without credentials (`none`,
 /// `http://proxy.example:3128`), for diagnostics such as `glossa-cli
 /// doctor`. With the system mode this is what the system says at this

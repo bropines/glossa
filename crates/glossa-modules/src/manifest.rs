@@ -142,6 +142,11 @@ pub struct ModuleSection {
     /// same when this is empty.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub requirements: Vec<String>,
+    /// `runtime = "python"`: the package index `requirements` come from,
+    /// instead of PyPI (`https://…/simple`). Its host must be in
+    /// `[permissions] network`.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub python_index: String,
 }
 
 /// A process module's command line: one for every platform, or one per
@@ -338,6 +343,23 @@ impl Manifest {
         }
         for r in &self.module.requirements {
             crate::python_env::check_requirement(r)?;
+        }
+        let index = self.module.python_index.trim();
+        if !index.is_empty() {
+            if self.module.runtime != Runtime::Python {
+                return Err("python_index is for runtime = \"python\" only".into());
+            }
+            if !index.starts_with("https://") {
+                return Err(format!("python_index {index:?} must be an https:// URL"));
+            }
+            // Like asset downloads: the permissions list says every host the
+            // module may get anything from.
+            if !self.permissions.allows_url(index) {
+                let host = url_host(index).unwrap_or_else(|| index.to_owned());
+                return Err(format!(
+                    "python_index: {host} is not in [permissions] network; add it to install from there"
+                ));
+            }
         }
         for asset in &self.assets {
             asset.validate()?;

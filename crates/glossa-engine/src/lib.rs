@@ -272,6 +272,10 @@ struct Inner {
     /// Background installs of the managed Python and modules' environments,
     /// by module id (or [`PYTHON_JOB`]).
     python_jobs: Mutex<HashMap<String, python::PythonJob>>,
+    /// Python modules' state as last read from disk, for front ends that
+    /// draw it every frame; emptied whenever something may have changed it
+    /// (see [`Engine::emit`]).
+    python_cache: Mutex<HashMap<String, python::ModulePython>>,
 }
 
 /// Something that went wrong at start without stopping it
@@ -379,6 +383,7 @@ impl Engine {
             secret_sync: Mutex::new(SecretSync::new()),
             asset_jobs: Mutex::new(HashMap::new()),
             python_jobs: Mutex::new(HashMap::new()),
+            python_cache: Mutex::new(HashMap::new()),
         };
         let engine = Engine { inner: Arc::new(inner) };
         engine.reload_modules();
@@ -517,7 +522,9 @@ impl Engine {
     /// Where the managed Python, `uv`, the modules' environments and `uv`'s
     /// cache go.
     pub fn python_dirs(&self) -> glossa_modules::python_env::PythonDirs {
-        python::python_dirs(&self.inner.paths)
+        let mut dirs = python::python_dirs(&self.inner.paths);
+        dirs.proxy = glossa_net::proxy_url(&self.config().network);
+        dirs
     }
 
     pub fn module_status(&self) -> ModuleStatus {
@@ -852,6 +859,11 @@ impl Engine {
     }
 
     pub fn emit(&self, event: Event) {
+        // A finished call may have installed a module's Python on the way
+        // (automatic downloads), so anything but streaming progress counts.
+        if !matches!(event, Event::Progress { .. }) {
+            self.inner.python_cache.lock().clear();
+        }
         self.inner.subscribers.lock().retain(|tx| tx.send(event.clone()).is_ok());
         if let Some(w) = self.inner.waker.read().clone() {
             w();
