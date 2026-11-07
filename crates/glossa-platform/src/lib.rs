@@ -28,6 +28,7 @@
 //! | Accent, dark mode ([`appearance`]) | registry                     | `gsettings` (dark only) | `gsettings` (dark only)                         | `NSColor`, `AppleInterfaceStyle` |
 //! | Installed fonts ([`fonts`])     | font folders, `name` tables     | `fc-list`               | `fc-list`                                       | font folders, `name` tables    |
 //! | Spell checking ([`spell`])      | Spell Checking API              | Hunspell dictionaries   | Hunspell dictionaries                           | `NSSpellChecker` (main thread) |
+//! | Wheel step ([`scroll`])         | `SPI_GETWHEELSCROLLLINES`       | fixed 53 points         | fixed 53 points                                 | fixed 40 points (system applies its speed) |
 //!
 //! Threading: [`hotkeys::HotkeyService`] must be created on the thread that
 //! runs the event loop on Windows (the hotkeys are bound to that thread's
@@ -52,6 +53,7 @@ pub mod layout;
 pub mod mouse;
 pub mod permissions;
 pub mod portal;
+pub mod scroll;
 pub mod secrets;
 pub mod selection;
 pub mod session;
