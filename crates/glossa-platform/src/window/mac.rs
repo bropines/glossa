@@ -103,3 +103,88 @@ pub fn round_corners(window: isize, radius: f32) -> bool {
     window.invalidateShadow();
     true
 }
+
+/// Hand the focus back to the program the user was working in when
+/// clicking one of this program's windows made it the active application:
+/// the popup's Replace button pastes with a keystroke, which goes to the
+/// active application. That program owns the frontmost ordinary window
+/// that is not ours. Waits up to `timeout` for it to become active, and
+/// returns whether it did (or this program was not active in the first
+/// place). Any thread.
+pub fn give_focus_back(timeout: std::time::Duration) -> bool {
+    use objc2_app_kit::{NSApplicationActivationOptions, NSRunningApplication};
+
+    if !NSRunningApplication::currentApplication().isActive() {
+        return true;
+    }
+    let Some(pid) = frontmost_other_pid() else {
+        tracing::debug!("no other program's window to give the focus back to");
+        return false;
+    };
+    let Some(target) = NSRunningApplication::runningApplicationWithProcessIdentifier(pid) else {
+        return false;
+    };
+    target.activateWithOptions(NSApplicationActivationOptions(0));
+    let until = std::time::Instant::now() + timeout;
+    while !target.isActive() {
+        if std::time::Instant::now() >= until {
+            tracing::debug!(pid, "the program did not take the focus back in time");
+            return false;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    }
+    // Activation is reported before the window is key again; give it a
+    // moment so the keystroke reaches the text field.
+    std::thread::sleep(std::time::Duration::from_millis(60));
+    true
+}
+
+/// The process owning the frontmost on-screen window of the normal level
+/// (layer 0) that is not this process's. Window owners and layers are
+/// readable without the Screen Recording permission.
+fn frontmost_other_pid() -> Option<i32> {
+    use std::ffi::c_void;
+
+    type CFTypeRef = *const c_void;
+    const ON_SCREEN_ONLY: u32 = 1 << 0; // kCGWindowListOptionOnScreenOnly
+    const EXCLUDE_DESKTOP: u32 = 1 << 4; // kCGWindowListExcludeDesktopElements
+    const CF_NUMBER_SINT64: isize = 4; // kCFNumberSInt64Type
+
+    #[link(name = "CoreGraphics", kind = "framework")]
+    extern "C" {
+        fn CGWindowListCopyWindowInfo(option: u32, relative_to: u32) -> CFTypeRef;
+        static kCGWindowOwnerPID: CFTypeRef;
+        static kCGWindowLayer: CFTypeRef;
+    }
+    #[link(name = "CoreFoundation", kind = "framework")]
+    extern "C" {
+        fn CFRelease(cf: CFTypeRef);
+        fn CFArrayGetCount(array: CFTypeRef) -> isize;
+        fn CFArrayGetValueAtIndex(array: CFTypeRef, index: isize) -> CFTypeRef;
+        fn CFDictionaryGetValue(dict: CFTypeRef, key: CFTypeRef) -> CFTypeRef;
+        fn CFNumberGetValue(number: CFTypeRef, kind: isize, out: *mut c_void) -> u8;
+    }
+
+    let own = std::process::id() as i64;
+    // SAFETY: the copied array is ours and released below; the values read
+    // from it are borrowed from it while it lives.
+    unsafe {
+        let number = |dict: CFTypeRef, key: CFTypeRef| -> Option<i64> {
+            let n = CFDictionaryGetValue(dict, key);
+            let mut v: i64 = 0;
+            (!n.is_null() && CFNumberGetValue(n, CF_NUMBER_SINT64, (&mut v as *mut i64).cast()) != 0).then_some(v)
+        };
+        let list = CGWindowListCopyWindowInfo(ON_SCREEN_ONLY | EXCLUDE_DESKTOP, 0);
+        if list.is_null() {
+            return None;
+        }
+        // Front to back.
+        let found = (0..CFArrayGetCount(list)).find_map(|i| {
+            let info = CFArrayGetValueAtIndex(list, i);
+            let pid = number(info, kCGWindowOwnerPID)?;
+            (number(info, kCGWindowLayer) == Some(0) && pid != own).then_some(pid as i32)
+        });
+        CFRelease(list);
+        found
+    }
+}
