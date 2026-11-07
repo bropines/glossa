@@ -13,7 +13,10 @@
 //! - a touchpad gesture (deltas in points, or fractions of a line where the
 //!   system reports touchpads as wheels, as Windows does) is held to its
 //!   dominant axis until it ends, momentum included. Whole wheel notches
-//!   are left alone: a tilt wheel turns sideways when it is told to.
+//!   are left alone: a tilt wheel turns sideways when it is told to;
+//! - with the zoom modifier held (Ctrl, Cmd on macOS) nothing is changed:
+//!   egui turns the wheel into `zoom_delta` there, which the text and
+//!   keyboard zoom read, and that should not grow with the scroll step.
 //!
 //! The axis lock follows `fastframe-scroll`
 //! (<https://github.com/crmne/fastframe>, MIT, Copyright (c) 2026 Carmine
@@ -46,7 +49,15 @@ const DECIDE_AFTER: f32 = 4.0;
 /// Travel this much wider than tall makes a sideways gesture: vertical
 /// scrolling is the common case and wins a near-diagonal start.
 const SIDEWAYS: f32 = 1.2;
-/// Windows scrolls a page minus a little so the last line stays in view.
+/// Where the system announces touches (macOS, Wayland), a gesture with no
+/// event for this long, in seconds, is over even without its lift: winit
+/// on Wayland sends a touch for some wheels but never the lift. The same
+/// time egui gives resting fingers.
+const RESTING: f64 = 1.0;
+/// Windows' "one screen at a time" scrolls the control's height; the scroll
+/// area under the pointer is not known before egui lays it out, so a page
+/// here is the window's height (as egui's own `MouseWheelUnit::Page` is),
+/// minus a little so the last line stays in view.
 const PAGE_FRACTION: f32 = 0.875;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -69,8 +80,9 @@ struct WindowScroll {
     last_event: f64,
     /// The window's height and width in points, for a page step.
     size: Vec2,
-    /// The system has said when fingers touch or lift, so a pause with
-    /// fingers resting is not taken for the end of the gesture.
+    /// The system announced the touch that began the gesture in progress
+    /// and has not announced its lift, so a pause with fingers resting is
+    /// not taken for the end of it.
     announced: bool,
     /// The axis the gesture holds, once decided.
     axis: Option<Axis>,
@@ -104,7 +116,7 @@ impl egui::Plugin for NativeScroll {
         "glossa::scroll"
     }
 
-    fn input_hook(&mut self, _ctx: &egui::Context, input: &mut RawInput) {
+    fn input_hook(&mut self, ctx: &egui::Context, input: &mut RawInput) {
         if !input.viewports.is_empty() {
             self.windows.retain(|id, _| input.viewports.contains_key(id));
         }
@@ -120,9 +132,13 @@ impl egui::Plugin for NativeScroll {
             self.steps = Some((self.read)());
         }
         let steps = self.steps.expect("read above");
+        let zoom = ctx.options(|o| o.input_options.zoom_modifier);
         for event in &mut input.events {
-            if let Event::MouseWheel { unit, delta, phase, source, .. } = event {
-                win.last_event = now;
+            if let Event::MouseWheel { unit, delta, phase, source, modifiers } = event {
+                if modifiers.matches_any(zoom) {
+                    win.last_event = now;
+                    continue;
+                }
                 win.on_wheel(steps, now, unit, delta, *phase, *source);
             }
         }
@@ -139,6 +155,12 @@ impl WindowScroll {
         phase: TouchPhase,
         source: MouseWheelSource,
     ) {
+        let quiet = now - self.last_event;
+        self.last_event = now;
+        if self.announced && quiet > RESTING {
+            self.announced = false;
+            self.reset();
+        }
         match phase {
             TouchPhase::Start => {
                 self.announced = true;
@@ -149,7 +171,9 @@ impl WindowScroll {
                 return;
             }
             TouchPhase::End | TouchPhase::Cancel => {
-                self.announced = true;
+                // The axis stays for the system's momentum, which follows
+                // at once; after a quiet gap the next movement decides anew.
+                self.announced = false;
                 return;
             }
             TouchPhase::Move => {}
@@ -327,5 +351,84 @@ mod tests {
             ],
         );
         assert_eq!(out, vec![Vec2::new(0.0, -9.0), Vec2::new(30.0, 0.0)]);
+    }
+
+    fn pad(x: f32, y: f32) -> Event {
+        wheel(MouseWheelUnit::Point, Vec2::new(x, y), TouchPhase::Move, MouseWheelSource::Trackpad)
+    }
+
+    fn phase(phase: TouchPhase) -> Event {
+        wheel(MouseWheelUnit::Point, Vec2::ZERO, phase, MouseWheelSource::Trackpad)
+    }
+
+    #[test]
+    fn the_zoom_modifier_leaves_the_wheel_to_egui() {
+        // Ctrl+wheel zooms through egui's `zoom_delta`, which grows with
+        // the delta: a notch must stay one line, whatever the scroll step.
+        let mut p = plugin(|| WheelSteps { vertical: WheelStep::Page, horizontal: WheelStep::Page });
+        let ctx = egui::Context::default();
+        let zoom = ctx.options(|o| o.input_options.zoom_modifier);
+        let ctrl = Event::MouseWheel {
+            unit: MouseWheelUnit::Line,
+            delta: Vec2::new(0.0, 1.0),
+            phase: TouchPhase::Move,
+            source: MouseWheelSource::Unknown,
+            modifiers: zoom,
+        };
+        let pinchy = Event::MouseWheel {
+            unit: MouseWheelUnit::Point,
+            delta: Vec2::new(2.0, 1.0),
+            phase: TouchPhase::Move,
+            source: MouseWheelSource::Trackpad,
+            modifiers: zoom,
+        };
+        let mut input = RawInput { time: Some(0.0), events: vec![ctrl.clone(), pinchy.clone()], ..Default::default() };
+        egui::Plugin::input_hook(&mut p, &ctx, &mut input);
+        assert_eq!(input.events, vec![ctrl, pinchy]);
+    }
+
+    #[test]
+    fn a_lift_without_momentum_lets_the_next_gesture_choose() {
+        let mut p = plugin(|| points(40.0));
+        frame(&mut p, 0.0, vec![phase(TouchPhase::Start)]);
+        assert_eq!(frame(&mut p, 0.016, vec![pad(1.0, -6.0)]), vec![Vec2::new(0.0, -6.0)]);
+        frame(&mut p, 0.032, vec![phase(TouchPhase::End)]);
+        // A new touch, announced.
+        frame(&mut p, 0.3, vec![phase(TouchPhase::Start)]);
+        assert_eq!(frame(&mut p, 0.316, vec![pad(6.0, 1.0)]), vec![Vec2::new(6.0, 0.0)]);
+        frame(&mut p, 0.332, vec![phase(TouchPhase::End)]);
+        // Movement after a quiet gap with no touch announced decides anew too.
+        assert_eq!(frame(&mut p, 0.6, vec![pad(1.0, -6.0)]), vec![Vec2::new(0.0, -6.0)]);
+    }
+
+    #[test]
+    fn a_touch_that_never_lifts_ends_after_a_rest() {
+        // Wayland: winit sends a touch for some wheels, never the lift.
+        let mut p = plugin(|| points(40.0));
+        frame(&mut p, 0.0, vec![phase(TouchPhase::Start)]);
+        assert_eq!(frame(&mut p, 0.016, vec![pad(0.0, -6.0)]), vec![Vec2::new(0.0, -6.0)]);
+        // Fingers resting half a second still hold the axis.
+        assert_eq!(frame(&mut p, 0.5, vec![pad(6.0, -1.0)]), vec![Vec2::new(0.0, -1.0)]);
+        // Two seconds of nothing end the gesture.
+        assert_eq!(frame(&mut p, 2.5, vec![pad(6.0, 1.0)]), vec![Vec2::new(6.0, 0.0)]);
+        // And the 150 ms gap applies again, with no touch announced.
+        assert_eq!(frame(&mut p, 2.8, vec![pad(1.0, -6.0)]), vec![Vec2::new(0.0, -6.0)]);
+    }
+
+    #[test]
+    fn closed_windows_are_forgotten() {
+        let mut p = plugin(|| points(40.0));
+        let child = ViewportId::from_hash_of("options");
+        let ctx = egui::Context::default();
+        let mut both = RawInput { viewport_id: child, events: vec![pad(0.0, -6.0)], ..Default::default() };
+        both.viewports.insert(ViewportId::ROOT, Default::default());
+        both.viewports.insert(child, Default::default());
+        egui::Plugin::input_hook(&mut p, &ctx, &mut both);
+        assert!(p.windows.contains_key(&child));
+        let mut root_only = RawInput::default();
+        root_only.viewports.insert(ViewportId::ROOT, Default::default());
+        egui::Plugin::input_hook(&mut p, &ctx, &mut root_only);
+        assert!(!p.windows.contains_key(&child));
+        assert!(p.windows.contains_key(&ViewportId::ROOT));
     }
 }

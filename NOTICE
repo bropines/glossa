@@ -38,6 +38,12 @@ chrome-lens-rs (crate chrome_lens_ocr)
   Chromium's third_party/lens_server_proto (BSD-3-Clause, Copyright 2024 The
   Chromium Authors) and grew from KolbyML's chrome-lens-ocr (MIT).
 
+fastframe-scroll
+  https://github.com/crmne/fastframe, MIT, Copyright (c) 2026 Carmine Paolino.
+  The touchpad axis lock in crates/glossa-ui-egui/src/scroll.rs (which axis a
+  gesture takes, how long it holds it, and which wheel input is left alone)
+  is adapted from its crate fastframe-scroll.
+
 Notable dependencies
 --------------------
 
