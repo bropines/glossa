@@ -28,8 +28,9 @@ with the software renderer (WARP, `GLOSSA_RENDERER=software`).
 Live tests against Tesseract (Linux) and Apple Vision (macOS, allowed to
 fail) run as extra steps. The Linux job also builds the native and Java
 example modules and runs `glossa-cli module test --strict
---require-runtimes modules`, so every module in `modules/` passes its
-fixtures with nothing skipped. Locally
+--require-runtimes --download modules`, so every module in `modules/` passes
+its fixtures with nothing skipped (`--download` fetches the managed Python
+and packages a Python example declares). Locally
 the same checks run in WSL ([AGENTS.md](../AGENTS.md#build-and-test-in-wsl-never-on-the-windows-host)).
 
 ## release.yml

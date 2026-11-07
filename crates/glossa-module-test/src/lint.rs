@@ -270,10 +270,17 @@ fn check_entry(dir: &Path, m: &Manifest, ctx: &RuntimeContext, out: &mut Vec<Fin
             if !dir.join(file).is_file() {
                 out.push(Finding::error(format!("the entry {file} is missing")));
             }
-            if glossa_modules::runtime::python::find_python(&ctx.python).is_none() {
-                return Some("no Python 3 interpreter found (install Python 3.8 or newer)".into());
+            // `auto` and `managed` can always get the managed Python (the
+            // run below says so when it is not downloaded); `system` and a
+            // path need what is on the machine.
+            use glossa_modules::python_env::{system_python, PythonChoice, Toolchain};
+            let managed_here = Toolchain::new(ctx.python_dirs.clone()).supported();
+            match PythonChoice::parse(&ctx.python) {
+                PythonChoice::Auto | PythonChoice::Managed if managed_here => None,
+                PythonChoice::Path(_) if glossa_modules::runtime::python::find_python(&ctx.python).is_some() => None,
+                PythonChoice::Auto | PythonChoice::System if system_python().is_some() => None,
+                _ => Some("no Python 3 interpreter found (install Python 3.8 or newer)".into()),
             }
-            None
         }
         Runtime::Process => glossa_modules::runtime::process::process_launch(dir, m, ctx).err(),
         Runtime::Java => {

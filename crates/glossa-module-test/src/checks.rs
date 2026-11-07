@@ -296,6 +296,7 @@ pub fn error_kind(e: &Error) -> &'static str {
         Error::NoTextRecognised | Error::LanguageNotDetected => "not_found",
         Error::Module { .. } => "module",
         Error::AssetsMissing { .. } => "assets_missing",
+        Error::RuntimeMissing { .. } => "runtime_missing",
         _ => "other",
     }
 }

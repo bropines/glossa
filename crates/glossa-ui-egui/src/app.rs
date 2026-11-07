@@ -841,7 +841,7 @@ impl GlossaApp {
             E::Network(_) => Some("msg.no_connection"),
             E::Unsupported { .. } => Some("msg.capability_unsupported"),
             E::NoTextRecognised => Some("msg.no_text_in_image"),
-            E::AssetsMissing { .. } => Some("msg.assets_missing"),
+            E::AssetsMissing { .. } | E::RuntimeMissing { .. } => Some("msg.assets_missing"),
             _ => None,
         };
         match key {
@@ -849,7 +849,9 @@ impl GlossaApp {
             Some(k) => {
                 let head = self.t(k);
                 match e {
-                    E::Network(_) | E::Unsupported { .. } | E::AssetsMissing { .. } => format!("{head}\n{e}"),
+                    E::Network(_) | E::Unsupported { .. } | E::AssetsMissing { .. } | E::RuntimeMissing { .. } => {
+                        format!("{head}\n{e}")
+                    }
                     _ => head,
                 }
             }

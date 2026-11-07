@@ -36,6 +36,8 @@ data: /home/me/.config/glossa  (portable: false)
 | `themes/` | data | Your themes, `.toml` or `.json` ([theming.md](theming.md)). |
 | `locales/` | data | Interface languages and rewordings ([below](#interface-languages)). |
 | `modules/` | data | Your modules ([modules/README.md](modules/README.md)). |
+| `runtimes/` | local data | The managed Python and `uv` Glossa downloads for Python modules (`python-<version>/`, `uv-<version>/`), shared by every module. Beside `models/`. |
+| `venvs/` | local data | One Python environment per module that declares dependencies (`venvs/<module id>/`). Beside `models/`. |
 | `models/` | local data | Files modules download (models, dictionaries), one folder per module ([modules/README.md](modules/README.md#assets)). Windows `%LOCALAPPDATA%\Glossa\models`, Linux `~/.local/share/glossa/models`, macOS `~/Library/Application Support/Glossa/models`; `models/` in the data folder for a portable copy or `GLOSSA_HOME`. |
 | `remote-desktop-token` | data | Wayland only: the desktop's permission for Glossa to copy and paste through the RemoteDesktop portal, so it asks once. Delete it, or revoke the permission in the desktop's settings, to be asked again. |
 | `glossa.log` | cache | The desktop program's log. `GLOSSA_LOG` sets how much goes into it ([cli.md](cli.md#environment-variables)). |
@@ -509,13 +511,13 @@ Set in *Options → Modules*, except `disabled`. See
 | key | type | default | what it does |
 |---|---|---|---|
 | `dirs` | array of paths | `[]` | Extra folders to look for modules in, after the built-in ones. |
-| `python` | string | `""` | The Python interpreter for Python modules. Empty finds one on `PATH`. |
+| `python` | string | `"auto"` | Which Python runs Python modules. `auto`: a Python 3.8 or newer installed on the machine for a module without dependencies, and otherwise the managed Python, which Glossa downloads once (about 25 MB) into `runtimes/`. `system`: always an installed one. `managed`: always Glossa's own. Anything else is the interpreter to use: a path, or a command line such as `py -3`. Empty means `auto`. A module with dependencies gets its own environment in `venvs/` whichever is chosen. See [modules/README.md](modules/README.md#python-dependencies). |
 | `java` | string | `""` | `java` for Java modules: the executable or a Java home folder. Empty looks in `JAVA_HOME`, on `PATH` and in the usual install folders. |
 | `allow_native` | bool | `true` | Load native (shared library) modules. They run with the program's full privileges. |
 | `allow_legacy_scripts` | bool | `true` | Load classic QTranslate `Service.js` scripts. |
 | `call_timeout_ms` | integer | `30000` | Time limit for one call into a module, 1000–600 000 ms. |
 | `disabled` | array of ids | `[]` | Module ids not to load. File only. |
-| `auto_download_assets` | bool | `false` | Download the files a module declares (models, dictionaries) on its first use without asking. Off, a module whose files are missing fails with a message and its settings offer the download. See [modules/README.md](modules/README.md#assets). |
+| `auto_download_assets` | bool | `false` | Download the files a module declares (models, dictionaries), and the managed Python and packages a Python module needs, on its first use without asking. Off, a module missing them fails with a message and its settings offer the download. See [modules/README.md](modules/README.md#assets). |
 
 ### `[contents]`
 

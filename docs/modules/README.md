@@ -87,7 +87,7 @@ In short:
 
 | | JavaScript | Python | Java | process | native |
 |---|---|---|---|---|---|
-| user installs | nothing | Python 3.8+ | Java 17+ | the program's runtime | nothing |
+| user installs | nothing | nothing (Glossa downloads a Python when none is installed or the module has dependencies) | Java 17+ | the program's runtime | nothing |
 | memory while idle | none | none (stopped) | none (stopped) | none (stopped) | the library |
 | start-up | instant | tens of ms | a fraction of a second | the program's | instant |
 | a crash takes down | the call | the call | the call | the call | Glossa |
@@ -160,6 +160,7 @@ license = "MIT"
 max_input_chars = 5000        # optional: longer text is cut at a word boundary
 idle_timeout_secs = 300       # Python, Java, process: stop the process after this long unused
 ready_to_use = true           # works with no key or setup: switched on when it first appears
+# requirements = ["requests>=2.31"]  # python: packages, installed for this module alone (see below)
 # Python, Java and process modules only (see process-modules.md):
 # command = ["node", "main.mjs"]   # process: the program; or command.windows / .macos / .linux / .unix / .default
 # args = ["--quiet"]               # appended after the command, script or jar
@@ -330,6 +331,56 @@ The module finds its files
 | Python, Java, process | the environment: `GLOSSA_ASSETS_DIR`, and `GLOSSA_ASSET_DET` per required asset (upper case, other characters as `_`); optional ones through the host call |
 | Python, Java, process | `${ASSETS_DIR}` in `command`, `args`, `env`, `cwd`, `classpath` and `jvm_args`, e.g. `command = ["${ASSETS_DIR}/ocr-helper"]` |
 | native | the `assets` host call |
+
+## Python dependencies
+
+A Python module may use packages from PyPI. It names them, and Glossa
+installs them for it; the user installs nothing, not even Python.
+
+```toml
+[module]
+runtime = "python"
+requirements = ["requests>=2.31", "idna==3.10"]   # pip requirement lines
+```
+
+Instead of `requirements`, a `requirements.txt` beside `module.toml`, or a
+`pyproject.toml` with `[project] dependencies`, does the same (the first of
+the three that names any package wins). Pin versions: the environment is
+made again only when the list changes.
+
+- **Which Python.** `[modules] python` ([configuration](../configuration.md#modules))
+  is `auto` by default: a Python 3.8 or newer installed on the machine for
+  a module without dependencies, and otherwise the *managed Python*, a
+  [python-build-standalone](https://github.com/astral-sh/python-build-standalone)
+  build of CPython 3.13 that Glossa downloads once (about 25 MB, 65 MB
+  unpacked) and shares between modules. `system` and `managed` force one or
+  the other; a path or command line names the interpreter.
+- **The environment.** A module with dependencies runs in an environment
+  of its own, `<local data>/Glossa/venvs/<module id>/`, made by
+  [uv](https://github.com/astral-sh/uv) (downloaded once, about 15 MB) with
+  `uv venv` and `uv pip install`. One module's packages never reach
+  another's. A hash of the requirements, the interpreter and the `uv`
+  version is kept in it; when any changes, the environment is made anew on
+  the next install. `uv`'s download cache is in Glossa's cache folder.
+- **When.** Nothing is downloaded at start-up. A call to a module whose
+  Python or packages are missing fails with "needs Python …, packages …
+  first", and its settings page offers *Download* with progress, as for
+  [assets](#assets); `glossa-cli python install <id>` and
+  [`/v1/python`](../control-api.md#v1python) do the same. With
+  `[modules] auto_download_assets = true` the first call installs them.
+- **Integrity.** The managed Python and `uv` are pinned in Glossa by
+  version, URL and SHA-256 for each supported system (macOS arm64 and
+  x86_64, Windows x86_64 and arm64, Linux x86_64 and aarch64), downloaded
+  and unpacked by the same code as assets, with the same checks and limits.
+  Packages come from PyPI through `uv` (not through `[permissions]`, which
+  govern the module's own `host.http` requests). `uv` runs with no shell and
+  ignores user and project configuration (`--no-config`).
+- **Where.** `runtimes/` and `venvs/` beside `models/`
+  ([data folders](../configuration.md)). `glossa-cli python status` lists
+  them; `glossa-cli python remove` deletes them all.
+
+[`modules/python/example-idna`](../../modules/python/example-idna) is a
+complete example.
 
 ## Trying a module
 

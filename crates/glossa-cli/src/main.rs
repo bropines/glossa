@@ -86,6 +86,11 @@ COMMANDS
                                       downloading (resumes, checks SHA-256; NAMEs pick optional
                                       files, none fetches the required ones), re-checking,
                                       deleting; also `module assets …`
+    python     [status | install [MODULE] | remove [MODULE]]
+                                      the Python modules run with: which one each module uses,
+                                      downloading the managed Python and uv (with MODULE: also
+                                      installing that module's packages), deleting them all
+                                      (with MODULE: only that module's environment)
     history    [--search Q] [--favorites] [--export FILE.{txt,csv,html,json}]
     import-classic DIR                settings, history, and use its services/themes/locales
     theme      list | show NAME | convert FILE    (classic JSON -> native TOML)
@@ -212,8 +217,8 @@ fn command_flags(command: &str) -> Option<&'static [&'static str]> {
             "--ignore-recordings",
             "--download",
         ],
-        "detect" | "modules" | "assets" | "import-classic" | "theme" | "locale" | "config" | "serve" | "action"
-        | "doctor" | "" | "help" | "version" => &[],
+        "detect" | "modules" | "assets" | "python" | "import-classic" | "theme" | "locale" | "config" | "serve"
+        | "action" | "doctor" | "" | "help" | "version" => &[],
         _ => return None,
     })
 }
@@ -434,6 +439,7 @@ fn module_command(args: &Args) -> Result<(), Fail> {
         ignore_recordings: args.has(&["--ignore-recordings"]),
         models_dir: Some(paths(args).models_dir()),
         download_assets: args.has(&["--download"]),
+        python_dirs: Some(glossa_engine::python_dirs(&paths(args))),
         ..Settings::default()
     };
     if let Some(t) = args.flag(&["--timeout"]) {
@@ -710,6 +716,7 @@ fn run(args: &Args) -> Result<(), Fail> {
         }
         "modules" | "module" if args.rest.first().is_some_and(|w| w == "assets") => assets(args, &args.rest[1..]),
         "assets" => assets(args, &args.rest),
+        "python" => python(args, &args.rest),
         "modules" => {
             let e = engine(args)?;
             let s = e.module_status();
@@ -1103,6 +1110,101 @@ fn assets(args: &Args, words: &[String]) -> Result<(), Fail> {
             Ok(())
         }
         other => Err(Fail::Usage(format!("unknown assets command {other:?} (list, status, download, verify, remove)"))),
+    }
+}
+
+/// Progress on stderr, one line rewritten in place at each whole percent.
+fn progress_line(quiet: bool) -> impl Fn(&glossa_engine::AssetProgress) {
+    let last = Mutex::new((String::new(), u64::MAX));
+    move |p| {
+        if quiet {
+            return;
+        }
+        let pct = (p.done * 100).checked_div(p.total).unwrap_or(0);
+        let mut last = last.lock().unwrap_or_else(|e| e.into_inner());
+        if last.0 != p.asset || last.1 != pct {
+            *last = (p.asset.clone(), pct);
+            if p.total == 0 {
+                eprint!("\r{}…                              ", p.asset);
+            } else {
+                eprint!("\r{}: {pct}% ({} of {} bytes)   ", p.asset, p.done, p.total);
+            }
+        }
+    }
+}
+
+/// `glossa-cli python …`: the Python modules run with.
+fn python(args: &Args, words: &[String]) -> Result<(), Fail> {
+    let e = engine(args)?;
+    let op = words.first().map(String::as_str).unwrap_or("status");
+    let module = words.get(1).map(String::as_str);
+    let print = |r: &glossa_engine::PythonReport, system: Option<&std::path::Path>| {
+        if args.json {
+            let mut v = serde_json::to_value(r).unwrap_or_default();
+            v["system_python"] = json!(system.map(|p| p.display().to_string()));
+            out!("{}", serde_json::to_string_pretty(&v).unwrap_or_default());
+            return;
+        }
+        out!("setting        [modules] python = {:?}", r.setting);
+        match system {
+            Some(p) => out!("system Python  {}", p.display()),
+            None => out!("system Python  none found (3.8 or newer)"),
+        }
+        let state = |s: &Option<glossa_engine::AssetStatus>| match s.as_ref().map(|s| &s.state) {
+            Some(glossa_engine::AssetState::Ready) => "ready".to_owned(),
+            Some(glossa_engine::AssetState::Partial { have }) => format!("partly downloaded ({have} bytes)"),
+            Some(_) => format!("not downloaded ({} bytes)", s.as_ref().map_or(0, |s| s.size)),
+            None => "not available for this system".to_owned(),
+        };
+        out!("managed Python {} — {}", r.python_version, state(&r.python));
+        if let Some(exe) = &r.python_exe {
+            out!("               {}", exe.display());
+        }
+        out!("uv             {} — {}", r.uv_version, state(&r.uv));
+        out!("environments   {}", r.venvs_dir.display());
+        if r.modules.is_empty() {
+            out!("no Python modules are loaded");
+        }
+        for m in &r.modules {
+            let what = m.requirements.as_deref().map(|q| format!(", needs {q}")).unwrap_or_default();
+            out!("  {:24} {}{what}", m.module, m.state);
+            for line in &m.missing {
+                out!("  {:24}   - {line}", "");
+            }
+        }
+    };
+    match op {
+        "status" => {
+            let system = e.system_python();
+            print(&e.python_status(), system.as_deref());
+            Ok(())
+        }
+        "install" => {
+            let quiet = args.json || !std::io::stderr().is_terminal();
+            let r = e
+                .install_python(module, &glossa_modules::CancelToken::new(), &progress_line(quiet))
+                .map_err(Fail::from);
+            if !quiet {
+                eprintln!();
+            }
+            let system = e.system_python();
+            print(&r?, system.as_deref());
+            Ok(())
+        }
+        "remove" => {
+            match module {
+                Some(id) => e.remove_module_python(id).map_err(Fail::from)?,
+                None => e.remove_python().map_err(Fail::from)?,
+            }
+            if !args.json {
+                match module {
+                    Some(id) => out!("deleted the Python environment of {id}"),
+                    None => out!("deleted the managed Python, uv and every module's environment"),
+                }
+            }
+            Ok(())
+        }
+        other => Err(Fail::Usage(format!("unknown python command {other:?} (status, install, remove)"))),
     }
 }
 

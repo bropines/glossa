@@ -845,14 +845,19 @@ pub mod mock {
             self.route(method, url_prefix, status, body, true)
         }
 
-        fn route(self, method: Method, url_prefix: &str, status: u16, body: &str, once: bool) -> Self {
+        /// Answer with a binary body (an archive, an image).
+        pub fn on_bytes(self, method: Method, url_prefix: &str, status: u16, body: &[u8]) -> Self {
+            self.route(method, url_prefix, status, body, false)
+        }
+
+        fn route(self, method: Method, url_prefix: &str, status: u16, body: impl AsRef<[u8]>, once: bool) -> Self {
             self.routes.lock().unwrap().push((
                 method,
                 url_prefix.to_owned(),
                 HttpResponse {
                     status,
                     headers: vec![("content-type".into(), "application/json; charset=utf-8".into())],
-                    body: body.as_bytes().to_vec(),
+                    body: body.as_ref().to_vec(),
                     codepage: None,
                 },
                 once,

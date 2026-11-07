@@ -5,6 +5,8 @@
 //! * [`manifest`] — `module.toml`.
 //! * [`assets`] — files a module declares (models, dictionaries), downloaded
 //!   and verified on demand.
+//! * [`python_env`] — the Python a Python module runs with: a system one, or
+//!   a managed build Glossa downloads, and per-module environments made by `uv`.
 //! * [`registry`] — finding modules on disk and keeping the provider list.
 //! * [`protocol`] / [`host_api`] — the module protocol, shared by the stdio
 //!   (Python, Java, any program) and native runtimes.
@@ -23,6 +25,7 @@ pub mod image_ops;
 pub mod manifest;
 pub mod protocol;
 pub mod provider;
+pub mod python_env;
 pub mod registry;
 pub mod runtime;
 

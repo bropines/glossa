@@ -114,7 +114,9 @@ jobs:
           cp target/debug/libglossa_example_lines.so modules/native/example-lines/
           (cd modules/native/example-c && cc -shared -fPIC -std=c99 -I ../../../include -o libshout.so shout.c)
           (cd modules/java/example-upper && ./build.sh)
-          target/debug/glossa-cli module test --strict --require-runtimes modules
+          # --download: the Python example with dependencies gets the
+          # managed Python, uv and its package (about 45 MB) first.
+          target/debug/glossa-cli module test --strict --require-runtimes --download modules
       # Every window drawn to a PNG under Xvfb, with Mesa's llvmpipe as the
       # OpenGL driver: no GPU on the runner, and none needed.
       - name: Screenshot smoke test

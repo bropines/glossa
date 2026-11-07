@@ -1,0 +1,21 @@
+# Cases for `glossa-cli module test`. The module's package must be
+# installed: `glossa-cli module test --download` gets it (and a Python, if
+# need be) first. See docs/modules/testing.md.
+
+[[case]]
+name = "encodes a domain name"
+op = "translate"
+text = "bücher.example"
+expect = { text = "xn--bcher-kva.example" }
+
+[[case]]
+name = "decodes a punycode name"
+op = "translate"
+text = "xn--bcher-kva.example"
+expect = { text = "bücher.example" }
+
+[[case]]
+name = "refuses what is not a domain name"
+op = "translate"
+text = "not a domain"
+expect = { error = "module", error_contains = "not a valid domain name" }

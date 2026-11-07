@@ -3,7 +3,8 @@
 A Python module is a directory with a `module.toml` and a script. Glossa starts
 the script as a child process the first time the module is used, talks to it
 over stdin/stdout, and stops it after a while without use. The user needs
-Python 3.8 or newer; the SDK is one file and needs nothing else.
+Python 3.8 or newer; the SDK is one file and needs nothing else. Users need
+not install Python: Glossa downloads one when it has to (see below).
 
 ```
 my-translator/
@@ -155,8 +156,16 @@ shared with the other stdio runtimes, are in
   log. Do not write protocol frames yourself.
 - One request at a time per module process. A call that runs past Glossa's
   module timeout gets the process killed; the next call starts a fresh one.
-- The interpreter is the one set in Glossa's settings, else the first Python 3
-  found (`python3`, `python`, `py -3` on Windows). Python 3.8 or newer.
+- The interpreter follows `[modules] python`: by default an installed Python
+  3.8 or newer (`python3`, `python`, `py -3` on Windows), or, when none is
+  installed or the module has dependencies, a Python that Glossa downloads
+  itself. Write for Python 3.8 unless the module has dependencies, which
+  always run on the managed CPython 3.13.
+- Packages: list them in `requirements = [...]` under `[module]` (or a
+  `requirements.txt` / `pyproject.toml` beside `module.toml`); Glossa
+  installs them with uv into an environment of the module's own. See
+  [Python dependencies](../../docs/modules/README.md#python-dependencies) and
+  [`modules/python/example-idna`](../../modules/python/example-idna).
 - The process runs in the module's directory with `PYTHONIOENCODING=utf-8`,
   `PYTHONUNBUFFERED=1` and `PYTHONDONTWRITEBYTECODE=1`.
 
