@@ -22,5 +22,4 @@ glossa-ocr = { workspace = true }
 # For `doctor` only: the session, permissions and the single-instance lock.
 glossa-platform = { workspace = true }
 serde_json = { workspace = true }
-tracing = { workspace = true }
 tracing-subscriber = { workspace = true }

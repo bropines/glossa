@@ -17,4 +17,3 @@ crate-type = ["cdylib", "rlib"]
 # or a git URL, and depend on nothing else from Glossa.
 [dependencies]
 glossa-module-sdk = { path = "../../../crates/glossa-module-sdk" }
-serde_json = { workspace = true }
