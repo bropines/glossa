@@ -11,6 +11,11 @@ the notes of its GitHub release.
 
 - `GLOSSA_FRAME_TRACE`: a per-frame trace of the main window, the popup and
   Options to a CSV file, for diagnosing stutter.
+- When the popup's translation came from another service because the first
+  one failed (fail-over), the popup says so under the text ("From Bing:
+  Google Translate did not answer", the reason on hover), and its title
+  names the service that answered. `glossa-cli translate` prints the same
+  on stderr.
 
 ### Fixed
 
@@ -20,6 +25,17 @@ the notes of its GitHub release.
   in before pasting.
 - macOS: the main window's tooltips named the shortcuts Ctrl+Enter, Ctrl+N
   and Ctrl+I; on macOS they are Cmd+Enter, Cmd+N and Cmd+I.
+- "Google Translate is rate-limiting us" no longer stops Google Translate.
+  It now asks three keyless addresses in turn (`clients5.google.com`,
+  `translate.googleapis.com`, `translate.google.<domain>`), moving on when
+  one answers 429 or shows Google's captcha page, and leaves a refusing
+  address alone for 30 s, doubling to 10 minutes, instead of asking it
+  again (and again on retry) at every popup. Speech does the same with its
+  own three addresses. Only when all of them refuse is the error shown, at
+  once and with the wait, and fail-over moves on to the next service.
+- Google Translate translates up to 50 000 characters (it was 5 000, the
+  rest cut off): a long text goes in requests of up to 10 000 characters,
+  cut at line breaks, and the line breaks are kept.
 - macOS: with the main window open behind other windows, the popup did not
   show (selection translation, the control API) until Glossa was switched
   to with Cmd+Tab. It now shows at once.

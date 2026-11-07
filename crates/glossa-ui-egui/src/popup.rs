@@ -260,16 +260,12 @@ impl PopupState {
     pub fn on_detached(&mut self, _job: u64, _result: Result<Arc<TranslationOutcome>, Arc<Error>>) {}
 
     fn title(&self, app: &GlossaApp) -> String {
-        let service_name = app
-            .engine
-            .registry()
-            .get(&self.service)
-            .map(|p| p.info().name.clone())
-            .or_else(|| {
-                self.outcome
-                    .as_ref()
-                    .and_then(|o| app.engine.registry().get(&o.translation.provider_id).map(|p| p.info().name.clone()))
-            })
+        // The service that answered, which is not the one asked when the
+        // engine fell back to the next.
+        let answered = self.outcome.as_ref().filter(|_| !self.busy).map(|o| o.translation.provider_id.as_str());
+        let service_name = answered
+            .and_then(|id| service_name(app, id))
+            .or_else(|| service_name(app, &self.service))
             .unwrap_or_default();
         match &self.outcome {
             Some(o) => {
@@ -283,6 +279,23 @@ impl PopupState {
             None => service_name,
         }
     }
+}
+
+fn service_name(app: &GlossaApp, id: &str) -> Option<String> {
+    app.engine.registry().get(id).map(|p| p.info().name.clone())
+}
+
+/// "From Bing: Google Translate did not answer", when the engine fell back
+/// to another service, with each failure's reason for the tooltip.
+fn fallback_note(app: &GlossaApp, o: &TranslationOutcome) -> Option<(String, String)> {
+    if o.failed.is_empty() {
+        return None;
+    }
+    let name = |id: &str| service_name(app, id).unwrap_or_else(|| id.to_owned());
+    let failed: Vec<String> = o.failed.iter().map(|(id, _)| name(id)).collect();
+    let note = app.locale.fmt_args("popup.answered_instead", &[&name(&o.translation.provider_id), &failed.join(", ")]);
+    let why = o.failed.iter().map(|(id, e)| format!("{}: {e}", name(id))).collect::<Vec<_>>().join("\n");
+    Some((note, why))
 }
 
 /// "Microsoft Translator" -> "Microsoft": the header has little room.
@@ -733,8 +746,14 @@ fn body(app: &mut GlossaApp, ui: &mut egui::Ui, st: &mut PopupState) -> (bool, e
                 let primary = o.translation.text.clone();
                 let rtl = o.pair.to.is_rtl() || glossa_core::text::guessed_direction(&primary).is_rtl();
                 let secondary = secondary_text(&o.translation);
+                let note = fallback_note(app, &o);
                 let primary_label = |ui: &mut egui::Ui| {
                     crate::bidi::label(ui, RichText::new(primary.clone()).font(font.clone()).color(text_color), rtl);
+                    if let Some((note, why)) = &note {
+                        let small = egui::FontId::proportional(font.size * 0.8);
+                        ui.label(RichText::new(note).font(small).color(text_color.gamma_multiply(0.62)))
+                            .on_hover_text(why);
+                    }
                 };
                 let secondary_font = egui::FontId::proportional(font.size * 0.92);
                 let secondary_label = |ui: &mut egui::Ui, text: &str| {

@@ -415,6 +415,7 @@ pub static STRINGS: &[(&str, &str, Option<&str>)] = &[
     ("popup.listen", "Listen to selected text", Some("w:6:10:30")),
     ("popup.copy", "Copy translation to clipboard", Some("w:6:10:40")),
     ("popup.title_direction", "%s to %s (%s)", None),
+    ("popup.answered_instead", "From %s: %s did not answer", None),
     ("popup.reset_size", "Back to automatic size", None),
     ("popup.change_target", "Click to translate into another language", None),
     ("popup.target_auto", "Automatic direction", None),
