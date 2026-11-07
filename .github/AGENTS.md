@@ -12,7 +12,10 @@ are skipped): `cargo fmt --check`, clippy with `-D warnings` and the tests
 on Linux (Ubuntu, with `libgtk-3-dev` and `libasound2-dev`), macOS and
 Windows (MSVC), and `cargo check` at the `rust-version` in `Cargo.toml`.
 Live tests against Tesseract (Linux) and Apple Vision (macOS, allowed to
-fail) run as extra steps. Locally
+fail) run as extra steps. The Linux job also builds the native and Java
+example modules and runs `glossa-cli module test --strict
+--require-runtimes modules`, so every module in `modules/` passes its
+fixtures with nothing skipped. Locally
 the same checks run in WSL ([AGENTS.md](../AGENTS.md#build-and-test-in-wsl-never-on-the-windows-host)).
 
 ## release.yml

@@ -4,8 +4,8 @@ If you write a Glossa module with an AI coding assistant, put the text
 below into your module's repository as `AGENTS.md` (Claude Code reads
 `CLAUDE.md`: add one with the single line `@AGENTS.md`). It tells the
 assistant what a module is, where the contract is written down, and how to
-check its work in Glossa. Fill in the first section; delete the runtimes
-you do not use.
+check its work with Glossa's test harness. Fill in the first section;
+delete the runtimes you do not use.
 
 Extra files in a module's folder, this one included, do not affect loading:
 Glossa reads only `module.toml` and the files it names.
@@ -38,6 +38,8 @@ Read these before changing behaviour; do not guess field names.
   - Java and any program over stdio: docs/modules/process-modules.md
   - Native (Rust, C): docs/modules/native-modules.md
   - Text recognition results and the image API: docs/modules/ocr-modules.md
+- Testing, the checklist for a module, and the fixture format:
+  https://github.com/bropines/glossa/blob/main/docs/modules/testing.md
 
 ## Rules
 
@@ -67,6 +69,63 @@ Read these before changing behaviour; do not guess field names.
   `print()` to the log). Flush after each line. Log to stderr or with
   `host.log`.
 
+- Every capability has a fixture case in `tests/`, and so does every error
+  the module raises. Fixtures use obvious fakes for keys
+  (`api_key = "test-key"`) and recorded answers for the network.
+
+## Must and must not
+
+You must:
+
+- read the contract above before writing code, and start from the
+  template for the runtime (listed in testing.md, *Templates*);
+- run `glossa-cli module test --strict .` after every change and show its
+  output before calling the work done;
+- record real answers (`--record`) only with a key the user gave you for
+  that purpose, and never write that key into a file.
+
+You must not:
+
+- put a key, token, cookie or password into any file of this repository,
+  fixtures and recordings included;
+- make a check pass by weakening it: deleting a failing case, loosening an
+  expectation, adding `"*"` to the permissions, or returning an empty
+  result instead of an error;
+- change the manifest's `id` or `api` without being asked.
+
+## Testing it
+
+The harness loads the module the way Glossa does, runs the cases in
+`tests/*.toml` against recorded HTTP answers (offline), and checks every
+answer against the protocol:
+
+```bash
+glossa-cli module check .               # the manifest and files only
+glossa-cli module test .                # load, run the fixtures, check the answers
+glossa-cli module test --strict .       # warnings fail too; run this before a commit
+glossa-cli -v module test --case "unknown word" .   # one case, with the module's log
+glossa-cli module test --record --set api_key=KEY . # refresh tests/recorded/ from the real service
+glossa-cli --json module test .         # the report as JSON
+```
+
+A case:
+
+```toml
+# tests/basic.toml
+[[case]]
+name = "translates a greeting"
+op = "translate"                 # translate | detect | dictionary | speak | ocr
+text = "Hello"
+from = "en"
+to = "de"
+options = { api_key = "test-key" }
+expect = { text = "Hallo", detected = "en" }
+[[case.http]]                    # what the service answers, matched by method and URL prefix
+method = "POST"
+url = "https://api.example.com/v1/translate"
+body = '{"translation": "Hallo", "source": "en"}'
+```
+
 ## Running it in Glossa
 
 Use a throwaway data folder so the user's own settings stay untouched:
@@ -92,6 +151,8 @@ module without a restart.
 
 ## Typical mistakes
 
+- `glossa-cli module test` reports an unknown key: a misspelt key, or one
+  in the wrong table; Glossa would silently ignore it.
 - `glossa-cli modules` lists the module under "failed": read the reason.
   Usual causes: a syntax error (file and line are given), a bad `id` or
   a value of the wrong type in `module.toml`, the entry file missing,
@@ -103,7 +164,10 @@ module without a restart.
 - A call that always times out (process modules): stdout is buffered, or
   something other than a frame was written to it.
 - Results show up empty: the returned field names do not match
-  protocol.md (`text`, not `translation`; `lang`, not `language`).
+  protocol.md (`text`, not `translation`; `lang`, not `language`). The
+  harness reports this as `bad_response … missing field`.
+- "no recorded response for GET …" in a test: the case has no recorded
+  answer for that request; add a `[[case.http]]` entry or run `--record`.
 - The module is listed but not in the service strip: it has a required
   option or lacks `ready_to_use = true`; switch it on in *Options →
   Services*.

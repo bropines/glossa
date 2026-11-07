@@ -55,6 +55,7 @@ Mac or in CI.
 | `crates/glossa-services` | built-in services and the system voice (`system_tts/`) |
 | `crates/glossa-ocr`, `crates/glossa-lens` | OCR engines; the built-in Google Lens client |
 | `crates/glossa-modules`, `crates/glossa-module-sdk` | module runtimes and registry; the wire types and the native ABI |
+| `crates/glossa-module-test` | the module test harness (`glossa-cli module test`); fixtures live in each module's `tests/` |
 | `crates/glossa-platform` | everything OS-specific ([its AGENTS.md](crates/glossa-platform/AGENTS.md)) |
 | `crates/glossa-ui-egui` | the desktop app ([its AGENTS.md](crates/glossa-ui-egui/AGENTS.md)) |
 | `crates/glossa-cli` | `glossa-cli`, and `doctor.rs` |
