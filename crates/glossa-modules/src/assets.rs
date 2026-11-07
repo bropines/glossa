@@ -77,6 +77,15 @@ pub struct AssetSpec {
     /// `x86_64`, `aarch64`, `x86`, `arm`…); empty for all.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub arch: Vec<String>,
+    /// Not needed to start the module: fetched only when asked for by name
+    /// (one of many language models, voices or recognisers). The module
+    /// sees which are there through the `assets` host call.
+    #[serde(default)]
+    pub optional: bool,
+    /// Make the file executable after download (Unix), for a helper program
+    /// a process module's `command` names through `${ASSETS_DIR}`.
+    #[serde(default)]
+    pub executable: bool,
 }
 
 /// `url = "…"` or `url = ["…", "…"]`.
@@ -109,6 +118,9 @@ pub enum Unpack {
     /// Unpack a gzipped tar into a folder named after the asset.
     #[serde(rename = "tar.gz", alias = "tgz")]
     TarGz,
+    /// Decompress a single gzipped file, saved under the asset's name.
+    #[serde(rename = "gz")]
+    Gz,
 }
 
 impl AssetSpec {
@@ -209,6 +221,9 @@ pub struct AssetStatus {
     pub path: PathBuf,
     pub size: u64,
     pub sha256: String,
+    /// Not needed to start the module; see [`AssetSpec::optional`].
+    #[serde(default)]
+    pub optional: bool,
     #[serde(flatten)]
     pub state: AssetState,
 }
@@ -308,13 +323,21 @@ impl ModuleAssets {
     fn status_of(&self, spec: &AssetSpec) -> AssetStatus {
         let path = self.path(&spec.name);
         let state = self.state_of(spec, &path);
-        AssetStatus { name: spec.name.clone(), path, size: spec.size, sha256: spec.sha256.clone(), state }
+        AssetStatus {
+            name: spec.name.clone(),
+            path,
+            size: spec.size,
+            sha256: spec.sha256.clone(),
+            optional: spec.optional,
+            state,
+        }
     }
 
     fn state_of(&self, spec: &AssetSpec, path: &Path) -> AssetState {
         let present = match spec.unpack {
             Unpack::None => fs::metadata(path).is_ok_and(|m| m.is_file() && m.len() == spec.size),
-            _ => path.is_dir(),
+            Unpack::Gz => path.is_file(),
+            Unpack::Zip | Unpack::TarGz => path.is_dir(),
         };
         let marker = self.read_marker(&spec.name);
         if present && marker.as_ref().is_some_and(|m| m.sha256.eq_ignore_ascii_case(&spec.sha256)) {
@@ -329,29 +352,67 @@ impl ModuleAssets {
         }
     }
 
-    /// Whether every asset is ready.
+    /// Whether every required (not `optional`) asset is ready: what the
+    /// module needs to start.
     pub fn ready(&self) -> bool {
-        self.specs.iter().all(|s| self.state_of(s, &self.path(&s.name)) == AssetState::Ready)
+        self.required().all(|s| self.state_of(s, &self.path(&s.name)) == AssetState::Ready)
     }
 
-    /// The names of the assets that are not ready.
+    fn required(&self) -> impl Iterator<Item = &AssetSpec> {
+        self.specs.iter().filter(|s| !s.optional)
+    }
+
+    /// The required assets that are not ready.
     pub fn missing(&self) -> Vec<String> {
-        self.status().into_iter().filter(|s| s.state != AssetState::Ready).map(|s| s.name).collect()
+        self.required()
+            .filter(|s| self.state_of(s, &self.path(&s.name)) != AssetState::Ready)
+            .map(|s| s.name.clone())
+            .collect()
     }
 
-    /// Bytes in all.
+    /// Bytes of the required assets.
     pub fn total_size(&self) -> u64 {
-        self.specs.iter().map(|s| s.size).sum()
+        self.required().map(|s| s.size).sum()
     }
 
-    /// Fetch every asset that is not ready, resuming partial files, and
-    /// verify each against its SHA-256 before it is put in place. Blocks; run
-    /// it on a worker thread. `progress` is called as bytes arrive.
+    /// The assets `names` stands for: those named, or every required one
+    /// when it is empty.
+    pub fn chosen(&self, names: &[String]) -> Result<Vec<&AssetSpec>> {
+        if names.is_empty() {
+            return Ok(self.required().collect());
+        }
+        names
+            .iter()
+            .map(|n| {
+                self.specs
+                    .iter()
+                    .find(|s| s.name == *n)
+                    .ok_or_else(|| Error::Config(format!("module {} has no file {n:?} for this system", self.module)))
+            })
+            .collect()
+    }
+
+    /// Fetch every required asset that is not ready; see [`Self::download_some`].
     pub fn download(&self, http: &dyn Http, cancel: &CancelToken, progress: &dyn Fn(&Progress)) -> Result<()> {
+        self.download_some(&[], http, cancel, progress)
+    }
+
+    /// Fetch the assets `names` names (every required one when empty) that
+    /// are not ready, resuming partial files, and verify each against its
+    /// SHA-256 before it is put in place. Blocks; run it on a worker thread.
+    /// `progress` is called as bytes arrive.
+    pub fn download_some(
+        &self,
+        names: &[String],
+        http: &dyn Http,
+        cancel: &CancelToken,
+        progress: &dyn Fn(&Progress),
+    ) -> Result<()> {
+        let chosen = self.chosen(names)?;
         let _busy = self.busy.lock();
-        let total = self.total_size();
+        let total = chosen.iter().map(|s| s.size).sum();
         let mut base = 0u64;
-        for spec in &self.specs {
+        for spec in chosen {
             if cancel.is_cancelled() {
                 return Err(Error::Cancelled);
             }
@@ -504,7 +565,32 @@ impl ModuleAssets {
         remove_any(&dest)?;
         let mut files = Vec::new();
         match spec.unpack {
-            Unpack::None => fs::rename(part, &dest)?,
+            Unpack::None => {
+                fs::rename(part, &dest)?;
+                #[cfg(unix)]
+                if spec.executable {
+                    set_executable(&dest, 0o755);
+                }
+            }
+            Unpack::Gz => {
+                let staging = self.state_dir().join(format!("{}.unpacking", spec.name));
+                let unpacked = gunzip(part, &staging);
+                if let Err(e) = unpacked {
+                    let _ = fs::remove_file(&staging);
+                    let _ = fs::remove_file(part);
+                    return Err(Error::Module {
+                        module: self.module.clone(),
+                        detail: format!("cannot unpack {}: {e}", spec.name),
+                    });
+                }
+                #[cfg(unix)]
+                if spec.executable {
+                    set_executable(&staging, 0o755);
+                }
+                files.push((String::new(), fs::metadata(&staging)?.len()));
+                fs::rename(&staging, &dest)?;
+                fs::remove_file(part)?;
+            }
             kind => {
                 let staging = self.state_dir().join(format!("{}.unpacking", spec.name));
                 remove_any(&staging)?;
@@ -554,7 +640,12 @@ impl ModuleAssets {
         let path = self.path(&spec.name);
         match spec.unpack {
             Unpack::None => Ok(sha256_file(&path)?.eq_ignore_ascii_case(&spec.sha256)),
-            _ => {
+            Unpack::Gz => {
+                let Some(marker) = self.read_marker(&spec.name) else { return Ok(false) };
+                let expected = marker.files.first().map(|(_, size)| *size);
+                Ok(fs::metadata(&path).is_ok_and(|m| m.is_file() && Some(m.len()) == expected))
+            }
+            Unpack::Zip | Unpack::TarGz => {
                 let Some(marker) = self.read_marker(&spec.name) else { return Ok(false) };
                 Ok(marker
                     .files
@@ -673,6 +764,14 @@ fn set_executable(path: &Path, mode: u32) {
     if mode & 0o111 != 0 {
         let _ = fs::set_permissions(path, fs::Permissions::from_mode(0o755));
     }
+}
+
+fn gunzip(archive: &Path, dest: &Path) -> std::result::Result<(), String> {
+    let file = File::open(archive).map_err(|e| e.to_string())?;
+    let mut r = flate2::read::GzDecoder::new(io::BufReader::new(file));
+    let mut out = File::create(dest).map_err(|e| format!("{}: {e}", dest.display()))?;
+    io::copy(&mut r, &mut out).map_err(|e| e.to_string())?;
+    Ok(())
 }
 
 /// A minimal tar reader: regular files and folders, with GNU long names and
@@ -1256,5 +1355,50 @@ mod tests {
         assert_eq!(translate(&g, &http).unwrap().text, "HI");
         assert_eq!(made.load(std::sync::atomic::Ordering::SeqCst), 1, "started once");
         assert_eq!(http.requests().len(), 1);
+    }
+
+    #[test]
+    fn optional_files_do_not_hold_the_module_back_and_come_by_name() {
+        let tmp = Temp::new("optional");
+        let toml = format!(
+            "{}{}",
+            one("\"https://dl.test/req\"", HELLO_SHA, HELLO.len(), ""),
+            one("\"https://dl.test/opt\"", HELLO_SHA, HELLO.len(), "optional = true").replace("data.bin", "ru-en")
+        );
+        let a = assets(&tmp, &toml);
+        assert_eq!(a.missing(), ["data.bin"]);
+        assert_eq!(a.total_size(), HELLO.len() as u64);
+        let http = MockHttp::new().on(Method::Get, "https://dl.test/", 200, HELLO);
+        a.download(&http, &CancelToken::new(), &|_| {}).unwrap();
+        assert!(a.ready(), "the optional file is not needed");
+        assert_eq!(http.requests().len(), 1);
+        assert_eq!(a.status()[1].state, AssetState::Missing);
+        assert!(a.status()[1].optional);
+        a.download_some(&["ru-en".into()], &http, &CancelToken::new(), &|_| {}).unwrap();
+        assert_eq!(a.status()[1].state, AssetState::Ready);
+        assert_eq!(http.requests().last().unwrap().url, "https://dl.test/opt");
+        assert!(a.download_some(&["nope".into()], &http, &CancelToken::new(), &|_| {}).is_err());
+    }
+
+    #[test]
+    fn a_gzipped_file_is_unpacked_in_place() {
+        let mut gz = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::fast());
+        gz.write_all(b"#!/bin/sh\necho model\n").unwrap();
+        let bytes = gz.finish().unwrap();
+        let tmp = Temp::new("gz");
+        let toml = one("\"https://dl.test/a\"", &sha_hex(&bytes), bytes.len(), "unpack = \"gz\"\nexecutable = true");
+        let a = assets(&tmp, &toml);
+        a.download(&Bytes(bytes), &CancelToken::new(), &|_| {}).unwrap();
+        assert!(a.ready());
+        let path = a.path("data.bin");
+        assert_eq!(fs::read_to_string(&path).unwrap(), "#!/bin/sh\necho model\n");
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            assert_ne!(fs::metadata(&path).unwrap().permissions().mode() & 0o111, 0, "executable");
+        }
+        assert_eq!(a.verify().unwrap()[0].state, AssetState::Ready);
+        fs::write(&path, "shorter").unwrap();
+        assert_eq!(a.verify().unwrap()[0].state, AssetState::Corrupt);
     }
 }

@@ -492,6 +492,8 @@
     "options.assets.corrupt": "повреждено, удалено",
     "options.assets.download": "Скачать (%s)",
     "options.assets.cancel": "Отмена",
+    "options.assets.optional": "необязательно",
+    "options.assets.get": "Скачать",
     "options.assets.verify": "Проверить файлы",
     "options.assets.remove": "Удалить файлы",
     "options.assets.open_folder": "Открыть папку",

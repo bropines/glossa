@@ -62,7 +62,7 @@ impl Engine {
         AssetReport {
             module: assets.module.clone(),
             dir: assets.root.clone(),
-            ready: statuses.iter().all(|s| s.state == glossa_modules::AssetState::Ready),
+            ready: assets.ready(),
             assets: statuses,
             total_size: assets.total_size(),
             job: self.inner.asset_jobs.lock().get(&assets.module).map(|j| j.state.lock().clone()),
@@ -82,30 +82,35 @@ impl Engine {
         registry.entries().iter().filter_map(|e| e.assets.as_ref()).map(|a| self.report(a)).collect()
     }
 
-    /// Download module `id`'s missing files and wait for them (the CLI).
+    /// Download module `id`'s missing files and wait for them (the CLI):
+    /// those `names` names, or every required one when it is empty.
     /// `progress` is called as bytes arrive. Does nothing when all are
     /// there.
     pub fn download_module_assets(
         &self,
         id: &str,
+        names: &[String],
         cancel: &CancelToken,
         progress: &dyn Fn(&AssetProgress),
     ) -> Result<AssetReport> {
         let assets = self.assets_of(id)?;
         let http = self.inner.http.read().clone();
-        assets.download(http.as_ref(), cancel, progress)?;
+        assets.download_some(names, http.as_ref(), cancel, progress)?;
         Ok(self.report(&assets))
     }
 
-    /// Start downloading module `id`'s missing files on a worker thread.
+    /// Start downloading module `id`'s missing files on a worker thread:
+    /// those `names` names, or every required one when it is empty.
     /// [`Event::AssetsChanged`] reports progress and the end;
-    /// [`Engine::module_assets`] has the state. Starting a download that
-    /// already runs does nothing.
-    pub fn start_asset_download(&self, id: &str) -> Result<()> {
+    /// [`Engine::module_assets`] has the state. Starting a download while
+    /// one runs for the module does nothing.
+    pub fn start_asset_download(&self, id: &str, names: &[String]) -> Result<()> {
         let assets = self.assets_of(id)?;
+        let total = assets.chosen(names)?.iter().map(|s| s.size).sum();
+        let names = names.to_vec();
         let state = Arc::new(Mutex::new(AssetJobState {
             running: true,
-            progress: AssetProgress { asset: String::new(), done: 0, total: assets.total_size() },
+            progress: AssetProgress { asset: String::new(), done: 0, total },
             error: String::new(),
         }));
         let cancel = CancelToken::new();
@@ -122,7 +127,7 @@ impl Engine {
         self.spawn("assets", move || {
             let http = engine.inner.http.read().clone();
             let last = Mutex::new(Instant::now());
-            let result = assets.download(http.as_ref(), &cancel, &|p| {
+            let result = assets.download_some(&names, http.as_ref(), &cancel, &|p| {
                 state.lock().progress = p.clone();
                 let mut last = last.lock();
                 if last.elapsed() >= PROGRESS_EVERY {
@@ -261,7 +266,7 @@ mod tests {
         let state = r.dir.join(".glossa");
         std::fs::create_dir_all(&state).unwrap();
         std::fs::write(state.join("model.onnx.part"), &BODY[..8]).unwrap();
-        let r = e.download_module_assets("offline-model", &CancelToken::new(), &|_| {}).unwrap();
+        let r = e.download_module_assets("offline-model", &[], &CancelToken::new(), &|_| {}).unwrap();
         assert!(r.ready, "{r:?}");
         assert_eq!(std::fs::read(r.dir.join("model.onnx")).unwrap(), BODY);
         assert_eq!(*seen.lock(), vec![Some(8)]);
@@ -278,7 +283,7 @@ mod tests {
         let (port, _) = file_server(1);
         let (e, dir) = engine("background", port);
         let rx = e.subscribe();
-        e.start_asset_download("offline-model").unwrap();
+        e.start_asset_download("offline-model", &[]).unwrap();
         let deadline = Instant::now() + Duration::from_secs(20);
         loop {
             let left = deadline.saturating_duration_since(Instant::now());

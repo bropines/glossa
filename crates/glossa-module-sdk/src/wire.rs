@@ -443,7 +443,7 @@ impl ImageInfo {
 /// What the `assets` host call returns: where the files a module declares
 /// in `[[assets]]` are. Each path is where the file (or the folder an
 /// archive was unpacked into) is once downloaded; Glossa starts a module
-/// with assets only when they are all there. Empty for a module without
+/// only when its required assets are all there. Empty for a module without
 /// assets.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct AssetsInfo {
@@ -453,6 +453,10 @@ pub struct AssetsInfo {
     /// Asset name -> absolute path.
     #[serde(default)]
     pub files: BTreeMap<String, String>,
+    /// The names in `files` not downloaded yet: optional assets the user
+    /// has not asked for. A file at its path is always a verified one.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub missing: Vec<String>,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]

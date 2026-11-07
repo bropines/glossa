@@ -182,7 +182,15 @@ impl<'a> HostApi<'a> {
                 Ok(serde_json::Value::Null)
             }
             "assets" => {
-                let info = self.assets.cloned().unwrap_or_default();
+                let mut info = self.assets.cloned().unwrap_or_default();
+                // Only verified files ever reach these paths (downloads wait
+                // in `.glossa/`), so being there is being ready.
+                info.missing = info
+                    .files
+                    .iter()
+                    .filter(|(_, path)| !std::path::Path::new(path.as_str()).exists())
+                    .map(|(name, _)| name.clone())
+                    .collect();
                 Ok(serde_json::to_value(info).expect("assets info serialises"))
             }
             op if op.starts_with("image.") => self.image_op(&op["image.".len()..], params),

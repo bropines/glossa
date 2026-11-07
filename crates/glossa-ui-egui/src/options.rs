@@ -1005,12 +1005,14 @@ fn module_assets(app: &mut GlossaApp, ui: &mut egui::Ui, st: &mut OptionsState, 
     ui.add_space(4.0);
     ui.label(RichText::new(app.t("options.assets.title")).strong());
     ui.label(RichText::new(app.t("options.assets.hint")).small().color(look.weak_text()));
+    let running = report.job.as_ref().is_some_and(|j| j.running);
+    let mut fetch_one = None;
     for a in &report.assets {
         let (state, bad) = match &a.state {
             glossa_engine::AssetState::Ready => (app.t("options.assets.ready"), false),
-            glossa_engine::AssetState::Missing => (app.t("options.assets.missing"), true),
+            glossa_engine::AssetState::Missing => (app.t("options.assets.missing"), !a.optional),
             glossa_engine::AssetState::Partial { have } => {
-                (app.locale.fmt("options.assets.partial", &human_size(*have)), true)
+                (app.locale.fmt("options.assets.partial", &human_size(*have)), !a.optional)
             }
             glossa_engine::AssetState::Outdated => (app.t("options.assets.outdated"), true),
             glossa_engine::AssetState::Corrupt => (app.t("options.assets.corrupt"), true),
@@ -1018,10 +1020,26 @@ fn module_assets(app: &mut GlossaApp, ui: &mut egui::Ui, st: &mut OptionsState, 
         ui.horizontal_wrapped(|ui| {
             ui.label(RichText::new(&a.name).small());
             ui.label(RichText::new(human_size(a.size)).small().color(look.weak_text()));
+            if a.optional {
+                ui.label(RichText::new(app.t("options.assets.optional")).small().color(look.weak_text()));
+            }
             ui.label(RichText::new(state).small().color(if bad { look.error() } else { look.weak_text() }));
+            // Optional files (one model of many) are fetched one by one.
+            if a.optional
+                && !running
+                && a.state != glossa_engine::AssetState::Ready
+                && ui.small_button(app.t("options.assets.get")).clicked()
+            {
+                fetch_one = Some(a.name.clone());
+            }
         });
     }
-    let running = report.job.as_ref().is_some_and(|j| j.running);
+    if let Some(name) = fetch_one {
+        st.assets_note = None;
+        if let Err(e) = app.engine.start_asset_download(id, &[name]) {
+            st.assets_note = Some((e.to_string(), true));
+        }
+    }
     if let Some(job) = &report.job {
         if job.running {
             let p = &job.progress;
@@ -1041,7 +1059,7 @@ fn module_assets(app: &mut GlossaApp, ui: &mut egui::Ui, st: &mut OptionsState, 
             let label = app.locale.fmt("options.assets.download", &human_size(report.total_size));
             if ui.button(label).clicked() {
                 st.assets_note = None;
-                if let Err(e) = app.engine.start_asset_download(id) {
+                if let Err(e) = app.engine.start_asset_download(id, &[]) {
                     st.assets_note = Some((e.to_string(), true));
                 }
             }

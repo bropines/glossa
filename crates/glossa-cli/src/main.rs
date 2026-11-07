@@ -78,10 +78,11 @@ COMMANDS
                                       --record writes tests/recorded/, which replays then prefer
                                       over the fixtures' own answers (--ignore-recordings: not)
     module check [--strict] DIR…      the same checks without loading or running anything
-    assets     [list | status ID | download ID | verify ID | remove ID]
+    assets     [list | status ID | download ID [NAME…] | verify ID | remove ID]
                                       files modules declare (models, dictionaries): their state,
-                                      downloading (resumes, checks SHA-256), re-checking, deleting;
-                                      also `module assets …`
+                                      downloading (resumes, checks SHA-256; NAMEs pick optional
+                                      files, none fetches the required ones), re-checking,
+                                      deleting; also `module assets …`
     history    [--search Q] [--favorites] [--export FILE.{txt,csv,html,json}]
     import-classic DIR                settings, history, and use its services/themes/locales
     theme      list | show NAME | convert FILE    (classic JSON -> native TOML)
@@ -1059,7 +1060,8 @@ fn assets(args: &Args, words: &[String]) -> Result<(), Fail> {
                 glossa_engine::AssetState::Outdated => "out of date".to_owned(),
                 glossa_engine::AssetState::Corrupt => "damaged, deleted".to_owned(),
             };
-            out!("  {:24} {:>12} bytes  {state}", a.name, a.size);
+            let optional = if a.optional { ", optional" } else { "" };
+            out!("  {:24} {:>12} bytes  {state}{optional}", a.name, a.size);
         }
     };
     match op {
@@ -1085,7 +1087,7 @@ fn assets(args: &Args, words: &[String]) -> Result<(), Fail> {
             let last = Mutex::new((String::new(), 0u64));
             let quiet = args.json || !std::io::stderr().is_terminal();
             let r = e
-                .download_module_assets(id, &cancel, &|p| {
+                .download_module_assets(id, &words[2..], &cancel, &|p| {
                     if quiet {
                         return;
                     }

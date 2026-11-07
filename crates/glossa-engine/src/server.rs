@@ -423,15 +423,20 @@ fn host_allowed(host: Option<&str>, listening_beyond_loopback: bool) -> bool {
     }
 }
 
-/// `/v1/assets/ID` (GET: the state) and `/v1/assets/ID/download`,
-/// `/cancel`, `/verify`, `/remove` (POST). A download runs in the
+/// `/v1/assets/ID` (GET: the state) and `/v1/assets/ID/download`
+/// (`?names=a,b` for optional files), `/cancel`, `/verify`, `/remove`
+/// (POST). A download runs in the
 /// background: the reply is the state as it starts, and polling the GET
 /// shows its progress.
-fn assets_route(engine: &Engine, rest: &str) -> Reply {
+fn assets_route(engine: &Engine, rest: &str, url: &str) -> Reply {
     let (id, op) = rest.split_once('/').unwrap_or((rest, ""));
+    // `?names=a,b` picks optional files; without it, the required ones.
+    let names: Vec<String> = query_param(url, "names")
+        .map(|n| n.split(',').map(str::trim).filter(|n| !n.is_empty()).map(str::to_owned).collect())
+        .unwrap_or_default();
     let result = match op {
         "" => engine.module_assets(id),
-        "download" => engine.start_asset_download(id).and_then(|()| engine.module_assets(id)),
+        "download" => engine.start_asset_download(id, &names).and_then(|()| engine.module_assets(id)),
         "cancel" => {
             engine.cancel_asset_download(id);
             engine.module_assets(id)
@@ -647,7 +652,7 @@ fn route(engine: &Engine, req: &mut Request) -> Reply {
             Err(r) => r,
         },
         "/v1/assets" => Reply::json(200, json!(engine.modules_with_assets())),
-        p if p.starts_with("/v1/assets/") => assets_route(engine, &p["/v1/assets/".len()..]),
+        p if p.starts_with("/v1/assets/") => assets_route(engine, &p["/v1/assets/".len()..], &url),
         _ => Reply::error(404, format!("no route {path}")),
     }
 }

@@ -57,6 +57,7 @@ impl<T: Transport> ProtocolProvider<T> {
                 .into_iter()
                 .map(|a| (a.name.clone(), dir.join(&a.name).to_string_lossy().into_owned()))
                 .collect(),
+            missing: Vec::new(),
         });
         Self { manifest, info, transport, cache, assets }
     }
