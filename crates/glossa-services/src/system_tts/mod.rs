@@ -1,10 +1,10 @@
 //! The system voice (`system-tts`): text to speech with the voices the
 //! operating system already has, offline.
 //!
-//! * Windows: WinRT `Windows.Media.SpeechSynthesis` ([`win`]).
-//! * macOS: `/usr/bin/say`, writing a WAV file ([`mac`]).
+//! * Windows: WinRT `Windows.Media.SpeechSynthesis` (`win`).
+//! * macOS: `/usr/bin/say`, writing a WAV file (`mac`).
 //! * Linux and the BSDs: `espeak-ng` (or `espeak`) with WAV on stdout
-//!   ([`linux`]). Without either, the provider says it is not installed and
+//!   (`linux`). Without either, the provider says it is not installed and
 //!   is not switched on.
 //!
 //! Every backend answers with WAV. The voice is chosen by the request's

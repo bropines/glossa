@@ -1124,4 +1124,269 @@ mod tests {
         assert_eq!(query_param("/x?a=1", "b"), None);
         assert_eq!(percent_decode("100%"), "100%");
     }
+
+    /// The next action event the front end would get, if one comes.
+    fn next_action(rx: &std::sync::mpsc::Receiver<Event>) -> Option<(Action, Option<String>)> {
+        (0..50).find_map(|_| match rx.recv_timeout(Duration::from_millis(100)) {
+            Ok(Event::Action { action, text }) => Some((action, text)),
+            _ => None,
+        })
+    }
+
+    #[test]
+    fn a_wrong_or_malformed_token_is_refused() {
+        let (e, dir) = engine();
+        let server = start(e).unwrap();
+        for (auth, query) in [
+            ("Authorization: Bearer wrong\r\n", ""),
+            ("Authorization: Bearer secretx\r\n", ""),
+            ("Authorization: Bearer secre\r\n", ""),
+            ("Authorization: Bearer SECRET\r\n", ""),
+            ("Authorization: Basic secret\r\n", ""),
+            ("Authorization: secret\r\n", ""),
+            ("Authorization: Bearer \r\n", ""),
+            ("", "?token="),
+            ("", "?token=wrong"),
+            ("", "?tokens=secret"),
+            ("", "?xtoken=secret"),
+        ] {
+            let (status, body) = request(
+                server.addr,
+                &format!("GET /v1/services{query} HTTP/1.1\r\nHost: 127.0.0.1\r\n{auth}Connection: close\r\n\r\n"),
+            );
+            assert_eq!(status, 401, "{auth}{query}");
+            assert!(body.contains("token"), "{body}");
+        }
+        // A wrong header does not spoil a right query string, nor the other
+        // way round.
+        let (status, _) = request(
+            server.addr,
+            "GET /v1/services?token=secret HTTP/1.1\r\nHost: 127.0.0.1\r\nAuthorization: Bearer wrong\r\nConnection: close\r\n\r\n",
+        );
+        assert_eq!(status, 200);
+        let (status, _) = request(
+            server.addr,
+            "GET /v1/services?token=wrong HTTP/1.1\r\nHost: 127.0.0.1\r\nAuthorization: Bearer secret\r\nConnection: close\r\n\r\n",
+        );
+        assert_eq!(status, 200);
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn the_token_is_checked_before_the_method_and_the_route() {
+        // Without the token nothing about the API is revealed: not which
+        // paths exist, nor which methods they take.
+        let (e, dir) = engine();
+        let server = start(e).unwrap();
+        assert_eq!(call(server.addr, "DELETE", "/v1/translate", "").0, 401);
+        assert_eq!(call(server.addr, "GET", "/v1/nothing", "").0, 401);
+        assert_eq!(call(server.addr, "POST", "/v1/translate", "{not json").0, 401);
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn health_answers_at_the_root_and_with_a_trailing_slash() {
+        let (e, dir) = engine();
+        let server = start(e).unwrap();
+        for path in ["/", "/health", "/health/", "/health?x=1"] {
+            let (status, body) = call(server.addr, "GET", path, "");
+            assert_eq!(status, 200, "{path}");
+            let v: Value = serde_json::from_str(&body).unwrap();
+            assert_eq!(v["name"], "glossa");
+            assert_eq!(v["version"], glossa_core::VERSION);
+        }
+        // A trailing slash reaches the real route too.
+        assert_eq!(call(server.addr, "GET", "/v1/services/?token=secret", "").0, 200);
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn every_endpoint_that_needs_text_says_so() {
+        let (e, dir) = engine();
+        let server = start(e).unwrap();
+        for path in ["/v1/translate", "/v1/detect", "/v1/dictionary", "/v1/speak"] {
+            let (status, body) = call(server.addr, "POST", &format!("{path}?token=secret"), "{}");
+            assert_eq!(status, 400, "{path}");
+            assert!(body.contains("text is required"), "{path}: {body}");
+            // A body that is not JSON is told apart from a missing field.
+            let (status, body) = call(server.addr, "POST", &format!("{path}?token=secret"), "[1,");
+            assert_eq!(status, 400, "{path}");
+            assert!(body.contains("invalid JSON"), "{path}: {body}");
+        }
+        // The answer is JSON with an `error` field, which clients parse.
+        let (_, body) = call(server.addr, "POST", "/v1/detect?token=secret", "{}");
+        let v: Value = serde_json::from_str(&body).unwrap();
+        assert!(v["error"].is_string(), "{body}");
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn ocr_requests_without_a_usable_image_are_400() {
+        let (e, dir) = engine();
+        let server = start(e).unwrap();
+        let (status, body) = call(server.addr, "POST", "/v1/ocr?token=secret", "{}");
+        assert_eq!(status, 400);
+        assert!(body.contains("image_base64"), "{body}");
+        let (status, body) = call(server.addr, "POST", "/v1/ocr?token=secret", r#"{"image_base64":"%%%"}"#);
+        assert_eq!(status, 400);
+        assert!(body.contains("image_base64"), "{body}");
+        let (status, _) = call(server.addr, "POST", "/v1/ocr?token=secret", r#"{"image_base64":7}"#);
+        assert_eq!(status, 400, "not a string");
+        let (status, _) = call(server.addr, "POST", "/v1/ocr?token=secret", "nope");
+        assert_eq!(status, 400, "neither an image type nor JSON");
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn actions_take_their_text_from_a_post_body() {
+        let (e, dir) = engine();
+        let rx = e.subscribe();
+        let server = start(e).unwrap();
+        let (status, body) = call(server.addr, "POST", "/v1/action/show_popup?token=secret", "из тела");
+        assert_eq!(status, 202);
+        assert_eq!(serde_json::from_str::<Value>(&body).unwrap()["accepted"], "show_popup");
+        assert_eq!(next_action(&rx), Some((Action::ShowPopup, Some("из тела".into()))));
+        // The query string wins over the body; no text at all is `None`.
+        call(server.addr, "POST", "/v1/action/show_popup?token=secret&text=query", "body");
+        assert_eq!(next_action(&rx), Some((Action::ShowPopup, Some("query".into()))));
+        call(server.addr, "GET", "/v1/action/show_main_window?token=secret", "");
+        assert_eq!(next_action(&rx), Some((Action::ShowMainWindow, None)));
+        // A wrong method on an action is a 405, not an unknown action.
+        assert_eq!(call(server.addr, "PUT", "/v1/action/show_popup?token=secret", "").0, 405);
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn pot_app_routes_map_onto_their_actions() {
+        let (e, dir) = engine();
+        let rx = e.subscribe();
+        let server = start(e).unwrap();
+        for (path, action) in [
+            ("/selection_translate", Action::ShowPopup),
+            ("/input_translate", Action::ShowMainWindow),
+            ("/ocr_recognize", Action::TextRecognition),
+            ("/ocr_translate", Action::RecognizeAndTranslate),
+        ] {
+            assert_eq!(call(server.addr, "GET", path, "").0, 202, "{path}");
+            assert_eq!(next_action(&rx), Some((action, None)), "{path}");
+        }
+        // pot-app's `/translate` carries the text as the plain body.
+        assert_eq!(call(server.addr, "POST", "/translate", "plain text body").0, 202);
+        assert_eq!(next_action(&rx), Some((Action::ShowPopup, Some("plain text body".into()))));
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn method_lists_match_whole_names() {
+        assert!(method_allowed(&Method::Get, "GET, POST"));
+        assert!(method_allowed(&Method::Post, "GET, POST"));
+        assert!(!method_allowed(&Method::Put, "GET, POST"));
+        assert!(!method_allowed(&Method::Get, "POST"));
+        assert_eq!(allowed_methods("/v1/action/anything"), Some("GET, POST"));
+        assert_eq!(allowed_methods("/health"), None, "open to every method");
+        assert_eq!(allowed_methods("/selection_translate"), None, "pot-app's bindings use any method");
+        assert_eq!(allowed_methods("/translate"), Some("POST"));
+    }
+
+    #[test]
+    fn engine_errors_map_onto_the_right_status() {
+        let p = || "p".to_owned();
+        for (e, status) in [
+            (Error::EmptyInput, 400),
+            (Error::SameLanguage, 400),
+            (Error::Config("x".into()), 400),
+            (Error::NoProvider("translate"), 404),
+            (Error::NoSuchModule("m".into()), 404),
+            (Error::NoTextRecognised, 422),
+            (Error::LanguageNotDetected, 422),
+            (Error::MissingCredential { provider: p(), what: "key".into() }, 412),
+            (Error::RateLimited { provider: p(), retry_after_secs: Some(3) }, 429),
+            (Error::Timeout(10), 504),
+            (Error::Internal("bug".into()), 500),
+            (Error::Network("down".into()), 502),
+            (Error::HttpStatus { provider: p(), status: 500, body: String::new() }, 502),
+            (Error::BadResponse { provider: p(), detail: "x".into() }, 502),
+        ] {
+            let reply = Reply::from_error(&e);
+            assert_eq!(reply.status, status, "{e:?}");
+            let v: Value = serde_json::from_slice(&reply.body).unwrap();
+            assert_eq!(v["error"], e.to_string(), "the message reaches the client");
+        }
+    }
+
+    #[test]
+    fn ocr_errors_blame_the_server_only_for_its_own_set_up() {
+        assert_eq!(Reply::from_ocr_error(&Error::NoProvider("ocr")).status, 503);
+        assert_eq!(Reply::from_ocr_error(&Error::Config("no lens".into())).status, 503);
+        assert_eq!(Reply::from_ocr_error(&Error::FileNotFound("tesseract".into())).status, 503);
+        let missing = Error::MissingCredential { provider: "p".into(), what: "key".into() };
+        assert_eq!(Reply::from_ocr_error(&missing).status, 503);
+        // What is wrong with the picture stays the request's fault.
+        assert_eq!(Reply::from_ocr_error(&Error::NoTextRecognised).status, 422);
+        assert_eq!(Reply::from_ocr_error(&Error::Timeout(5)).status, 504);
+    }
+
+    #[test]
+    fn tokens_compare_whole_and_exact() {
+        assert!(constant_time_eq("secret", "secret"));
+        assert!(!constant_time_eq("secret", "secreT"));
+        assert!(!constant_time_eq("secret", "secret "));
+        assert!(!constant_time_eq("", "secret"));
+        assert!(constant_time_eq("", ""), "the caller refuses an empty token itself");
+    }
+
+    #[test]
+    fn languages_are_optional_but_never_guessed() {
+        let body = json!({ "from": "  en ", "to": "" });
+        assert_eq!(lang_param(&body, "/x", "from", LangId::AUTO).ok(), Some(LangId::ENGLISH), "trimmed");
+        assert_eq!(lang_param(&body, "/x", "to", LangId::RUSSIAN).ok(), Some(LangId::RUSSIAN), "empty: default");
+        assert_eq!(lang_param(&json!({}), "/x?to=ru", "to", LangId::AUTO).ok(), Some(LangId::RUSSIAN));
+        assert_eq!(lang_param(&json!({}), "/x?to=auto", "to", LangId::ENGLISH).ok(), Some(LangId::AUTO));
+        let err = lang_param(&json!({}), "/x?to=qq", "to", LangId::AUTO).err().unwrap();
+        assert_eq!(err.status, 400);
+    }
+
+    #[test]
+    fn the_json_body_wins_over_the_query_string() {
+        let body = json!({ "text": "from body", "n": 5 });
+        assert_eq!(field(&body, "/x?text=from+query", "text").as_deref(), Some("from body"));
+        assert_eq!(field(&json!({}), "/x?text=from+query", "text").as_deref(), Some("from query"));
+        // A non-string field falls through to the query string rather than
+        // being turned into text.
+        assert_eq!(field(&body, "/x", "n"), None);
+        assert_eq!(field(&body, "/x?n=6", "n").as_deref(), Some("6"));
+    }
+
+    #[test]
+    fn booleans_from_json_numbers_and_nulls() {
+        assert_eq!(bool_param(&json!({ "b": 1 }), "/x", "b").ok().flatten(), Some(true));
+        assert_eq!(bool_param(&json!({ "b": 0 }), "/x", "b").ok().flatten(), Some(false));
+        assert!(bool_param(&json!({ "b": 2 }), "/x", "b").is_err());
+        assert!(bool_param(&json!({ "b": [true] }), "/x", "b").is_err());
+        // JSON null is absent: the query string decides.
+        assert_eq!(bool_param(&json!({ "b": null }), "/x?b=on", "b").ok().flatten(), Some(true));
+        assert_eq!(bool_param(&json!({ "b": " YES " }), "/x", "b").ok().flatten(), Some(true));
+        assert_eq!(bool_param(&json!({}), "/x?b=OFF", "b").ok().flatten(), Some(false));
+    }
+
+    #[test]
+    fn query_parameters_match_whole_keys_and_tolerate_bad_escapes() {
+        assert_eq!(query_param("/x?text", "text").as_deref(), Some(""), "a bare key is an empty value");
+        assert_eq!(query_param("/x?subtext=a&text=b", "text").as_deref(), Some("b"));
+        assert_eq!(query_param("/x?text=a&text=b", "text").as_deref(), Some("a"), "the first wins");
+        assert_eq!(query_param("/x", "text"), None);
+        assert_eq!(query_param("/x?a=1%3D2", "a").as_deref(), Some("1=2"));
+        assert_eq!(percent_decode("%zz%4"), "%zz%4");
+        assert_eq!(percent_decode("%41%42"), "AB");
+        assert_eq!(percent_decode("%FF"), "\u{fffd}", "invalid UTF-8 is replaced, not a panic");
+        assert_eq!(percent_decode("a%2Bb+c"), "a+b c", "an escaped plus stays a plus");
+    }
+
+    #[test]
+    fn binding_needs_a_full_socket_address() {
+        assert!(matches!(checked_bind("127.0.0.1", "t"), Err(Error::Config(_))), "a port is required");
+        assert!(matches!(checked_bind("[::]:60828", ""), Err(Error::Config(_))), "every address, no token");
+        assert!(checked_bind("[::1]:60828", "").is_ok());
+        assert_eq!(connect_addr("not an address"), "not an address", "left for the caller to report");
+    }
 }

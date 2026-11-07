@@ -13,7 +13,7 @@ use glossa_platform::permissions::{self, Permission, Status};
 use glossa_platform::{Compositor, DisplayServer, Session};
 use serde_json::{json, Value};
 
-/// The whole report as JSON; [`print`] turns it into text.
+/// The whole report as JSON; [`print()`] turns it into text.
 pub fn report(paths: &Paths) -> Value {
     let session = Session::detect();
     let config = Config::load(&paths.config_file());

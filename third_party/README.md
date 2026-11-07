@@ -22,6 +22,13 @@ Unchanged except for these fixes, marked `Glossa patch` in the source:
   it the composition visual sits on top of the window's unpainted, opaque
   redirection surface, and neither the desktop nor Mica / Acrylic shows
   through. egui's `ViewportBuilder` has no setting for it.
+- `src/native/glow_integration.rs` and `src/native/wgpu_integration.rs`,
+  screenshots of immediate viewports: `ViewportCommand::Screenshot` sent to
+  an immediate viewport (Options, the popup, every tool window) was queued
+  and never answered, since only the deferred path drains a viewport's
+  requested actions. The immediate path now reads the picture back after
+  painting and completes the callback. `glossa --screenshot` and its smoke
+  test depend on it.
 - `src/native/glow_integration.rs`, hidden windows: on macOS
   `ViewportInfo::visible()` stays unknown for a window hidden with
   `ViewportCommand::Visible(false)`, so a hidden root window (Glossa's main

@@ -747,6 +747,100 @@ mod tests {
     }
 
     #[test]
+    fn desktop_scale_is_one_in_points_and_for_nonsense_scales() {
+        let want = if crate::shell::SHELL.desktop_in_points { 1.0 } else { 2.0 };
+        assert_eq!(desktop_scale(2.0), want);
+        // A monitor that reports no usable scale must not shrink or flip
+        // every coordinate.
+        for bad in [0.0, -1.5, f32::NAN] {
+            assert_eq!(desktop_scale(bad), 1.0, "{bad}");
+        }
+        let mut m = mon(0, 0, 2880, 1800);
+        m.scale = 2.0;
+        assert_eq!(m.desktop_scale(), want);
+    }
+
+    #[test]
+    fn fit_axis_prefers_after_then_before_then_clamps() {
+        // Room after the anchor.
+        assert_eq!(fit_axis(100.0, 116.0, 50.0, 0.0, 1000.0), 116.0);
+        // Exactly fits after: still after.
+        assert_eq!(fit_axis(900.0, 950.0, 50.0, 0.0, 1000.0), 950.0);
+        // No room after, room before: ends at the anchor's start.
+        assert_eq!(fit_axis(900.0, 951.0, 50.0, 0.0, 1000.0), 850.0);
+        // Exactly fits before.
+        assert_eq!(fit_axis(50.0, 990.0, 50.0, 0.0, 1000.0), 0.0);
+        // Neither: clamped into range, as near the anchor's end as allowed.
+        assert_eq!(fit_axis(400.0, 600.0, 500.0, 0.0, 1000.0), 500.0);
+        // Longer than the range: pinned to its start.
+        assert_eq!(fit_axis(400.0, 600.0, 2000.0, 0.0, 1000.0), 0.0);
+        // Negative ranges (a monitor left of or above the primary).
+        assert_eq!(fit_axis(-100.0, -84.0, 50.0, -1920.0, 0.0), -84.0);
+        assert_eq!(fit_axis(-30.0, -14.0, 50.0, -1920.0, 0.0), -80.0);
+    }
+
+    #[test]
+    fn an_anchor_left_of_the_work_area_does_not_put_the_popup_off_screen() {
+        // A selection that starts on a neighbouring monitor or under a
+        // panel: the popup still lands inside this work area.
+        let mut m = mon(0, 0, 1920, 1080);
+        m.work_area = Rect::new(0.0, 32.0, 1920.0, 1048.0); // a top panel
+        let (x, y) = place_popup(Rect::new(10.0, 0.0, 16.0, 16.0), POPUP, &[m]);
+        assert_eq!((x, y), (26.0, 32.0), "pushed below the panel");
+    }
+
+    #[test]
+    fn negative_sizes_are_treated_as_zero() {
+        let m = [mon(0, 0, 1920, 1080)];
+        // A caret reported with a negative height (seen from some apps)
+        // anchors at its top-left, and a negative popup size is nothing.
+        assert_eq!(place_popup(Rect::new(100.0, 100.0, -5.0, -5.0), POPUP, &m), (100.0, 100.0));
+        assert_eq!(place_popup(cursor(100.0, 100.0), (-1.0, -1.0), &m), (116.0, 116.0));
+        let d = place_dropdown(Rect::new(10.0, 10.0, 50.0, 20.0), (-5.0, -5.0), &m);
+        assert_eq!((d.height, d.above), (0.0, false));
+    }
+
+    #[test]
+    fn a_popup_on_a_portrait_monitor_below_the_primary_stays_on_it() {
+        let m = [mon(0, 0, 1920, 1080), mon(200, 1080, 1080, 1920)];
+        // Near the right edge and bottom of the portrait monitor.
+        let (x, y) = place_popup(cursor(1250.0, 2980.0), POPUP, &m);
+        assert_eq!((x, y), (850.0, 2680.0));
+        assert!(m[1].contains(x, y) && m[1].contains(x + POPUP.0 - 1.0, y + POPUP.1 - 1.0));
+    }
+
+    #[test]
+    fn the_nearest_monitor_is_chosen_by_distance_not_by_order() {
+        let far = mon(5000, 0, 1920, 1080);
+        let near = mon(0, 0, 1920, 1080);
+        // Just right of `near`, in a gap.
+        let anchor = cursor(1950.0, 500.0);
+        let (x, _) = place_popup(anchor, POPUP, &[far, near]);
+        assert!(near.contains(x, 500.0), "{x}");
+    }
+
+    #[test]
+    fn dropdowns_start_inside_the_work_area_and_fit_when_wider_than_it() {
+        let m = [mon(0, 0, 800, 600)];
+        // The control's left edge is off-screen: the list starts at the edge.
+        assert_eq!(place_dropdown(Rect::new(-40.0, 100.0, 100.0, 20.0), LIST, &m).x, 0.0);
+        // A list wider than the screen is pinned to its left edge.
+        assert_eq!(place_dropdown(Rect::new(300.0, 100.0, 100.0, 20.0), (1200.0, 100.0), &m).x, 0.0);
+    }
+
+    #[test]
+    fn a_dropdown_on_a_control_below_the_work_area_still_gets_a_height() {
+        // The control sits under a taskbar: no room below at all. The list
+        // must still be visible (above, and the full height when it fits).
+        let m = [with_taskbar(0, 0)];
+        let p = place_dropdown(Rect::new(10.0, 1050.0, 100.0, 20.0), LIST, &m);
+        assert_eq!(p, DropdownPlace { x: 10.0, y: 750.0, height: 300.0, above: true });
+        // Taller than the whole work area: it scrolls, never zero tall.
+        let p = place_dropdown(Rect::new(10.0, 1050.0, 100.0, 20.0), (200.0, 5000.0), &m);
+        assert!(p.height >= 1.0 && p.y >= 0.0, "{p:?}");
+    }
+
+    #[test]
     #[ignore = "needs a display"]
     fn real_monitors_are_listed() {
         let all = monitors();

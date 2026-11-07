@@ -10,7 +10,21 @@ running it by hand (*Actions → release → Run workflow*).
 On a push to `main` and on pull requests (changes to Markdown files only
 are skipped): `cargo fmt --check`, clippy with `-D warnings` and the tests
 on Linux (Ubuntu, with `libgtk-3-dev` and `libasound2-dev`), macOS and
-Windows (MSVC), and `cargo check` at the `rust-version` in `Cargo.toml`.
+Windows (MSVC), `cargo doc` with warnings as errors, `cargo machete` for
+unused dependencies, and `cargo check` at the `rust-version` in
+`Cargo.toml`.
+
+The screenshot smoke test (`scripts/screenshot-smoke.sh`) follows the tests
+on all three systems: every window `glossa --screenshot-list` names, in
+Glossa Dark, Glossa Light (with the Russian interface) and macOS Light,
+each from a throwaway data folder. It is offline: every service is
+`scripts/smoke-module`, a JavaScript module with canned answers, and the
+proxy points at a closed port. A crash, a hang, a blank picture or a
+string with no text fails it; pixels are not compared, since fonts differ
+between systems. The pictures are kept as the `screenshots-<os>` artifact
+of the run, which is where to look at a change to the UI without a machine
+of that system. Linux draws under Xvfb with Mesa's software OpenGL, Windows
+with the software renderer (WARP, `GLOSSA_RENDERER=software`).
 Live tests against Tesseract (Linux) and Apple Vision (macOS, allowed to
 fail) run as extra steps. The Linux job also builds the native and Java
 example modules and runs `glossa-cli module test --strict

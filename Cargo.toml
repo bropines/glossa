@@ -94,6 +94,19 @@ codegen-units = 1
 panic = "unwind"
 strip = true
 
+# Font parsing and rasterising (skrifa, read-fonts) and egui's tessellator
+# and font atlas (epaint) run whenever a window opens, and every window
+# opens anew after the graphics unload in the tray. At opt-level 3 the main
+# window's first frame took 6 ms instead of 14 and Options' 28 ms instead of
+# 65 (Apple M-series), for 0.26 MB (1.7%) more in glossa. The image codecs
+# gained nothing measurable and cost 0.8 MB, so they stay at "z".
+[profile.release.package.epaint]
+opt-level = 3
+[profile.release.package.skrifa]
+opt-level = 3
+[profile.release.package.read-fonts]
+opt-level = 3
+
 [profile.release-perf]
 inherits = "release"
 opt-level = 3

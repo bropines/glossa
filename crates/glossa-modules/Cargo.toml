@@ -9,7 +9,7 @@ authors.workspace = true
 
 [features]
 default = ["js", "python", "process", "native", "image"]
-js = ["dep:boa_engine", "dep:boa_gc"]
+js = ["dep:boa_engine"]
 python = []
 # Any program over stdio (`runtime = "process"`) and Java modules (`runtime = "java"`).
 process = []
@@ -30,7 +30,6 @@ parking_lot = { workspace = true, features = ["arc_lock"] }
 base64 = { workspace = true }
 thiserror = { workspace = true }
 boa_engine = { workspace = true, optional = true }
-boa_gc = { version = "0.22", optional = true }
 libloading = { workspace = true, optional = true }
 image = { workspace = true, optional = true }
 md-5 = "0.10"
@@ -43,3 +42,7 @@ flate2 = { version = "1.1", default-features = false, features = ["rust_backend"
 
 [dev-dependencies]
 glossa-net = { workspace = true }
+
+# machete reads `use md5::…` as a different crate from `md-5`.
+[package.metadata.cargo-machete]
+ignored = ["md-5"]

@@ -1,9 +1,9 @@
 //! The application: state, event routing, and the frame loop.
 //!
-//! Work happens in two places. [`GlossaApp::logic`] runs on every wake-up,
+//! Work happens in two places. `GlossaApp::logic` runs on every wake-up,
 //! even while the main window is hidden in the tray: it drains engine events,
 //! hotkeys, tray clicks and background tasks, and decides which windows must
-//! exist. [`GlossaApp::ui`] draws whatever is visible. When something must
+//! exist. `GlossaApp::ui` draws whatever is visible. When something must
 //! appear while everything is hidden (the popup, after a hotkey), `logic`
 //! asks for a paint while hidden so `ui` runs and can open it.
 
@@ -1117,7 +1117,7 @@ impl eframe::App for GlossaApp {
         crate::welcome::show(self, &ctx);
         crate::keyboard::show_keyboard(self, &ctx);
         if let Some((what, path)) = self.launch.screenshot.clone() {
-            crate::actions::screenshot_flow(self, &ctx, &what, &path);
+            crate::screenshot::flow(self, &ctx, &what, &path);
         }
     }
 

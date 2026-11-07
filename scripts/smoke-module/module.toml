@@ -1,0 +1,13 @@
+# Offline stand-in for every service in the screenshot smoke test
+# (scripts/screenshot-smoke.sh): canned answers, no network, so the
+# pictures are the same on every run and CI hits no service.
+capabilities = ["translate", "detect_language", "dictionary"]
+
+[module]
+id = "smoke"
+name = "Smoke Test"
+version = "1.0.0"
+runtime = "js"
+entry = "main.js"
+description = "Canned answers for the screenshot smoke test."
+ready_to_use = true

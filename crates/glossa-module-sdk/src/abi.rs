@@ -28,7 +28,7 @@
 //! } GlossaModuleVTable;
 //! ```
 //!
-//! `call` returns a [`Reply`](crate::wire::Reply) as JSON: `{"result": ...}`
+//! `call` returns a [`crate::wire::Reply`] as JSON: `{"result": ...}`
 //! or `{"error": {"kind": ..., "message": ...}}`. The host frees it with the
 //! module's own `free`, so each side frees only what it allocated.
 //!

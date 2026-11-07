@@ -619,6 +619,95 @@ mod tests {
         assert!(read_frame(&mut huge.as_slice()).is_err());
     }
 
+    /// One end of a connection: what the other side sent, and what this
+    /// side writes back.
+    struct Conn {
+        input: std::io::Cursor<Vec<u8>>,
+        output: Vec<u8>,
+    }
+
+    impl Read for Conn {
+        fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+            self.input.read(buf)
+        }
+    }
+
+    impl Write for Conn {
+        fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+            self.output.write(buf)
+        }
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+
+    fn served(input: Vec<u8>) -> (Vec<Message>, Vec<u8>) {
+        let mut conn = Conn { input: std::io::Cursor::new(input), output: Vec::new() };
+        let mut got = Vec::new();
+        handle_connection(&mut conn, &mut |m| got.push(m));
+        (got, conn.output)
+    }
+
+    #[test]
+    fn a_good_message_is_acknowledged_and_delivered() {
+        let m = Message { action: Action::ShowPopup, text: Some("hi".into()) };
+        let (got, reply) = served(m.encode());
+        assert_eq!(got, vec![m]);
+        assert_eq!(reply, b"OK", "the sender waits for this before it exits");
+    }
+
+    #[test]
+    fn bad_or_empty_frames_are_neither_acknowledged_nor_delivered() {
+        // An empty frame is how the listener is woken to shut down.
+        let (got, reply) = served(0u32.to_le_bytes().to_vec());
+        assert!(got.is_empty() && reply.is_empty());
+        // Unknown action: a newer build's message an older one cannot act on.
+        let body = b"v1\nfuture_action\n0\n";
+        let mut frame = (body.len() as u32).to_le_bytes().to_vec();
+        frame.extend_from_slice(body);
+        let (got, reply) = served(frame);
+        assert!(got.is_empty() && reply.is_empty());
+        // A frame cut short.
+        let mut cut = Message::show().encode();
+        cut.truncate(cut.len() - 2);
+        let (got, reply) = served(cut);
+        assert!(got.is_empty() && reply.is_empty());
+    }
+
+    #[test]
+    fn decoding_is_strict_about_the_header_and_lenient_about_the_text() {
+        // The text flag decides, whatever follows it.
+        assert_eq!(
+            Message::decode(b"v1\nshow_popup\n0\nignored"),
+            Some(Message { action: Action::ShowPopup, text: None })
+        );
+        assert_eq!(
+            Message::decode(b"v1\nshow_popup\n1"),
+            Some(Message { action: Action::ShowPopup, text: Some(String::new()) }),
+            "a flagged but absent text is empty"
+        );
+        assert_eq!(Message::decode(b"v1\nshow_popup"), None, "the flag is required");
+        assert_eq!(Message::decode(b""), None);
+        assert_eq!(Message::decode(&[0xff, 0xfe]), None, "not UTF-8");
+        // Text keeps every newline and character it had.
+        let text = "a\nb\n\nc\r\n — ✓";
+        let m = Message { action: Action::ShowPopup, text: Some(text.into()) };
+        let frame = m.encode();
+        assert_eq!(u32::from_le_bytes(frame[..4].try_into().unwrap()) as usize, frame.len() - 4, "length prefix");
+        assert_eq!(Message::decode(&frame[4..]).unwrap().text.as_deref(), Some(text));
+    }
+
+    #[test]
+    fn frames_up_to_the_limit_are_read_and_short_reads_fail() {
+        let mut exact = MAX_MESSAGE.to_le_bytes().to_vec();
+        exact.extend(std::iter::repeat_n(b'x', MAX_MESSAGE as usize));
+        assert_eq!(read_frame(&mut exact.as_slice()).unwrap().len(), MAX_MESSAGE as usize);
+        assert!(read_frame(&mut [1u8, 0].as_slice()).is_err(), "a cut length");
+        let mut short = 10u32.to_le_bytes().to_vec();
+        short.extend_from_slice(b"abc");
+        assert!(read_frame(&mut short.as_slice()).is_err(), "a cut body");
+    }
+
     #[test]
     fn keys_differ_by_data_folder_and_user_and_are_stable() {
         let a = instance_key("me", Path::new("/data/one"));

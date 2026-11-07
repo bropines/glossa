@@ -3,7 +3,7 @@
 //! Built to match what the classic program does (see
 //! `docs/research/classic-behaviour.md`): it opens at the mouse pointer offset
 //! by 15 px, is 350–600 px wide depending on the text, has a one-line header
-//! "<From> to <To> (<Service>)" with favourite / dictionary / listen / copy /
+//! "`<From>` to `<To>` (`<Service>`)" with favourite / dictionary / listen / copy /
 //! replace icons, shows only the translation, shows a strip of service tabs
 //! while the pointer is over it, and hides itself a few seconds after the
 //! pointer leaves — unless it was dragged, which pins it.

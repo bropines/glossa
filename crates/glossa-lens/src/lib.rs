@@ -1,5 +1,5 @@
 //! Google Lens for Glossa, on top of chrome-lens-rs
-//! (https://github.com/bropines/chrome-lens-rs, `chrome_lens_ocr`): Chromium's
+//! (<https://github.com/bropines/chrome-lens-rs>, `chrome_lens_ocr`): Chromium's
 //! own `lens_server_proto` (vendored there, pinned to one Chromium commit,
 //! re-pinned with its `update-protos`), the picture encoded the way Chromium
 //! encodes it, and the request Chromium's Lens overlay sends (exactly one

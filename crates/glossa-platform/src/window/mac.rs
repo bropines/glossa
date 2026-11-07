@@ -4,7 +4,6 @@ use objc2::rc::Retained;
 use objc2::runtime::AnyObject;
 use objc2::{msg_send, MainThreadMarker};
 use objc2_app_kit::{NSApplication, NSColor, NSWindow, NSWindowCollectionBehavior};
-use objc2_foundation::NSString;
 
 /// One of this program's windows by its title, as a pointer to its
 /// NSWindow: for the windows egui makes (immediate viewports), whose
@@ -12,11 +11,13 @@ use objc2_foundation::NSString;
 /// while it is open. Main thread only.
 pub fn own_window_by_title(title: &str) -> Option<isize> {
     let mtm = MainThreadMarker::new()?;
-    let want = NSString::from_str(title);
+    // Compared as Rust strings, not with `isEqualToString:`: on macOS 15 a
+    // title may be a Swift string whose BOOL return objc2's debug checks
+    // reject ('B', not 'c'), aborting debug builds.
     NSApplication::sharedApplication(mtm)
         .windows()
         .iter()
-        .find(|w| w.title().isEqualToString(&want))
+        .find(|w| w.title().to_string() == title)
         .map(|w| Retained::as_ptr(&w) as isize)
 }
 

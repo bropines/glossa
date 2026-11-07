@@ -2505,4 +2505,343 @@ copy_joined_lines = true",
         n.adopt_tray_click_toggles(None, Os::Unix);
         assert_eq!(n, TrayConfig::for_os(Os::Unix));
     }
+
+    #[test]
+    fn renderer_reads_the_rarer_spellings_from_the_file_and_the_environment() {
+        // The file's aliases (serde) and `GLOSSA_RENDERER` (from_name) are
+        // separate lists; both must keep `gl` for files written by hand.
+        let c = Config::from_toml("[appearance]\nrenderer = \"gl\"").unwrap();
+        assert_eq!(c.appearance.renderer, Renderer::OpenGl);
+        for (name, want) in [
+            ("gl", Renderer::OpenGl),
+            ("open-gl", Renderer::OpenGl),
+            ("open_gl", Renderer::OpenGl),
+            ("  Gpu ", Renderer::Gpu),
+            ("WGPU", Renderer::Gpu),
+            ("cpu", Renderer::Software),
+            ("warp", Renderer::Software),
+            ("Software", Renderer::Software),
+        ] {
+            assert_eq!(Renderer::from_name(name), Some(want), "{name:?}");
+        }
+        assert_eq!(Renderer::from_name(""), None);
+        // Every name the program writes reads back as the same renderer.
+        for r in [Renderer::OpenGl, Renderer::Gpu, Renderer::Software] {
+            assert_eq!(Renderer::from_name(r.as_str()), Some(r));
+            let mut c = Config::default();
+            c.appearance.renderer = r;
+            assert_eq!(Config::from_toml(&c.to_toml()).unwrap().appearance.renderer, r);
+        }
+    }
+
+    #[test]
+    fn mica_alt_loads_by_its_hyphenated_alias_and_is_written_without_it() {
+        let c = Config::from_toml("[appearance.popup]\nbackdrop = \"mica-alt\"").unwrap();
+        assert_eq!(c.appearance.popup.backdrop, Backdrop::MicaAlt);
+        assert!(c.to_toml().contains("backdrop = \"micaalt\""), "older builds read only the canonical name");
+        // The lenient parser takes the same spellings as the file.
+        for text in ["mica-alt", "MICA_ALT", " micaalt "] {
+            assert_eq!(text.parse::<Backdrop>(), Ok(Backdrop::MicaAlt), "{text:?}");
+        }
+        assert!("glass".parse::<Backdrop>().unwrap_err().contains("glass"), "the error names the bad value");
+    }
+
+    #[test]
+    fn every_enum_setting_loads_by_its_documented_name() {
+        let c = Config::from_toml(
+            r#"
+            [general]
+            results_layout = "stacked"
+            startup_action = "restore_previous"
+            secret_storage = "system"
+            [network.proxy]
+            mode = "auto"
+            scheme = "socks4"
+            [exceptions]
+            mode = "enabled_for"
+            [advanced]
+            copy_action = "accessibility_only"
+            layout_indicator = "caret"
+            terminal_copy_action = "ctrl_c"
+            [mouse_mode]
+            behaviour = "show_translation_and_read"
+            [ocr]
+            after_select = "in_place"
+            [ocr.vision]
+            level = "fast"
+            [ocr.lens]
+            mode = "daemon"
+            "#,
+        )
+        .unwrap();
+        assert_eq!(c.general.results_layout, ResultsLayout::Stacked);
+        assert_eq!(c.general.startup_action, StartupAction::RestorePrevious);
+        assert_eq!(c.general.secret_storage, crate::secrets::SecretStorage::System);
+        assert_eq!(c.network.proxy.mode, ProxyMode::Auto);
+        assert_eq!(c.network.proxy.scheme, ProxyScheme::Socks4);
+        assert_eq!(c.exceptions.mode, ExceptionMode::EnabledFor);
+        assert_eq!(c.advanced.copy_action, CopyAction::AccessibilityOnly);
+        assert_eq!(c.advanced.layout_indicator, LayoutIndicator::Caret);
+        assert_eq!(c.advanced.terminal_copy_action, CopyAction::CtrlC);
+        assert_eq!(c.mouse_mode.behaviour, MouseBehaviour::ShowTranslationAndRead);
+        assert_eq!(c.ocr.after_select, OcrAfterSelect::InPlace);
+        assert_eq!(c.ocr.vision.level, VisionLevel::Fast);
+        assert_eq!(c.ocr.lens.mode, LensMode::Daemon);
+        // And the whole lot survives a save.
+        assert_eq!(Config::from_toml(&c.to_toml()).unwrap(), c);
+    }
+
+    #[test]
+    fn an_unknown_enum_name_is_an_error_not_a_default() {
+        // A typo must not silently turn a setting back to its default.
+        for text in [
+            "[general]\nresults_layout = \"grid\"",
+            "[network.proxy]\nmode = \"pac\"",
+            "[network.proxy]\nscheme = \"SOCKS5\"",
+            "[advanced]\ncopy_action = \"ctrl-c\"",
+            "[ocr.lens]\nmode = \"web\"",
+        ] {
+            assert!(Config::from_toml(text).is_err(), "{text}");
+        }
+    }
+
+    #[test]
+    fn fields_added_later_take_their_own_defaults_inside_a_present_table() {
+        // A table written before these keys existed: each falls back to its
+        // own default, not to the type's zero.
+        let c = Config::from_toml(
+            "[appearance]\ntheme = \"Glossa Dark\"\n[appearance.popup]\ntransparency = 10\n\
+             [general]\nui_language = \"ru\"\n",
+        )
+        .unwrap();
+        assert_eq!(c.appearance.backdrop_opacity, 100, "full_percent, not 0");
+        assert_eq!(c.appearance.popup.backdrop_opacity, 100);
+        assert_eq!(c.appearance.popup.icon_scale, 1.0, "one, not 0");
+        assert_eq!(c.appearance.popup.shade, 0);
+        assert!(!c.general.show_welcome, "files from before the guide skip it");
+        assert_eq!(c.appearance.popup.max_width, 600.0, "a sibling key keeps the struct default");
+        assert_eq!(c.ocr.tesseract.psm, None);
+    }
+
+    #[test]
+    fn rules_and_endpoints_load_with_their_optional_fields_absent() {
+        let c = Config::from_toml(
+            "[[exceptions.rules]]\nwindow_class = \"Edit\"\n\
+             [[services.ai_endpoints]]\nid = \"ai-x\"\nname = \"X\"\n",
+        )
+        .unwrap();
+        assert_eq!(c.exceptions.rules, vec![ExceptionRule { program: String::new(), window_class: "Edit".into() }]);
+        assert_eq!(c.services.ai_endpoints[0].preset, "", "preset is optional");
+        // An endpoint without its id cannot be used, so it is an error.
+        assert!(Config::from_toml("[[services.ai_endpoints]]\nname = \"X\"\n").is_err());
+    }
+
+    #[test]
+    fn window_geometry_maximised_is_optional_and_the_rest_is_required() {
+        let c = Config::from_toml("[windows.main]\nx = 1.0\ny = 2.0\nwidth = 300.0\nheight = 200.0\n").unwrap();
+        assert!(!c.windows["main"].maximized);
+        assert!(Config::from_toml("[windows.main]\nx = 1.0\ny = 2.0\n").is_err());
+    }
+
+    #[test]
+    fn languages_load_by_number_or_by_code() {
+        let c = Config::from_toml(
+            "[general]\nfirst_language = \"de\"\n[general.pair]\nfrom = \"en\"\nto = 46\n\
+             [languages]\ndisabled = [\"fr\", 17]\n",
+        )
+        .unwrap();
+        assert_eq!(c.general.first_language, LangId::from_code("de").unwrap());
+        assert_eq!(c.general.pair, LangPair::new(LangId::ENGLISH, LangId::RUSSIAN));
+        assert!(!c.languages.is_enabled(LangId::from_code("fr").unwrap()));
+        assert!(!c.languages.is_enabled(LangId::ENGLISH));
+        assert!(c.languages.is_enabled(LangId::RUSSIAN));
+        assert!(Config::from_toml("[general]\nfirst_language = \"klingon\"").is_err());
+        // Written back as numbers, which every build reads.
+        assert!(c.to_toml().contains("first_language = "));
+        assert_eq!(Config::from_toml(&c.to_toml()).unwrap().general.pair, c.general.pair);
+    }
+
+    #[test]
+    fn an_unknown_target_language_becomes_auto() {
+        let c = Config::from_toml("[general.pair]\nfrom = 17\nto = 0\n").unwrap();
+        assert_eq!(c.general.pair.to, LangId::AUTO);
+        assert_eq!(c.general.pair.from, LangId::ENGLISH);
+    }
+
+    #[test]
+    fn popup_widths_are_clamped_against_each_other() {
+        // A minimum above the maximum would make the popup's size range
+        // empty; the minimum gives way.
+        let c = Config::from_toml("[appearance.popup]\nmin_width = 900.0\nmax_width = 500.0\n").unwrap();
+        assert_eq!(c.appearance.popup.max_width, 500.0);
+        assert_eq!(c.appearance.popup.min_width, 500.0);
+        let c = Config::from_toml(
+            "[appearance.popup]\nmin_width = 1.0\nmax_width = 99999.0\nmax_height = 1.0\nframe_thickness = -3.0\n\
+             auto_hide_secs = 100000\n",
+        )
+        .unwrap();
+        let p = &c.appearance.popup;
+        assert_eq!((p.min_width, p.max_width, p.max_height), (80.0, 4000.0, 80.0));
+        assert_eq!(p.frame_thickness, 0.0);
+        assert_eq!(p.auto_hide_secs, 600);
+    }
+
+    #[test]
+    fn every_other_number_is_clamped_on_load() {
+        let c = Config::from_toml(
+            "[network]\ntimeout_secs = 100000\nmax_retries = 50\n\
+             [appearance]\ntext_size = 1.0\nicon_scale = 10.0\nwindow_transparency = 255\n\
+             [dictionary]\nzoom = 5\n[general]\ninstant_delay_ms = 1\n[history]\nmax_entries = 0\n\
+             [modules]\ncall_timeout_ms = 1\n[ocr]\nwatch_interval_ms = 999999999\n\
+             [advanced]\ncopy_wait_ms = 0\n",
+        )
+        .unwrap();
+        assert_eq!(c.network.timeout_secs, 300);
+        assert_eq!(c.network.max_retries, 5);
+        assert_eq!(c.appearance.text_size, 6.0);
+        assert_eq!(c.appearance.icon_scale, 3.0);
+        assert_eq!(c.appearance.window_transparency, 90);
+        assert_eq!(c.dictionary.zoom, 50);
+        assert_eq!(c.general.instant_delay_ms, 150);
+        assert_eq!(c.history.max_entries, 10, "0 would keep nothing");
+        assert_eq!(c.modules.call_timeout_ms, 1000);
+        assert_eq!(c.ocr.watch_interval_ms, 60_000);
+        assert_eq!(c.advanced.copy_wait_ms, 20);
+        // In range: untouched.
+        assert_eq!(Config::from_toml("[dictionary]\nzoom = 150").unwrap().dictionary.zoom, 150);
+    }
+
+    #[test]
+    fn a_saved_default_config_loads_as_itself() {
+        // What a first run writes must read back unchanged, or every start
+        // would rewrite (and possibly migrate) the user's file.
+        let mut c = Config::default();
+        c.sanitise();
+        assert_eq!(Config::from_toml(&c.to_toml()).unwrap(), c);
+    }
+
+    #[test]
+    fn services_sort_by_the_users_order_and_keep_the_rest_stable() {
+        let s = Services { order: vec!["deepl".into(), "google".into()], ..Default::default() };
+        assert_eq!(s.sorted(["yandex", "google", "bing", "deepl"]), ["deepl", "google", "yandex", "bing"]);
+        assert!(s.sorted([]).is_empty());
+        assert_eq!(s.option("deepl", "api_key"), None);
+    }
+
+    #[test]
+    fn ai_endpoint_ids_avoid_option_keys_of_removed_endpoints() {
+        // Options left behind by a removed endpoint must not be inherited by
+        // a new one with the same name.
+        let mut s = Services::default();
+        s.set_option("ai-local", "model", serde_json::json!("old"));
+        assert_eq!(s.new_ai_endpoint_id("Local"), "ai-local-2");
+        assert_eq!(s.new_ai_endpoint_id("--"), "ai-endpoint");
+    }
+
+    #[test]
+    fn a_proxy_without_a_host_or_a_username_has_no_credentials_in_its_url() {
+        let mut p = Proxy { mode: ProxyMode::Manual, host: "   ".into(), ..Default::default() };
+        assert_eq!(p.url(), None, "a blank host is not a proxy");
+        p.host = " proxy.lan ".into();
+        p.password = "unused".into();
+        assert_eq!(p.url().as_deref(), Some("http://proxy.lan:8080"), "no user: no password either");
+        p.mode = ProxyMode::Auto;
+        assert_eq!(p.url(), None, "auto is the system proxy");
+        p.mode = ProxyMode::None;
+        assert_eq!(p.url(), None);
+    }
+
+    #[test]
+    fn exception_rules_match_program_names_loosely_and_classes_exactly() {
+        let r = ExceptionRule { program: "Game.exe".into(), window_class: "UnityWndClass".into() };
+        assert!(r.matches("game.EXE", "UnityWndClass"));
+        assert!(!r.matches("game.exe", "unitywndclass"), "classes are case-sensitive, as Windows reports them");
+        assert!(!r.matches("other.exe", "UnityWndClass"));
+        let any = ExceptionRule { program: String::new(), window_class: String::new() };
+        assert!(any.matches("x", "y"));
+    }
+
+    #[test]
+    fn enabled_for_mode_also_honours_the_focused_controls_class() {
+        let only = Exceptions {
+            mode: ExceptionMode::EnabledFor,
+            rules: vec![ExceptionRule { program: String::new(), window_class: "Edit".into() }],
+            smart_detection: true,
+        };
+        assert!(only.allows_window("app.exe", "Main", "Edit"), "the focused Edit is listed");
+        assert!(!only.allows_window("app.exe", "Main", "Static"));
+        // Smart detection refuses a list even where the user enabled it.
+        let mut list = only.clone();
+        list.rules[0].window_class = "SysListView32".into();
+        assert!(!list.allows_window("app.exe", "Main", "SysListView32"));
+        // Explorer's view is a non-text control only in Explorer.
+        let e = Exceptions { rules: Vec::new(), ..Exceptions::default_for(Os::Windows) };
+        assert!(e.allows_window("someapp.exe", "Main", "DirectUIHWND"));
+        assert!(!e.allows_window("EXPLORER.EXE", "Main", "DirectUIHWND"));
+    }
+
+    #[test]
+    fn popup_opacity_never_reaches_invisible() {
+        let p = PopupConfig { transparency: 250, ..Default::default() };
+        assert!((p.opacity() - 0.1).abs() < 1e-6, "an unsanitised value still leaves 10%");
+        assert_eq!(PopupConfig { transparency: 0, ..Default::default() }.opacity(), 1.0);
+        assert_eq!(
+            PopupIcons::from_legacy(0),
+            PopupIcons { dictionary: false, listen: false, copy: false, replace: false }
+        );
+        assert_eq!(PopupIcons::from_legacy(1 | 32), PopupIcons::from_legacy(0), "bits outside the four are ignored");
+    }
+
+    #[test]
+    fn popup_shade_is_capped_and_keeps_an_opaque_fill_opaque() {
+        let mut p = PopupConfig { shade: 200, ..Default::default() };
+        let opaque = Color::rgba(200, 100, 50, 255);
+        let s = p.shaded(opaque, false);
+        assert_eq!(s.a, 255);
+        // Capped at 90%: some of the colour is left.
+        assert_eq!((s.r, s.g, s.b), (20, 10, 5));
+        p.shade = 90;
+        assert_eq!(p.shaded(opaque, false), s);
+    }
+
+    #[test]
+    fn effective_theme_ignores_the_system_when_following_is_off() {
+        let a = Appearance { follow_system_theme: false, theme: "Mine".into(), ..Default::default() };
+        assert_eq!(a.effective_theme(Some(true)), "Mine");
+        assert_eq!(a.effective_theme(Some(false)), "Mine");
+    }
+
+    #[test]
+    fn classic_install_parts_need_the_folder_and_the_switch() {
+        let dir = std::env::temp_dir().join(format!("glossa-classic-{}", std::process::id()));
+        std::fs::remove_dir_all(&dir).ok();
+        std::fs::create_dir_all(dir.join("Services")).unwrap();
+        assert!(!ClassicInstall::looks_like_install(&dir), "Services alone is not enough");
+        std::fs::create_dir_all(dir.join("Themes")).unwrap();
+        assert!(ClassicInstall::looks_like_install(&dir));
+
+        let mut c = ClassicInstall { path: Some(dir.clone()), ..Default::default() };
+        assert_eq!(c.services_dir(), Some(dir.join("Services")));
+        assert_eq!(c.themes_dir(), Some(dir.join("Themes")));
+        assert_eq!(c.locales_dir(), None, "no Locales folder");
+        c.use_services = false;
+        assert_eq!(c.services_dir(), None, "switched off");
+        assert_eq!(ClassicInstall::default().themes_dir(), None, "no path");
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn terminal_rule_migration_is_idempotent() {
+        let mut a = Advanced { terminals: Vec::new(), terminal_rules_version: 0, ..Default::default() };
+        a.migrate_terminal_rules();
+        let once = a.clone();
+        a.migrate_terminal_rules();
+        assert_eq!(a, once);
+        assert_eq!(a.terminals, Advanced::default().terminals);
+        // A version from the future is kept, not lowered.
+        let mut future = Advanced { terminal_rules_version: 99, terminals: Vec::new(), ..Default::default() };
+        future.migrate_terminal_rules();
+        assert_eq!(future.terminal_rules_version, 99);
+        assert!(future.terminals.is_empty());
+    }
 }

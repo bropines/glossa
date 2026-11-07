@@ -85,7 +85,7 @@ impl LangId {
     }
 
     /// Whether the script runs right to left. Drives both UI alignment and the
-    /// reordering in [`crate::text::for_display`].
+    /// bidirectional reordering the UI does before drawing.
     #[inline]
     pub fn is_rtl(self) -> bool {
         self.info().rtl

@@ -5,7 +5,6 @@
 //! runs on a short-lived thread and reports back as a [`Task`], so the UI
 //! never stalls for the hundreds of milliseconds those take.
 
-use std::path::Path;
 use std::time::Duration;
 
 use glossa_core::{Action, LangId, LangPair};
@@ -365,31 +364,4 @@ fn with_selection(app: &mut GlossaApp, action: Action, text: String, cursor: Opt
         }
         _ => {}
     }
-}
-
-/// Development aid behind `--screenshot WHAT`: open the named window once
-/// at start, so it can be photographed from outside.
-pub fn screenshot_flow(app: &mut GlossaApp, ctx: &egui::Context, what: &str, _path: &Path) {
-    use std::sync::atomic::{AtomicBool, Ordering};
-    static DONE: AtomicBool = AtomicBool::new(false);
-    if DONE.swap(true, Ordering::SeqCst) {
-        return;
-    }
-    match what {
-        "options" => crate::options::open(app),
-        w if w.starts_with("options:") => crate::options::open_at(app, &w["options:".len()..]),
-        "dictionary" => crate::dictionary::open(app, Some("serendipity".into())),
-        "history" => crate::history::open(app),
-        "about" => app.about_open = true,
-        "welcome" => crate::welcome::open(app),
-        "keyboard" => app.keyboard_open = true,
-        "popup" => crate::popup::open(app, "The quick brown fox jumps over the lazy dog.".into(), Some((400, 300))),
-        _ => {
-            if app.main.source.is_empty() {
-                app.main.source = "Hello! This is Glossa, the resurrected QTranslate.".into();
-            }
-            app.translate_main();
-        }
-    }
-    ctx.request_repaint();
 }

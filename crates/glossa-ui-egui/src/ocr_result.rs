@@ -35,7 +35,7 @@ use crate::icons::{self, Icon};
 use crate::style::c;
 
 /// The viewport's name.
-const VIEWPORT: &str = "glossa-ocr-result";
+pub(crate) const VIEWPORT: &str = "glossa-ocr-result";
 /// The key in `config.windows` for its size and place.
 const GEOMETRY: &str = "ocr-result";
 /// Google Lens's provider id (`glossa_ocr::lens::LENS_ID`; the UI does not

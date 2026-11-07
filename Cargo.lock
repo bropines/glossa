@@ -1155,9 +1155,6 @@ name = "deranged"
 version = "0.5.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "9e9de72ce2ad1f90dc62fa25f0f430ef85eb4b0d8fa0be4f30373bc40a21d28e"
-dependencies = [
- "serde_core",
-]
 
 [[package]]
 name = "derive_arbitrary"
@@ -2167,7 +2164,6 @@ dependencies = [
  "glossa-ocr",
  "glossa-platform",
  "serde_json",
- "tracing",
  "tracing-subscriber",
 ]
 
@@ -2179,7 +2175,6 @@ dependencies = [
  "serde",
  "serde_json",
  "thiserror 2.0.21",
- "time",
  "toml 0.9.12+spec-1.1.0",
  "tracing",
  "unicode-segmentation",
@@ -2193,8 +2188,6 @@ dependencies = [
  "glossa-core",
  "glossa-modules",
  "glossa-net",
- "serde",
- "serde_json",
  "tracing",
 ]
 
@@ -2232,7 +2225,6 @@ name = "glossa-example-rot13"
 version = "0.1.0-beta.2"
 dependencies = [
  "glossa-module-sdk",
- "serde_json",
 ]
 
 [[package]]
@@ -2274,7 +2266,6 @@ version = "0.1.0-beta.2"
 dependencies = [
  "base64 0.22.1",
  "boa_engine",
- "boa_gc",
  "flate2",
  "glossa-core",
  "glossa-module-sdk",
@@ -2298,7 +2289,6 @@ dependencies = [
 name = "glossa-net"
 version = "0.1.0-beta.2"
 dependencies = [
- "base64 0.22.1",
  "glossa-core",
  "percent-encoding",
  "rustls-native-certs",
@@ -2370,7 +2360,6 @@ dependencies = [
  "glossa-core",
  "glossa-modules",
  "glossa-net",
- "serde",
  "serde_json",
  "tracing",
  "windows 0.62.2",

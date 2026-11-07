@@ -151,14 +151,18 @@ impl History {
 
     /// Drop the oldest non-favourites beyond the limit. Favourites are never
     /// dropped by the limit.
+    /// Drop the oldest non-favourites until the limit holds. The newest
+    /// entry always stays: it is the one `record` just added and returned
+    /// the id of, and when favourites alone fill the limit it goes over the
+    /// limit with them rather than vanish.
     fn trim(&mut self) {
         if self.max_entries == 0 {
             return;
         }
         while self.entries.len() > self.max_entries {
-            match self.entries.iter().rposition(|e| !e.favorite) {
+            match self.entries.iter().skip(1).rposition(|e| !e.favorite) {
                 Some(i) => {
-                    self.entries.remove(i);
+                    self.entries.remove(i + 1);
                 }
                 None => break,
             }
@@ -361,5 +365,189 @@ mod tests {
         assert_eq!(h.len(), 1);
         assert!(backup.is_none());
         std::fs::remove_dir_all(&dir).ok();
+    }
+
+    fn sources(h: &History) -> Vec<&str> {
+        h.iter().map(|e| e.source.as_str()).collect()
+    }
+
+    #[test]
+    fn surrounding_whitespace_does_not_make_a_new_entry() {
+        let mut h = History::new(100);
+        let a = h.record("  hello\n", res("g", "привет"), 1);
+        let b = h.record("hello", res("d", "здравствуй"), 2);
+        assert_eq!(a, b);
+        assert_eq!(sources(&h), ["hello"], "stored trimmed");
+    }
+
+    #[test]
+    fn joining_an_entry_refreshes_its_time() {
+        let mut h = History::new(100);
+        let id = h.record("a", res("g", "a"), 10);
+        h.record("a", res("d", "a"), 20);
+        assert_eq!(h.get(id).unwrap().created, 20);
+        h.record("b", res("g", "b"), 30);
+        h.record("a", res("g", "a2"), 40);
+        assert_eq!(h.get(id).unwrap().created, 40, "moved to the top with the new time");
+    }
+
+    #[test]
+    fn a_different_direction_from_the_same_service_is_kept_beside_the_first() {
+        let mut h = History::new(100);
+        h.record("hello", res("g", "привет"), 1);
+        let de = HistoryResult {
+            provider_id: "g".into(),
+            from: LangId::RUSSIAN,
+            to: LangId::from_code("de").unwrap(),
+            text: "hallo".into(),
+        };
+        h.record("hello", de, 2);
+        let e = h.iter().next().unwrap();
+        assert_eq!(e.results.len(), 2, "one per target language");
+        assert_eq!(e.latest().unwrap().text, "hallo");
+    }
+
+    #[test]
+    fn a_zero_limit_keeps_everything() {
+        let mut h = History::new(0);
+        for i in 0..50 {
+            h.record(&format!("t{i}"), res("g", "x"), i);
+        }
+        assert_eq!(h.len(), 50);
+    }
+
+    #[test]
+    fn lowering_the_limit_trims_at_once_from_the_oldest_end() {
+        let mut h = History::new(100);
+        for s in ["a", "b", "c", "d", "e"] {
+            h.record(s, res("g", s), 1);
+        }
+        h.set_max_entries(2);
+        assert_eq!(sources(&h), ["e", "d"]);
+    }
+
+    #[test]
+    fn favourites_may_exceed_the_limit() {
+        let mut h = History::new(100);
+        for s in ["a", "b", "c"] {
+            let id = h.record(s, res("g", s), 1);
+            h.set_favorite(id, true);
+        }
+        h.set_max_entries(2);
+        assert_eq!(sources(&h), ["c", "b", "a"], "the limit never drops a favourite");
+    }
+
+    /// When favourites alone fill the limit, the entry `record` just added
+    /// stays (over the limit, as favourites may be) instead of being trimmed
+    /// at once: the id `record` returns reaches the UI and
+    /// `Engine::record_translation`, and must name an entry.
+    #[test]
+    fn a_new_entry_is_not_dropped_by_its_own_trim() {
+        let mut h = History::new(2);
+        for s in ["a", "b"] {
+            let id = h.record(s, res("g", s), 1);
+            h.set_favorite(id, true);
+        }
+        let id = h.record("c", res("g", "c"), 2);
+        assert!(h.get(id).is_some(), "record returned {id}, which is not in {:?}", sources(&h));
+        assert_eq!(sources(&h), ["c", "b", "a"]);
+        // The next one pushes the previous non-favourite out, not a favourite.
+        let id = h.record("d", res("g", "d"), 3);
+        assert!(h.get(id).is_some());
+        assert_eq!(sources(&h), ["d", "b", "a"]);
+    }
+
+    #[test]
+    fn unknown_ids_are_reported_not_ignored() {
+        let mut h = History::new(100);
+        let id = h.record("a", res("g", "a"), 1);
+        assert!(!h.set_favorite(id + 100, true));
+        assert!(!h.remove(id + 100));
+        assert!(h.get(id + 100).is_none());
+        assert!(h.remove(id));
+        assert!(!h.remove(id), "already gone");
+        assert!(h.is_empty());
+    }
+
+    #[test]
+    fn a_removed_id_is_not_handed_out_again() {
+        // The UI and the control API refer to entries by id; reusing one
+        // could act on the wrong entry.
+        let mut h = History::new(100);
+        let a = h.record("a", res("g", "a"), 1);
+        h.remove(a);
+        let b = h.record("b", res("g", "b"), 2);
+        assert_ne!(a, b);
+        h.clear(true);
+        let c = h.record("c", res("g", "c"), 3);
+        assert!(c > b, "not even after clearing");
+    }
+
+    #[test]
+    fn ids_start_at_one_even_from_a_default_history() {
+        let mut h = History::default();
+        assert_eq!(h.record("a", res("g", "a"), 1), 1, "0 means 'not recorded'");
+        assert_eq!(h.record("b", res("g", "b"), 1), 2);
+    }
+
+    #[test]
+    fn search_trims_the_needle_and_ignores_unrelated_entries() {
+        let mut h = History::new(100);
+        h.record("Hello", res("g", "Привет"), 1);
+        h.record("Cat", res("g", "Кот"), 2);
+        let found = h.search("  hello  ", false);
+        assert_eq!(found.len(), 1);
+        assert_eq!(found[0].source, "Hello");
+        assert!(h.search("dog", false).is_empty());
+        // Newest first, as the list shows them.
+        let all: Vec<&str> = h.search("   ", false).iter().map(|e| e.source.as_str()).collect();
+        assert_eq!(all, ["Cat", "Hello"]);
+    }
+
+    #[test]
+    fn loading_applies_the_current_limit() {
+        let dir = std::env::temp_dir().join(format!("glossa-hist-limit-{}", std::process::id()));
+        let path = dir.join("history.json");
+        let mut h = History::new(100);
+        for s in ["a", "b", "c", "d"] {
+            h.record(s, res("g", s), 1);
+        }
+        h.save(&path).unwrap();
+        let back = History::load(&path, 2).unwrap();
+        assert_eq!(sources(&back), ["d", "c"]);
+        let (back, _) = History::load_recovering(&path, 3).unwrap();
+        assert_eq!(back.len(), 3);
+        assert!(!path.with_extension("json.tmp").exists(), "the temp file is renamed away");
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn a_stale_next_id_in_the_file_is_corrected_on_load() {
+        // A hand-edited or imported file may carry entries with ids at or
+        // above its `next_id`; new entries must not collide with them.
+        let dir = std::env::temp_dir().join(format!("glossa-hist-nextid-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("history.json");
+        let file = r#"{"entries":[{"id":7,"source":"old","results":[]}],"next_id":2}"#;
+        std::fs::write(&path, file).unwrap();
+        for mut h in [History::load(&path, 100).unwrap(), History::load_recovering(&path, 100).unwrap().0] {
+            let old = h.get(7).expect("loaded");
+            assert!(!old.favorite && old.created == 0, "optional fields default");
+            assert_eq!(h.record("new", res("g", "n"), 1), 8);
+        }
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn imported_entries_go_to_the_bottom_with_fresh_ids() {
+        let mut h = History::new(100);
+        let a = h.record("a", res("g", "a"), 1);
+        let imported = HistoryEntry { id: a, source: "old".into(), results: vec![], favorite: true, created: 0 };
+        h.push_oldest(imported);
+        assert_eq!(sources(&h), ["a", "old"]);
+        let old_id = h.iter().last().unwrap().id;
+        assert_ne!(old_id, a, "the file's id is replaced");
+        assert!(h.get(old_id).unwrap().favorite, "the rest is kept");
+        assert!(h.record("b", res("g", "b"), 2) > old_id);
     }
 }
