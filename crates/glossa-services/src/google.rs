@@ -1,5 +1,17 @@
-//! Google Translate, through the keyless `client=gtx` endpoint the browser
-//! extensions use, plus the `translate_tts` speech endpoint.
+//! Google Translate, through the keyless endpoints the browser extensions
+//! use, plus the `translate_tts` speech endpoint.
+//!
+//! Three addresses answer the same `translate_a/single` request in the same
+//! format: `clients5.google.com` (`client=dict-chrome-ex`, the dictionary
+//! extension's), `translate.googleapis.com` (`client=gtx`) and
+//! `translate.google.<domain>` (`client=gtx`). Each keeps its own count of
+//! how hard it is being asked, so when one starts refusing (HTTP 429, or a
+//! redirect to the `google.com/sorry` captcha) the next one usually still
+//! answers. A refusing address is left alone for a cooling-off period that
+//! doubles with each refusal (see [`crate::backoff`]); when all of them are
+//! cooling off the provider says so at once, with the wait, and the engine
+//! moves on to the next service. `docs/research/google-translate.md` has
+//! what was observed and how other clients deal with it.
 //!
 //! The endpoint answers with positional JSON arrays rather than objects, and
 //! which slots are filled depends on the `dt=` flags sent. The layout this
@@ -20,7 +32,8 @@
 //! `Null` for a missing slot, so a reshuffled response degrades to "less
 //! detail" rather than a panic.
 
-use std::sync::RwLock;
+use std::sync::{Arc, RwLock};
+use std::time::{Duration, Instant};
 
 use glossa_core::dict::{Example, Explanation, Pronunciation};
 use glossa_core::translate::{PartOfSpeechEntry, Sense};
@@ -29,20 +42,72 @@ use glossa_core::{
     TranslateRequest, Translation,
 };
 use glossa_modules::{Host, OptionSpec, Provider};
-use glossa_net::{url_encode, HttpRequest};
+use glossa_net::{url_encode, HttpRequest, HttpResponse};
 use serde_json::Value;
 
+use crate::backoff::{ceil_secs, Backoff};
 use crate::common::{
-    all_langs_with_auto, check_pair, check_status, detected, is_auto, json_body, split_text, strip_tags,
+    all_langs_with_auto, check_pair, check_status, detected, is_auto, parse_json, split_text, strip_tags,
 };
 
-const API: &str = "https://translate.googleapis.com/translate_a/single";
+/// The first translation endpoint, which the tests answer for.
+#[cfg(test)]
+const API: &str = "https://clients5.google.com/translate_a/single";
+#[cfg(test)]
 const TTS: &str = "https://translate.google.com/translate_tts";
 /// Past this many bytes of encoded text the query string gets long enough for
 /// Google to answer 413/400, so the text moves into a form body.
 const GET_LIMIT: usize = 1800;
 /// The TTS endpoint refuses longer input.
 const TTS_CHUNK: usize = 200;
+/// Characters per translation request. The endpoint takes far more in one
+/// form body (100 000 characters were answered in testing), but an answer
+/// that large is slow to arrive in one piece; a few requests this size keep
+/// each one quick without turning a long text into a stream of small ones.
+const CHUNK: usize = 10_000;
+/// The most text one translation takes: five requests at most.
+const MAX_INPUT: usize = 5 * CHUNK;
+
+/// A keyless address of Google's web translator.
+#[derive(Debug, Clone, Copy)]
+struct Endpoint {
+    /// Its name in the cooling-off table and in the log.
+    key: &'static str,
+    /// `None`: `translate.google.<the preferred domain>`.
+    host: Option<&'static str>,
+    client: &'static str,
+}
+
+impl Endpoint {
+    fn url(&self, host: &Host, path: &str) -> String {
+        match self.host {
+            Some(h) => format!("https://{h}{path}?client={}", self.client),
+            None => {
+                format!("https://translate.google.{}{path}?client={}", sane_domain(host.preferred_domain), self.client)
+            }
+        }
+    }
+}
+
+/// Where `translate_a/single` is asked, in order of preference. The
+/// dictionary extension's address comes first because it was the one that
+/// kept answering Glossa's client while both `client=gtx` addresses showed
+/// it the captcha (see the research notes); the user-facing site comes last,
+/// so that a block on it, which the user's browser shares, is the last
+/// thing we add to.
+const TRANSLATE: [Endpoint; 3] = [
+    Endpoint { key: "clients5.google.com", host: Some("clients5.google.com"), client: "dict-chrome-ex" },
+    Endpoint { key: "translate.googleapis.com", host: Some("translate.googleapis.com"), client: "gtx" },
+    Endpoint { key: "translate.google", host: None, client: "gtx" },
+];
+
+/// Where `translate_tts` is asked. Speech has its own limits, separate from
+/// translation's, so it has its own entries in the table.
+const SPEECH: [Endpoint; 3] = [
+    Endpoint { key: "tts translate.google", host: None, client: "tw-ob" },
+    Endpoint { key: "tts translate.googleapis.com", host: Some("translate.googleapis.com"), client: "gtx" },
+    Endpoint { key: "tts clients5.google.com", host: Some("clients5.google.com"), client: "dict-chrome-ex" },
+];
 
 /// Google's codes are the legacy ones (`iw`, `zh-CN`, `tl`, `no`).
 fn code(lang: LangId) -> &'static str {
@@ -74,21 +139,145 @@ fn sane_domain(domain: &str) -> &str {
     }
 }
 
-/// One call to the `gtx` endpoint.
-fn query(host: &Host, provider: &str, text: &str, from: LangId, to: LangId, dts: &[&str]) -> Result<Value> {
-    let mut url = format!("{API}?client=gtx&sl={}&tl={}&hl={}", url_encode(code(from)), url_encode(code(to)), hl(host));
-    for dt in dts {
-        url.push_str("&dt=");
-        url.push_str(dt);
+/// What a browser sends besides its user agent (which the client adds).
+fn browser_headers(req: HttpRequest, host: &Host) -> HttpRequest {
+    let hl = hl(host);
+    let languages = if hl == "en" { "en-US,en;q=0.9".to_owned() } else { format!("{hl},en-US;q=0.8,en;q=0.7") };
+    req.header("Accept", "*/*").header("Accept-Language", languages).no_retry_when_limited()
+}
+
+/// A refusal in disguise: the `google.com/sorry` captcha page. It normally
+/// arrives with status 429 after the redirect, but has been seen with 200,
+/// and none of these endpoints answers HTML otherwise.
+fn is_captcha(resp: &HttpResponse) -> bool {
+    let html = resp.header("content-type").is_some_and(|ct| ct.trim_start().starts_with("text/html"));
+    let head = String::from_utf8_lossy(&resp.body[..resp.body.len().min(4096)]).to_ascii_lowercase();
+    html || head.contains("/sorry/index") || head.contains("unusual traffic")
+}
+
+/// Check a response for a refusal, then for any other error status.
+fn checked(resp: HttpResponse, provider: &str) -> Result<HttpResponse> {
+    let resp = check_status(resp, provider)?;
+    if is_captcha(&resp) {
+        return Err(Error::RateLimited { provider: provider.to_owned(), retry_after_secs: None });
     }
-    url.push_str("&ie=UTF-8&oe=UTF-8");
+    Ok(resp)
+}
+
+/// Ask `endpoints` in order, skipping those cooling off, until one answers.
+///
+/// A refusal puts the endpoint in the cooling-off table and moves on; so
+/// does a server error or a 403, which one address can give while another
+/// works. Any other failure from the first endpoint asked (no network, a
+/// timeout, an unreadable answer) is reported as is, since asking the next
+/// address would fail the same way and only make the user wait longer.
+fn first_answer<T>(
+    limits: &Backoff,
+    host: &Host,
+    provider: &str,
+    endpoints: &[Endpoint],
+    mut call: impl FnMut(&Endpoint) -> Result<T>,
+) -> Result<T> {
+    let mut soonest: Option<Duration> = None;
+    let mut note_wait = |wait: Duration| soonest = Some(soonest.map_or(wait, |s| s.min(wait)));
+    let mut limited = false;
+    let mut first_error: Option<Error> = None;
+    let mut asked = 0;
+    for ep in endpoints {
+        if let Some(wait) = limits.cooling(ep.key, Instant::now()) {
+            tracing::debug!(endpoint = ep.key, secs = ceil_secs(wait), "skipped: still cooling off after a refusal");
+            limited = true;
+            note_wait(wait);
+            continue;
+        }
+        host.check_cancelled()?;
+        asked += 1;
+        match call(ep) {
+            Ok(v) => {
+                limits.ok(ep.key);
+                if asked > 1 || limited {
+                    tracing::info!(endpoint = ep.key, "answered after another endpoint refused");
+                }
+                return Ok(v);
+            }
+            Err(Error::RateLimited { retry_after_secs, .. }) => {
+                let wait = limits.limited(ep.key, retry_after_secs, Instant::now());
+                tracing::info!(endpoint = ep.key, secs = wait.as_secs(), "rate-limited; leaving it alone for a while");
+                limited = true;
+                note_wait(wait);
+            }
+            Err(e @ (Error::Cancelled | Error::Timeout(_))) => return Err(e),
+            Err(e) => {
+                let switchable = matches!(&e, Error::HttpStatus { status, .. } if *status == 403 || *status >= 500);
+                if asked == 1 && !limited && !switchable {
+                    return Err(e);
+                }
+                tracing::debug!(endpoint = ep.key, error = %e, "failed; trying the next endpoint");
+                first_error.get_or_insert(e);
+            }
+        }
+    }
+    if limited {
+        return Err(Error::RateLimited { provider: provider.to_owned(), retry_after_secs: soonest.map(ceil_secs) });
+    }
+    Err(first_error.unwrap_or_else(|| Error::bad_response(provider, "no endpoint to ask")))
+}
+
+/// One `translate_a/single` call, on whichever endpoint answers.
+fn query(
+    host: &Host,
+    limits: &Backoff,
+    provider: &str,
+    text: &str,
+    from: LangId,
+    to: LangId,
+    dts: &[&str],
+) -> Result<Value> {
+    let mut params = format!("&sl={}&tl={}&hl={}", url_encode(code(from)), url_encode(code(to)), hl(host));
+    for dt in dts {
+        params.push_str("&dt=");
+        params.push_str(dt);
+    }
+    params.push_str("&ie=UTF-8&oe=UTF-8");
     let encoded = url_encode(text);
-    let req = if encoded.len() > GET_LIMIT {
-        HttpRequest::post(url).form(&[("q", text)])
-    } else {
-        HttpRequest::get(format!("{url}&q={encoded}"))
-    };
-    json_body(host.http.send(req.provider(provider))?, provider)
+    first_answer(limits, host, provider, &TRANSLATE, |ep| {
+        let url = format!("{}{params}", ep.url(host, "/translate_a/single"));
+        let req = if encoded.len() > GET_LIMIT {
+            HttpRequest::post(url).form(&[("q", text)])
+        } else {
+            HttpRequest::get(format!("{url}&q={encoded}"))
+        };
+        let resp = checked(host.http.send(browser_headers(req, host).provider(provider))?, provider)?;
+        parse_json(&resp, provider)
+    })
+}
+
+/// Cut `text` into pieces of at most `max` characters that join back into
+/// `text` exactly: after a line break if there is one in the second half of
+/// the window, else after a sentence end there, else after any whitespace,
+/// else at the limit.
+fn split_keeping(text: &str, max: usize) -> Vec<&str> {
+    let max = max.max(1);
+    let mut out = Vec::new();
+    let mut rest = text;
+    while let Some((limit, _)) = rest.char_indices().nth(max) {
+        let window = &rest[..limit];
+        let after = |i: usize| i + window[i..].chars().next().map_or(1, char::len_utf8);
+        let late = |cut: &usize| *cut >= limit / 2;
+        let cut = window
+            .rfind('\n')
+            .map(after)
+            .filter(late)
+            .or_else(|| window.rfind(['.', '!', '?', '\u{3002}', '\u{FF01}', '\u{FF1F}']).map(after).filter(late))
+            .or_else(|| window.rfind(char::is_whitespace).map(after).filter(|c| *c > 0))
+            .unwrap_or(limit);
+        out.push(&rest[..cut]);
+        rest = &rest[cut..];
+    }
+    if !rest.is_empty() {
+        out.push(rest);
+    }
+    out
 }
 
 /// The translated text: every segment's `[0]`, concatenated.
@@ -173,6 +362,26 @@ fn parse_translation(v: &Value, provider: &str) -> Result<Translation> {
     })
 }
 
+/// Add the next chunk's translation to the ones before it. The dictionary
+/// senses only come with a single word, so the first chunk's stand.
+fn append_chunk(whole: &mut Translation, part: Translation) {
+    whole.text.push_str(&part.text);
+    let join = |a: &mut Option<String>, b: Option<String>| {
+        if let Some(b) = b {
+            match a {
+                Some(a) => {
+                    a.push(' ');
+                    a.push_str(&b);
+                }
+                None => *a = Some(b),
+            }
+        }
+    };
+    join(&mut whole.romanisation, part.romanisation);
+    join(&mut whole.source_romanisation, part.source_romanisation);
+    whole.detected_from = whole.detected_from.or(part.detected_from);
+}
+
 /// The "open in browser" link, shared by the translator and the dictionary.
 fn web_link_for(domain: &str, text: &str, pair: LangPair) -> String {
     format!(
@@ -209,6 +418,7 @@ pub struct Google {
     info: ProviderInfo,
     options: Vec<OptionSpec>,
     domain: DomainMemo,
+    limits: Arc<Backoff>,
 }
 
 impl Default for Google {
@@ -221,6 +431,12 @@ impl Google {
     pub const ID: &'static str = "google";
 
     pub fn new() -> Self {
+        Self::sharing(Arc::default())
+    }
+
+    /// With a cooling-off table shared with [`GoogleDictionary`], which asks
+    /// the same endpoints.
+    pub(crate) fn sharing(limits: Arc<Backoff>) -> Self {
         let mut info = ProviderInfo::new(
             Self::ID,
             "Google Translate",
@@ -232,14 +448,14 @@ impl Google {
         info.homepage = "https://translate.google.com".into();
         info.ready_to_use = true;
         info.languages = all_langs_with_auto();
-        info.max_input_chars = Some(5000);
+        info.max_input_chars = Some(MAX_INPUT);
         let options = vec![
             OptionSpec::boolean("romanisation", "Show romanisation", true)
                 .help("Add a Latin transcription of non-Latin text under the result."),
             OptionSpec::boolean("dictionary", "Show alternatives by part of speech", true)
                 .help("For single words, list other translations grouped as noun, verb, …"),
         ];
-        Self { info, options, domain: DomainMemo::default() }
+        Self { info, options, domain: DomainMemo::default(), limits }
     }
 
     fn flag(host: &Host, key: &str) -> bool {
@@ -268,13 +484,34 @@ impl Provider for Google {
             dts.push("rm");
         }
         dts.push("ld");
-        let v = query(host, &self.info.name, &req.text, req.from, req.to, &dts)?;
-        parse_translation(&v, &self.info.name)
+        let chunks = split_keeping(&req.text, CHUNK);
+        let mut out: Option<Translation> = None;
+        for chunk in &chunks {
+            let v = query(host, &self.limits, &self.info.name, chunk, req.from, req.to, &dts)?;
+            let part = parse_translation(&v, &self.info.name)?;
+            match out.as_mut() {
+                None => out = Some(part),
+                Some(whole) => append_chunk(whole, part),
+            }
+            if chunks.len() > 1 {
+                // Google trims each request's answer; put back the line
+                // breaks the text was cut after (or the space, for a cut
+                // inside a line).
+                let tail = &chunk[chunk.trim_end().len()..];
+                let tail = tail.find('\n').map_or(tail, |i| &tail[i..]);
+                out.as_mut().expect("set above").text.push_str(tail);
+            }
+        }
+        let mut t = out.ok_or(Error::EmptyInput)?;
+        if chunks.len() > 1 {
+            t.text.truncate(t.text.trim_end().len());
+        }
+        Ok(t)
     }
 
     fn detect(&self, host: &Host, text: &str) -> Result<Detection> {
         self.domain.remember(host);
-        let v = query(host, &self.info.name, text, LangId::AUTO, LangId::ENGLISH, &["ld"])?;
+        let v = query(host, &self.limits, &self.info.name, text, LangId::AUTO, LangId::ENGLISH, &["ld"])?;
         let lang = detected_source(&v).ok_or(Error::LanguageNotDetected)?;
         let confidence = v[6].as_f64().or_else(|| v[8][2][0].as_f64()).unwrap_or(1.0);
         Ok(Detection { lang, confidence: confidence.clamp(0.0, 1.0) as f32 })
@@ -290,25 +527,31 @@ impl Provider for Google {
             return Err(Error::EmptyInput);
         }
         let total = chunks.len();
+        let provider = self.info.name.as_str();
         let mut bytes = Vec::new();
         for (idx, chunk) in chunks.iter().enumerate() {
-            host.check_cancelled()?;
-            let mut url = format!(
-                "{TTS}?ie=UTF-8&client=tw-ob&tl={}&total={total}&idx={idx}&textlen={}&q={}",
-                url_encode(req.lang.legacy_code()),
-                chunk.chars().count(),
-                url_encode(chunk)
-            );
-            if req.slow {
-                url.push_str("&ttsspeed=0.24");
-            }
-            let resp = check_status(host.http.send(HttpRequest::get(url).provider(&self.info.name))?, &self.info.name)?;
-            // A captcha page arrives as HTML with status 200.
-            if resp.header("content-type").is_some_and(|ct| ct.starts_with("text/html")) || resp.body.is_empty() {
-                return Err(Error::bad_response(&self.info.name, "speech endpoint returned no audio"));
-            }
+            let audio = first_answer(&self.limits, host, provider, &SPEECH, |ep| {
+                let mut url = format!(
+                    "{}&ie=UTF-8&tl={}&total={total}&idx={idx}&textlen={}&q={}",
+                    ep.url(host, "/translate_tts"),
+                    url_encode(req.lang.legacy_code()),
+                    chunk.chars().count(),
+                    url_encode(chunk)
+                );
+                if req.slow {
+                    url.push_str("&ttsspeed=0.24");
+                }
+                let resp = checked(
+                    host.http.send(browser_headers(HttpRequest::get(url), host).provider(provider))?,
+                    provider,
+                )?;
+                if resp.body.is_empty() {
+                    return Err(Error::bad_response(provider, "speech endpoint returned no audio"));
+                }
+                Ok(resp.body)
+            })?;
             // MP3 frames concatenate into a playable stream.
-            bytes.extend_from_slice(&resp.body);
+            bytes.extend_from_slice(&audio);
         }
         Ok(Audio { bytes, mime: "audio/mpeg".into() })
     }
@@ -323,6 +566,7 @@ impl Provider for Google {
 pub struct GoogleDictionary {
     info: ProviderInfo,
     domain: DomainMemo,
+    limits: Arc<Backoff>,
 }
 
 impl Default for GoogleDictionary {
@@ -335,6 +579,11 @@ impl GoogleDictionary {
     pub const ID: &'static str = "google-dictionary";
 
     pub fn new() -> Self {
+        Self::sharing(Arc::default())
+    }
+
+    /// With a cooling-off table shared with [`Google`].
+    pub(crate) fn sharing(limits: Arc<Backoff>) -> Self {
         let mut info = ProviderInfo::new(Self::ID, "Google Dictionary", Capabilities::DICTIONARY);
         info.description = "Definitions, usage examples and synonyms from Google Translate's dictionary, \
                             with translations grouped by part of speech. No key needed."
@@ -343,7 +592,7 @@ impl GoogleDictionary {
         info.ready_to_use = true;
         info.languages = all_langs_with_auto();
         info.max_input_chars = Some(200);
-        Self { info, domain: DomainMemo::default() }
+        Self { info, domain: DomainMemo::default(), limits }
     }
 }
 
@@ -424,7 +673,8 @@ impl Provider for GoogleDictionary {
     fn dictionary(&self, host: &Host, req: &DictRequest) -> Result<Article> {
         check_pair(&self.info, req.from, req.to)?;
         self.domain.remember(host);
-        let v = query(host, &self.info.name, req.text.trim(), req.from, req.to, &["bd", "md", "ex", "ss", "rm", "t"])?;
+        let dts = ["bd", "md", "ex", "ss", "rm", "t"];
+        let v = query(host, &self.limits, &self.info.name, req.text.trim(), req.from, req.to, &dts)?;
         if !v.is_array() {
             return Err(Error::bad_response(&self.info.name, "expected a JSON array"));
         }
@@ -455,7 +705,7 @@ mod tests {
     }
 
     #[test]
-    fn translate_builds_the_gtx_url_and_parses_everything() {
+    fn translate_builds_the_url_and_parses_everything() {
         let http = MockHttp::new().on(Method::Get, API, 200, HELLO_WORLD);
         let out = with_test_host(&http, &OptionValues::new(), |h| {
             Google::new().translate(h, &TranslateRequest::new("Hello world", LangPair::new(LangId::AUTO, ru())))
@@ -470,7 +720,7 @@ mod tests {
         assert_eq!(out.parts_of_speech[0].senses[0].back_translations, vec!["world", "peace"]);
 
         let req = &http.requests()[0];
-        assert!(req.url.starts_with(&format!("{API}?client=gtx&sl=auto&tl=ru&hl=en")), "{}", req.url);
+        assert!(req.url.starts_with(&format!("{API}?client=dict-chrome-ex&sl=auto&tl=ru&hl=en")), "{}", req.url);
         for dt in ["dt=t", "dt=bd", "dt=rm", "dt=ld", "ie=UTF-8", "oe=UTF-8"] {
             assert!(req.url.contains(dt), "{dt} missing from {}", req.url);
         }
@@ -631,7 +881,7 @@ mod tests {
         assert_eq!(reqs.len(), 2);
         assert_eq!(audio.bytes, b"MP3MP3");
         for (i, r) in reqs.iter().enumerate() {
-            assert!(r.url.contains("client=tw-ob&tl=en"), "{}", r.url);
+            assert!(r.url.starts_with(&format!("{TTS}?client=tw-ob&ie=UTF-8&tl=en&")), "{}", r.url);
             assert!(r.url.contains(&format!("&total=2&idx={i}&")), "{}", r.url);
             assert!(r.url.ends_with("&ttsspeed=0.24"));
             let q = r.url.split("&q=").nth(1).unwrap_or_default();
@@ -746,6 +996,176 @@ mod tests {
         assert!(matches!(r, Err(Error::HttpStatus { status: 500, .. })));
     }
 
+    const SECOND: &str = "https://translate.googleapis.com/translate_a/single";
+    const WEB: &str = "https://translate.google.com/translate_a/single";
+    const OK: &str = r#"[[["ok","x",null,null,1]],null,"en"]"#;
+
+    fn tr(g: &Google, http: &MockHttp) -> Result<Translation> {
+        with_test_host(http, &OptionValues::new(), |h| {
+            g.translate(h, &TranslateRequest::new("x", LangPair::new(LangId::ENGLISH, ru())))
+        })
+    }
+
+    fn hosts(http: &MockHttp) -> Vec<String> {
+        http.requests().iter().map(|r| r.url.split('?').next().unwrap_or_default().to_owned()).collect()
+    }
+
+    #[test]
+    fn a_refusal_moves_to_the_next_endpoint_and_is_remembered() {
+        let http = MockHttp::new().on(Method::Get, API, 429, "Too Many Requests").on(Method::Get, SECOND, 200, OK);
+        let g = Google::new();
+        assert_eq!(tr(&g, &http).unwrap().text, "ok");
+        assert_eq!(hosts(&http), vec![API, SECOND]);
+        let req = &http.requests()[1];
+        assert!(req.url.starts_with(&format!("{SECOND}?client=gtx&sl=en&tl=ru")), "{}", req.url);
+        assert!(req.no_retry_when_limited, "the client must not retry a refusal itself");
+        assert!(req.headers.iter().any(|(n, v)| n == "Accept-Language" && v.starts_with("en")), "{:?}", req.headers);
+
+        // The refusing endpoint is left alone on the next call.
+        assert_eq!(tr(&g, &http).unwrap().text, "ok");
+        assert_eq!(hosts(&http), vec![API, SECOND, SECOND]);
+    }
+
+    #[test]
+    fn a_cooled_off_endpoint_is_asked_again_and_forgiven() {
+        let limits = Arc::new(Backoff::new(Duration::from_millis(20), Duration::from_millis(20)));
+        let g = Google::sharing(limits.clone());
+        let http = MockHttp::new().on_once(Method::Get, API, 429, "").on(Method::Get, API, 200, OK).on(
+            Method::Get,
+            SECOND,
+            200,
+            OK,
+        );
+        tr(&g, &http).unwrap();
+        assert!(limits.cooling("clients5.google.com", Instant::now()).is_some());
+        std::thread::sleep(Duration::from_millis(30));
+        tr(&g, &http).unwrap();
+        assert_eq!(hosts(&http), vec![API, SECOND, API]);
+        assert_eq!(limits.cooling("clients5.google.com", Instant::now()), None);
+        // Forgiven: the next refusal starts from the shortest wait again.
+        assert_eq!(limits.limited("clients5.google.com", None, Instant::now()), Duration::from_millis(20));
+    }
+
+    #[test]
+    fn when_every_endpoint_refuses_the_wait_is_reported_without_asking_again() {
+        let http = MockHttp::new().on(Method::Get, API, 429, "").on(Method::Get, SECOND, 429, "").on(
+            Method::Get,
+            WEB,
+            429,
+            "",
+        );
+        let g = Google::new();
+        let r = tr(&g, &http);
+        assert!(matches!(r, Err(Error::RateLimited { retry_after_secs: Some(30), .. })), "{r:?}");
+        assert_eq!(hosts(&http), vec![API, SECOND, WEB]);
+        // All cooling off: an answer at once, and no request.
+        let r = tr(&g, &http);
+        assert!(matches!(r, Err(Error::RateLimited { retry_after_secs: Some(s), .. }) if s <= 30), "{r:?}");
+        assert_eq!(http.requests().len(), 3);
+        // Its message is the familiar one, with the wait.
+        assert!(r.unwrap_err().to_string().contains("Google Translate is rate-limiting us"));
+    }
+
+    #[test]
+    fn the_captcha_page_counts_as_a_refusal() {
+        let captcha = "<html><body>Our systems have detected unusual traffic from your computer network. \
+                       <a href=\"https://www.google.com/sorry/index?continue=x\">";
+        let http = MockHttp::new().on(Method::Get, API, 200, captcha).on(Method::Get, SECOND, 200, OK);
+        assert_eq!(tr(&Google::new(), &http).unwrap().text, "ok");
+        assert_eq!(hosts(&http), vec![API, SECOND]);
+    }
+
+    #[test]
+    fn a_server_error_tries_the_next_endpoint_without_a_cooling_off() {
+        let limits = Arc::new(Backoff::default());
+        let http = MockHttp::new().on(Method::Get, API, 503, "busy").on(Method::Get, SECOND, 200, OK);
+        assert_eq!(tr(&Google::sharing(limits.clone()), &http).unwrap().text, "ok");
+        assert_eq!(limits.cooling("clients5.google.com", Instant::now()), None);
+
+        // Every endpoint failing that way reports the first failure.
+        let http = MockHttp::new().on(Method::Get, "https://", 500, "oops");
+        let r = tr(&Google::new(), &http);
+        assert!(matches!(r, Err(Error::HttpStatus { status: 500, .. })), "{r:?}");
+        assert_eq!(http.requests().len(), 3);
+    }
+
+    #[test]
+    fn no_network_is_reported_at_once() {
+        // No route at all: the mock answers with a network error.
+        let http = MockHttp::new();
+        let r = tr(&Google::new(), &http);
+        assert!(matches!(r, Err(Error::Network(_))), "{r:?}");
+        assert_eq!(http.requests().len(), 1, "the other endpoints would fail the same way");
+    }
+
+    #[test]
+    fn the_dictionary_shares_the_translators_cooling_off() {
+        let limits = Arc::new(Backoff::default());
+        let http = MockHttp::new().on(Method::Get, API, 429, "").on(Method::Get, SECOND, 200, RUN);
+        tr(&Google::sharing(limits.clone()), &http).unwrap();
+        let req = DictRequest { text: "run".into(), from: LangId::ENGLISH, to: ru(), exact: true };
+        with_test_host(&http, &OptionValues::new(), |h| GoogleDictionary::sharing(limits).dictionary(h, &req)).unwrap();
+        assert_eq!(hosts(&http), vec![API, SECOND, SECOND]);
+    }
+
+    #[test]
+    fn speech_moves_to_the_next_endpoint_when_refused() {
+        let http = MockHttp::new().on(Method::Get, TTS, 429, "").on(
+            Method::Get,
+            "https://translate.googleapis.com/translate_tts",
+            200,
+            "MP3",
+        );
+        let speak = |g: &Google| {
+            with_test_host(&http, &OptionValues::new(), |h| {
+                g.speak(h, &SpeakRequest { text: "hi".into(), lang: LangId::ENGLISH, slow: false })
+            })
+        };
+        let g = Google::new();
+        assert_eq!(speak(&g).unwrap().bytes, b"MP3");
+        assert_eq!(speak(&g).unwrap().bytes, b"MP3");
+        let urls: Vec<String> = http.requests().iter().map(|r| r.url.clone()).collect();
+        assert_eq!(urls.len(), 3, "{urls:?}");
+        assert!(urls[1].starts_with("https://translate.googleapis.com/translate_tts?client=gtx&"), "{}", urls[1]);
+        assert!(urls[2].starts_with("https://translate.googleapis.com/"), "the refusal is remembered");
+    }
+
+    #[test]
+    fn long_text_goes_in_a_few_large_requests_and_keeps_its_line_breaks() {
+        let para = "The cat sat on the mat. ".repeat(200); // 4800 characters
+        let text = format!("{para}\n{para}\n{para}\n{para}\n{para}");
+        let http = MockHttp::new()
+            .on_once(Method::Post, API, 200, r#"[[["one","x",null,null,1]],null,"en"]"#)
+            .on_once(Method::Post, API, 200, r#"[[["two","x",null,null,1]],null,"en"]"#)
+            .on_once(Method::Post, API, 200, r#"[[["three","x",null,null,1]],null,"en"]"#);
+        let out = with_test_host(&http, &OptionValues::new(), |h| {
+            Google::new().translate(h, &TranslateRequest::new(text.clone(), LangPair::new(LangId::ENGLISH, ru())))
+        })
+        .unwrap();
+        assert_eq!(http.requests().len(), 3);
+        assert_eq!(out.text, "one\ntwo\nthree");
+        assert!(Google::new().info().max_input_chars.unwrap() >= 50_000);
+    }
+
+    #[test]
+    fn splitting_keeps_every_character_and_prefers_line_breaks() {
+        let text = format!("{}\n{}. {}", "a".repeat(70), "b".repeat(20), "c".repeat(30));
+        let parts = split_keeping(&text, 100);
+        assert_eq!(parts.concat(), text);
+        assert_eq!(parts[0], format!("{}\n", "a".repeat(70)));
+        assert!(parts.iter().all(|p| p.chars().count() <= 100));
+        // A line break early in the window is passed over for a later space.
+        let text = format!("ab\n{} {}", "x".repeat(80), "y".repeat(30));
+        let parts = split_keeping(&text, 100);
+        assert_eq!(parts[0], format!("ab\n{} ", "x".repeat(80)));
+        // No break at all: cut at the limit, on a character boundary.
+        let text = "я".repeat(250);
+        let parts = split_keeping(&text, 100);
+        assert_eq!(parts.iter().map(|p| p.chars().count()).collect::<Vec<_>>(), vec![100, 100, 50]);
+        assert_eq!(split_keeping("short", 100), vec!["short"]);
+        assert!(split_keeping("", 100).is_empty());
+    }
+
     #[test]
     #[ignore = "live network"]
     fn live_google_translate() {
@@ -756,5 +1176,36 @@ mod tests {
         .unwrap();
         assert!(!out.text.is_empty());
         assert_eq!(out.detected_from, Some(LangId::ENGLISH));
+    }
+
+    /// Every endpoint on its own, so a report says which still answer.
+    #[test]
+    #[ignore = "live network"]
+    fn live_every_endpoint_answers() {
+        let http = glossa_net::HttpClient::plain();
+        let mut answered = Vec::new();
+        for ep in TRANSLATE.iter().chain(&SPEECH) {
+            let limits = Backoff::default();
+            let r = with_test_host(&http, &OptionValues::new(), |h| {
+                let tts = ep.key.starts_with("tts");
+                first_answer(&limits, h, "Google Translate", std::slice::from_ref(ep), |ep| {
+                    let url = if tts {
+                        format!("{}&ie=UTF-8&tl=en&total=1&idx=0&textlen=5&q=hello", ep.url(h, "/translate_tts"))
+                    } else {
+                        format!("{}&sl=en&tl=ru&dt=t&q=hello", ep.url(h, "/translate_a/single"))
+                    };
+                    let resp = checked(h.http.send(browser_headers(HttpRequest::get(url), h))?, "Google Translate")?;
+                    Ok(resp.body.len())
+                })
+            });
+            eprintln!("{:32} {r:?}", ep.key);
+            answered.push((ep.key, r.is_ok()));
+        }
+        // One refusing address is what the fall-back is for; all of them
+        // refusing means it would not help either.
+        for group in ["translate", "tts"] {
+            let ok = answered.iter().any(|(k, ok)| *ok && k.starts_with("tts") == (group == "tts"));
+            assert!(ok, "no {group} endpoint answered: {answered:?}");
+        }
     }
 }

@@ -181,7 +181,7 @@ programs cannot register global hotkeys, bind keys to the
 | key | type | default | set in | what it does |
 |---|---|---|---|---|
 | `timeout_secs` | integer | `10` | Options → Internet | Timeout for one request to a service, 1–300 s. (AI endpoints have their own timeout.) |
-| `max_retries` | integer | `1` | Options → Internet | Retries after a connection error, a timeout, or a 429 or 5xx answer, 0–5. |
+| `max_retries` | integer | `1` | Options → Internet | Retries after a connection error, a timeout, or a 429 or 5xx answer, 0–5. Google Translate does not retry a 429: it asks its next address instead, and leaves the refusing one alone for a while (30 s, doubling to 10 min). |
 | `user_agent` | string | `""` | file only | Sent with every request unless a service sets its own. Empty uses Glossa's default. |
 | `proxy` | table | | | See [`[network.proxy]`](#networkproxy). |
 
@@ -349,7 +349,7 @@ untouched Windows list is given the empty one when it loads.
 | `browser` | string | `""` | Options → Advanced | Command to open links with. Empty uses the system's default browser. |
 | `copy_action` | `"ctrl_c"`, `"ctrl_insert"`, `"accessibility_only"` | `"ctrl_c"` | Options → Advanced | How the selection is copied out of another program when the accessibility interface does not give it: Ctrl+C, Ctrl+Insert (for terminals where Ctrl+C interrupts), or never send a keystroke. |
 | `layout_indicator` | `"none"`, `"caret"`, `"tray"` | `"none"` | file only | Kept from the classic settings (a keyboard layout indicator); not implemented, not in the options. |
-| `preferred_domain` | string | `"com"` | Options → Advanced | The Google domain to use: `com`, `ru`, `com.ua`, `de`, `co.jp`… |
+| `preferred_domain` | string | `"com"` | Options → Advanced | The Google domain to use: `com`, `ru`, `com.ua`, `de`, `co.jp`… Used for "open in browser", for speech, and for the last of Google Translate's three addresses (`translate.google.<domain>`). |
 | `gui_translation` | bool | `false` | file only | Kept from the classic settings (translating other programs' controls); not implemented, not in the options. |
 | `slower_listen_repeat` | bool | `true` | Options → Advanced | Listening to the same text again within five seconds plays it slowly. |
 | `remove_line_breaks` | bool | `false` | Options → Advanced | Join lines before translating. |
