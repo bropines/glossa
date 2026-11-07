@@ -20,14 +20,17 @@ function recognize(req, host) {
   var img = req.image_handle ? host.image.info(req.image_handle) : host.image.fromBase64(req.image_base64);
   // Vision reads tiny text poorly: enlarge small captures. Then stay well
   // inside its limits (20 MB per request, about 75 megapixels).
-  var minHeight = Number(host.options.min_height || 0);
-  if (minHeight > 0) img = host.image.scaleToMinHeight(img, { min_height: minHeight, max_side: 4000 });
-  img = host.image.resize(img, { max_side: 4000 });
+  var maxSide = Number(host.options.max_side || 4000);
+  var minHeight = host.options.enlarge === false ? 0 : Number(host.options.min_height || 0);
+  if (minHeight > 0) img = host.image.scaleToMinHeight(img, { min_height: minHeight, max_side: maxSide });
+  img = host.image.resize(img, { max_side: maxSide });
   var upload = host.image.encode(img, { format: "png" });
   if (upload.data_base64.length > 14000000) upload = host.image.encode(img, { format: "jpeg", quality: 90 });
 
-  var request = { image: { content: upload.data_base64 }, features: [{ type: "DOCUMENT_TEXT_DETECTION" }] };
-  if (req.lang && req.lang !== "auto") request.imageContext = { languageHints: [req.lang] };
+  var feature = host.options.feature || "DOCUMENT_TEXT_DETECTION";
+  var request = { image: { content: upload.data_base64 }, features: [{ type: feature }] };
+  var hints = languageHints(req, host.options);
+  if (hints.length) request.imageContext = { languageHints: hints };
   var r = host.fetch("https://vision.googleapis.com/v1/images:annotate?key=" + encodeURIComponent(key), {
     method: "POST",
     json: { requests: [request] },
@@ -55,6 +58,15 @@ function recognize(req, host) {
     // The boxes are in the prepared copy's pixels.
     transform: img.transform
   };
+}
+
+// The languages to tell Vision about: the one Glossa asks for (the
+// default), the user's own list, or none at all.
+function languageHints(req, options) {
+  var mode = options.hints || "request";
+  if (mode === "none") return [];
+  if (mode === "custom") return options.custom_hints || [];
+  return req.lang && req.lang !== "auto" ? [req.lang] : [];
 }
 
 function block(b) {

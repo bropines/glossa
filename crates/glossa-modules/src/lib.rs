@@ -7,6 +7,8 @@
 //!   and verified on demand.
 //! * [`python_env`] — the Python a Python module runs with: a system one, or
 //!   a managed build Glossa downloads, and per-module environments made by `uv`.
+//! * [`settings`] — a provider's settings page as data: layout, conditions,
+//!   validation and a module's translations.
 //! * [`registry`] — finding modules on disk and keeping the provider list.
 //! * [`protocol`] / [`host_api`] — the module protocol, shared by the stdio
 //!   (Python, Java, any program) and native runtimes.
@@ -28,9 +30,11 @@ pub mod provider;
 pub mod python_env;
 pub mod registry;
 pub mod runtime;
+pub mod settings;
 
 pub use assets::{AssetState, AssetStatus, ModuleAssets};
 pub use glossa_module_sdk::PROTOCOL_VERSION;
 pub use manifest::{Manifest, Runtime};
 pub use provider::{CancelToken, Host, OptionKind, OptionSpec, OptionValues, Provider};
 pub use registry::{Entry, LoadReport, Origin, Registry, RuntimeContext};
+pub use settings::{FieldError, SettingsPage};

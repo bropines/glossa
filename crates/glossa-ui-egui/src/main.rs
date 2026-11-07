@@ -21,6 +21,7 @@ mod inplace;
 mod keyboard;
 mod langs;
 mod main_window;
+mod module_settings;
 mod mouse;
 mod notice;
 mod ocr;

@@ -1134,6 +1134,10 @@ pub type MakeProvider = Box<dyn Fn() -> std::result::Result<Arc<dyn Provider>, S
 pub struct AssetGate {
     info: ProviderInfo,
     options: Vec<OptionSpec>,
+    /// For the settings page: the layout and translations travel with the
+    /// options, so the page looks the same before the files arrive.
+    manifest: Manifest,
+    page: crate::settings::PageCache,
     assets: Arc<ModuleAssets>,
     auto_download: bool,
     make: MakeProvider,
@@ -1145,6 +1149,8 @@ impl AssetGate {
         Self {
             info: manifest.provider_info(),
             options: manifest.options.clone(),
+            manifest: manifest.clone(),
+            page: Default::default(),
             assets,
             auto_download,
             make,
@@ -1182,6 +1188,10 @@ impl Provider for AssetGate {
 
     fn options(&self) -> &[OptionSpec] {
         &self.options
+    }
+
+    fn settings_page(&self, lang: &str) -> Arc<crate::settings::SettingsPage> {
+        self.page.get(lang, || self.manifest.settings_page(lang))
     }
 
     fn translate(&self, host: &Host, req: &TranslateRequest) -> Result<Translation> {

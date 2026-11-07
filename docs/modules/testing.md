@@ -36,6 +36,10 @@ finds most of it for you; the rest needs a moment's thought.
   different protocol.
 - No key the documentation does not list. Glossa ignores unknown keys, so a
   misspelt `entyr` silently does nothing; the harness reports it.
+- Settings-page keys check out: conditions parse and name options that
+  exist, patterns compile, text defaults pass their own checks, every id in
+  `[ui.settings]` names an option or an item, and `locales/*.toml` parse
+  with keys that name something. The harness reports each.
 
 **Capabilities**
 

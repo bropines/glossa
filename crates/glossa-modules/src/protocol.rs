@@ -45,6 +45,7 @@ pub struct ProtocolProvider<T: Transport> {
     cache: Arc<ModuleCache>,
     /// The module's assets, for the `assets` host call.
     assets: Option<crate::assets::ModuleAssets>,
+    page: crate::settings::PageCache,
 }
 
 impl<T: Transport> ProtocolProvider<T> {
@@ -56,7 +57,7 @@ impl<T: Transport> ProtocolProvider<T> {
             .as_ref()
             .and_then(|dir| dir.parent())
             .and_then(|models| crate::assets::ModuleAssets::for_manifest(&manifest, models).ok().flatten());
-        Self { manifest, info, transport, cache, assets }
+        Self { manifest, info, transport, cache, assets, page: Default::default() }
     }
 
     pub fn manifest(&self) -> &Manifest {
@@ -119,6 +120,10 @@ impl<T: Transport> Provider for ProtocolProvider<T> {
 
     fn options(&self) -> &[OptionSpec] {
         &self.manifest.options
+    }
+
+    fn settings_page(&self, lang: &str) -> std::sync::Arc<crate::settings::SettingsPage> {
+        self.page.get(lang, || self.manifest.settings_page(lang))
     }
 
     fn translate(&self, host: &Host, req: &TranslateRequest) -> Result<Translation> {

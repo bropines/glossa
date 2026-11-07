@@ -157,6 +157,7 @@ description = "One line for the services list."
 homepage = "https://example.com"
 author = "You"
 license = "MIT"
+min_glossa = "0.1.0"          # optional: older Glossa builds refuse the module ("needs Glossa 0.1.0 or newer")
 max_input_chars = 5000        # optional: longer text is cut at a word boundary
 idle_timeout_secs = 300       # Python, Java, process: stop the process after this long unused
 ready_to_use = true           # works with no key or setup: switched on when it first appears
@@ -180,7 +181,7 @@ network = ["api.example.com", "*.example.org"]   # "*" for any host; empty = no 
 
 [[options]]                   # each becomes a field on the module's settings page
 key = "api_key"
-type = "secret"               # text | secret | url | bool | number | select | multiline
+type = "secret"               # text | secret | url | bool | number | select | multiselect | multiline | lang | file
 label = "API key"
 help = "Get one at https://example.com/keys"
 required = true
@@ -257,6 +258,149 @@ Options are stored in the user's `config.toml` under
 - A `required` option is marked with `*` on the settings page. When it is
   empty, fail with `missing_credential` and the option's key as the
   message, and Glossa tells the user which setting to fill in.
+
+### Settings pages
+
+The settings page is drawn from `[[options]]` alone, so a module never
+ships UI code. Beyond `key`, `type`, `label`, `help`, `default`,
+`required`, `choices`, `min`, `max` and `placeholder`, an option may say
+more. Every key is optional; a module without them looks as before.
+
+| key | for | meaning |
+|---|---|---|
+| `pattern` | text types | a regular expression the value must match; anchor it (`^…$`) to match the whole value |
+| `pattern_message` | text types | shown under the field instead of the generic "does not match" |
+| `min_length`, `max_length` | text types, `multiselect` | characters (for `multiselect`, how many are picked) |
+| `step` | `number` | the drag or slider step |
+| `widget = "slider"` | `number` with `min` and `max` | a slider instead of a number field |
+| `allow_auto` | `lang` | offer "Detect language" (the value `auto`) |
+| `filters` | `file` | extensions the file dialog offers: `["txt", "csv"]` |
+| `visible_if` | any | a [condition](#conditions): the field is shown only while it holds |
+| `enabled_if` | any | a condition: the field is greyed out unless it holds |
+| `group` | any | put the field into the group with this id (declared in `[ui.settings]`, or made up on the spot and titled by its id) |
+
+The types added for richer pages:
+
+| `type` | value | control |
+|---|---|---|
+| `multiselect` | a list of strings from `choices` | checkboxes in a dropdown |
+| `lang` | a language code (`de`, `zh-Hans`, `auto`) | Glossa's searchable language picker |
+| `file` | a path | a text field and a *Browse…* button; the module gets the path, not the file |
+
+A type this Glossa does not know (from a newer release) does not stop the
+module: the field shows a "needs a newer version" line.
+
+#### Checks
+
+Glossa checks values as the user types and shows a message under a field
+that fails: `required` and empty, `pattern`, `min`/`max`,
+`min_length`/`max_length`, and the type itself (a `url` must start with
+`http://` or `https://`, a `number` must be a number, a `select` value one
+of its `choices`, a `lang` value a language). Hidden and greyed-out fields
+are not checked. *Apply* still saves what was typed, since the user may be
+half-way through, and the services list marks the module "check the
+settings". Checks only the service can make (is the key accepted?) stay
+with the module: fail with `missing_credential` and the option's key.
+
+#### Conditions
+
+`visible_if` and `enabled_if` take a small expression, evaluated by Glossa
+every frame with no call into the module:
+
+```
+options.api_key                         filled in (not empty, not false, not 0)
+!options.api_key                        not filled in
+options.tone == 'casual'                equal to a string, number or true/false
+options.temperature > 0.5               < <= > >= compare numbers
+options.mode == 'custom' && options.url
+(options.a || options.b) && !options.c
+```
+
+A path is `options.<key>`; literals are `'text'`, `"text"`, numbers,
+`true`, `false` and `null`. There are no function calls and no
+arithmetic. Paths starting with `state.` are reserved for module panels and
+read as empty on the settings page.
+
+#### Layout
+
+Without a layout, options are listed in order, and those with the same
+`group` are gathered into one group box where the first of them stands.
+`[ui.settings]` arranges the page:
+
+```toml
+[ui]
+format = 1                       # the version of everything under [ui]
+
+[ui.settings]
+layout = ["pages"]               # the top level, in order
+
+[[ui.settings.items]]
+id = "pages"
+type = "tabs"                    # each child group is one tab
+children = ["connection", "advanced"]
+
+[[ui.settings.items]]
+id = "connection"
+type = "group"                   # a titled box; collapsed = true folds it
+label = "Connection"
+children = ["note", "api_key", "size"]
+
+[[ui.settings.items]]
+id = "note"
+type = "label"
+style = "weak"                   # normal | weak | error | heading
+label = "Create a key at example.com."
+
+[[ui.settings.items]]
+id = "size"
+type = "row"                     # children side by side
+children = ["enlarge", "min_height"]
+
+[[ui.settings.items]]
+id = "advanced"
+type = "group"
+label = "Advanced"
+children = ["model", "timeout"]
+```
+
+`layout` and `children` list option keys and item ids. Item types are
+`group` (with `collapsed`), `row`, `tabs` (children are groups), `label`
+(with `style`) and `separator`; items also take `visible_if` and
+`enabled_if`, which apply to everything inside. An option the layout does
+not place is never lost: it is added at the end, or to its `group`. Older
+Glossa builds ignore `[ui]` and list the options in order.
+[`js/google-vision-ocr`](../../modules/js/google-vision-ocr) uses all of
+this with tabs, a row, a slider, a multiselect and conditions.
+
+#### Translations
+
+The manifest's text is the English default. `locales/<lang>.toml` in the
+module's folder translates it into the language of Glossa's interface, and
+the page follows a switch of that language at once:
+
+```toml
+# locales/ru.toml
+[module]
+name = "Мой переводчик"
+description = "…"
+
+[options.api_key]
+label = "Ключ API"
+help = "…"
+placeholder = "…"
+pattern_message = "…"
+
+[options.tone.choices]           # a choice's label, by its value
+casual = "Разговорный"
+
+[settings.items.connection]      # an item's label (and help)
+label = "Подключение"
+```
+
+The file is named by the interface language's code (`ru`, `pt-BR`; a
+regional file falls back to its base, `pt`). A missing key falls back to
+the manifest. `glossa-cli module check` reports files that do not parse and
+keys that name nothing.
 
 ### Assets
 

@@ -14,6 +14,7 @@
 //! author = "…"
 //! license = "MIT"
 //! requirements = ["requests>=2.31"]  # runtime = "python" only: packages, see `python_env`
+//! min_glossa = "0.2.0"          # refuse to load in older builds
 //!
 //! capabilities = ["translate", "detect_language"]
 //! languages = ["en", "ru", "de"]   # omit for "all"
@@ -30,6 +31,16 @@
 //! label = "API key"
 //! required = true
 //!
+//! [[options]]                    # richer settings; see `settings`
+//! key = "model"
+//! type = "select"
+//! choices = [{ value = "small" }, { value = "large" }]
+//! enabled_if = "options.api_key"
+//! group = "advanced"
+//!
+//! [ui.settings]                  # optional layout; see `settings`
+//! layout = ["api_key", "advanced"]
+//!
 //! [[assets]]                     # files fetched on first use; see `assets`
 //! name = "model"
 //! url = "https://example.com/model.onnx"
@@ -40,6 +51,10 @@
 //! Classic QTranslate scripts and pot-app plugins carry no `module.toml`; the
 //! runtimes synthesise a [`Manifest`] for them from what the script itself
 //! declares.
+//!
+//! `locales/<lang>.toml` beside the manifest translates its text
+//! ([`crate::settings::strings`]); [`Manifest::load`] reads the files into
+//! [`Manifest::strings`].
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -49,6 +64,11 @@ use serde::{Deserialize, Serialize};
 
 use crate::assets::AssetSpec;
 use crate::provider::OptionSpec;
+use crate::settings::{ModuleStrings, SettingsPage, UiSection};
+
+/// The Glossa version `min_glossa` is compared with. Every crate shares the
+/// workspace version.
+pub const GLOSSA_VERSION: &str = env!("CARGO_PKG_VERSION");
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Manifest {
@@ -65,6 +85,10 @@ pub struct Manifest {
     pub permissions: Permissions,
     #[serde(default)]
     pub options: Vec<OptionSpec>,
+    /// `[ui]`: the settings-page layout (and, in later formats, panels).
+    /// Older builds ignore the table and load the module as a plain service.
+    #[serde(default, skip_serializing_if = "UiSection::is_default")]
+    pub ui: UiSection,
     /// Files the module needs that are downloaded on demand (models,
     /// dictionaries, helper programs); see [`crate::assets`].
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -73,6 +97,10 @@ pub struct Manifest {
     /// the `assets` host call reports. `None` for a module without assets.
     #[serde(skip)]
     pub assets_dir: Option<PathBuf>,
+    /// Translations of the manifest's text from `locales/<lang>.toml`, read
+    /// by [`Manifest::load`]. Empty for a manifest parsed from text.
+    #[serde(skip)]
+    pub strings: ModuleStrings,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
@@ -94,6 +122,11 @@ pub struct ModuleSection {
     pub author: String,
     #[serde(default)]
     pub license: String,
+    /// The oldest Glossa that can run the module (`"0.2.0"`). Older builds
+    /// list it among the failed modules with "needs Glossa x.y.z or newer".
+    /// Empty: any.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub min_glossa: String,
     /// Longest input the service accepts, in characters.
     #[serde(default)]
     pub max_input_chars: Option<usize>,
@@ -300,7 +333,23 @@ pub enum ManifestError {
 impl Manifest {
     pub fn load(path: &Path) -> Result<Manifest, ManifestError> {
         let text = std::fs::read_to_string(path).map_err(|e| ManifestError::Io(path.to_owned(), e))?;
-        Manifest::parse(&text).map_err(|message| ManifestError::Invalid { path: path.to_owned(), message })
+        let mut m =
+            Manifest::parse(&text).map_err(|message| ManifestError::Invalid { path: path.to_owned(), message })?;
+        if let Some(dir) = path.parent() {
+            // A broken translation never stops a module: its text falls
+            // back to the manifest's, and `module check` names the file.
+            let (strings, problems) = ModuleStrings::load(dir);
+            for p in problems {
+                tracing::warn!(module = %m.module.id, "{p}");
+            }
+            m.strings = strings;
+        }
+        Ok(m)
+    }
+
+    /// The settings page in the interface language `lang`.
+    pub fn settings_page(&self, lang: &str) -> SettingsPage {
+        SettingsPage::for_manifest(self, lang)
     }
 
     pub fn parse(text: &str) -> Result<Manifest, String> {
@@ -320,6 +369,7 @@ impl Manifest {
             // It names folders (the module's files go to `models/<id>`).
             return Err(format!("module id {id:?} must contain a letter or a digit"));
         }
+        check_min_glossa(&self.module.min_glossa, GLOSSA_VERSION)?;
         if self.module.api != crate::PROTOCOL_VERSION {
             return Err(format!(
                 "module speaks protocol {}, this build speaks {}",
@@ -421,9 +471,132 @@ impl Manifest {
     }
 }
 
+/// Refuse a module that needs a newer Glossa than `current`.
+pub fn check_min_glossa(min: &str, current: &str) -> Result<(), String> {
+    let min = min.trim();
+    if min.is_empty() {
+        return Ok(());
+    }
+    let want = Version::parse(min).ok_or_else(|| format!("min_glossa {min:?} is not a version like \"0.2.0\""))?;
+    let have = Version::parse(current).ok_or_else(|| format!("this build's version {current:?} does not parse"))?;
+    if have < want {
+        return Err(format!("needs Glossa {min} or newer (this is {current})"));
+    }
+    Ok(())
+}
+
+/// `major.minor.patch[-pre]`, ordered as semantic versioning orders them:
+/// `0.2.0-beta.2 < 0.2.0-beta.10 < 0.2.0`. Build metadata is ignored.
+#[derive(Debug, PartialEq, Eq)]
+struct Version {
+    nums: [u64; 3],
+    pre: Vec<String>,
+}
+
+impl Version {
+    fn parse(s: &str) -> Option<Version> {
+        let s = s.trim().trim_start_matches('v');
+        let s = s.split('+').next()?;
+        let (core, pre) = match s.split_once('-') {
+            Some((c, p)) => (c, p.split('.').map(str::to_owned).collect()),
+            None => (s, Vec::new()),
+        };
+        let parts: Vec<&str> = core.split('.').collect();
+        if parts.len() > 3 {
+            return None;
+        }
+        let mut nums = [0u64; 3];
+        for (i, p) in parts.iter().enumerate() {
+            nums[i] = p.parse().ok()?;
+        }
+        Some(Version { nums, pre })
+    }
+}
+
+impl PartialOrd for Version {
+    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+impl Ord for Version {
+    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+        use std::cmp::Ordering;
+        self.nums.cmp(&other.nums).then_with(|| match (self.pre.is_empty(), other.pre.is_empty()) {
+            (true, true) => Ordering::Equal,
+            (true, false) => Ordering::Greater,
+            (false, true) => Ordering::Less,
+            (false, false) => {
+                for (a, b) in self.pre.iter().zip(&other.pre) {
+                    let o = match (a.parse::<u64>(), b.parse::<u64>()) {
+                        (Ok(x), Ok(y)) => x.cmp(&y),
+                        (Ok(_), Err(_)) => Ordering::Less,
+                        (Err(_), Ok(_)) => Ordering::Greater,
+                        _ => a.cmp(b),
+                    };
+                    if o != Ordering::Equal {
+                        return o;
+                    }
+                }
+                self.pre.len().cmp(&other.pre.len())
+            }
+        })
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn min_glossa_compares_versions_with_prereleases() {
+        assert!(check_min_glossa("", "0.1.0").is_ok());
+        assert!(check_min_glossa("0.1.0", "0.1.0").is_ok());
+        assert!(check_min_glossa("0.1", "0.1.0").is_ok());
+        assert!(check_min_glossa("0.1.0-beta.2", "0.1.0-beta.10").is_ok());
+        assert!(check_min_glossa("0.1.0-beta.2", "0.1.0").is_ok());
+        assert!(check_min_glossa("0.1.0-alpha", "0.1.0-beta").is_ok());
+        let e = check_min_glossa("0.1.0", "0.1.0-beta.2").unwrap_err();
+        assert_eq!(e, "needs Glossa 0.1.0 or newer (this is 0.1.0-beta.2)");
+        assert!(check_min_glossa("0.10.0", "0.9.9").is_err());
+        assert!(check_min_glossa("1.0.0", "0.99.0").is_err());
+        assert!(check_min_glossa("soon", "0.1.0").unwrap_err().contains("not a version"));
+        // This build loads a module asking for its own version and refuses
+        // one asking for a far-off release.
+        let own = SAMPLE.replace("[module]", &format!("[module]\nmin_glossa = \"{GLOSSA_VERSION}\""));
+        assert!(Manifest::parse(&own).is_ok());
+        let future = SAMPLE.replace("[module]", "[module]\nmin_glossa = \"99.0.0\"");
+        assert!(Manifest::parse(&future).unwrap_err().contains("needs Glossa 99.0.0 or newer"));
+    }
+
+    #[test]
+    fn old_manifests_parse_as_before() {
+        // The sample predates richer settings: nothing new appears, and it
+        // serialises without any of the new keys.
+        let m = Manifest::parse(SAMPLE).unwrap();
+        assert!(m.ui.is_default() && m.module.min_glossa.is_empty() && m.strings.is_empty());
+        let o = &m.options[0];
+        assert!(o.pattern.is_empty() && o.visible_if.is_empty() && o.group.is_empty() && o.step.is_none());
+        let back = serde_json::to_string(&m).unwrap();
+        for new in ["min_glossa", "[ui", "pattern", "visible_if", "widget", "group", "allow_auto"] {
+            assert!(!back.contains(new), "{new} in {back}");
+        }
+        // A type from a newer format still loads the module.
+        let newer = SAMPLE.replace("type = \"secret\"", "type = \"colour\"");
+        assert_eq!(Manifest::parse(&newer).unwrap().options[0].kind, crate::OptionKind::Unknown);
+    }
+
+    #[test]
+    fn load_reads_the_locale_files() {
+        let dir = std::env::temp_dir().join(format!("glossa-manifest-locales-{}", std::process::id()));
+        std::fs::create_dir_all(dir.join("locales")).unwrap();
+        std::fs::write(dir.join("module.toml"), SAMPLE).unwrap();
+        std::fs::write(dir.join("locales/ru.toml"), "[options.api_key]\nlabel = 'Ключ'\n").unwrap();
+        let m = Manifest::load(&dir.join("module.toml")).unwrap();
+        assert_eq!(m.settings_page("ru").options[0].label, "Ключ");
+        assert_eq!(m.settings_page("en").options[0].label, "");
+        std::fs::remove_dir_all(&dir).ok();
+    }
 
     const SAMPLE: &str = r#"
         capabilities = ["translate", "detect_language"]

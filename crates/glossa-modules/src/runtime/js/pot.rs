@@ -112,6 +112,8 @@ impl PotPlugin {
             options: info.needs.iter().map(need_to_option).collect(),
             assets: Vec::new(),
             assets_dir: None,
+            ui: Default::default(),
+            strings: Default::default(),
         };
         manifest.validate()?;
         Ok(PotPlugin { dir: dir.to_owned(), main, manifest, kind })

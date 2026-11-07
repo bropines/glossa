@@ -47,3 +47,15 @@ expect = { error = "not_found" }
 method = "POST"
 url = "https://vision.googleapis.com/v1/images:annotate"
 body = '{"responses": [{}]}'
+
+[[case]]
+name = "custom language hints, scene detection, no enlarging"
+op = "ocr"
+image = { width = 200, height = 60 }
+options = { api_key = "test-key", hints = "custom", custom_hints = ["ru", "de"], feature = "TEXT_DETECTION", enlarge = false, max_side = 2000 }
+[case.expect]
+text = "Hello world"
+[[case.http]]
+method = "POST"
+url = "https://vision.googleapis.com/v1/images:annotate"
+body_file = "responses/hello-world.json"

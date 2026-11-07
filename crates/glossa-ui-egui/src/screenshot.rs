@@ -115,6 +115,17 @@ fn open(app: &mut GlossaApp, what: &str) -> bool {
                 return false;
             }
             crate::options::open_at(app, page);
+            // `GLOSSA_SCREENSHOT_SERVICE=<id>`: that provider's settings on
+            // the Services page; `GLOSSA_SCREENSHOT_TAB=<tabs id>=<n>`: the
+            // n-th tab (from 0) of a `tabs` item on its page.
+            if let Ok(id) = std::env::var("GLOSSA_SCREENSHOT_SERVICE") {
+                crate::options::select_service(app, &id);
+                if let Some((tabs, n)) =
+                    std::env::var("GLOSSA_SCREENSHOT_TAB").ok().as_deref().and_then(|t| t.split_once('='))
+                {
+                    crate::module_settings::select_tab(&app.ctx, &id, tabs, n.parse().unwrap_or(0));
+                }
+            }
         }
         "dictionary" => crate::dictionary::open(app, Some("serendipity".into())),
         "history" => crate::history::open(app),

@@ -107,6 +107,15 @@ pub trait Provider: Send + Sync {
         &[]
     }
 
+    /// The settings page in the interface language `lang`: [`Provider::options`]
+    /// laid out and translated, with conditions and checks compiled. Built-in
+    /// providers get their options in order; modules add `[ui.settings]` and
+    /// their locale files.
+    fn settings_page(&self, lang: &str) -> Arc<crate::settings::SettingsPage> {
+        let _ = lang;
+        Arc::new(crate::settings::SettingsPage::plain(self.options()))
+    }
+
     fn translate(&self, host: &Host, req: &TranslateRequest) -> Result<Translation> {
         let _ = (host, req);
         Err(self.unsupported("translation"))
@@ -219,6 +228,10 @@ impl Provider for Guarded {
         self.inner.options()
     }
 
+    fn settings_page(&self, lang: &str) -> Arc<crate::settings::SettingsPage> {
+        self.inner.settings_page(lang)
+    }
+
     fn translate(&self, host: &Host, req: &TranslateRequest) -> Result<Translation> {
         self.call("translation", || self.inner.translate(host, req))
     }
@@ -263,8 +276,15 @@ impl Provider for Guarded {
 }
 
 /// One setting a provider takes. Mirrors the `[[options]]` table of a module
-/// manifest.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+/// manifest; built-in providers build the same struct in code.
+///
+/// The first block of fields is the original format. The rest were added
+/// with richer settings pages (the declarative-modules RFC, phase 1); all
+/// are optional and skipped when empty, so old manifests read the same and
+/// a serialised spec only carries what was set. What they mean at run time
+/// lives in [`crate::settings`]: conditions in `settings::condition`, checks
+/// in `settings::validate`.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct OptionSpec {
     pub key: String,
     #[serde(default)]
@@ -278,7 +298,7 @@ pub struct OptionSpec {
     /// The provider cannot work without it.
     #[serde(default)]
     pub required: bool,
-    /// For `select`: the allowed values and their labels.
+    /// For `select` and `multiselect`: the allowed values and their labels.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub choices: Vec<Choice>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -287,6 +307,50 @@ pub struct OptionSpec {
     pub max: Option<f64>,
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub placeholder: String,
+
+    // -- validation -----------------------------------------------------------
+    /// A regular expression the value must match (`regex-lite` syntax). It
+    /// matches anywhere unless anchored, so write `^...$` for the whole value.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub pattern: String,
+    /// Shown under the field when `pattern` does not match, instead of the
+    /// generic message.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub pattern_message: String,
+    /// Text length in characters (for `multiselect`: how many are picked).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub min_length: Option<usize>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_length: Option<usize>,
+
+    // -- presentation ---------------------------------------------------------
+    /// `number`: the drag or slider step.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub step: Option<f64>,
+    /// Another control for the type: `"slider"` for a `number` with `min` and
+    /// `max`. Empty for the type's usual one.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub widget: String,
+    /// `lang`: offer "Detect language" (`auto`) as a choice.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub allow_auto: bool,
+    /// `file`: extensions the file dialog offers, without the dot.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub filters: Vec<String>,
+
+    // -- layout ---------------------------------------------------------------
+    /// A [condition](crate::settings::condition): show the field only while
+    /// it holds.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub visible_if: String,
+    /// A condition: the field is greyed out unless it holds.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub enabled_if: String,
+    /// Put the field into the settings-page group with this id, creating the
+    /// group when `[ui.settings]` does not declare it. Shorthand for listing
+    /// the key in the group's `children`.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub group: String,
 }
 
 impl OptionSpec {
@@ -296,12 +360,7 @@ impl OptionSpec {
             label: label.into(),
             kind: OptionKind::Text,
             default: serde_json::Value::String(default.into()),
-            help: String::new(),
-            required: false,
-            choices: Vec::new(),
-            min: None,
-            max: None,
-            placeholder: String::new(),
+            ..Self::default()
         }
     }
 
@@ -367,6 +426,27 @@ pub enum OptionKind {
     Number,
     Select,
     Multiline,
+    /// Several of `choices`; the value is a list of strings.
+    Multiselect,
+    /// A language code, picked with Glossa's language picker.
+    Lang,
+    /// A path, typed or picked with a file dialog. The module gets the path,
+    /// not the file.
+    File,
+    /// A type from a newer format. The module still loads; the settings page
+    /// says the field needs a newer Glossa.
+    #[serde(other)]
+    Unknown,
+}
+
+impl OptionKind {
+    /// Whether the value is a string the user types.
+    pub fn is_text(self) -> bool {
+        matches!(
+            self,
+            OptionKind::Text | OptionKind::Secret | OptionKind::Url | OptionKind::Multiline | OptionKind::File
+        )
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
