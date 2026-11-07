@@ -647,6 +647,42 @@ fn chosen_locale<'a>(
     })
 }
 
+/// The user's language folder, a rescan (so a pack dropped there, or a
+/// string fixed in one, shows without a restart), and what was wrong in the
+/// files.
+fn language_files(app: &GlossaApp, ui: &mut egui::Ui, look: &crate::style::Look) {
+    ui.horizontal(|ui| {
+        if ui.button(app.t("options.basics.ui_language_folder")).clicked() {
+            let dir = app.engine.paths().user_locale_dir();
+            let _ = std::fs::create_dir_all(&dir);
+            let _ = crate::app::open_with_system(&dir.to_string_lossy());
+        }
+        if ui.button(app.t("options.basics.ui_language_reload")).clicked() {
+            // The rescan reads every theme and locale folder, so it runs off
+            // the UI thread; the engine's ConfigChanged brings the result.
+            let engine = app.engine.clone();
+            let _ = std::thread::Builder::new().name("glossa-rescan".into()).spawn(move || engine.refresh_catalogs());
+        }
+    });
+    let issues = app.engine.locale_issues();
+    if issues.is_empty() {
+        return;
+    }
+    ui.label(RichText::new(app.t("options.basics.ui_language_problems")).color(look.weak_text()));
+    for issue in &issues {
+        let colour = match issue.severity() {
+            glossa_core::locale::Severity::Error => look.error(),
+            glossa_core::locale::Severity::Warning => look.weak_text(),
+        };
+        // The file's name is enough here; the log has the full path.
+        let text = match issue.source(&app.locale) {
+            Some(f) => format!("{f}: {}", issue.message(&app.locale)),
+            None => issue.message(&app.locale),
+        };
+        ui.label(RichText::new(text).small().color(colour));
+    }
+}
+
 fn basics(app: &mut GlossaApp, ui: &mut egui::Ui, st: &mut OptionsState) {
     let look = app.look.clone();
     let d = &mut st.draft;
@@ -686,6 +722,7 @@ fn basics(app: &mut GlossaApp, ui: &mut egui::Ui, st: &mut OptionsState) {
                 }
             });
         });
+        language_files(app, ui, &look);
         row(ui, &app.t("options.basics.font"), |ui| {
             font_picker(app, ui, &mut st.fonts, &mut d.appearance.font_family);
         });
@@ -746,8 +783,9 @@ fn hotkeys(app: &mut GlossaApp, ui: &mut egui::Ui, st: &mut OptionsState) {
             }
         });
     }
-    for e in &app.hotkey_errors {
-        ui.label(RichText::new(e).color(app.look.error()));
+    for (action, e) in &app.hotkey_errors {
+        let text = crate::hotkey_error_text(&app.locale, *action, e);
+        ui.label(RichText::new(text).color(app.look.error()));
     }
     ui.add_space(6.0);
     let conflicts = d.hotkeys.conflicts();
@@ -2571,6 +2609,7 @@ mod tests {
             folder: folder.into(),
             builtin: folder.is_empty(),
             files: Vec::new(),
+            classic_files: 0,
         }
     }
 

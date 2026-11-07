@@ -23,6 +23,11 @@
 //! user's own file (see `glossa_engine::LocaleCatalog::load`), so a classic
 //! file written for the old program no longer leaves Glossa's newer strings
 //! in English.
+//!
+//! Each file is checked as it is laid on ([`Locale::validate`]): unknown keys
+//! are dropped with a warning, and a string whose `%s` count differs from
+//! English is dropped as an error, so the layer below shows instead.
+//! [`Locale::template`] writes the starting point for a new translation.
 
 use std::collections::{BTreeSet, HashMap};
 use std::sync::Mutex;
@@ -181,7 +186,10 @@ impl Locale {
                 #[serde(default)]
                 languages: HashMap<String, String>,
             }
-            let n: Native = serde_json::from_value(value).map_err(|e| e.to_string())?;
+            let mut n: Native = serde_json::from_value(value).map_err(|e| e.to_string())?;
+            // An empty string is a gap in a template, not a blank label.
+            n.strings.retain(|_, v| !v.is_empty());
+            n.languages.retain(|_, v| !v.trim().is_empty());
             Ok(Locale {
                 code: n.code,
                 name: n.name,
@@ -243,6 +251,233 @@ impl Locale {
             doc["languages"] = Value::Object(names);
         }
         serde_json::to_string_pretty(&doc).unwrap_or_default()
+    }
+}
+
+/// What the language list needs from a locale file, read without keeping
+/// its strings: discovery reads only this, and the full file loads when the
+/// language is chosen.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct LocaleHeader {
+    pub code: String,
+    pub name: String,
+    pub native_name: String,
+    pub classic: bool,
+}
+
+/// How serious a problem in a locale file is.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Severity {
+    /// Harmless: the entry is ignored and everything else applies.
+    Warning,
+    /// The entry would break the interface, so it is skipped and the
+    /// layer below (or English) shows instead.
+    Error,
+}
+
+/// What is wrong with an entry of a locale file.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum IssueKind {
+    /// A string key the program does not know (a typo, or a string that was
+    /// removed).
+    UnknownKey,
+    /// A language name for a tag that is not in the language table.
+    UnknownLanguage,
+    /// A different number of `%s` than the English text.
+    Placeholders { expected: usize, found: usize },
+    /// The file could not be read or parsed at all.
+    Unreadable(String),
+}
+
+/// A problem found in a locale file, for the log, Options and
+/// `glossa-cli locale check`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LocaleIssue {
+    /// The file, when the issue came from one on disk.
+    pub file: Option<std::path::PathBuf>,
+    /// The string key or language tag; empty for a whole-file problem.
+    pub key: String,
+    pub kind: IssueKind,
+    /// The file is a classic QTranslate `lang.json`, read from the user's
+    /// installation: nothing the user is expected to fix.
+    pub classic: bool,
+}
+
+impl LocaleIssue {
+    /// A problem with the file itself.
+    pub fn unreadable(file: &std::path::Path, why: String, classic: bool) -> Self {
+        LocaleIssue { file: Some(file.to_owned()), key: String::new(), kind: IssueKind::Unreadable(why), classic }
+    }
+
+    /// Classic files are warnings whatever is wrong with them: the strings
+    /// are skipped all the same, but the file belongs to the old program
+    /// and is not the user's to fix.
+    pub fn severity(&self) -> Severity {
+        match self.kind {
+            _ if self.classic => Severity::Warning,
+            IssueKind::UnknownKey | IssueKind::UnknownLanguage => Severity::Warning,
+            IssueKind::Placeholders { .. } | IssueKind::Unreadable(_) => Severity::Error,
+        }
+    }
+
+    /// Where the issue is, shortly: the file's name, with its folder and a
+    /// note for a classic file (every classic file is `lang.json`).
+    pub fn source(&self, locale: &Locale) -> Option<String> {
+        let file = self.file.as_ref()?;
+        let name = file.file_name()?.to_string_lossy().into_owned();
+        if !self.classic {
+            return Some(name);
+        }
+        let folder = file.parent().and_then(|p| p.file_name()).map(|f| f.to_string_lossy().into_owned());
+        let shown = match folder {
+            Some(f) => format!("{f}/{name}"),
+            None => name,
+        };
+        Some(locale.fmt("locale.issue.classic_file", &shown))
+    }
+
+    /// The issue in `locale`'s language, without the file name.
+    pub fn message(&self, locale: &Locale) -> String {
+        match &self.kind {
+            IssueKind::UnknownKey => locale.fmt("locale.issue.unknown_key", &self.key),
+            IssueKind::UnknownLanguage => locale.fmt("locale.issue.unknown_language", &self.key),
+            IssueKind::Placeholders { expected, found } => {
+                locale.fmt_args("locale.issue.placeholders", &[&self.key, &found.to_string(), &expected.to_string()])
+            }
+            IssueKind::Unreadable(why) => locale.fmt("locale.issue.unreadable", why),
+        }
+    }
+
+    /// The message after the file's full path, when there is one.
+    pub fn describe(&self, locale: &Locale) -> String {
+        match &self.file {
+            Some(f) if self.classic => {
+                format!(
+                    "{}: {}",
+                    locale.fmt("locale.issue.classic_file", &f.display().to_string()),
+                    self.message(locale)
+                )
+            }
+            Some(f) => format!("{}: {}", f.display(), self.message(locale)),
+            None => self.message(locale),
+        }
+    }
+}
+
+impl Locale {
+    /// Read only the header of a locale file of either format.
+    ///
+    /// The strings are skipped as the text is read, not built: listing the
+    /// languages costs a pass over each file and nothing more.
+    pub fn parse_header(text: &str) -> Result<LocaleHeader, String> {
+        use serde::de::IgnoredAny;
+        // Both formats' header fields; everything else (the strings) is
+        // passed over without being kept.
+        #[derive(Deserialize)]
+        #[allow(non_snake_case)]
+        struct Header {
+            code: Option<String>,
+            #[serde(default)]
+            name: String,
+            #[serde(default)]
+            native_name: String,
+            #[serde(default)]
+            LanguageCode: String,
+            #[serde(default)]
+            LanguageName: String,
+            #[serde(default)]
+            LanguageNativeName: String,
+            Strings: Option<IgnoredAny>,
+            Windows: Option<IgnoredAny>,
+        }
+        let h: Header = serde_json::from_str(&jsonc::strip(text)).map_err(|e| e.to_string())?;
+        if h.Strings.is_some() || h.Windows.is_some() {
+            let native_name =
+                if h.LanguageNativeName.is_empty() { h.LanguageName.clone() } else { h.LanguageNativeName };
+            Ok(LocaleHeader { code: h.LanguageCode, name: h.LanguageName, native_name, classic: true })
+        } else {
+            let code = h.code.ok_or("missing field `code`")?;
+            Ok(LocaleHeader { code, name: h.name, native_name: h.native_name, classic: false })
+        }
+    }
+
+    /// Check this locale against the program's keys and drop what would do
+    /// harm: unknown keys and language tags are warnings (they would never
+    /// show anyway), a string with a different number of `%s` than English is
+    /// an error and is removed, so the layer below shows instead of a
+    /// sentence with a hole or a stray placeholder.
+    pub fn validate(&mut self) -> Vec<LocaleIssue> {
+        let mut issues = Vec::new();
+        let classic = self.classic;
+        let issue = |key: &str, kind| LocaleIssue { file: None, key: key.to_owned(), kind, classic };
+        let mut keys: Vec<String> = self.strings.keys().cloned().collect();
+        keys.sort();
+        for key in keys {
+            let Some(en) = english(&key) else {
+                self.strings.remove(&key);
+                issues.push(issue(&key, IssueKind::UnknownKey));
+                continue;
+            };
+            let expected = en.matches("%s").count();
+            let found = self.strings[&key].matches("%s").count();
+            if expected != found {
+                self.strings.remove(&key);
+                issues.push(issue(&key, IssueKind::Placeholders { expected, found }));
+            }
+        }
+        let tags: std::collections::HashSet<&str> = crate::LangId::all().map(|l| l.bcp47()).collect();
+        let mut unknown: Vec<String> = self.languages.keys().filter(|k| !tags.contains(k.as_str())).cloned().collect();
+        unknown.sort();
+        for tag in unknown {
+            self.languages.remove(&tag);
+            issues.push(issue(&tag, IssueKind::UnknownLanguage));
+        }
+        issues
+    }
+
+    /// The keys this locale does not translate, in table order.
+    pub fn untranslated_keys(&self) -> Vec<&'static str> {
+        STRINGS.iter().map(|(k, _, _)| *k).filter(|k| !self.strings.contains_key(*k)).collect()
+    }
+
+    /// A pack for translators to start from, in the native format with
+    /// comments (which locale files may carry): every key, with its English
+    /// text and the classic address (`w:10:1070`, `s:172`…) above it where
+    /// the classic program had the string, and the value from `base` or
+    /// empty. An empty value counts as untranslated, so a half-filled
+    /// template already loads. The language table's names follow, likewise.
+    pub fn template(base: Option<&Locale>) -> String {
+        let q = |s: &str| serde_json::to_string(s).unwrap_or_default();
+        let comment = |s: &str| s.replace(['\r', '\n'], " ");
+        let empty = Locale::default();
+        let base = base.unwrap_or(&empty);
+        let mut out = String::new();
+        out.push_str("// A Glossa interface language. Fill in the header and the strings, save it as\n");
+        out.push_str("// <code>.json in the data folder's locales folder, and check it with\n");
+        out.push_str("// `glossa-cli locale check FILE`. Keep every %s: each stands for a value.\n");
+        out.push_str("// Empty strings fall back to English.\n{\n");
+        for (field, value) in
+            [("code", &base.code), ("name", &base.name), ("native_name", &base.native_name), ("author", &base.author)]
+        {
+            out.push_str(&format!("  {}: {},\n", q(field), q(value)));
+        }
+        out.push_str("  \"strings\": {\n");
+        for (key, en, addr) in STRINGS {
+            out.push_str(&format!("    // {}", comment(en)));
+            if let Some(addr) = addr {
+                out.push_str(&format!("  [classic {addr}]"));
+            }
+            out.push('\n');
+            let value = base.strings.get(*key).map(String::as_str).unwrap_or("");
+            out.push_str(&format!("    {}: {},\n", q(key), q(value)));
+        }
+        out.push_str("  },\n  \"languages\": {\n");
+        for lang in crate::LangId::all() {
+            let value = base.languages.get(lang.bcp47()).map(String::as_str).unwrap_or("");
+            out.push_str(&format!("    {}: {}, // {}\n", q(lang.bcp47()), q(value), lang.english_name()));
+        }
+        out.push_str("  }\n}\n");
+        out
     }
 }
 
@@ -592,6 +827,14 @@ pub static STRINGS: &[(&str, &str, Option<&str>)] = &[
     ("options.basics.clear_history_on_exit", "Clear history on exit", Some("w:10:1124")),
     ("options.basics.expand_items", "Expand items", Some("w:10:1123")),
     ("options.basics.ui_language_system", "System", None),
+    ("options.basics.ui_language_folder", "Language folder", None),
+    ("options.basics.ui_language_reload", "Reload languages", None),
+    ("options.basics.ui_language_problems", "Problems in the language files:", None),
+    ("locale.issue.unknown_key", "%s: unknown key, ignored", None),
+    ("locale.issue.unknown_language", "%s: unknown language tag, ignored", None),
+    ("locale.issue.placeholders", "%s: %s placeholders where English has %s; the string is skipped", None),
+    ("locale.issue.unreadable", "cannot be read: %s", None),
+    ("locale.issue.classic_file", "%s (classic QTranslate file)", None),
     ("options.basics.font_default", "--- Default ---", None),
     (
         "options.basics.smart_direction",
@@ -1534,5 +1777,81 @@ mod tests {
         assert_eq!(total, STRINGS.len());
         let l = Locale::parse(r#"{"code":"xx","strings":{"main.translate":"T","not.a.key":"N"}}"#).unwrap();
         assert_eq!(l.coverage().0, 1);
+    }
+
+    #[test]
+    fn validation_skips_broken_placeholders_and_warns_about_unknown_keys() {
+        let mut l = Locale::parse(
+            r#"{ "code": "xx", "strings": {
+                "main.translate": "Tr",
+                "msg.ms": "ms only",
+                "options.ai.test_ok": "OK %s %s",
+                "no.such.key": "?",
+                "main.source_placeholder": ""
+            }, "languages": { "de": "Deu", "zz-Fake": "?" } }"#,
+        )
+        .unwrap();
+        let issues = l.validate();
+        let kinds: Vec<(&str, &IssueKind)> = issues.iter().map(|i| (i.key.as_str(), &i.kind)).collect();
+        assert_eq!(
+            kinds,
+            vec![
+                ("msg.ms", &IssueKind::Placeholders { expected: 1, found: 0 }),
+                ("no.such.key", &IssueKind::UnknownKey),
+                ("zz-Fake", &IssueKind::UnknownLanguage),
+            ]
+        );
+        assert_eq!(issues[0].severity(), Severity::Error);
+        assert_eq!(issues[1].severity(), Severity::Warning);
+        assert_eq!(l.get("main.translate"), "Tr");
+        assert_eq!(l.get("options.ai.test_ok"), "OK %s %s", "matching placeholders stay");
+        assert_eq!(l.get("msg.ms"), "%s ms", "a skipped string falls back to English");
+        assert_eq!(l.get("main.source_placeholder"), english("main.source_placeholder").unwrap(), "empty is a gap");
+        assert_eq!(
+            issues[0].message(&Locale::english()),
+            "msg.ms: 0 placeholders where English has 1; the string is skipped"
+        );
+        let ru = Locale::builtin("ru").unwrap();
+        assert_eq!(issues[1].message(&ru), "no.such.key: неизвестный ключ, пропущен");
+    }
+
+    #[test]
+    fn headers_read_without_the_strings() {
+        let h = Locale::parse_header(r#"{ "code": "de", "native_name": "Deutsch", "strings": { "a": "b" } }"#).unwrap();
+        assert_eq!(
+            h,
+            LocaleHeader { code: "de".into(), name: "".into(), native_name: "Deutsch".into(), classic: false }
+        );
+        let c = Locale::parse_header(CLASSIC_RU).unwrap();
+        assert!(c.classic && c.code == "ru" && c.native_name == "Русский");
+        assert!(Locale::parse_header(r#"{ "strings": {} }"#).is_err(), "a native file needs its code");
+        assert!(Locale::parse_header("not json").is_err());
+    }
+
+    #[test]
+    fn the_template_lists_every_key_and_loads_back() {
+        let t = Locale::template(None);
+        for (key, _, _) in STRINGS {
+            assert!(t.contains(&format!("\"{key}\": \"\"")), "{key} missing from the template");
+        }
+        assert!(t.contains("// Interface language:  [classic w:10:1070]"), "English and the classic address");
+        assert!(t.contains("\"de\": \"\", // German"));
+        // A blank template is a valid, empty pack.
+        let mut blank = Locale::parse(&t.replacen("\"code\": \"\"", "\"code\": \"xx\"", 1)).unwrap();
+        assert!(blank.validate().is_empty());
+        assert_eq!(blank.coverage().0, 0);
+        assert_eq!(blank.get("main.translate"), "Translate");
+        // Starting from a language keeps its strings, so a translator can
+        // update a pack from it.
+        let ru = Locale::builtin("ru").unwrap();
+        let mut back = Locale::parse(&Locale::template(Some(&ru))).unwrap();
+        assert!(back.validate().is_empty());
+        assert_eq!(back.code, "ru");
+        assert_eq!(back.coverage(), ru.coverage());
+        assert_eq!(back.get("options.server"), ru.get("options.server"));
+        assert_eq!(
+            back.language_name(crate::LangId::from_code("de").unwrap()),
+            ru.language_name(crate::LangId::from_code("de").unwrap())
+        );
     }
 }

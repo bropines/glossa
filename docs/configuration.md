@@ -623,3 +623,47 @@ files first, then native ones, so a native file can reword single strings
 of a built-in or classic translation. `glossa-cli locale convert lang.json`
 turns a classic file into a native one, and `glossa-cli locale list` shows
 what is available.
+
+The interface language applies at once, with no restart: every window, the
+tray menu and the macOS menu bar switch as soon as the setting is applied.
+
+### Your own language pack
+
+Put your files in the `locales` folder of the data folder (*Options →
+Basics → Language folder* opens it). It is searched last, so its files win.
+A native file looks like this:
+
+```json
+{
+  "code": "eo",
+  "name": "Esperanto",
+  "native_name": "Esperanto",
+  "author": "you",
+  "strings": { "main.translate": "Traduki" },
+  "languages": { "de": "Germana" }
+}
+```
+
+- `code` is required; `native_name` is what the language list shows next
+  to `name`. A new code joins the list; the code of a built-in language
+  (`ru.json`, `en.json`) lays your strings over it key by key, so a single
+  string can be fixed without waiting for a release.
+- Keys a file lacks, and empty strings, fall back to the layer below and
+  finally to English.
+- Each file is checked when its language is chosen: an unknown key or
+  language tag is a warning and is ignored; a string whose `%s`
+  placeholders do not match the English text in number is an error and is
+  skipped, so the layer below shows instead. A file in this folder that
+  cannot be read (or is over 4 MB) is an error too. In a classic
+  `lang.json` from the QTranslate installation the same problems are only
+  warnings, named with the file's folder: the strings are skipped all the
+  same, but the file is not yours to fix. Problems go to the log and are
+  listed under the language setting in Options.
+- Only the chosen language is loaded; for the others, only the header is
+  read to fill the list. A rescan that finds the chosen language's files
+  unchanged keeps what is loaded.
+- After editing a file, *Reload languages* in Options applies it.
+
+`glossa-cli locale template` writes a file to start from, with every key,
+its English text and its classic address; `glossa-cli locale check FILE`
+checks one ([cli.md](cli.md#locale)).

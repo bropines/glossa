@@ -16,6 +16,7 @@ use std::io::{IsTerminal, Read};
 use std::path::PathBuf;
 use std::process::ExitCode;
 
+use glossa_core::locale::Severity;
 use glossa_core::{Capabilities, LangId, LangPair, Paths};
 use std::sync::{Arc, Mutex};
 
@@ -89,6 +90,7 @@ COMMANDS
     import-classic DIR                settings, history, and use its services/themes/locales
     theme      list | show NAME | convert FILE    (classic JSON -> native TOML)
     locale     list | convert FILE                (classic lang.json -> native JSON)
+               check FILE | template [LANG]       (validate a pack; a pack to translate from)
     config     path | show
     serve                             run the control API (and on Linux the D-Bus service) until Ctrl+C
     action     ACTION [TEXT]          ask a running Glossa to act (show_popup, text_recognition…)
@@ -845,6 +847,74 @@ fn run(args: &Args) -> Result<(), Fail> {
                     let (have, total) = locale.coverage();
                     eprintln!("{} ({}): {have} of {total} strings", locale.name, locale.code);
                     out!("{}", locale.to_native_json());
+                    Ok(())
+                }
+                "check" => {
+                    let file = args.rest.get(1).ok_or_else(|| Fail::Usage("locale check FILE".into()))?;
+                    let mut locale = glossa_core::Locale::parse(&std::fs::read_to_string(file)?)
+                        .map_err(|e| Fail::Op(format!("{file}: {e}")))?;
+                    let issues = locale.validate();
+                    let (have, total) = locale.coverage();
+                    let missing = locale.untranslated_keys();
+                    let en = glossa_core::Locale::english();
+                    let errors = issues.iter().filter(|i| i.severity() == Severity::Error).count();
+                    if args.json {
+                        let list: Vec<serde_json::Value> = issues
+                            .iter()
+                            .map(|i| {
+                                json!({
+                                    "key": i.key,
+                                    "severity": if i.severity() == Severity::Error { "error" } else { "warning" },
+                                    "message": i.message(&en),
+                                })
+                            })
+                            .collect();
+                        out!(
+                            "{}",
+                            json!({
+                                "code": locale.code, "name": locale.name, "native_name": locale.native_name,
+                                "translated": have, "total": total, "missing": missing, "issues": list,
+                            })
+                        );
+                    } else {
+                        out!("{} ({}): {have} of {total} strings", locale.native_name, locale.code);
+                        for i in &issues {
+                            let level = if i.severity() == Severity::Error { "error" } else { "warning" };
+                            out!("{level}: {}", i.message(&en));
+                        }
+                        if args.verbose {
+                            for k in &missing {
+                                out!("missing: {k}");
+                            }
+                        } else if !missing.is_empty() {
+                            out!("{} strings fall back to English (-v lists them)", missing.len());
+                        }
+                    }
+                    if errors > 0 {
+                        if args.json {
+                            // The report above is the output; the exit code says it failed.
+                            std::process::exit(1);
+                        }
+                        return Err(Fail::Op(format!("{errors} strings skipped")));
+                    }
+                    Ok(())
+                }
+                "template" => {
+                    let base = match args.rest.get(1) {
+                        Some(lang) => {
+                            let e = engine(args)?;
+                            let Some(entry) = e
+                                .locales()
+                                .into_iter()
+                                .find(|l| l.code.eq_ignore_ascii_case(lang) || l.name.eq_ignore_ascii_case(lang))
+                            else {
+                                return Err(Fail::Usage(format!("no interface language {lang:?} (see locale list)")));
+                            };
+                            Some(e.load_locale(&entry.code))
+                        }
+                        None => None,
+                    };
+                    outp!("{}", glossa_core::Locale::template(base.as_ref()));
                     Ok(())
                 }
                 other => Err(Fail::Usage(format!("unknown locale command {other:?}"))),
