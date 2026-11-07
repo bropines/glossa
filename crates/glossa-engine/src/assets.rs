@@ -24,8 +24,12 @@ pub struct AssetReport {
     pub assets: Vec<AssetStatus>,
     /// Bytes in all.
     pub total_size: u64,
-    /// Every asset is downloaded and verified.
+    /// Every required asset is downloaded and verified.
     pub ready: bool,
+    /// A download, check or delete runs for the module now, whoever
+    /// started it (the UI, a first call's automatic download, the control
+    /// API): the front end disables Delete and Download meanwhile.
+    pub busy: bool,
     /// A background download, running or just finished.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub job: Option<AssetJobState>,
@@ -63,6 +67,8 @@ impl Engine {
             module: assets.module.clone(),
             dir: assets.root.clone(),
             ready: assets.ready(),
+            busy: assets.is_busy()
+                || self.inner.asset_jobs.lock().get(&assets.module).is_some_and(|j| j.state.lock().running),
             assets: statuses,
             total_size: assets.total_size(),
             job: self.inner.asset_jobs.lock().get(&assets.module).map(|j| j.state.lock().clone()),
@@ -171,8 +177,39 @@ impl Engine {
         Ok(report)
     }
 
+    /// [`Engine::remove_module_assets`] on a worker thread, for the UI.
+    /// [`Event::AssetsChanged`] reports the end; a failure shows as the
+    /// job's error.
+    pub fn start_asset_removal(&self, id: &str) -> Result<()> {
+        self.assets_of(id)?;
+        let state = Arc::new(Mutex::new(AssetJobState { running: true, ..Default::default() }));
+        self.inner
+            .asset_jobs
+            .lock()
+            .insert(id.to_owned(), AssetJob { state: state.clone(), cancel: CancelToken::new() });
+        self.emit(Event::AssetsChanged { module: id.to_owned() });
+        let (engine, module) = (self.clone(), id.to_owned());
+        self.spawn("assets", move || {
+            let result = engine.remove_module_assets(&module);
+            if let Err(e) = result {
+                tracing::warn!(module = %module, "could not delete the module's files: {e}");
+                let mut s = state.lock();
+                s.running = false;
+                s.error = e.to_string();
+                engine
+                    .inner
+                    .asset_jobs
+                    .lock()
+                    .insert(module.clone(), AssetJob { state: state.clone(), cancel: CancelToken::new() });
+            }
+            engine.emit(Event::AssetsChanged { module });
+        });
+        Ok(())
+    }
+
     /// Delete module `id`'s downloaded files. The modules are reloaded, so a
-    /// module that was running waits for its files again.
+    /// module that was running waits for its files again. Blocks until a
+    /// download running for the module stops: call it from a worker.
     pub fn remove_module_assets(&self, id: &str) -> Result<()> {
         let assets = self.assets_of(id)?;
         self.cancel_asset_download(id);
@@ -238,7 +275,7 @@ mod tests {
         std::fs::write(
             module.join("module.toml"),
             format!(
-                "capabilities = [\"translate\"]\n[module]\nid = \"offline-model\"\nname = \"Offline\"\nruntime = \"js\"\n\
+                "capabilities = [\"translate\"]\n[permissions]\nnetwork = [\"127.0.0.1\"]\n[module]\nid = \"offline-model\"\nname = \"Offline\"\nruntime = \"js\"\n\
                  [[assets]]\nname = \"model.onnx\"\nurl = \"http://127.0.0.1:{port}/model.onnx\"\nsha256 = \"{}\"\nsize = {}\n",
                 BODY_SHA,
                 BODY.len()
@@ -265,7 +302,8 @@ mod tests {
         // Half a file from an earlier attempt: the download resumes it.
         let state = r.dir.join(".glossa");
         std::fs::create_dir_all(&state).unwrap();
-        std::fs::write(state.join("model.onnx.part"), &BODY[..8]).unwrap();
+        // The partial file's name carries the start of the expected hash.
+        std::fs::write(state.join(format!("model.onnx.{}.part", &BODY_SHA[..16])), &BODY[..8]).unwrap();
         let r = e.download_module_assets("offline-model", &[], &CancelToken::new(), &|_| {}).unwrap();
         assert!(r.ready, "{r:?}");
         assert_eq!(std::fs::read(r.dir.join("model.onnx")).unwrap(), BODY);

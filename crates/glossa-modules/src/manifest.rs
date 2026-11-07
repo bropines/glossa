@@ -303,6 +303,10 @@ impl Manifest {
         {
             return Err(format!("module id {id:?} must be lowercase letters, digits, '-', '_' or '.'"));
         }
+        if id.chars().all(|c| c == '.') {
+            // It names folders (the module's files go to `models/<id>`).
+            return Err(format!("module id {id:?} must contain a letter or a digit"));
+        }
         if self.module.api != crate::PROTOCOL_VERSION {
             return Err(format!(
                 "module speaks protocol {}, this build speaks {}",
@@ -323,6 +327,18 @@ impl Manifest {
         }
         for asset in &self.assets {
             asset.validate()?;
+            // Downloads stay within the hosts the module declares, like its
+            // own requests, so the permissions list says everything the
+            // module may reach.
+            for url in asset.url.list() {
+                if !self.permissions.allows_url(url) {
+                    let host = url_host(url).unwrap_or_else(|| url.to_owned());
+                    return Err(format!(
+                        "asset {}: {host} is not in [permissions] network; add it to download from there",
+                        asset.name
+                    ));
+                }
+            }
         }
         Ok(())
     }

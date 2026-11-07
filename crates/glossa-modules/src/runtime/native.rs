@@ -71,52 +71,17 @@ type EntryFn = unsafe extern "C" fn() -> *const ModuleVTable;
 
 /// Load the native module in `dir` described by `manifest`.
 ///
-/// Only the library file is looked for here. Opening it runs its
-/// initialisers and maps its code (and whatever an ML runtime it links
-/// pulls in), so that waits for the module's first call: a module the user
-/// never calls costs nothing.
+/// The library is opened and its entry point checked here, so a broken
+/// one is reported when the modules load rather than on the first call.
+/// That is cheap: the module's own setup (a model, a session) belongs in
+/// its first `call`. A module whose library or model comes from its
+/// `[[assets]]` is not opened at all until they are downloaded.
 pub fn load(dir: &Path, manifest: Manifest, ctx: &RuntimeContext) -> Result<Arc<dyn Provider>, String> {
     let stem = if manifest.module.entry.trim().is_empty() { &manifest.module.id } else { &manifest.module.entry };
     let path = resolve_library(dir, stem)?;
-    tracing::debug!(module = %manifest.module.id, path = %path.display(), "native module found");
-    let transport = LazyNative { path, call_timeout: ctx.call_timeout, open: Mutex::new(None) };
+    let transport = NativeTransport::open(&path, ctx.call_timeout)?;
+    tracing::debug!(module = %manifest.module.id, path = %path.display(), "native module loaded");
     Ok(Arc::new(ProtocolProvider::new(manifest, transport, ctx.cache.clone())))
-}
-
-/// A native module whose library is opened on the first call.
-pub struct LazyNative {
-    path: PathBuf,
-    call_timeout: Duration,
-    open: Mutex<Option<Arc<NativeTransport>>>,
-}
-
-impl LazyNative {
-    /// Whether the library has been opened.
-    pub fn is_open(&self) -> bool {
-        self.open.lock().is_some()
-    }
-
-    fn transport(&self) -> Result<Arc<NativeTransport>, ModuleError> {
-        let mut open = self.open.lock();
-        if let Some(t) = open.as_ref() {
-            return Ok(t.clone());
-        }
-        let t = Arc::new(NativeTransport::open(&self.path, self.call_timeout).map_err(ModuleError::other)?);
-        tracing::debug!(path = %self.path.display(), "native module loaded");
-        *open = Some(t.clone());
-        Ok(t)
-    }
-}
-
-impl Transport for LazyNative {
-    fn call(
-        &self,
-        method: &str,
-        params: serde_json::Value,
-        host: &dyn Fn(&str, serde_json::Value) -> Reply,
-    ) -> Result<serde_json::Value, ModuleError> {
-        self.transport()?.call(method, params, host)
-    }
 }
 
 // -- finding the library --------------------------------------------------------

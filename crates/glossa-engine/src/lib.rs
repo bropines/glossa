@@ -11,8 +11,8 @@
 //! main window with instant translation on never lets an older, slower answer
 //! overwrite a newer one.
 
-#[cfg(feature = "js")]
 pub mod assets;
+#[cfg(feature = "js")]
 pub mod bundled;
 pub mod catalog;
 pub mod dbus;

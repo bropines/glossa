@@ -34,11 +34,6 @@ the notes of its GitHub release.
   `asset_path` / `assetPath` in the Python and Java SDKs, and
   `GLOSSA_ASSET_*` / `${ASSETS_DIR}` for process modules.
 
-### Changed
-
-- Native modules open their library on the first call instead of when
-  Glossa starts, so an installed native module costs nothing until used.
-
 ### Fixed
 
 - macOS: the popup's Replace button did not replace the selected text:

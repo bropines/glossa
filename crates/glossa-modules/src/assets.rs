@@ -257,11 +257,42 @@ pub struct ModuleAssets {
     pub module: String,
     /// `<models>/<module-id>`.
     pub root: PathBuf,
+    /// `<models>`: nothing is ever written or deleted outside `root`, which
+    /// sits directly below it.
+    models_dir: PathBuf,
     pub specs: Vec<AssetSpec>,
-    /// One download at a time per module: the UI's and a first call's
-    /// automatic one would otherwise write the same partial file.
-    busy: Mutex<()>,
 }
+
+/// One writer at a time per module folder, across every [`ModuleAssets`]
+/// made for it in this process (each reload of the modules makes new ones):
+/// the UI's download, a first call's automatic one, a check and a delete
+/// would otherwise touch the same files. Another process (`glossa-cli`
+/// next to the desktop app) is kept out by a file lock as well; see
+/// [`ModuleAssets::exclusive`].
+fn folder_lock(root: &Path) -> Arc<Mutex<()>> {
+    static LOCKS: std::sync::OnceLock<Mutex<std::collections::HashMap<PathBuf, Arc<Mutex<()>>>>> =
+        std::sync::OnceLock::new();
+    LOCKS.get_or_init(Default::default).lock().entry(root.to_owned()).or_default().clone()
+}
+
+/// Held while a download, a check or a delete runs.
+pub struct Exclusive {
+    _file: Option<File>,
+    _guard: parking_lot::ArcMutexGuard<parking_lot::RawMutex, ()>,
+}
+
+/// The most an archive may unpack to: generous for compressed text
+/// (dictionaries shrink tenfold or more), but bounded, so a small archive
+/// cannot fill the disk.
+pub fn unpack_limit(download_size: u64) -> u64 {
+    const FLOOR: u64 = 64 << 20;
+    const CEILING: u64 = 64 << 30;
+    download_size.saturating_mul(32).clamp(FLOOR, CEILING)
+}
+
+/// The most a tar extended-header record (a long name, pax attributes) may
+/// take; real ones are a few hundred bytes.
+const MAX_TAR_RECORD: u64 = 1 << 20;
 
 impl ModuleAssets {
     /// The assets of `manifest` that apply here, under `models_dir`. `None`
@@ -280,18 +311,37 @@ impl ModuleAssets {
         if specs.is_empty() {
             return Ok(None);
         }
-        Ok(Some(Self {
-            module: manifest.module.id.clone(),
-            root: models_dir.join(&manifest.module.id),
-            specs,
-            busy: Mutex::new(()),
-        }))
+        let id = &manifest.module.id;
+        // The id becomes a folder name: exactly one ordinary component, so
+        // `.`, `..` or a separator can never point the folder elsewhere.
+        let one_component = matches!(Path::new(id).components().collect::<Vec<_>>().as_slice(), [Component::Normal(c)] if *c == std::ffi::OsStr::new(id));
+        if !one_component || id.chars().all(|c| c == '.') {
+            return Err(format!("module id {id:?} cannot name a folder for its files"));
+        }
+        Ok(Some(Self { module: id.clone(), root: models_dir.join(id), models_dir: models_dir.to_owned(), specs }))
     }
 
     /// Where `name` is (or will be) once ready: the file, or the folder it
     /// was unpacked into.
     pub fn path(&self, name: &str) -> PathBuf {
         self.root.join(name)
+    }
+
+    /// What the `assets` host call answers: only assets verified against
+    /// the hash the manifest names now are handed out; the rest (optional
+    /// ones not downloaded, files left from an older version) are listed
+    /// as missing.
+    pub fn host_info(&self) -> glossa_module_sdk::wire::AssetsInfo {
+        let mut info =
+            glossa_module_sdk::wire::AssetsInfo { dir: self.root.to_string_lossy().into_owned(), ..Default::default() };
+        for status in self.status() {
+            if status.state == AssetState::Ready {
+                info.files.insert(status.name, status.path.to_string_lossy().into_owned());
+            } else {
+                info.missing.push(status.name);
+            }
+        }
+        info
     }
 
     /// Every asset's path, by name.
@@ -303,8 +353,84 @@ impl ModuleAssets {
         self.root.join(STATE_DIR)
     }
 
+    /// The partial download of `name`. Its name carries the start of the
+    /// expected hash, so a part left over from an older version of the
+    /// file is never resumed into the new one.
     fn part_path(&self, name: &str) -> PathBuf {
-        self.state_dir().join(format!("{name}.part"))
+        let sha = self.specs.iter().find(|s| s.name == name).map(|s| s.sha256.to_ascii_lowercase()).unwrap_or_default();
+        self.state_dir().join(format!("{name}.{}.part", &sha[..sha.len().min(16)]))
+    }
+
+    /// Delete partial downloads of `name` other than the current one.
+    fn drop_stale_parts(&self, name: &str) {
+        let current = self.part_path(name);
+        let Ok(dir) = fs::read_dir(self.state_dir()) else { return };
+        for e in dir.flatten() {
+            let file = e.file_name().to_string_lossy().into_owned();
+            let ours = file
+                .strip_prefix(name)
+                .and_then(|rest| rest.strip_prefix('.'))
+                .is_some_and(|rest| rest.ends_with(".part") && !rest[..rest.len() - 5].contains('.'));
+            if ours && e.path() != current {
+                let _ = fs::remove_file(e.path());
+            }
+        }
+    }
+
+    /// Whether `path` lies inside this module's folder, which lies directly
+    /// in the models folder. Checked before anything is written or deleted.
+    fn contained(&self, path: &Path) -> io::Result<()> {
+        let root_ok = self.root.parent() == Some(self.models_dir.as_path())
+            && self.root.file_name().is_some_and(|n| n == std::ffi::OsStr::new(&self.module));
+        let inside =
+            path.strip_prefix(&self.root).is_ok_and(|rel| rel.components().all(|c| matches!(c, Component::Normal(_))));
+        if root_ok && inside {
+            Ok(())
+        } else {
+            Err(io::Error::other(format!("refusing to touch {} outside {}", path.display(), self.root.display())))
+        }
+    }
+
+    fn remove_inside(&self, path: &Path) -> io::Result<()> {
+        self.contained(path)?;
+        remove_any(path)
+    }
+
+    /// Whether a download, a check or a delete runs for this module now, in
+    /// this process (the UI greys out Delete meanwhile).
+    pub fn is_busy(&self) -> bool {
+        folder_lock(&self.root).try_lock().is_none()
+    }
+
+    /// Take the module's folder for writing: the in-process lock, then a
+    /// lock file beside the folder against another Glossa process. Blocks
+    /// while either is held elsewhere.
+    pub fn exclusive(&self) -> io::Result<Exclusive> {
+        let guard = folder_lock(&self.root).lock_arc();
+        let locks = self.models_dir.join(".locks");
+        let file = fs::create_dir_all(&locks).and_then(|()| {
+            fs::OpenOptions::new()
+                .create(true)
+                .truncate(false)
+                .write(true)
+                .open(locks.join(format!("{}.lock", self.module)))
+        });
+        let file = match file {
+            Ok(f) => {
+                if f.try_lock().is_err() {
+                    tracing::info!(module = %self.module, "another Glossa is working on these files; waiting");
+                    f.lock()?;
+                }
+                Some(f)
+            }
+            // A read-only models folder fails later with a clearer error;
+            // the in-process lock still holds.
+            Err(e) => {
+                tracing::debug!(module = %self.module, "no lock file for the module's files: {e}");
+                None
+            }
+        };
+        Ok(Exclusive { _file: file, _guard: guard })
     }
 
     fn marker_path(&self, name: &str) -> PathBuf {
@@ -409,7 +535,7 @@ impl ModuleAssets {
         progress: &dyn Fn(&Progress),
     ) -> Result<()> {
         let chosen = self.chosen(names)?;
-        let _busy = self.busy.lock();
+        let _busy = self.exclusive()?;
         let total = chosen.iter().map(|s| s.size).sum();
         let mut base = 0u64;
         for spec in chosen {
@@ -429,6 +555,7 @@ impl ModuleAssets {
 
     fn fetch_one(&self, spec: &AssetSpec, http: &dyn Http, cancel: &CancelToken, progress: &dyn Fn(u64)) -> Result<()> {
         fs::create_dir_all(self.state_dir())?;
+        self.drop_stale_parts(&spec.name);
         let part = self.part_path(&spec.name);
         let mut last_err = None;
         for url in spec.url.list() {
@@ -562,7 +689,7 @@ impl ModuleAssets {
     /// Put a verified download in place and write its marker.
     fn install(&self, spec: &AssetSpec, part: &Path) -> Result<()> {
         let dest = self.path(&spec.name);
-        remove_any(&dest)?;
+        self.remove_inside(&dest)?;
         let mut files = Vec::new();
         match spec.unpack {
             Unpack::None => {
@@ -574,7 +701,7 @@ impl ModuleAssets {
             }
             Unpack::Gz => {
                 let staging = self.state_dir().join(format!("{}.unpacking", spec.name));
-                let unpacked = gunzip(part, &staging);
+                let unpacked = gunzip(part, &staging, &mut Budget::new(spec.size));
                 if let Err(e) = unpacked {
                     let _ = fs::remove_file(&staging);
                     let _ = fs::remove_file(part);
@@ -593,11 +720,11 @@ impl ModuleAssets {
             }
             kind => {
                 let staging = self.state_dir().join(format!("{}.unpacking", spec.name));
-                remove_any(&staging)?;
+                self.remove_inside(&staging)?;
                 fs::create_dir_all(&staging)?;
                 let unpacked = match kind {
-                    Unpack::Zip => unzip(part, &staging),
-                    _ => untar_gz(part, &staging),
+                    Unpack::Zip => unzip(part, &staging, &mut Budget::new(spec.size)),
+                    _ => untar_gz(part, &staging, &mut Budget::new(spec.size)),
                 };
                 if let Err(e) = unpacked {
                     let _ = fs::remove_dir_all(&staging);
@@ -622,12 +749,12 @@ impl ModuleAssets {
     /// is there with its size. Anything damaged is deleted, so the next
     /// download fetches it again. Blocks.
     pub fn verify(&self) -> Result<Vec<AssetStatus>> {
-        let _busy = self.busy.lock();
+        let _busy = self.exclusive()?;
         let mut out = Vec::new();
         for spec in &self.specs {
             let mut status = self.status_of(spec);
             if status.state == AssetState::Ready && !self.intact(spec)? {
-                remove_any(&status.path)?;
+                self.remove_inside(&status.path)?;
                 let _ = fs::remove_file(self.marker_path(&spec.name));
                 status.state = AssetState::Corrupt;
             }
@@ -657,7 +784,8 @@ impl ModuleAssets {
 
     /// Delete every downloaded file of this module, partial ones included.
     pub fn remove(&self) -> Result<()> {
-        let _busy = self.busy.lock();
+        let _busy = self.exclusive()?;
+        self.contained(&self.root.join(STATE_DIR))?;
         remove_any(&self.root)?;
         Ok(())
     }
@@ -732,7 +860,31 @@ fn safe_join(root: &Path, name: &str) -> Option<PathBuf> {
     any.then_some(out)
 }
 
-fn unzip(archive: &Path, dest: &Path) -> std::result::Result<(), String> {
+/// Counts what an archive unpacks to against [`unpack_limit`].
+struct Budget {
+    left: u64,
+}
+
+impl Budget {
+    fn new(download_size: u64) -> Self {
+        Self { left: unpack_limit(download_size) }
+    }
+
+    /// Copy at most what is left of the budget, failing past it.
+    fn copy(&mut self, from: &mut impl Read, to: &mut impl Write, what: &str) -> std::result::Result<u64, String> {
+        let copied = io::copy(&mut from.take(self.left + 1), to).map_err(|e| format!("{what}: {e}"))?;
+        if copied > self.left {
+            return Err(format!(
+                "{what}: the archive unpacks to more than {} bytes, far beyond its download size",
+                self.left
+            ));
+        }
+        self.left -= copied;
+        Ok(copied)
+    }
+}
+
+fn unzip(archive: &Path, dest: &Path, budget: &mut Budget) -> std::result::Result<(), String> {
     let file = File::open(archive).map_err(|e| e.to_string())?;
     let mut zip = zip::ZipArchive::new(file).map_err(|e| e.to_string())?;
     for i in 0..zip.len() {
@@ -749,7 +901,7 @@ fn unzip(archive: &Path, dest: &Path) -> std::result::Result<(), String> {
             fs::create_dir_all(parent).map_err(|e| e.to_string())?;
         }
         let mut out = File::create(&path).map_err(|e| format!("{}: {e}", path.display()))?;
-        io::copy(&mut entry, &mut out).map_err(|e| format!("{name}: {e}"))?;
+        budget.copy(&mut entry, &mut out, &name)?;
         #[cfg(unix)]
         if let Some(mode) = entry.unix_mode() {
             set_executable(&path, mode);
@@ -766,18 +918,18 @@ fn set_executable(path: &Path, mode: u32) {
     }
 }
 
-fn gunzip(archive: &Path, dest: &Path) -> std::result::Result<(), String> {
+fn gunzip(archive: &Path, dest: &Path, budget: &mut Budget) -> std::result::Result<(), String> {
     let file = File::open(archive).map_err(|e| e.to_string())?;
     let mut r = flate2::read::GzDecoder::new(io::BufReader::new(file));
     let mut out = File::create(dest).map_err(|e| format!("{}: {e}", dest.display()))?;
-    io::copy(&mut r, &mut out).map_err(|e| e.to_string())?;
+    budget.copy(&mut r, &mut out, "gz")?;
     Ok(())
 }
 
 /// A minimal tar reader: regular files and folders, with GNU long names and
 /// pax `path` records. Links, devices and the like are skipped; an asset has
 /// no business carrying them.
-fn untar_gz(archive: &Path, dest: &Path) -> std::result::Result<(), String> {
+fn untar_gz(archive: &Path, dest: &Path, budget: &mut Budget) -> std::result::Result<(), String> {
     let file = File::open(archive).map_err(|e| e.to_string())?;
     let mut r = flate2::read::GzDecoder::new(io::BufReader::new(file));
     let mut header = [0u8; 512];
@@ -803,6 +955,9 @@ fn untar_gz(archive: &Path, dest: &Path) -> std::result::Result<(), String> {
         let padded = size.div_ceil(512) * 512;
         match kind {
             b'L' | b'x' => {
+                if size > MAX_TAR_RECORD {
+                    return Err(format!("a tar header record of {size} bytes is not a file name"));
+                }
                 let mut data = vec![0u8; size as usize];
                 r.read_exact(&mut data).map_err(|e| e.to_string())?;
                 skip(&mut r, padded - size)?;
@@ -838,7 +993,7 @@ fn untar_gz(archive: &Path, dest: &Path) -> std::result::Result<(), String> {
             fs::create_dir_all(parent).map_err(|e| e.to_string())?;
         }
         let mut out = File::create(&path).map_err(|e| format!("{}: {e}", path.display()))?;
-        let copied = io::copy(&mut (&mut r).take(size), &mut out).map_err(|e| format!("{name}: {e}"))?;
+        let copied = budget.copy(&mut (&mut r).take(size), &mut out, &name)?;
         if copied != size {
             return Err(format!("{name}: the archive ends early"));
         }
@@ -1041,7 +1196,7 @@ mod tests {
 
     fn manifest(assets: &str) -> Manifest {
         Manifest::parse(&format!(
-            "capabilities = [\"translate\"]\n[module]\nid = \"m\"\nname = \"M\"\nruntime = \"js\"\n{assets}"
+            "capabilities = [\"translate\"]\n[permissions]\nnetwork = [\"*.test\", \"x\"]\n[module]\nid = \"m\"\nname = \"M\"\nruntime = \"js\"\n{assets}"
         ))
         .unwrap()
     }
@@ -1209,7 +1364,7 @@ mod tests {
     fn bad_asset_entries_are_rejected_with_a_reason() {
         let parse = |toml: &str| {
             Manifest::parse(&format!(
-                "capabilities = [\"translate\"]\n[module]\nid = \"m\"\nname = \"M\"\nruntime = \"js\"\n{toml}"
+                "capabilities = [\"translate\"]\n[permissions]\nnetwork = [\"x\"]\n[module]\nid = \"m\"\nname = \"M\"\nruntime = \"js\"\n{toml}"
             ))
         };
         assert!(parse(&one("\"https://x/\"", "abc", 11, "")).unwrap_err().contains("64 hex"));
@@ -1400,5 +1555,150 @@ mod tests {
         assert_eq!(a.verify().unwrap()[0].state, AssetState::Ready);
         fs::write(&path, "shorter").unwrap();
         assert_eq!(a.verify().unwrap()[0].state, AssetState::Corrupt);
+    }
+
+    #[test]
+    fn module_ids_cannot_point_the_folder_outside_the_models_folder() {
+        for bad in [".", "..", "..."] {
+            let err = Manifest::parse(&format!(
+                "capabilities = [\"translate\"]\n[module]\nid = \"{bad}\"\nname = \"M\"\nruntime = \"js\"\n"
+            ))
+            .unwrap_err();
+            assert!(err.contains("letter or a digit"), "{bad}: {err}");
+            // Even a manifest that skipped validation gets no folder.
+            let mut m = manifest(&one("\"https://dl.test/d\"", HELLO_SHA, 11, ""));
+            m.module.id = bad.into();
+            assert!(ModuleAssets::for_manifest(&m, Path::new("/tmp/models")).is_err(), "{bad}");
+        }
+        // Deleting a module's files leaves its neighbours alone.
+        let tmp = Temp::new("contained");
+        let a = assets(&tmp, &one("\"https://dl.test/d\"", HELLO_SHA, HELLO.len(), ""));
+        fs::write(tmp.0.join("neighbour.txt"), "keep").unwrap();
+        fs::create_dir_all(a.state_dir()).unwrap();
+        a.remove().unwrap();
+        assert!(tmp.0.join("neighbour.txt").exists() && !a.root.exists());
+        assert!(a.contained(&tmp.0.join("neighbour.txt")).is_err());
+        assert!(a.contained(&a.root.join("../neighbour.txt")).is_err());
+        assert!(a.contained(&a.root.join("data.bin")).is_ok());
+    }
+
+    #[test]
+    fn asset_hosts_must_be_in_the_permissions() {
+        let err = Manifest::parse(&format!(
+            "capabilities = [\"translate\"]\n[permissions]\nnetwork = [\"api.example.com\"]\n[module]\nid = \"m\"\nname = \"M\"\nruntime = \"js\"\n{}",
+            one("[\"https://api.example.com/a\", \"https://cdn.other.org/a\"]", HELLO_SHA, 11, "")
+        ))
+        .unwrap_err();
+        assert!(err.contains("cdn.other.org") && err.contains("[permissions]"), "{err}");
+    }
+
+    #[test]
+    fn archives_that_unpack_far_beyond_their_size_are_refused() {
+        assert_eq!(unpack_limit(1), 64 << 20);
+        assert_eq!(unpack_limit(u64::MAX), 64 << 30);
+        // 80 MiB of zeros gzip to a few dozen kilobytes.
+        let mut gz = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::fast());
+        let zeros = vec![0u8; 1 << 20];
+        for _ in 0..80 {
+            gz.write_all(&zeros).unwrap();
+        }
+        let bomb = gz.finish().unwrap();
+        let tmp = Temp::new("bomb");
+        let a = assets(&tmp, &one("\"https://dl.test/a\"", &sha_hex(&bomb), bomb.len(), "unpack = \"gz\""));
+        let err = a.download(&Bytes(bomb), &CancelToken::new(), &|_| {}).unwrap_err();
+        assert!(err.to_string().contains("unpacks to more than"), "{err}");
+        assert!(!a.path("data.bin").exists() && !a.ready());
+
+        // A tar "long name" record claiming megabytes is refused before
+        // anything is allocated for it.
+        let mut h = [0u8; 512];
+        h[..13].copy_from_slice(b"././@LongLink");
+        h[124..135].copy_from_slice(format!("{:011o}", 2u64 << 20).as_bytes());
+        h[156] = b'L';
+        let mut tar = h.to_vec();
+        tar.extend_from_slice(&[0u8; 1024]);
+        let mut gz = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::fast());
+        gz.write_all(&tar).unwrap();
+        let bytes = gz.finish().unwrap();
+        let tmp = Temp::new("longname");
+        let a = assets(&tmp, &one("\"https://dl.test/a\"", &sha_hex(&bytes), bytes.len(), "unpack = \"tar.gz\""));
+        let err = a.download(&Bytes(bytes), &CancelToken::new(), &|_| {}).unwrap_err();
+        assert!(err.to_string().contains("header record"), "{err}");
+    }
+
+    #[test]
+    fn writers_to_one_folder_take_turns_across_reloads_and_processes() {
+        let tmp = Temp::new("turns");
+        let toml = one("\"https://dl.test/d\"", HELLO_SHA, HELLO.len(), "");
+        // Two instances for one folder, as after a reload of the modules.
+        let a = assets(&tmp, &toml);
+        let b = Arc::new(assets(&tmp, &toml));
+        let held = a.exclusive().unwrap();
+        assert!(b.is_busy(), "the lock is shared by folder, not by instance");
+        let done = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let worker = {
+            let (b, done) = (b.clone(), done.clone());
+            std::thread::spawn(move || {
+                let http = MockHttp::new().on(Method::Get, "https://dl.test/", 200, HELLO);
+                b.download(&http, &CancelToken::new(), &|_| {}).unwrap();
+                done.store(true, std::sync::atomic::Ordering::SeqCst);
+            })
+        };
+        std::thread::sleep(std::time::Duration::from_millis(150));
+        assert!(!done.load(std::sync::atomic::Ordering::SeqCst), "the second writer waits");
+        drop(held);
+        worker.join().unwrap();
+        assert!(b.ready() && !b.is_busy());
+
+        // Another process holding the lock file keeps a writer waiting too.
+        let lock = fs::OpenOptions::new().write(true).open(tmp.0.join(".locks").join("m.lock")).unwrap();
+        lock.lock().unwrap();
+        let done = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let worker = {
+            let (b, done) = (b.clone(), done.clone());
+            std::thread::spawn(move || {
+                b.verify().unwrap();
+                done.store(true, std::sync::atomic::Ordering::SeqCst);
+            })
+        };
+        std::thread::sleep(std::time::Duration::from_millis(150));
+        assert!(!done.load(std::sync::atomic::Ordering::SeqCst), "the file lock holds it back");
+        lock.unlock().unwrap();
+        worker.join().unwrap();
+    }
+
+    #[test]
+    fn a_part_left_from_an_older_version_is_not_resumed() {
+        const NEW: &str = "HELLO WORLD";
+        let tmp = Temp::new("stale");
+        let old = assets(&tmp, &one("\"https://dl.test/d\"", HELLO_SHA, HELLO.len(), ""));
+        let http = MockHttp::new().on_once(Method::Get, "https://dl.test/", 200, "hello ");
+        assert!(old.download(&http, &CancelToken::new(), &|_| {}).is_err());
+        assert_eq!(old.status()[0].state, AssetState::Partial { have: 6 });
+
+        // The module is updated: same name and size, another file.
+        let new = assets(&tmp, &one("\"https://dl.test/d\"", &sha_hex(NEW.as_bytes()), NEW.len(), ""));
+        assert_eq!(new.status()[0].state, AssetState::Missing, "the old part is not this file's");
+        let http = MockHttp::new().on(Method::Get, "https://dl.test/", 200, NEW);
+        new.download(&http, &CancelToken::new(), &|_| {}).unwrap();
+        assert!(http.requests()[0].headers.iter().all(|(n, _)| n != "Range"), "nothing resumed");
+        assert_eq!(fs::read_to_string(new.path("data.bin")).unwrap(), NEW);
+        assert!(!old.part_path("data.bin").exists(), "the stale part was cleared");
+    }
+
+    #[test]
+    fn the_host_call_hands_out_only_files_verified_for_this_manifest() {
+        let tmp = Temp::new("hostinfo");
+        let toml = one("\"https://dl.test/d\"", HELLO_SHA, HELLO.len(), "optional = true");
+        let a = assets(&tmp, &toml);
+        assert_eq!(a.host_info().missing, ["data.bin"]);
+        let http = MockHttp::new().on(Method::Get, "https://dl.test/", 200, HELLO);
+        a.download_some(&["data.bin".into()], &http, &CancelToken::new(), &|_| {}).unwrap();
+        let info = a.host_info();
+        assert!(info.missing.is_empty() && info.files.contains_key("data.bin"));
+        // The manifest now names another file: the old one is not handed out.
+        let changed = assets(&tmp, &toml.replace(HELLO_SHA, &sha_hex(b"HELLO WORLD")));
+        let info = changed.host_info();
+        assert_eq!((info.files.len(), info.missing), (0, vec!["data.bin".to_owned()]));
     }
 }

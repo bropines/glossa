@@ -240,13 +240,14 @@ Takes no parameters (`null`). Returns where the files from the manifest's
   "missing": ["ru-en"] }
 ```
 
-- `files` holds every asset that applies to this system, by name: a file,
-  or the folder an archive was unpacked into.
-- `missing` lists the ones not downloaded yet, which can only be
-  `optional` ones: Glossa starts a module only when its required assets are
-  all there and verified. A file at its path is always a verified one.
+- `files` holds the assets that are downloaded and verified against the
+  hash the manifest names now, by name: a file, or the folder an archive
+  was unpacked into.
+- `missing` lists the rest: optional assets not downloaded yet, or a file
+  left from an older version of the module. Glossa starts a module only
+  when its required assets are all verified.
 - A module without assets gets `{"dir": "", "files": {}}`.
-- Process modules also find the paths in their environment
+- Process modules also find their required assets in the environment
   (`GLOSSA_ASSETS_DIR`, `GLOSSA_ASSET_<NAME>`), so they can load a model
   before the first request.
 

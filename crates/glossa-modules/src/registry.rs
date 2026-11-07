@@ -370,8 +370,12 @@ fn point_at_assets(manifest: &mut Manifest, assets: &ModuleAssets) {
     m.jvm_args.iter_mut().for_each(expand);
     expand(&mut m.cwd);
     m.env.entry("GLOSSA_ASSETS_DIR".into()).or_insert_with(|| root.clone());
-    for (name, path) in assets.paths() {
-        m.env.entry(crate::assets::env_name(&name)).or_insert_with(|| path.to_string_lossy().into_owned());
+    // Required assets only: the module starts once those are verified.
+    // Optional ones may be missing or outdated, so a module learns about
+    // them from the `assets` host call, which checks.
+    for spec in assets.specs.iter().filter(|s| !s.optional) {
+        let path = assets.path(&spec.name);
+        m.env.entry(crate::assets::env_name(&spec.name)).or_insert_with(|| path.to_string_lossy().into_owned());
     }
     manifest.assets_dir = Some(assets.root.clone());
 }
@@ -495,6 +499,9 @@ id = "needs-model"
 name = "Needs a model"
 runtime = "js"
 env = { OWN = "${ASSETS_DIR}/x" }
+
+[permissions]
+network = ["dl.test"]
 
 [[assets]]
 name = "model.bin"

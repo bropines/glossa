@@ -70,7 +70,10 @@ pub enum Error {
     /// dictionary) that have not been downloaded yet. The front end offers
     /// the download; nothing is fetched without the user's say-so unless
     /// automatic downloads are switched on.
-    #[error("module {module} needs its files downloaded first ({})", missing.join(", "))]
+    #[error(
+        "module {module} needs its files downloaded first ({}): use Download in its settings, or run `glossa-cli module assets download {module}`",
+        missing.join(", ")
+    )]
     AssetsMissing { module: String, missing: Vec<String> },
 
     /// A downloaded module file did not match the checksum its manifest

@@ -43,22 +43,19 @@ pub struct ProtocolProvider<T: Transport> {
     info: ProviderInfo,
     transport: T,
     cache: Arc<ModuleCache>,
-    /// The `assets` host call's answer, for a module with assets.
-    assets: Option<wire::AssetsInfo>,
+    /// The module's assets, for the `assets` host call.
+    assets: Option<crate::assets::ModuleAssets>,
 }
 
 impl<T: Transport> ProtocolProvider<T> {
     pub fn new(manifest: Manifest, transport: T, cache: Arc<ModuleCache>) -> Self {
         let info = manifest.provider_info();
-        let assets = manifest.assets_dir.as_ref().map(|dir| wire::AssetsInfo {
-            dir: dir.to_string_lossy().into_owned(),
-            files: crate::assets::select(&manifest.assets, std::env::consts::OS, std::env::consts::ARCH)
-                .unwrap_or_default()
-                .into_iter()
-                .map(|a| (a.name.clone(), dir.join(&a.name).to_string_lossy().into_owned()))
-                .collect(),
-            missing: Vec::new(),
-        });
+        // The registry sets `assets_dir` to `<models>/<id>`.
+        let assets = manifest
+            .assets_dir
+            .as_ref()
+            .and_then(|dir| dir.parent())
+            .and_then(|models| crate::assets::ModuleAssets::for_manifest(&manifest, models).ok().flatten());
         Self { manifest, info, transport, cache, assets }
     }
 

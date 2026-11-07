@@ -952,6 +952,7 @@ pub static STRINGS: &[(&str, &str, Option<&str>)] = &[
     ("options.assets.corrupt", "damaged, deleted", None),
     ("options.assets.download", "Download (%s)", None),
     ("options.assets.cancel", "Cancel", None),
+    ("options.assets.busy", "Downloading or checking files…", None),
     ("options.assets.optional", "optional", None),
     ("options.assets.get", "Download", None),
     ("options.assets.verify", "Check files", None),

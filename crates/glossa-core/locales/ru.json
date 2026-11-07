@@ -492,6 +492,7 @@
     "options.assets.corrupt": "повреждено, удалено",
     "options.assets.download": "Скачать (%s)",
     "options.assets.cancel": "Отмена",
+    "options.assets.busy": "Идёт загрузка или проверка файлов…",
     "options.assets.optional": "необязательно",
     "options.assets.get": "Скачать",
     "options.assets.verify": "Проверить файлы",

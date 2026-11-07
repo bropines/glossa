@@ -1026,7 +1026,7 @@ fn module_assets(app: &mut GlossaApp, ui: &mut egui::Ui, st: &mut OptionsState, 
             ui.label(RichText::new(state).small().color(if bad { look.error() } else { look.weak_text() }));
             // Optional files (one model of many) are fetched one by one.
             if a.optional
-                && !running
+                && !report.busy
                 && a.state != glossa_engine::AssetState::Ready
                 && ui.small_button(app.t("options.assets.get")).clicked()
             {
@@ -1051,10 +1051,16 @@ fn module_assets(app: &mut GlossaApp, ui: &mut egui::Ui, st: &mut OptionsState, 
         }
     }
     ui.horizontal_wrapped(|ui| {
-        if running {
+        // A delete runs as a job too, with nothing to count and nothing
+        // to cancel.
+        let downloading = running && report.job.as_ref().is_some_and(|j| j.progress.total > 0);
+        if downloading {
             if ui.button(app.t("options.assets.cancel")).clicked() {
                 app.engine.cancel_asset_download(id);
             }
+        } else if report.busy {
+            ui.add(egui::Spinner::new().size(14.0));
+            ui.label(RichText::new(app.t("options.assets.busy")).small().color(look.weak_text()));
         } else if !report.ready {
             let label = app.locale.fmt("options.assets.download", &human_size(report.total_size));
             if ui.button(label).clicked() {
@@ -1066,7 +1072,7 @@ fn module_assets(app: &mut GlossaApp, ui: &mut egui::Ui, st: &mut OptionsState, 
         }
         let checking = st.assets_check.is_some();
         if report.ready
-            && !running
+            && !report.busy
             && ui.add_enabled(!checking, egui::Button::new(app.t("options.assets.verify"))).clicked()
         {
             let (tx, rx) = std::sync::mpsc::channel();
@@ -1099,8 +1105,9 @@ fn module_assets(app: &mut GlossaApp, ui: &mut egui::Ui, st: &mut OptionsState, 
             let _ = crate::app::open_with_system(&report.dir.to_string_lossy());
         }
         let any_on_disk = report.assets.iter().any(|a| a.state != glossa_engine::AssetState::Missing);
-        if any_on_disk && !running && ui.button(app.t("options.assets.remove")).clicked() {
-            if let Err(e) = app.engine.remove_module_assets(id) {
+        if any_on_disk && ui.add_enabled(!report.busy, egui::Button::new(app.t("options.assets.remove"))).clicked() {
+            st.assets_note = None;
+            if let Err(e) = app.engine.start_asset_removal(id) {
                 st.assets_note = Some((e.to_string(), true));
             }
         }

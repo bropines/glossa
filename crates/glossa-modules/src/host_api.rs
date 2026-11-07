@@ -96,8 +96,8 @@ pub struct HostApi<'a> {
     /// The images of this call (`image.*` host calls); dropped with it.
     #[cfg(feature = "image")]
     pub images: Mutex<crate::image_ops::ImageStore>,
-    /// Where the module's assets are, for the `assets` host call.
-    pub assets: Option<&'a wire::AssetsInfo>,
+    /// The module's assets, for the `assets` host call.
+    pub assets: Option<&'a crate::assets::ModuleAssets>,
 }
 
 impl<'a> HostApi<'a> {
@@ -111,8 +111,8 @@ impl<'a> HostApi<'a> {
         }
     }
 
-    /// Answer the `assets` host call with `assets`.
-    pub fn with_assets(mut self, assets: Option<&'a wire::AssetsInfo>) -> Self {
+    /// Answer the `assets` host call from `assets`.
+    pub fn with_assets(mut self, assets: Option<&'a crate::assets::ModuleAssets>) -> Self {
         self.assets = assets;
         self
     }
@@ -182,15 +182,7 @@ impl<'a> HostApi<'a> {
                 Ok(serde_json::Value::Null)
             }
             "assets" => {
-                let mut info = self.assets.cloned().unwrap_or_default();
-                // Only verified files ever reach these paths (downloads wait
-                // in `.glossa/`), so being there is being ready.
-                info.missing = info
-                    .files
-                    .iter()
-                    .filter(|(_, path)| !std::path::Path::new(path.as_str()).exists())
-                    .map(|(name, _)| name.clone())
-                    .collect();
+                let info = self.assets.map(|a| a.host_info()).unwrap_or_default();
                 Ok(serde_json::to_value(info).expect("assets info serialises"))
             }
             op if op.starts_with("image.") => self.image_op(&op["image.".len()..], params),

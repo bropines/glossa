@@ -311,19 +311,23 @@ optional = true                      # fetched only when the user picks it
   and their sizes, since the archive itself is not kept.
 - **Where.** `<local data>/Glossa/models/<module id>/` (`data/models/` in a
   portable copy). `glossa-cli assets status <id>` prints the folder.
-- **Network.** Asset URLs need not be in `[permissions] network`: they are
-  fixed in the manifest and checked by hash. Downloads use the user's
-  proxy settings.
+- **Network.** Every asset URL's host must be in `[permissions] network`
+  (a manifest that downloads from elsewhere does not load), so the
+  permissions list says everything the module may reach. Downloads use the
+  user's proxy settings.
+- **Limits.** An archive may unpack to at most 32 times its download size
+  (at least 64 MiB, at most 64 GiB); one that unpacks further is refused
+  and deleted. Writing and deleting stay inside the module's own folder.
 
 The module finds its files
 
 | runtime | how |
 |---|---|
-| any | the `assets` host call: `{"dir": …, "files": {"det": "/…/det"}, "missing": […]}` ([protocol](protocol.md#assets)) |
+| any | the `assets` host call: `{"dir": …, "files": {"det": "/…/det"}, "missing": […]}`, only files verified for the current manifest ([protocol](protocol.md#assets)) |
 | JavaScript | `host.assetPath("det")`, `host.assets()` |
 | Python | `host.asset_path("det")`, `host.assets()` in the SDK |
 | Java | `host.assetPath("det")`, `host.assets()` in the SDK |
-| Python, Java, process | the environment: `GLOSSA_ASSETS_DIR`, and `GLOSSA_ASSET_DET` per asset (upper case, other characters as `_`) |
+| Python, Java, process | the environment: `GLOSSA_ASSETS_DIR`, and `GLOSSA_ASSET_DET` per required asset (upper case, other characters as `_`); optional ones through the host call |
 | Python, Java, process | `${ASSETS_DIR}` in `command`, `args`, `env`, `cwd`, `classpath` and `jvm_args`, e.g. `command = ["${ASSETS_DIR}/ocr-helper"]` |
 | native | the `assets` host call |
 
