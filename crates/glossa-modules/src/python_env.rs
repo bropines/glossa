@@ -18,7 +18,7 @@
 //! Downloads go through [`ModuleAssets`], so they resume, are checked
 //! against their SHA-256 before use, unpack with the same caps and stay
 //! below their folder. Nothing here runs when Glossa starts: the module's
-//! first call finds out what is missing ([`PythonEnv::ready`]) and either
+//! first call finds out what is missing ([`PythonEnv::state`]) and either
 //! fails with [`Error::RuntimeMissing`] for the front end to offer the
 //! download, or downloads it on that call's worker when automatic downloads
 //! are on.
