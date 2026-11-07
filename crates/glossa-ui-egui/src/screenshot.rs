@@ -29,11 +29,19 @@ const SETTLE_FRAMES: u32 = 10;
 /// And at least this long, for a new window to be mapped and composited.
 const SETTLE_TIME: Duration = Duration::from_millis(1500);
 /// A run that has not finished by then is stuck; the watchdog ends it.
-const DEADLINE: Duration = Duration::from_secs(60);
+/// Counted from the start of the process, so a renderer that deadlocks
+/// before the first frame is caught too.
+const DEADLINE: Duration = Duration::from_secs(90);
 
-/// A picture with fewer colours than this drew nothing worth the name:
-/// any text brings dozens of anti-aliased shades.
-const MIN_COLOURS: usize = 8;
+/// Real windows show 145 colours or more (an empty History, the plainest,
+/// on macOS); any text brings dozens of anti-aliased shades.
+const MIN_COLOURS: usize = 64;
+/// Below the top [`TOP_BAND`] of the picture (title bars, tab strips), at
+/// least this share of pixels differs from the background. Real windows
+/// measured 1.2% (an empty History) and up; a window whose body drew
+/// nothing has none.
+const MIN_CONTENT: f64 = 0.005;
+const TOP_BAND: f64 = 0.15;
 
 /// Options states rather than pages, as `options::open_at` takes them: the
 /// font list open, and the note after starting at login is turned on.
@@ -56,7 +64,6 @@ pub fn flow(app: &mut GlossaApp, ctx: &egui::Context, what: &str, path: &Path) {
     static SHOT: AtomicBool = AtomicBool::new(false);
 
     let start = *START.get_or_init(|| {
-        watchdog();
         if !open(app, what) {
             eprintln!("glossa: --screenshot: unknown window {what:?}; known: {}", targets().join(", "));
             std::process::exit(EXIT_UNKNOWN);
@@ -143,9 +150,10 @@ fn sample_picture() -> image::RgbaImage {
     })
 }
 
-/// End the run if it is stuck: a window that never opened, a renderer that
-/// never delivered the picture.
-fn watchdog() {
+/// End the run if it is stuck: a renderer that never drew a frame, a window
+/// that never opened, a picture that never arrived. Started as soon as
+/// `--screenshot` is seen, before any window or graphics context exists.
+pub fn watchdog() {
     std::thread::spawn(|| {
         std::thread::sleep(DEADLINE);
         eprintln!("glossa: --screenshot: no picture after {}s", DEADLINE.as_secs());
@@ -185,17 +193,22 @@ fn blank(image: &ColorImage) -> Option<String> {
     if w == 0 || h == 0 {
         return Some("no pixels".into());
     }
-    let mut colours = std::collections::HashSet::new();
+    let mut counts = std::collections::HashMap::new();
     for p in &image.pixels {
-        colours.insert(p.to_array());
-        if colours.len() >= MIN_COLOURS {
-            return None;
-        }
+        *counts.entry(*p).or_insert(0usize) += 1;
     }
-    Some(match colours.len() {
-        1 => "a single colour".into(),
-        n => format!("only {n} colours"),
-    })
+    match counts.len() {
+        1 => return Some("a single colour".into()),
+        n if n < MIN_COLOURS => return Some(format!("only {n} colours")),
+        _ => {}
+    }
+    let background = counts.into_iter().max_by_key(|&(_, n)| n).map(|(c, _)| c)?;
+    let body = &image.pixels[((h as f64 * TOP_BAND) as usize) * w..];
+    let content = body.iter().filter(|&&p| p != background).count() as f64 / body.len().max(1) as f64;
+    if content < MIN_CONTENT {
+        return Some(format!("{:.2}% of the body differs from the background", content * 100.0));
+    }
+    None
 }
 
 #[cfg(test)]
@@ -216,13 +229,38 @@ mod tests {
         assert_eq!(blank(&two).as_deref(), Some("only 2 colours"));
     }
 
-    #[test]
-    fn a_picture_with_shades_is_not_blank() {
-        let mut img = filled(40, 30, Color32::WHITE);
-        for (i, p) in img.pixels.iter_mut().take(64).enumerate() {
-            *p = Color32::from_gray(i as u8 * 3);
+    /// Shades of grey drawn as text would be, in rows starting at `top`.
+    fn with_text(mut img: ColorImage, top: usize, rows: usize) -> ColorImage {
+        let w = img.width();
+        for y in top..top + rows {
+            for x in 0..w / 2 {
+                img.pixels[y * w + x] = Color32::from_gray(((x * 7 + y) % 200) as u8);
+            }
         }
+        img
+    }
+
+    #[test]
+    fn a_picture_with_text_in_its_body_is_not_blank() {
+        let img = with_text(filled(200, 100, Color32::WHITE), 50, 4);
         assert_eq!(blank(&img), None);
+    }
+
+    #[test]
+    fn few_colours_or_an_empty_body_are_blank() {
+        // A dozen shades on the background: a frame and a border, no text.
+        let mut img = filled(200, 100, Color32::WHITE);
+        for (i, p) in img.pixels.iter_mut().take(12).enumerate() {
+            *p = Color32::from_gray(i as u8 * 10);
+        }
+        assert_eq!(blank(&img).as_deref(), Some("only 13 colours"));
+        // Plenty of colours, but all in the title bar.
+        let img = with_text(filled(200, 100, Color32::WHITE), 0, 10);
+        assert!(blank(&img).is_some_and(|why| why.contains("body")), "{:?}", blank(&img));
+        // Black with a few stray pixels is still blank.
+        let mut img = filled(200, 100, Color32::BLACK);
+        img.pixels[9_000] = Color32::RED;
+        assert!(blank(&img).is_some());
     }
 
     #[test]

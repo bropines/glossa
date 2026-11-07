@@ -128,6 +128,9 @@ impl Wake {
 
 fn main() -> eframe::Result<()> {
     let launch = parse_args();
+    if launch.screenshot.is_some() {
+        screenshot::watchdog();
+    }
     let paths = match &launch.home {
         Some(h) => Paths::for_exe_dir(
             std::env::current_exe().ok().and_then(|p| p.parent().map(Into::into)).unwrap_or_default(),

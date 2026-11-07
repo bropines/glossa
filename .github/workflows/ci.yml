@@ -118,6 +118,7 @@ jobs:
       # Every window drawn to a PNG under Xvfb, with Mesa's llvmpipe as the
       # OpenGL driver: no GPU on the runner, and none needed.
       - name: Screenshot smoke test
+        timeout-minutes: 15
         run: |
           sudo apt-get install -y --no-install-recommends xvfb xauth libgl1 libglx-mesa0 libegl1 libgl1-mesa-dri libxkbcommon-x11-0
           cargo build -p glossa-ui-egui --locked
@@ -129,6 +130,7 @@ jobs:
           name: screenshots-linux
           path: target/screenshots
           if-no-files-found: ignore
+          retention-days: 7
       # The Tesseract provider against the real program, on a picture the
       # test draws itself.
       - name: Tesseract live test
@@ -153,6 +155,7 @@ jobs:
       # Every window drawn to a PNG (the runner has a window server). A
       # debug build: its dependencies are already built for the tests.
       - name: Screenshot smoke test
+        timeout-minutes: 15
         run: |
           cargo build -p glossa-ui-egui --locked
           scripts/screenshot-smoke.sh target/debug/glossa target/screenshots
@@ -163,6 +166,7 @@ jobs:
           name: screenshots-macos
           path: target/screenshots
           if-no-files-found: ignore
+          retention-days: 7
       # Vision ships with macOS, so the live test can run on the runner; it is
       # informative rather than gating while the runners' Vision behaviour is
       # unproven.
@@ -189,6 +193,7 @@ jobs:
       # beyond 1.1, so the software renderer (WARP) draws. A debug build
       # has a console, so the script sees the program's messages.
       - name: Screenshot smoke test
+        timeout-minutes: 15
         shell: bash
         env:
           GLOSSA_RENDERER: software
@@ -202,6 +207,7 @@ jobs:
           name: screenshots-windows
           path: target/screenshots
           if-no-files-found: ignore
+          retention-days: 7
 
   msrv:
     # The oldest compiler the workspace claims to support: rust-version in

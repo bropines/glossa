@@ -17,7 +17,9 @@ unused dependencies, and `cargo check` at the `rust-version` in
 The screenshot smoke test (`scripts/screenshot-smoke.sh`) follows the tests
 on all three systems: every window `glossa --screenshot-list` names, in
 Glossa Dark, Glossa Light (with the Russian interface) and macOS Light,
-each from a throwaway data folder. A crash, a hang, a blank picture or a
+each from a throwaway data folder. It is offline: every service is
+`scripts/smoke-module`, a JavaScript module with canned answers, and the
+proxy points at a closed port. A crash, a hang, a blank picture or a
 string with no text fails it; pixels are not compared, since fonts differ
 between systems. The pictures are kept as the `screenshots-<os>` artifact
 of the run, which is where to look at a change to the UI without a machine

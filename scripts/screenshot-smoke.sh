@@ -10,6 +10,10 @@
 # A debug build is best on Windows, where a release build has no console
 # and its messages are lost (the exit codes still count).
 #
+# Offline: every service is `scripts/smoke-module`, a JavaScript module
+# with canned answers, and the proxy points at a closed local port, so a
+# request that slips through fails at once instead of reaching a service.
+#
 # GLOSSA_SMOKE_THEMES overrides the themes, separated by commas;
 # GLOSSA_SMOKE_ONLY limits the windows to those whose names contain it.
 set -u
@@ -18,6 +22,7 @@ bin=${1:?usage: screenshot-smoke.sh path/to/glossa [OUT_DIR]}
 out=${2:-target/screenshots}
 IFS=',' read -r -a themes <<< "${GLOSSA_SMOKE_THEMES:-Glossa Dark,Glossa Light,macOS Light}"
 
+module=$(cd "$(dirname "$0")" && pwd)/smoke-module
 targets=$("$bin" --screenshot-list | tr -d '\r') || { echo "cannot list the windows from $bin" >&2; exit 1; }
 [ -n "$targets" ] || { echo "$bin listed no windows" >&2; exit 1; }
 
@@ -42,7 +47,8 @@ run_theme() {
     local theme=$1 lang=$2 slug home t file start code
     slug=$(printf '%s' "$theme" | tr 'A-Z ' 'a-z-')
     home="$scratch/$slug"
-    mkdir -p "$home" "$out/$slug"
+    mkdir -p "$home/modules" "$out/$slug"
+    cp -R "$module" "$home/modules/smoke"
     cat > "$home/config.toml" <<EOF
 [general]
 ui_language = "$lang"
@@ -52,6 +58,25 @@ show_welcome = false
 [appearance]
 theme = "$theme"
 follow_system_theme = false
+
+[services]
+order = ["smoke"]
+enabled = ["smoke"]
+active = "smoke"
+dictionary_order = ["smoke"]
+dictionary_enabled = ["smoke"]
+dictionary_active = "smoke"
+fail_over = false
+
+[network]
+max_retries = 0
+timeout_secs = 3
+
+[network.proxy]
+mode = "manual"
+scheme = "http"
+host = "127.0.0.1"
+port = 9
 
 [updates]
 check_automatically = false
