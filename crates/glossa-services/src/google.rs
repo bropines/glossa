@@ -8,7 +8,7 @@
 //! how hard it is being asked, so when one starts refusing (HTTP 429, or a
 //! redirect to the `google.com/sorry` captcha) the next one usually still
 //! answers; the next one is also asked when the first cannot be reached. A refusing address is left alone for a cooling-off period that
-//! doubles with each refusal (see [`crate::backoff`]); when all of them are
+//! doubles with each refusal (see `crate::backoff`); when all of them are
 //! cooling off the provider says so at once, with the wait, and the engine
 //! moves on to the next service. `docs/research/google-translate.md` has
 //! what was observed and how other clients deal with it.
