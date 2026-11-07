@@ -65,7 +65,8 @@ ureq = { version = "3", features = ["json", "socks-proxy", "gzip"] }
 image = { version = "0.25", default-features = false, features = ["png", "jpeg", "webp"] }
 
 # -- scripting --------------------------------------------------------------
-boa_engine = "0.22"
+rquickjs = { version = "0.14", default-features = false, features = ["std"] }
+stacker = "0.1"
 libloading = "0.9"
 
 # -- ui / platform ----------------------------------------------------------
@@ -106,6 +107,13 @@ opt-level = 3
 opt-level = 3
 [profile.release.package.read-fonts]
 opt-level = 3
+
+# QuickJS is C, compiled by rquickjs-sys's build script with the profile's
+# optimisation level. Unoptimised, its interpreter loop takes several KB of
+# stack per JavaScript call, so a debug build overflows the engine's stack
+# limit after a few dozen nested calls (and runs the tests slowly).
+[profile.dev.package.rquickjs-sys]
+opt-level = 2
 
 [profile.release-perf]
 inherits = "release"

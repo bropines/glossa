@@ -48,8 +48,10 @@ each under its own license:
     (MIT OR Apache-2.0): the window system and rendering. epaint_default_fonts
     embeds the Hack, Ubuntu and Noto Emoji fonts (MIT / Bitstream Vera, Ubuntu
     Font Licence 1.0, SIL OFL 1.1).
-  boa (https://boajs.dev, Unlicense OR MIT): the JavaScript engine that runs
-    JavaScript modules and classic QTranslate service scripts.
+  QuickJS (https://github.com/quickjs-ng/quickjs, MIT; Copyright Fabrice
+    Bellard, Charlie Gordon, Ben Noordhuis and the QuickJS-ng contributors) through rquickjs
+    (MIT): the JavaScript engine that runs JavaScript modules, classic
+    QTranslate service scripts and pot-app plugins.
   ureq (MIT OR Apache-2.0) with rustls (Apache-2.0 OR ISC OR MIT) and ring
     (Apache-2.0 AND ISC): HTTP and TLS. webpki-roots carries Mozilla's CA
     certificate list (CDLA-Permissive-2.0).

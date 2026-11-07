@@ -63,7 +63,7 @@ module calls a web service through `host.fetch`; the
 
 | kind | you write | runs as | good for | guide |
 |---|---|---|---|---|
-| JavaScript | `main.js` | inside Glossa (boa engine), a fresh context per call | web APIs: a few requests and some JSON | [js-modules.md](js-modules.md) |
+| JavaScript | `main.js` | inside Glossa (QuickJS engine), a fresh context per call | web APIs: a few requests and some JSON | [js-modules.md](js-modules.md) |
 | Python | `main.py` | a child process, started on first use, stopped when idle | anything needing Python libraries (ML models, `chrome-lens-py`, scraping) | [sdk/python](../../sdk/python/README.md) |
 | Java | a `.jar` (Java, Kotlin, any JVM language) | a child process like Python, with Java found for you | JVM libraries and engines (Tess4J, ONNX Runtime for Java, Lucene), Kotlin code | [process-modules.md](process-modules.md#java-modules), [sdk/java](../../sdk/java/README.md) |
 | Process | any program: `node main.mjs`, a Go or C# binary, a script | a child process like Python | any language with stdin and stdout; no SDK needed | [process-modules.md](process-modules.md) |

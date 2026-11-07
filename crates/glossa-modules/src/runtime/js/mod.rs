@@ -9,8 +9,9 @@
 //! All three are [`Transport`](crate::protocol::Transport)s wrapped in a
 //! [`ProtocolProvider`], so language mapping, network permissions and error
 //! handling are shared with the Python and native runtimes. The engine is
-//! Boa, a JavaScript engine written in Rust — no C toolchain, no external
-//! runtime, and nothing resident between calls (see [`engine`]).
+//! QuickJS, a small JavaScript engine in C, embedded through `rquickjs`: no
+//! external runtime, a memory and time limit on every call, and nothing
+//! resident between calls (see [`engine`]).
 
 pub mod engine;
 pub mod glossa;
@@ -27,8 +28,7 @@ use crate::registry::RuntimeContext;
 
 pub fn load_glossa(dir: &Path, manifest: Manifest, ctx: &RuntimeContext) -> Result<Arc<dyn Provider>, String> {
     let script = glossa::GlossaScript::from_dir(dir, &manifest.module.entry)?;
-    let name = script.path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
-    engine::check_syntax(&script.source, &name)?;
+    script.script.check()?;
     Ok(Arc::new(ProtocolProvider::new(
         manifest,
         glossa::GlossaTransport { script: Arc::new(script) },
@@ -51,7 +51,7 @@ pub fn load_embedded(
     if manifest.module.runtime != crate::manifest::Runtime::Js {
         return Err(format!("{label}: an embedded module must have runtime = \"js\""));
     }
-    let script = glossa::GlossaScript { path: label.into(), source: script.trim_start_matches('\u{feff}').to_owned() };
+    let script = glossa::GlossaScript::new(label.into(), script);
     Ok(Arc::new(ProtocolProvider::new(manifest, glossa::GlossaTransport { script: Arc::new(script) }, cache)))
 }
 

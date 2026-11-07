@@ -9,7 +9,6 @@
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use boa_engine::JsValue;
 use glossa_module_sdk::wire::{ErrorKind, ModuleError, Reply};
 
 use super::engine::{self, Bridge};
@@ -19,15 +18,20 @@ pub const GLOSSA_JS: &str = include_str!("glossa.js");
 
 pub struct GlossaScript {
     pub path: PathBuf,
-    pub source: String,
+    pub script: engine::Script,
 }
 
 impl GlossaScript {
+    pub fn new(path: PathBuf, source: &str) -> GlossaScript {
+        let name = path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+        GlossaScript { path, script: engine::Script::new(name, source.trim_start_matches('\u{feff}')) }
+    }
+
     pub fn from_dir(dir: &Path, entry: &str) -> Result<GlossaScript, String> {
         let entry = if entry.is_empty() { "main.js" } else { entry };
         let path = dir.join(entry);
         let source = std::fs::read_to_string(&path).map_err(|e| format!("{}: {e}", path.display()))?;
-        Ok(GlossaScript { path, source: source.trim_start_matches('\u{feff}').to_owned() })
+        Ok(GlossaScript::new(path, &source))
     }
 }
 
@@ -43,27 +47,26 @@ impl Transport for GlossaTransport {
         host: &dyn Fn(&str, serde_json::Value) -> Reply,
     ) -> Result<serde_json::Value, ModuleError> {
         let _bridge = Bridge::install(host);
-        let mut ctx = engine::new_context().map_err(ModuleError::other)?;
-        engine::eval(&mut ctx, GLOSSA_JS, "glossa.js").map_err(ModuleError::other)?;
-        let options = params.get("options").cloned().unwrap_or_else(|| serde_json::json!({}));
-        engine::set_global_json(&mut ctx, "__options", &options).map_err(ModuleError::other)?;
-        engine::eval(&mut ctx, "host.options = __options;", "options").map_err(ModuleError::other)?;
-        let name = self.script.path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
-        engine::eval(&mut ctx, &self.script.source, &name).map_err(engine::script_error)?;
+        let value = engine::with_context(|ctx| -> Result<serde_json::Value, ModuleError> {
+            engine::shared::WEB.eval(ctx).map_err(ModuleError::other)?;
+            engine::shared::GLOSSA.eval(ctx).map_err(ModuleError::other)?;
+            let options = params.get("options").cloned().unwrap_or_else(|| serde_json::json!({}));
+            engine::set_global_json(ctx, "__options", &options).map_err(ModuleError::other)?;
+            engine::eval(ctx, "host.options = __options;", "options").map_err(ModuleError::other)?;
+            self.script.script.eval(ctx).map_err(engine::script_error)?;
 
-        let entry =
-            engine::call_global(&mut ctx, "__glossaEntry", &[JsValue::from(boa_engine::JsString::from(method))])
-                .map_err(ModuleError::other)?;
-        let Some(f) = entry.as_callable() else {
-            return Err(ModuleError::unsupported(method));
-        };
-        let req = engine::from_json(&mut ctx, &params).map_err(ModuleError::other)?;
-        let host_obj = engine::get_global(&mut ctx, "host");
-        let out = f
-            .call(&JsValue::undefined(), &[req, host_obj], &mut ctx)
-            .map_err(|e| engine::script_error(format!("{method}: {}", engine::describe(&e, &mut ctx))))?;
-        let out = engine::settle(&mut ctx, out).map_err(|e| engine::script_error(format!("{method}: {e}")))?;
-        let value = engine::to_json(&mut ctx, &out).map_err(ModuleError::other)?;
+            let entry =
+                engine::call_global(ctx, "__glossaEntry", &[engine::str(ctx, method)]).map_err(ModuleError::other)?;
+            if !entry.is_function() {
+                return Err(ModuleError::unsupported(method));
+            }
+            let req = engine::from_json(ctx, &params).map_err(ModuleError::other)?;
+            let host_obj = engine::get_global(ctx, "host");
+            let out = engine::call(ctx, &entry, &[req, host_obj])
+                .map_err(|e| engine::script_error(format!("{method}: {e}")))?;
+            engine::to_json(ctx, &out).map_err(ModuleError::other)
+        })
+        .map_err(ModuleError::other)??;
         match (method, value) {
             ("translate", serde_json::Value::String(s)) => Ok(serde_json::json!({ "text": s })),
             (_, serde_json::Value::Null) => {
@@ -100,7 +103,7 @@ mod tests {
         .unwrap();
         ProtocolProvider::new(
             manifest,
-            GlossaTransport { script: Arc::new(GlossaScript { path: "main.js".into(), source: source.into() }) },
+            GlossaTransport { script: Arc::new(GlossaScript::new("main.js".into(), source)) },
             ModuleCache::new(),
         )
     }
@@ -226,14 +229,6 @@ mod tests {
     #[cfg(feature = "image")]
     #[test]
     fn the_cloud_vision_example_maps_its_layout() {
-        // Boa in a debug build needs more than a test thread's 2 MB to turn
-        // a result this deep into JSON (release builds need a fraction);
-        // engine workers get 8 MB.
-        std::thread::Builder::new().stack_size(8 << 20).spawn(cloud_vision_example).unwrap().join().unwrap();
-    }
-
-    #[cfg(feature = "image")]
-    fn cloud_vision_example() {
         let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../modules/js/google-vision-ocr");
         let manifest = crate::manifest::Manifest::load(&dir.join("module.toml")).unwrap();
         let p = super::super::load_glossa(&dir, manifest, &crate::registry::RuntimeContext::default()).unwrap();
@@ -275,6 +270,190 @@ mod tests {
         });
         let sent = &http.requests()[0];
         assert!(sent.url.contains("key=fake-key"));
+    }
+
+    #[test]
+    fn the_browser_fetch_and_url_work_for_bundled_libraries() {
+        // The shape esbuild gives a bundle built with `--format=cjs`:
+        // `module.exports` replaced by an object of getters.
+        let p = provider(
+            r#"
+            var __defProp = Object.defineProperty;
+            var src_exports = {};
+            __defProp(src_exports, "translate", { get: () => translate, enumerable: true });
+            module.exports = src_exports;
+            async function translate(req) {
+                const url = new URL("/v1/t?x=1", "https://api.test/base/");
+                url.searchParams.set("q", req.text);
+                url.searchParams.append("to", req.to);
+                const body = new URLSearchParams({ a: "b c", d: "é&" });
+                const r = await fetch(url, { method: "POST", body, headers: { "X-Key": "k" } });
+                if (!r.ok || !r.headers.get("Content-Type").startsWith("application/json")) throw new Error("bad");
+                const data = await r.json();
+                return data.out + " " + url.host + url.pathname + " " + body;
+            }
+            "#,
+            "\"api.test\"",
+        );
+        let http = MockHttp::new().on(Method::Post, "https://api.test/v1/t", 200, r#"{"out":"мир"}"#);
+        let opts = OptionValues::new();
+        with_test_host(&http, &opts, |host| {
+            let t = p
+                .translate(host, &TranslateRequest::new("a b", LangPair::new(LangId::ENGLISH, LangId::RUSSIAN)))
+                .unwrap();
+            assert_eq!(t.text, "мир api.test/v1/t a=b+c&d=%C3%A9%26");
+        });
+        let req = &http.requests()[0];
+        assert_eq!(req.url, "https://api.test/v1/t?x=1&q=a+b&to=ru");
+        assert!(req.headers.iter().any(|(k, v)| k == "x-key" && v == "k"), "{:?}", req.headers);
+        assert!(req
+            .headers
+            .iter()
+            .any(|(k, v)| k == "content-type" && v.starts_with("application/x-www-form-urlencoded")));
+    }
+
+    #[test]
+    fn url_and_search_params_follow_the_common_cases() {
+        let p = provider(
+            r#"
+            function translate() {
+                const out = [];
+                const u = new URL("HTTPS://user:pw@Example.COM:443/a/./b/../c?x=1&y=2#frag");
+                out.push(u.href, u.origin, u.port, u.search, u.hash, u.searchParams.get("y"));
+                out.push(new URL("../d?z", "https://h.test/a/b/c").href);
+                out.push(new URL("//cdn.test/x", "https://h.test/").href);
+                out.push(new URL("http://h.test:8080").href);
+                const sp = new URLSearchParams("?a=1&b=2&a=3&c=%20+");
+                out.push(sp.getAll("a").join(","), sp.get("c"), String(sp.has("z")), sp.size);
+                sp.delete("a"); sp.sort();
+                out.push(sp.toString(), [...sp.keys()].join(","));
+                out.push(String(URL.canParse("not a url")));
+                const h = new Headers([["A", "1"], ["a", "2"]]);
+                out.push(h.get("A"));
+                return out.join("|");
+            }
+            "#,
+            "",
+        );
+        let http = MockHttp::new();
+        let opts = OptionValues::new();
+        with_test_host(&http, &opts, |host| {
+            let t = p
+                .translate(host, &TranslateRequest::new("x", LangPair::new(LangId::ENGLISH, LangId::RUSSIAN)))
+                .unwrap();
+            let parts: Vec<&str> = t.text.split('|').collect();
+            assert_eq!(
+                parts,
+                [
+                    "https://user:pw@example.com/a/c?x=1&y=2#frag",
+                    "https://example.com",
+                    "",
+                    "?x=1&y=2",
+                    "#frag",
+                    "2",
+                    "https://h.test/a/d?z",
+                    "https://cdn.test/x",
+                    "http://h.test:8080/",
+                    "1,3",
+                    "  ",
+                    "false",
+                    "4",
+                    "b=2&c=++",
+                    "b,c",
+                    "false",
+                    "1, 2",
+                ]
+            );
+        });
+    }
+
+    /// Every web-standard name Glossa provides can be declared again by a
+    /// module, with `const` or `class`, as in a browser.
+    #[test]
+    fn modules_may_declare_the_provided_web_names() {
+        let names = [
+            "URL",
+            "URLSearchParams",
+            "Headers",
+            "AbortController",
+            "queueMicrotask",
+            "fetch",
+            "console",
+            "btoa",
+            "atob",
+            "TextEncoder",
+            "TextDecoder",
+            "setTimeout",
+            "clearTimeout",
+            "escape",
+            "unescape",
+        ];
+        let http = MockHttp::new();
+        let opts = OptionValues::new();
+        for name in names {
+            for decl in [format!("const {name} = 'mine';"), format!("class {name} {{}}")] {
+                let source = format!("{decl}\nfunction translate() {{ return typeof {name}; }}");
+                let p = provider(&source, "");
+                with_test_host(&http, &opts, |host| {
+                    let t = p
+                        .translate(host, &TranslateRequest::new("x", LangPair::new(LangId::ENGLISH, LangId::RUSSIAN)))
+                        .unwrap_or_else(|e| panic!("{decl}: {e}"));
+                    let want = if decl.starts_with("const") { "string" } else { "function" };
+                    assert_eq!(t.text, want, "{decl}");
+                });
+            }
+        }
+    }
+
+    #[test]
+    fn fetch_keeps_working_when_a_module_shadows_its_helpers() {
+        let p = provider(
+            r#"
+            class URL {}
+            class Headers {}
+            const URLSearchParams = null, btoa = null, atob = null;
+            async function translate(req) {
+                const r = await fetch("https://api.test/t", { method: "POST", body: "x", headers: { A: "1" } });
+                const h = r.headers;
+                return (await r.json()).out + " " + (h.get("content-type") !== null);
+            }
+            "#,
+            "\"api.test\"",
+        );
+        let http = MockHttp::new().on(Method::Post, "https://api.test/t", 200, r#"{"out":"ok"}"#);
+        let opts = OptionValues::new();
+        with_test_host(&http, &opts, |host| {
+            let t = p
+                .translate(host, &TranslateRequest::new("x", LangPair::new(LangId::ENGLISH, LangId::RUSSIAN)))
+                .unwrap();
+            assert_eq!(t.text, "ok true");
+        });
+    }
+
+    #[test]
+    fn header_names_that_look_like_object_keys_are_plain_names() {
+        let p = provider(
+            r#"
+            function translate() {
+                const h = new Headers();
+                const out = [h.has("constructor"), h.get("toString"), h.has("__proto__")];
+                h.set("Constructor", "a");
+                h.append("__proto__", "b");
+                h.set("toString", "c");
+                out.push(h.get("constructor"), h.get("__proto__"), h.get("tostring"), [...h.keys()].join(","));
+                return out.join("|");
+            }
+            "#,
+            "",
+        );
+        let http = MockHttp::new();
+        let opts = OptionValues::new();
+        with_test_host(&http, &opts, |host| {
+            let t = p
+                .translate(host, &TranslateRequest::new("x", LangPair::new(LangId::ENGLISH, LangId::RUSSIAN)))
+                .unwrap();
+            assert_eq!(t.text, "false||false|a|b|c|__proto__,constructor,tostring");
+        });
     }
 
     #[test]

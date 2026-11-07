@@ -72,6 +72,22 @@ the notes of its GitHub release.
   no text. `--screenshot-list` names every window it can draw, and
   `scripts/screenshot-smoke.sh` renders them all in several themes; CI runs
   it on Linux, macOS and Windows and keeps the pictures.
+- JavaScript modules can use libraries from npm: bundle them into `main.js`
+  with esbuild (see *Using npm packages* in `docs/modules/js-modules.md`).
+  Glossa modules get `fetch` (over `host.http`, within the module's network
+  permissions), `URL`, `URLSearchParams`, `Headers`, `AbortController` and
+  `queueMicrotask`; pot-app plugins get the same except `fetch`, which they
+  already had in pot's own form.
+
+### Changed
+
+- JavaScript (Glossa modules, classic QTranslate scripts, pot-app plugins)
+  now runs on QuickJS instead of boa. Glossa is about 3 MB smaller, a script
+  call is several times faster and uses a fraction of the memory, and every
+  call has a 128 MB heap limit and a 10-second limit on the script's own
+  work (waiting for the network does not count). Over a limit, the call
+  fails with a message saying which. Large scripts (over 16 KB) are compiled
+  once and kept as bytecode.
 
 ### Fixed
 
