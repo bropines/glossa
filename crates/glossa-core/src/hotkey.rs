@@ -63,6 +63,9 @@ pub enum Action {
     SwapLanguages,
     /// Cycle to the next enabled translation service.
     NextService,
+    /// Apply the next preset (built-in ones first, then the user's, in
+    /// their order).
+    NextPreset,
     ShowOptions,
     Quit,
 }
@@ -90,7 +93,7 @@ impl Action {
         Action::SpeechInput,
     ];
 
-    pub const ALL: [Action; 27] = [
+    pub const ALL: [Action; 28] = [
         Action::ShowMainWindow,
         Action::ShowPopup,
         Action::ShowDictionary,
@@ -116,6 +119,7 @@ impl Action {
         Action::TranslateScreenInPlace,
         Action::SwapLanguages,
         Action::NextService,
+        Action::NextPreset,
         Action::ShowOptions,
         Action::Quit,
     ];
@@ -186,6 +190,7 @@ impl Action {
             Action::TranslateScreenInPlace => "Translate the whole screen in place",
             Action::SwapLanguages => "Swap translation direction",
             Action::NextService => "Switch to the next service",
+            Action::NextPreset => "Switch to the next preset",
             Action::ShowOptions => "Show options",
             Action::Quit => "Exit",
         }
@@ -219,6 +224,7 @@ impl Action {
             Action::TranslateScreenInPlace => "translate_screen_in_place",
             Action::SwapLanguages => "swap_languages",
             Action::NextService => "next_service",
+            Action::NextPreset => "next_preset",
             Action::ShowOptions => "show_options",
             Action::Quit => "quit",
         }

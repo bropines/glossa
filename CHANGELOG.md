@@ -22,6 +22,18 @@ the notes of its GitHub release.
   module check` reports mistakes in all of the above. The Google Cloud
   Vision example module shows every part (docs/modules/README.md,
   *Settings pages*).
+- Presets: named sets of services to switch between in one click. A preset
+  holds which services are on and in what order, the active one, the
+  dictionaries, the voice, the OCR engine, module settings and, if you
+  like, the language pair, and never an API key or token (it uses the ones
+  already set). Manage them in *Options → Services → Presets* (save the
+  current setup, apply, rename, duplicate, delete, export to a `.toml` file
+  and import, with a list of services an imported preset needs that are
+  not installed), pick one from the main window menu, or bind the new
+  `next_preset` action to a hotkey or a tray click; the tray menu has
+  *Next preset*. Three built-in presets (*Everyday*, *Private*, *Word
+  study*) use only services that need no key. Also `glossa-cli preset`
+  and the control API's `/v1/presets`.
 - The interface language switches at once, without a restart: every
   window, the tray menu and the macOS menu bar follow the setting as soon
   as it is applied.

@@ -25,7 +25,8 @@ bus, with no token: see [D-Bus](#d-bus).
   [`/v1/services`](#get-v1services), [`/v1/translate`](#v1translate),
   [`/v1/detect`](#post-v1detect), [`/v1/dictionary`](#v1dictionary),
   [`/v1/ocr`](#post-v1ocr), [`/v1/speak`](#post-v1speak),
-  [`/v1/action`](#v1actionaction), [`/v1/assets`](#v1assets), [`/v1/python`](#v1python)
+  [`/v1/action`](#v1actionaction), [`/v1/assets`](#v1assets), [`/v1/python`](#v1python),
+  [`/v1/presets`](#presets)
 - [pot-app compatibility](#pot-app-compatibility)
 - [D-Bus](#d-bus)
 - [Binding hotkeys to it](#binding-hotkeys-to-it)
@@ -186,6 +187,7 @@ Errors have a status code and a body of the form:
 | POST | [`/v1/speak`](#post-v1speak) | Text to speech, as audio. |
 | GET, POST | [`/v1/action/<action>`](#v1actionaction) | Ask the desktop program to perform an action. |
 | GET, POST | [`/v1/assets…`](#v1assets) | Files modules declare (models, dictionaries): state, download, check, delete. |
+| GET, POST | [`/v1/presets…`](#presets) | List, apply, save, export and import presets. |
 | any | [pot-app routes](#pot-app-compatibility) | `/selection_translate`, `/input_translate`, `/ocr_recognize`, `/ocr_translate`, `POST /translate`. |
 
 The examples use `$T` for the token and the default address.
@@ -384,7 +386,7 @@ The action ids are listed in [cli.md](cli.md#action): `show_main_window`,
 `convert_layout`, `listen_translation`, `text_recognition`, `speech_input`,
 `recognize_and_translate`, `repeat_last_recognition`,
 `recognize_to_clipboard`, `watch_region`, `translate_region_in_place`, `translate_screen_in_place`,
-`swap_languages`, `next_service`,
+`swap_languages`, `next_service`, `next_preset`,
 `show_options`, `quit`.
 
 [`glossa-cli action`](cli.md#action) sends these requests for you, reading
@@ -432,6 +434,34 @@ The Python that Python modules run with
 | POST | `/v1/python/<id>/cancel` | Stop it. |
 
 An unknown or non-Python module is a 404.
+
+### Presets
+
+Named sets of services ([configuration.md](configuration.md#presets)). Names
+go in a JSON body (`{"name": "Work"}`) or the query (`?name=Work`) and
+ignore case. Every route needs the token. Changes apply to the running
+program at once, and a preset never carries a key or token.
+
+| method | path | does |
+|---|---|---|
+| GET | `/v1/presets` | `{"current": "Private", "presets": [...]}`: each with `name`, `builtin`, `current`, `enabled`, `active`, `dictionary_enabled`, `pair`, and `missing` (services it names that are not installed). |
+| POST | `/v1/presets/apply` | Apply `name`. Answers `{"name", "missing", "dropped_secrets"}`; `missing` lists what was skipped. |
+| POST | `/v1/presets/next` | Apply the preset after the current one. |
+| POST | `/v1/presets/save` | Save the current setup as `name`; `"languages": true` records the language pair too. `dropped_secrets` lists the keys left out. |
+| GET | `/v1/presets/export?name=…` | The preset as a `.toml` file (`application/toml`), secrets excluded. |
+| POST | `/v1/presets/import` | The body is an exported file. Answers the name it was stored under, the services that are not installed, and any credentials dropped from it. |
+| POST | `/v1/presets/rename` | Rename `name` to `new_name`. |
+| POST | `/v1/presets/duplicate` | Copy `name` (a built-in one too) as `new_name`, or `NAME (2)`. |
+| POST | `/v1/presets/delete` | Delete `name`. Built-in presets cannot be deleted (400). |
+
+```console
+$ curl -s -X POST -H "Authorization: Bearer $T" -d '{"name":"Private"}' http://127.0.0.1:60828/v1/presets/apply
+{"name":"Private","missing":[],"dropped_secrets":[]}
+```
+
+An unknown preset is a 404; a bad name or a built-in one where only your
+own will do is a 400. [`glossa-cli preset`](cli.md#preset) uses these
+routes when Glossa is running.
 
 ## pot-app compatibility
 

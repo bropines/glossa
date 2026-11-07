@@ -183,6 +183,9 @@ pub struct OptionsState {
     assets_note: Option<(String, bool)>,
     /// The installed font families, for the font picker.
     fonts: FontList,
+    /// The Presets tab of the Services page is showing, and its state.
+    presets_tab: bool,
+    pub presets: crate::presets::PresetsPage,
 }
 
 /// The installed font families, listed on a worker the first time the font
@@ -318,6 +321,11 @@ pub fn open_at(app: &mut GlossaApp, name: &str) {
                 st.autostart_initial = true;
                 st.autostart_done = Some(Ok(true));
             }
+            "presets" => {
+                st.page = Page::Services;
+                st.presets_tab = true;
+                return;
+            }
             _ => {}
         }
     }
@@ -369,6 +377,8 @@ pub fn open(app: &mut GlossaApp) {
             assets_check: None,
             assets_note: None,
             fonts: FontList::default(),
+            presets_tab: false,
+            presets: Default::default(),
         });
     }
     app.ctx.request_repaint();
@@ -919,13 +929,21 @@ fn services(app: &mut GlossaApp, ui: &mut egui::Ui, st: &mut OptionsState) {
             (Capabilities::LISTEN, "options.services.speech"),
             (Capabilities::OCR, "options.services.ocr"),
         ] {
-            if ui.selectable_label(st.service_group == cap, app.t(key)).clicked() {
+            if ui.selectable_label(!st.presets_tab && st.service_group == cap, app.t(key)).clicked() {
                 st.service_group = cap;
                 st.selected_service = None;
+                st.presets_tab = false;
             }
+        }
+        if ui.selectable_label(st.presets_tab, app.t("options.services.presets")).clicked() {
+            st.presets_tab = true;
         }
     });
     ui.separator();
+    if st.presets_tab {
+        crate::presets::page(app, ui, &mut st.draft, &mut st.presets);
+        return;
+    }
     poll_ai_task(app, st);
     let providers = app.engine.providers(st.service_group);
     // Two panes that use the whole window: the list on the left (its width
@@ -2078,7 +2096,7 @@ fn advanced(app: &mut GlossaApp, ui: &mut egui::Ui, st: &mut OptionsState) {
 
 /// What tray clicks can be set to, in the order the list shows them. A file
 /// may name any action; one not listed here is shown too while chosen.
-const TRAY_CHOICES: [TrayAction; 12] = [
+const TRAY_CHOICES: [TrayAction; 13] = [
     TrayAction::Run(Action::ShowMainWindow),
     TrayAction::Run(Action::ShowPopup),
     TrayAction::Run(Action::TranslateClipboardInPopup),
@@ -2088,6 +2106,7 @@ const TRAY_CHOICES: [TrayAction; 12] = [
     TrayAction::Run(Action::ShowDictionary),
     TrayAction::Run(Action::ShowHistory),
     TrayAction::Run(Action::ToggleMouseMode),
+    TrayAction::Run(Action::NextPreset),
     TrayAction::Run(Action::ShowOptions),
     TrayAction::Menu,
     TrayAction::Nothing,

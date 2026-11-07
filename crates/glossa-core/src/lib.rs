@@ -19,6 +19,7 @@ pub mod legacy;
 pub mod locale;
 pub mod ocr;
 pub mod paths;
+pub mod preset;
 pub mod secrets;
 pub mod text;
 pub mod theme;
@@ -35,6 +36,7 @@ pub use lang::{LangId, LangPair};
 pub use locale::Locale;
 pub use ocr::{OcrRequest, OcrResult};
 pub use paths::Paths;
+pub use preset::Preset;
 pub use theme::Theme;
 pub use translate::{Detection, ProviderInfo, TranslateRequest, Translation};
 

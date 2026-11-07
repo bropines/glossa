@@ -15,6 +15,7 @@ mod doctor;
 use std::io::{IsTerminal, Read};
 use std::path::PathBuf;
 use std::process::ExitCode;
+use std::time::Duration;
 
 use glossa_core::locale::Severity;
 use glossa_core::{Capabilities, LangId, LangPair, Paths};
@@ -86,6 +87,11 @@ COMMANDS
                                       downloading (resumes, checks SHA-256; NAMEs pick optional
                                       files, none fetches the required ones), re-checking,
                                       deleting; also `module assets …`
+    preset     [list | apply NAME | next | save NAME [--languages] | export NAME [-o FILE]
+               | import FILE | rename NAME NEW | duplicate NAME [NEW] | delete NAME] [--local]
+                                      named sets of services, their order and options (never keys);
+                                      changes go to a running Glossa through the control API when
+                                      one answers, else to the settings file (--local: always the file)
     python     [status | install [MODULE] | remove [MODULE]]
                                       the Python modules run with: which one each module uses,
                                       downloading the managed Python and uv (with MODULE: also
@@ -176,6 +182,8 @@ const SWITCHES: &[&str] = &[
     "--strict",
     "--require-runtimes",
     "--ignore-recordings",
+    "--languages",
+    "--local",
 ];
 
 /// Flags every command takes.
@@ -203,6 +211,7 @@ fn command_flags(command: &str) -> Option<&'static [&'static str]> {
             "--translate-with",
         ],
         "speak" => &["-o", "--out", "-l", "--lang", "--slow"],
+        "preset" | "presets" => &["-o", "--out", "--languages", "--local"],
         "services" => &["-c", "--capability"],
         "history" => &["--search", "--favorites", "--export"],
         "module" => &[
@@ -717,6 +726,7 @@ fn run(args: &Args) -> Result<(), Fail> {
         "modules" | "module" if args.rest.first().is_some_and(|w| w == "assets") => assets(args, &args.rest[1..]),
         "assets" => assets(args, &args.rest),
         "python" => python(args, &args.rest),
+        "preset" | "presets" => preset(args, &args.rest),
         "modules" => {
             let e = engine(args)?;
             let s = e.module_status();
@@ -1205,6 +1215,186 @@ fn python(args: &Args, words: &[String]) -> Result<(), Fail> {
             Ok(())
         }
         other => Err(Fail::Usage(format!("unknown python command {other:?} (status, install, remove)"))),
+    }
+}
+
+/// A running Glossa's control API, when one answers: its address and token.
+fn running_glossa(args: &Args) -> Option<(String, String)> {
+    let cfg = glossa_core::Config::load(&paths(args).config_file()).ok()?;
+    if !cfg.server.enabled || cfg.server.token.is_empty() {
+        return None;
+    }
+    let addr = glossa_engine::server::connect_addr(&cfg.server.bind);
+    let probe = glossa_net::HttpRequest::get(format!("http://{addr}/health")).timeout(Duration::from_secs(2));
+    let resp = glossa_net::Http::send(&glossa_net::HttpClient::plain(), probe).ok()?;
+    (resp.is_success() && resp.text().contains("\"glossa\"")).then_some((addr, cfg.server.token))
+}
+
+/// One call to `/v1/presets…` on a running Glossa; the body of its answer.
+fn preset_api(addr: &str, token: &str, post: bool, path: &str, body: Vec<u8>) -> Result<String, Fail> {
+    let url = format!("http://{addr}/v1/presets{path}");
+    let req = if post { glossa_net::HttpRequest::post(url).body(body) } else { glossa_net::HttpRequest::get(url) };
+    let req = req.header("Authorization", format!("Bearer {token}")).timeout(Duration::from_secs(30));
+    let resp = glossa_net::Http::send(&glossa_net::HttpClient::plain(), req)?;
+    let text = resp.text();
+    if !resp.is_success() {
+        let msg = serde_json::from_str::<serde_json::Value>(&text)
+            .ok()
+            .and_then(|v| v["error"].as_str().map(str::to_owned))
+            .unwrap_or(text);
+        return Err(Fail::Op(msg));
+    }
+    Ok(text)
+}
+
+fn parse_answer(text: &str) -> Result<serde_json::Value, Fail> {
+    serde_json::from_str(text).map_err(|e| Fail::Op(format!("unexpected answer from Glossa: {e}")))
+}
+
+fn parse_report(text: &str) -> Result<glossa_engine::PresetReport, Fail> {
+    serde_json::from_str(text).map_err(|e| Fail::Op(format!("unexpected answer from Glossa: {e}")))
+}
+
+/// `glossa-cli preset …`: list, apply, save, export, import and manage
+/// presets.
+fn preset(args: &Args, words: &[String]) -> Result<(), Fail> {
+    let op = words.first().map(String::as_str).unwrap_or("list");
+    let arg = |i: usize, what: &str| {
+        words.get(i).map(String::as_str).ok_or_else(|| Fail::Usage(format!("preset {op} needs {what}")))
+    };
+    // The running program keeps its settings in memory and would write over
+    // a change made to the file behind its back, so changes go through it.
+    let remote = if args.has(&["--local"]) { None } else { running_glossa(args) };
+    let report = |r: &glossa_engine::PresetReport, verb: &str| {
+        if args.json {
+            out!("{}", serde_json::to_string_pretty(r).unwrap_or_default());
+            return;
+        }
+        out!("{verb} preset {:?}", r.name);
+        if !r.missing.is_empty() {
+            out!("not installed here, skipped: {}", r.missing.join(", "));
+        }
+        if !r.dropped_secrets.is_empty() {
+            out!("left out (a preset never keeps keys or tokens): {}", r.dropped_secrets.join(", "));
+        }
+    };
+    let named = |name: &str, new_name: Option<&str>| {
+        let mut v = json!({ "name": name });
+        if let Some(n) = new_name {
+            v["new_name"] = json!(n);
+        }
+        serde_json::to_vec(&v).unwrap_or_default()
+    };
+    match op {
+        "list" => {
+            let entries: Vec<glossa_engine::PresetEntry> = match &remote {
+                Some((addr, token)) => {
+                    let v = parse_answer(&preset_api(addr, token, false, "", vec![])?)?;
+                    serde_json::from_value(v["presets"].clone()).map_err(|e| Fail::Op(e.to_string()))?
+                }
+                None => engine(args)?.presets(),
+            };
+            if args.json {
+                out!("{}", serde_json::to_string_pretty(&entries).unwrap_or_default());
+                return Ok(());
+            }
+            for p in &entries {
+                let mark = if p.current { "*" } else { " " };
+                let kind = if p.builtin { " (built-in)" } else { "" };
+                out!("{mark} {}{kind}", p.name);
+                let services = if p.enabled.is_empty() { "unchanged".to_owned() } else { p.enabled.join(", ") };
+                out!("    services: {services}");
+                if !p.missing.is_empty() {
+                    out!("    not installed: {}", p.missing.join(", "));
+                }
+            }
+            Ok(())
+        }
+        "apply" | "next" => {
+            let r = match (&remote, op) {
+                (Some((addr, token)), "next") => parse_report(&preset_api(addr, token, true, "/next", vec![])?)?,
+                (Some((addr, token)), _) => {
+                    parse_report(&preset_api(addr, token, true, "/apply", named(arg(1, "a name")?, None))?)?
+                }
+                (None, "next") => engine(args)?.next_preset()?,
+                (None, _) => engine(args)?.apply_preset(arg(1, "a name")?)?,
+            };
+            report(&r, "applied");
+            Ok(())
+        }
+        "save" => {
+            let name = arg(1, "a name")?;
+            let languages = args.has(&["--languages"]);
+            let r = match &remote {
+                Some((addr, token)) => {
+                    let body = serde_json::to_vec(&json!({ "name": name, "languages": languages })).unwrap_or_default();
+                    parse_report(&preset_api(addr, token, true, "/save", body)?)?
+                }
+                None => engine(args)?.save_preset(name, languages)?,
+            };
+            report(&r, "saved");
+            Ok(())
+        }
+        "export" => {
+            let name = arg(1, "a name")?;
+            let text = match &remote {
+                Some((addr, token)) => {
+                    let path = format!("/export?name={}", glossa_net::url_encode(name));
+                    preset_api(addr, token, false, &path, vec![])?
+                }
+                None => engine(args)?.export_preset_text(name)?,
+            };
+            match args.flag(&["-o", "--out"]) {
+                Some(file) => {
+                    std::fs::write(file, text)?;
+                    if !args.json {
+                        eprintln!("wrote {file}");
+                    }
+                }
+                None => outp!("{text}"),
+            }
+            Ok(())
+        }
+        "import" => {
+            let file = arg(1, "a file")?;
+            let r = match &remote {
+                Some((addr, token)) => parse_report(&preset_api(addr, token, true, "/import", std::fs::read(file)?)?)?,
+                None => engine(args)?.import_preset(std::path::Path::new(file))?,
+            };
+            report(&r, "imported");
+            Ok(())
+        }
+        "rename" | "duplicate" | "delete" => {
+            let name = arg(1, "a name")?;
+            let new_name = if op == "rename" { Some(arg(2, "a new name")?) } else { words.get(2).map(String::as_str) };
+            let result = match &remote {
+                Some((addr, token)) => {
+                    let v = parse_answer(&preset_api(addr, token, true, &format!("/{op}"), named(name, new_name))?)?;
+                    v["name"].as_str().or(v["deleted"].as_str()).unwrap_or(name).to_owned()
+                }
+                None => {
+                    let e = engine(args)?;
+                    match (op, new_name) {
+                        ("rename", Some(new)) => e.rename_preset(name, new).map(|()| new.trim().to_owned())?,
+                        ("duplicate", new) => e.duplicate_preset(name, new)?,
+                        _ => e.delete_preset(name).map(|()| name.to_owned())?,
+                    }
+                }
+            };
+            if args.json {
+                out!("{}", json!({ "name": result }));
+            } else {
+                match op {
+                    "rename" => out!("renamed {name:?} to {result:?}"),
+                    "duplicate" => out!("copied {name:?} as {result:?}"),
+                    _ => out!("deleted {name:?}"),
+                }
+            }
+            Ok(())
+        }
+        other => Err(Fail::Usage(format!(
+            "unknown preset command {other:?} (list, apply, next, save, export, import, rename, duplicate, delete)"
+        ))),
     }
 }
 

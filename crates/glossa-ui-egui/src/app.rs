@@ -821,6 +821,19 @@ impl GlossaApp {
                 }
             }
             Event::Action { action, text } => self.perform(action, text),
+            Event::PresetApplied { result } => {
+                let cfg = self.engine.config();
+                if let Some(st) = self.options.as_mut() {
+                    crate::presets::sync_draft(&mut st.draft, &cfg);
+                }
+                match result {
+                    Ok(r) => {
+                        let text = crate::presets::report_text(self, "preset.applied", &r);
+                        self.notify(text, false);
+                    }
+                    Err(e) => self.notify(e.to_string(), true),
+                }
+            }
             // The waker has already asked for a frame; the options page
             // reads the new state when it draws.
             Event::AssetsChanged { .. } => {}

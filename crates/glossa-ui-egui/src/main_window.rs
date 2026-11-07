@@ -327,6 +327,8 @@ fn main_menu(app: &mut GlossaApp, ui: &mut egui::Ui) {
         ui.radio_value(&mut g.startup_action, StartupAction::RestorePrevious, app.t("menu.startup_restore"));
     });
     ui.separator();
+    crate::presets::menu_section(app, ui);
+    ui.separator();
     if ui.button(app.t("menu.dictionary")).clicked() {
         app.perform(Action::ShowDictionary, None);
         ui.close();
