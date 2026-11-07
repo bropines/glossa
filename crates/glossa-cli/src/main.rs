@@ -71,6 +71,11 @@ COMMANDS
     speak      [-l LANG] [--slow] -o OUT.mp3 TEXT…
     services   [-c CAPABILITY]        translate | dictionary | listen | ocr | detect_language
     modules                           what loaded, what failed and why
+    module test [--live|--record] [--case NAME] [--set KEY=VALUE] [--timeout SECS]
+                [--strict] [--require-runtimes] DIR…
+                                      check a module folder (or every module below DIR), load it
+                                      and run its fixtures (tests/*.toml) with recorded HTTP
+    module check [--strict] DIR…      the same checks without loading or running anything
     history    [--search Q] [--favorites] [--export FILE.{txt,csv,html,json}]
     import-classic DIR                settings, history, and use its services/themes/locales
     theme      list | show NAME | convert FILE    (classic JSON -> native TOML)
@@ -127,6 +132,9 @@ const VALUED: &[&str] = &[
     "-F",
     "--format",
     "--translate-with",
+    "--case",
+    "--set",
+    "--timeout",
 ];
 
 /// Flags that take no value.
@@ -145,6 +153,10 @@ const SWITCHES: &[&str] = &[
     "--full",
     "--in-place",
     "--join-lines",
+    "--live",
+    "--record",
+    "--strict",
+    "--require-runtimes",
 ];
 
 /// Flags every command takes.
@@ -174,6 +186,7 @@ fn command_flags(command: &str) -> Option<&'static [&'static str]> {
         "speak" => &["-o", "--out", "-l", "--lang", "--slow"],
         "services" => &["-c", "--capability"],
         "history" => &["--search", "--favorites", "--export"],
+        "module" => &["--live", "--record", "--case", "--set", "--timeout", "--strict", "--require-runtimes"],
         "detect" | "modules" | "import-classic" | "theme" | "locale" | "config" | "serve" | "action" | "doctor"
         | "" | "help" | "version" => &[],
         _ => return None,
@@ -363,6 +376,82 @@ fn text(args: &Args) -> Result<String, Fail> {
     let mut s = String::new();
     std::io::stdin().read_to_string(&mut s)?;
     Ok(s)
+}
+
+/// `module test` / `module check`: the module test harness
+/// (`glossa-module-test`). Needs no data folder, so it runs the same on a
+/// developer's machine and in CI.
+fn module_command(args: &Args) -> Result<(), Fail> {
+    use glossa_module_test::{Network, Settings, Status};
+    let sub = args.rest.first().map(String::as_str).unwrap_or("");
+    let check_only = match sub {
+        "test" => false,
+        "check" => true,
+        "" => return Err(Fail::Usage("module test DIR… or module check DIR…".into())),
+        other => return Err(Fail::Usage(format!("unknown module command {other:?}; use test or check"))),
+    };
+    let roots = &args.rest[1..];
+    if roots.is_empty() {
+        return Err(Fail::Usage(format!("module {sub} needs a module folder")));
+    }
+    let network = match (args.has(&["--live"]), args.has(&["--record"])) {
+        (true, true) => return Err(Fail::Usage("--live and --record do not go together".into())),
+        (true, false) => Network::Live,
+        (false, true) => Network::Record,
+        (false, false) => Network::Replay,
+    };
+    let mut settings = Settings {
+        network,
+        check_only,
+        strict: args.has(&["--strict"]),
+        require_runtimes: args.has(&["--require-runtimes"]),
+        case_filter: args.flag(&["--case"]).map(str::to_owned),
+        ..Settings::default()
+    };
+    if let Some(t) = args.flag(&["--timeout"]) {
+        let secs: u64 = t.parse().map_err(|_| Fail::Usage(format!("--timeout {t:?}: seconds, e.g. 30")))?;
+        settings.timeout = std::time::Duration::from_secs(secs.max(1));
+    }
+    for (name, value) in &args.flags {
+        if name != "--set" {
+            continue;
+        }
+        let pair = value.as_deref().unwrap_or_default();
+        let (k, v) = pair.split_once('=').ok_or_else(|| Fail::Usage(format!("--set {pair:?}: use KEY=VALUE")))?;
+        // A number or a boolean is passed as one, anything else as text.
+        let value = serde_json::from_str::<serde_json::Value>(v)
+            .ok()
+            .filter(|j| j.is_number() || j.is_boolean())
+            .unwrap_or_else(|| json!(v));
+        settings.options.insert(k.trim().to_owned(), value);
+    }
+
+    let mut dirs = Vec::new();
+    for root in roots {
+        let found = glossa_module_test::find_modules(std::path::Path::new(root));
+        if found.is_empty() {
+            return Err(Fail::Op(format!("no module.toml in {root} or below it")));
+        }
+        dirs.extend(found);
+    }
+    let reports: Vec<_> = dirs.iter().map(|d| glossa_module_test::test_module(d, &settings)).collect();
+    let count = |s: Status| reports.iter().filter(|r| r.status == s).count();
+    let (pass, fail, skip) = (count(Status::Pass), count(Status::Fail), count(Status::Skip));
+    if args.json {
+        out!("{}", json!({ "modules": reports, "passed": pass, "failed": fail, "skipped": skip }));
+    } else {
+        for r in &reports {
+            outp!("{}", r.render());
+        }
+        if reports.len() > 1 {
+            out!("\n{} modules: {pass} passed, {fail} failed, {skip} skipped", reports.len());
+        }
+    }
+    if fail > 0 {
+        // The report already says what failed; exit 1 without repeating it.
+        std::process::exit(1);
+    }
+    Ok(())
 }
 
 fn run(args: &Args) -> Result<(), Fail> {
@@ -663,6 +752,7 @@ fn run(args: &Args) -> Result<(), Fail> {
             e.shutdown();
             Ok(())
         }
+        "module" => module_command(args),
         "theme" => {
             let sub = args.rest.first().map(String::as_str).unwrap_or("list");
             match sub {

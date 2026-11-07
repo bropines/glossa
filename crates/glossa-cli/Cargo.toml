@@ -16,6 +16,7 @@ glossa-core = { workspace = true }
 glossa-engine = { workspace = true }
 glossa-net = { workspace = true }
 glossa-modules = { workspace = true }
+glossa-module-test = { workspace = true }
 glossa-dict = { workspace = true }
 glossa-ocr = { workspace = true }
 # For `doctor` only: the session, permissions and the single-instance lock.

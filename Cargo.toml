@@ -5,6 +5,7 @@ members = [
     "crates/glossa-net",
     "crates/glossa-module-sdk",
     "crates/glossa-modules",
+    "crates/glossa-module-test",
     "crates/glossa-services",
     "crates/glossa-dict",
     "crates/glossa-ocr",
@@ -38,6 +39,7 @@ glossa-dict = { path = "crates/glossa-dict" }
 glossa-engine = { path = "crates/glossa-engine" }
 glossa-platform = { path = "crates/glossa-platform" }
 glossa-module-sdk = { path = "crates/glossa-module-sdk" }
+glossa-module-test = { path = "crates/glossa-module-test" }
 
 # -- foundation -------------------------------------------------------------
 anyhow = "1"
