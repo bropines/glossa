@@ -151,14 +151,18 @@ impl History {
 
     /// Drop the oldest non-favourites beyond the limit. Favourites are never
     /// dropped by the limit.
+    /// Drop the oldest non-favourites until the limit holds. The newest
+    /// entry always stays: it is the one `record` just added and returned
+    /// the id of, and when favourites alone fill the limit it goes over the
+    /// limit with them rather than vanish.
     fn trim(&mut self) {
         if self.max_entries == 0 {
             return;
         }
         while self.entries.len() > self.max_entries {
-            match self.entries.iter().rposition(|e| !e.favorite) {
+            match self.entries.iter().skip(1).rposition(|e| !e.favorite) {
                 Some(i) => {
-                    self.entries.remove(i);
+                    self.entries.remove(i + 1);
                 }
                 None => break,
             }
@@ -433,12 +437,11 @@ mod tests {
         assert_eq!(sources(&h), ["c", "b", "a"], "the limit never drops a favourite");
     }
 
-    /// A new translation recorded while favourites alone fill the limit is
-    /// dropped by the trim in the same call, yet `record` returns its id, so
-    /// a caller (the UI starring the entry it just recorded, or
-    /// `Engine::record_translation`) holds an id that names nothing.
+    /// When favourites alone fill the limit, the entry `record` just added
+    /// stays (over the limit, as favourites may be) instead of being trimmed
+    /// at once: the id `record` returns reaches the UI and
+    /// `Engine::record_translation`, and must name an entry.
     #[test]
-    #[ignore = "known bug: record returns the id of an entry its own trim removed"]
     fn a_new_entry_is_not_dropped_by_its_own_trim() {
         let mut h = History::new(2);
         for s in ["a", "b"] {
@@ -447,6 +450,11 @@ mod tests {
         }
         let id = h.record("c", res("g", "c"), 2);
         assert!(h.get(id).is_some(), "record returned {id}, which is not in {:?}", sources(&h));
+        assert_eq!(sources(&h), ["c", "b", "a"]);
+        // The next one pushes the previous non-favourite out, not a favourite.
+        let id = h.record("d", res("g", "d"), 3);
+        assert!(h.get(id).is_some());
+        assert_eq!(sources(&h), ["d", "b", "a"]);
     }
 
     #[test]

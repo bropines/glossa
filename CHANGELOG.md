@@ -61,6 +61,9 @@ the notes of its GitHub release.
 
 ### Fixed
 
+- History: when favourites alone filled the limit, a new translation was
+  recorded and dropped in the same moment, and starring it from the window
+  did nothing. It is now kept, over the limit as favourites may be.
 - macOS: the popup's Replace button did not replace the selected text:
   clicking the popup made Glossa the active application, so the paste went
   to Glossa. The focus now goes back to the program the text was selected
