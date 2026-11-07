@@ -198,6 +198,7 @@ pub fn to_net_request(req: wire::HttpRequest) -> Result<HttpRequest, ModuleError
         timeout: req.timeout_ms.map(Duration::from_millis),
         codepage: None,
         provider: String::new(),
+        no_retry_when_limited: false,
     })
 }
 

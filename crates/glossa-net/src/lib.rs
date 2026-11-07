@@ -74,6 +74,10 @@ pub struct HttpRequest {
     pub codepage: Option<Codepage>,
     /// Which provider is asking, for error messages and logs.
     pub provider: String,
+    /// Hand a 429 (or a 503 with `Retry-After`) straight back instead of
+    /// retrying: for a provider with somewhere else to go, a retry only
+    /// prolongs the block and delays the fall-back.
+    pub no_retry_when_limited: bool,
 }
 
 impl HttpRequest {
@@ -113,6 +117,12 @@ impl HttpRequest {
 
     pub fn timeout(mut self, timeout: Duration) -> Self {
         self.timeout = Some(timeout);
+        self
+    }
+
+    /// See [`HttpRequest::no_retry_when_limited`].
+    pub fn no_retry_when_limited(mut self) -> Self {
+        self.no_retry_when_limited = true;
         self
     }
 
@@ -474,6 +484,7 @@ impl Http for HttpClient {
                 // CDNs is dropped by DPI on some networks) cost 20 s that way.
                 Err(Error::Timeout(_)) => false,
                 Err(e) if e.is_transient() => true,
+                Ok(r) if request.no_retry_when_limited && is_rate_limit(r) => false,
                 Ok(r) => matches!(r.status, 429 | 500 | 502 | 503 | 504),
                 Err(_) => false,
             };
@@ -512,6 +523,11 @@ impl Http for HttpClient {
             std::thread::sleep(backoff);
         }
     }
+}
+
+/// Whether [`HttpResponse::error_for_status`] would call this a rate limit.
+fn is_rate_limit(r: &HttpResponse) -> bool {
+    r.status == 429 || r.status == 503 && r.header("retry-after").is_some()
 }
 
 /// Which certificates a server must chain up to.
@@ -967,6 +983,23 @@ mod tests {
             ..Default::default()
         };
         HttpClient::new(&settings).unwrap()
+    }
+
+    #[test]
+    fn a_rate_limit_is_retried_unless_the_request_says_not_to() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        static HITS: AtomicUsize = AtomicUsize::new(0);
+        let url = stalling_server(|mut s| {
+            use std::io::{Read as _, Write as _};
+            let mut buf = [0u8; 1024];
+            let _ = s.read(&mut buf);
+            HITS.fetch_add(1, Ordering::SeqCst);
+            let _ = s.write_all(b"HTTP/1.1 429 Too Many Requests\r\nContent-Length: 0\r\nConnection: close\r\n\r\n");
+        });
+        let r = client(5, 1).send(HttpRequest::get(&url).no_retry_when_limited()).unwrap();
+        assert_eq!((r.status, HITS.load(Ordering::SeqCst)), (429, 1), "asked once");
+        let r = client(5, 1).send(HttpRequest::get(&url)).unwrap();
+        assert_eq!((r.status, HITS.load(Ordering::SeqCst)), (429, 3), "asked again by default");
     }
 
     #[test]
