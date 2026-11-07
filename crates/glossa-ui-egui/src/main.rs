@@ -502,12 +502,12 @@ pub fn register_hotkeys(shell: &mut Shell) {
     }
 }
 
-/// A hotkey failure in the interface language, after the action's name when
-/// there is one; the options page lists these.
 /// A hotkey that could not be set up, and for which action (none when the
 /// hotkey service itself failed).
 pub type HotkeyFailure = (Option<Action>, glossa_platform::HotkeyError);
 
+/// A hotkey failure in the interface language, after the action's name when
+/// there is one; the options page lists these.
 pub fn hotkey_error_text(
     locale: &glossa_core::Locale,
     action: Option<Action>,

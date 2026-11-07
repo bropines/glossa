@@ -298,14 +298,42 @@ pub struct LocaleIssue {
     /// The string key or language tag; empty for a whole-file problem.
     pub key: String,
     pub kind: IssueKind,
+    /// The file is a classic QTranslate `lang.json`, read from the user's
+    /// installation: nothing the user is expected to fix.
+    pub classic: bool,
 }
 
 impl LocaleIssue {
+    /// A problem with the file itself.
+    pub fn unreadable(file: &std::path::Path, why: String, classic: bool) -> Self {
+        LocaleIssue { file: Some(file.to_owned()), key: String::new(), kind: IssueKind::Unreadable(why), classic }
+    }
+
+    /// Classic files are warnings whatever is wrong with them: the strings
+    /// are skipped all the same, but the file belongs to the old program
+    /// and is not the user's to fix.
     pub fn severity(&self) -> Severity {
         match self.kind {
+            _ if self.classic => Severity::Warning,
             IssueKind::UnknownKey | IssueKind::UnknownLanguage => Severity::Warning,
             IssueKind::Placeholders { .. } | IssueKind::Unreadable(_) => Severity::Error,
         }
+    }
+
+    /// Where the issue is, shortly: the file's name, with its folder and a
+    /// note for a classic file (every classic file is `lang.json`).
+    pub fn source(&self, locale: &Locale) -> Option<String> {
+        let file = self.file.as_ref()?;
+        let name = file.file_name()?.to_string_lossy().into_owned();
+        if !self.classic {
+            return Some(name);
+        }
+        let folder = file.parent().and_then(|p| p.file_name()).map(|f| f.to_string_lossy().into_owned());
+        let shown = match folder {
+            Some(f) => format!("{f}/{name}"),
+            None => name,
+        };
+        Some(locale.fmt("locale.issue.classic_file", &shown))
     }
 
     /// The issue in `locale`'s language, without the file name.
@@ -320,9 +348,16 @@ impl LocaleIssue {
         }
     }
 
-    /// The message after the file's name, when there is one.
+    /// The message after the file's full path, when there is one.
     pub fn describe(&self, locale: &Locale) -> String {
         match &self.file {
+            Some(f) if self.classic => {
+                format!(
+                    "{}: {}",
+                    locale.fmt("locale.issue.classic_file", &f.display().to_string()),
+                    self.message(locale)
+                )
+            }
             Some(f) => format!("{}: {}", f.display(), self.message(locale)),
             None => self.message(locale),
         }
@@ -331,21 +366,38 @@ impl LocaleIssue {
 
 impl Locale {
     /// Read only the header of a locale file of either format.
+    ///
+    /// The strings are skipped as the text is read, not built: listing the
+    /// languages costs a pass over each file and nothing more.
     pub fn parse_header(text: &str) -> Result<LocaleHeader, String> {
-        let value: Value = serde_json::from_str(&jsonc::strip(text)).map_err(|e| e.to_string())?;
-        let s = |k: &str| value.get(k).and_then(Value::as_str).unwrap_or_default().to_owned();
-        if value.get("Strings").is_some() || value.get("Windows").is_some() {
-            let name = s("LanguageName");
-            let mut native_name = s("LanguageNativeName");
-            if native_name.is_empty() {
-                native_name = name.clone();
-            }
-            Ok(LocaleHeader { code: s("LanguageCode"), name, native_name, classic: true })
+        use serde::de::IgnoredAny;
+        // Both formats' header fields; everything else (the strings) is
+        // passed over without being kept.
+        #[derive(Deserialize)]
+        #[allow(non_snake_case)]
+        struct Header {
+            code: Option<String>,
+            #[serde(default)]
+            name: String,
+            #[serde(default)]
+            native_name: String,
+            #[serde(default)]
+            LanguageCode: String,
+            #[serde(default)]
+            LanguageName: String,
+            #[serde(default)]
+            LanguageNativeName: String,
+            Strings: Option<IgnoredAny>,
+            Windows: Option<IgnoredAny>,
+        }
+        let h: Header = serde_json::from_str(&jsonc::strip(text)).map_err(|e| e.to_string())?;
+        if h.Strings.is_some() || h.Windows.is_some() {
+            let native_name =
+                if h.LanguageNativeName.is_empty() { h.LanguageName.clone() } else { h.LanguageNativeName };
+            Ok(LocaleHeader { code: h.LanguageCode, name: h.LanguageName, native_name, classic: true })
         } else {
-            if !value.get("code").is_some_and(Value::is_string) {
-                return Err("missing field `code`".into());
-            }
-            Ok(LocaleHeader { code: s("code"), name: s("name"), native_name: s("native_name"), classic: false })
+            let code = h.code.ok_or("missing field `code`")?;
+            Ok(LocaleHeader { code, name: h.name, native_name: h.native_name, classic: false })
         }
     }
 
@@ -356,7 +408,8 @@ impl Locale {
     /// sentence with a hole or a stray placeholder.
     pub fn validate(&mut self) -> Vec<LocaleIssue> {
         let mut issues = Vec::new();
-        let issue = |key: &str, kind| LocaleIssue { file: None, key: key.to_owned(), kind };
+        let classic = self.classic;
+        let issue = |key: &str, kind| LocaleIssue { file: None, key: key.to_owned(), kind, classic };
         let mut keys: Vec<String> = self.strings.keys().cloned().collect();
         keys.sort();
         for key in keys {
@@ -781,6 +834,7 @@ pub static STRINGS: &[(&str, &str, Option<&str>)] = &[
     ("locale.issue.unknown_language", "%s: unknown language tag, ignored", None),
     ("locale.issue.placeholders", "%s: %s placeholders where English has %s; the string is skipped", None),
     ("locale.issue.unreadable", "cannot be read: %s", None),
+    ("locale.issue.classic_file", "%s (classic QTranslate file)", None),
     ("options.basics.font_default", "--- Default ---", None),
     (
         "options.basics.smart_direction",

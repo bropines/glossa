@@ -239,6 +239,10 @@ struct Inner {
     /// What was wrong in the locale files: unreadable ones, and the chosen
     /// language's skipped strings.
     locale_issues: RwLock<Vec<glossa_core::locale::LocaleIssue>>,
+    /// What the current locale was loaded from, so a rescan that finds the
+    /// same language and the same files keeps it (and the front end has
+    /// nothing to rebuild).
+    locale_stamp: RwLock<Option<catalog::LocaleStamp>>,
     modules: RwLock<ModuleStatus>,
     module_cache: Arc<ModuleCache>,
     subscribers: Mutex<Vec<Sender<Event>>>,
@@ -353,6 +357,7 @@ impl Engine {
             locales: RwLock::new(LocaleCatalog::default()),
             locale: RwLock::new(Arc::new(Locale::english())),
             locale_issues: RwLock::new(Vec::new()),
+            locale_stamp: RwLock::new(None),
             modules: RwLock::new(ModuleStatus::default()),
             module_cache,
             subscribers: Mutex::new(Vec::new()),
@@ -409,11 +414,11 @@ impl Engine {
         {
             self.reload_modules();
         }
-        if before.classic != after.classic
-            || before.appearance.theme != after.appearance.theme
-            || before.general.ui_language != after.general.ui_language
-        {
-            self.reload_catalogs();
+        if before.classic != after.classic || before.appearance.theme != after.appearance.theme {
+            self.reload_themes();
+        }
+        if before.classic != after.classic || before.general.ui_language != after.general.ui_language {
+            self.reload_locales();
         }
         if !before.history.enabled && after.history.enabled {
             // Switched on after a start with it off: the file was never read,
@@ -644,20 +649,35 @@ impl Engine {
     }
 
     fn reload_catalogs(&self) {
+        self.reload_themes();
+        self.reload_locales();
+    }
+
+    fn reload_themes(&self) {
         let cfg = self.config();
         let paths = &self.inner.paths;
         let mut theme_dirs = paths.theme_dirs();
         theme_dirs.push(paths.user_theme_dir());
         let classic_themes: Vec<PathBuf> = cfg.classic.themes_dir().into_iter().collect();
         *self.inner.themes.write() = ThemeCatalog::discover(&theme_dirs, &classic_themes);
+    }
 
+    /// Rescan the locale folders (headers only) and load the chosen language
+    /// again only if it, or one of its files, changed: a new `Locale` makes
+    /// the front end rebuild its menus.
+    fn reload_locales(&self) {
+        let cfg = self.config();
+        let paths = &self.inner.paths;
         let mut locale_dirs: Vec<PathBuf> = cfg.classic.locales_dir().into_iter().collect();
         locale_dirs.extend(paths.locale_dirs());
-        let locales = LocaleCatalog::discover(&locale_dirs);
-        let (locale, mut issues) = locales.load_checked(&cfg.general.ui_language);
-        issues.splice(0..0, locales.broken().iter().cloned());
-        *self.inner.locale.write() = Arc::new(locale);
-        *self.inner.locale_issues.write() = issues;
+        let locales = LocaleCatalog::discover(&locale_dirs, Some(&paths.user_locale_dir()));
+        let stamp = locales.stamp(&cfg.general.ui_language);
+        if self.inner.locale_stamp.read().as_ref() != Some(&stamp) {
+            let (locale, issues) = locales.load_checked(&cfg.general.ui_language);
+            *self.inner.locale.write() = Arc::new(locale);
+            *self.inner.locale_issues.write() = issues;
+            *self.inner.locale_stamp.write() = Some(stamp);
+        }
         *self.inner.locales.write() = locales;
     }
 
@@ -791,7 +811,9 @@ impl Engine {
 
     /// Problems in the locale files, for Options.
     pub fn locale_issues(&self) -> Vec<glossa_core::locale::LocaleIssue> {
-        self.inner.locale_issues.read().clone()
+        let mut issues = self.inner.locales.read().broken().to_vec();
+        issues.extend(self.inner.locale_issues.read().iter().cloned());
+        issues
     }
 
     pub fn locale(&self) -> Arc<Locale> {
@@ -1748,6 +1770,27 @@ mod tests {
         e.update_config(|c| c.ocr.tesseract.path = dir.join("no-tesseract").to_string_lossy().into_owned()).unwrap();
         let err = e.recognize(png, LangId::ENGLISH, None).unwrap_err();
         assert!(matches!(err, Error::FileNotFound(ref p) if p.contains("no-lens_scan")), "{err:?}");
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// The front end rebuilds its menus when the locale is a new one, so a
+    /// theme change or a rescan that finds nothing new must keep it.
+    #[test]
+    fn the_locale_is_replaced_only_when_the_language_or_its_files_change() {
+        let (e, dir) = engine("locale-stamp");
+        e.update_config(|c| c.general.ui_language = "en".into()).unwrap();
+        let en = e.locale();
+        e.update_config(|c| c.appearance.theme = "Glossa Light".into()).unwrap();
+        e.refresh_catalogs();
+        assert!(Arc::ptr_eq(&en, &e.locale()), "nothing about the language changed");
+        e.update_config(|c| c.general.ui_language = "ru".into()).unwrap();
+        let ru = e.locale();
+        assert_eq!(ru.code, "ru");
+        let user = e.paths().user_locale_dir();
+        std::fs::create_dir_all(&user).unwrap();
+        std::fs::write(user.join("ru.json"), r#"{ "code": "ru", "strings": { "main.translate": "Пере" } }"#).unwrap();
+        e.refresh_catalogs();
+        assert_eq!(e.locale().get("main.translate"), "Пере", "a new file for the language loads");
         std::fs::remove_dir_all(&dir).ok();
     }
 

@@ -653,11 +653,15 @@ A native file looks like this:
 - Each file is checked when its language is chosen: an unknown key or
   language tag is a warning and is ignored; a string whose `%s`
   placeholders do not match the English text in number is an error and is
-  skipped, so the layer below shows instead. A file that cannot be read is
-  an error too. Problems go to the log and are listed under the language
-  setting in Options.
+  skipped, so the layer below shows instead. A file in this folder that
+  cannot be read (or is over 4 MB) is an error too. In a classic
+  `lang.json` from the QTranslate installation the same problems are only
+  warnings, named with the file's folder: the strings are skipped all the
+  same, but the file is not yours to fix. Problems go to the log and are
+  listed under the language setting in Options.
 - Only the chosen language is loaded; for the others, only the header is
-  read to fill the list.
+  read to fill the list. A rescan that finds the chosen language's files
+  unchanged keeps what is loaded.
 - After editing a file, *Reload languages* in Options applies it.
 
 `glossa-cli locale template` writes a file to start from, with every key,

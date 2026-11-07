@@ -658,7 +658,10 @@ fn language_files(app: &GlossaApp, ui: &mut egui::Ui, look: &crate::style::Look)
             let _ = crate::app::open_with_system(&dir.to_string_lossy());
         }
         if ui.button(app.t("options.basics.ui_language_reload")).clicked() {
-            app.engine.refresh_catalogs();
+            // The rescan reads every theme and locale folder, so it runs off
+            // the UI thread; the engine's ConfigChanged brings the result.
+            let engine = app.engine.clone();
+            let _ = std::thread::Builder::new().name("glossa-rescan".into()).spawn(move || engine.refresh_catalogs());
         }
     });
     let issues = app.engine.locale_issues();
@@ -672,8 +675,7 @@ fn language_files(app: &GlossaApp, ui: &mut egui::Ui, look: &crate::style::Look)
             glossa_core::locale::Severity::Warning => look.weak_text(),
         };
         // The file's name is enough here; the log has the full path.
-        let file = issue.file.as_ref().and_then(|f| f.file_name()).map(|n| n.to_string_lossy().into_owned());
-        let text = match file {
+        let text = match issue.source(&app.locale) {
             Some(f) => format!("{f}: {}", issue.message(&app.locale)),
             None => issue.message(&app.locale),
         };
@@ -2607,6 +2609,7 @@ mod tests {
             folder: folder.into(),
             builtin: folder.is_empty(),
             files: Vec::new(),
+            classic_files: 0,
         }
     }
 
