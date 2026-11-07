@@ -95,7 +95,16 @@ EOF
         if [ $code -ne 0 ]; then
             sed 's/^/    /' "$home/err.txt" | tail -n 20
             # Panics and warnings go to the log, not to stderr.
-            [ -f "$home/cache/glossa.log" ] && grep -E "ERROR|WARN|panic" "$home/cache/glossa.log" | tail -n 15 | sed 's/^/    log: /'
+            # The first panic of this theme with its frames, then the rest
+            # of the run's errors and warnings.
+            if [ -f "$home/cache/glossa.log" ]; then
+                if [ ! -e "$home/shown-panic" ] && grep -q "panic on thread" "$home/cache/glossa.log"; then
+                    grep -m1 -A60 "panic on thread" "$home/cache/glossa.log" | sed 's/^/    log: /'
+                    touch "$home/shown-panic"
+                fi
+                grep -E "ERROR|WARN" "$home/cache/glossa.log" | tail -n 8 | sed 's/^/    log: /'
+                : > "$home/cache/glossa.log"
+            fi
             echo "$slug/$t: $(describe $code)" >> "$scratch/failed"
         elif [ ! -s "$file" ]; then
             echo "$slug/$t: no picture written" >> "$scratch/failed"
