@@ -127,6 +127,8 @@ pub struct GlossaApp {
     pub welcome: Option<crate::welcome::WelcomeState>,
     pub dictionary: Option<crate::dictionary::DictState>,
     pub history: Option<crate::history::HistoryState>,
+    /// The module editor, while open.
+    pub module_editor: Option<crate::module_editor::ModuleEditor>,
     pub about_open: bool,
     pub keyboard_open: bool,
 
@@ -248,6 +250,7 @@ impl GlossaApp {
             welcome,
             dictionary: None,
             history: None,
+            module_editor: None,
             about_open: false,
             keyboard_open: false,
             tasks_tx,
@@ -1078,6 +1081,7 @@ impl eframe::App for GlossaApp {
             || self.options.is_some()
             || self.dictionary.is_some()
             || self.history.is_some()
+            || self.module_editor.is_some()
             || self.about_open
             || self.keyboard_open
             || self.welcome.is_some();
@@ -1098,6 +1102,7 @@ impl eframe::App for GlossaApp {
             || self.options.is_some()
             || self.dictionary.is_some()
             || self.history.is_some()
+            || self.module_editor.is_some()
             || self.about_open
             || self.keyboard_open
             || self.welcome.is_some();
@@ -1158,6 +1163,8 @@ impl eframe::App for GlossaApp {
         crate::dictionary::show(self, &ctx);
         phase("history");
         crate::history::show(self, &ctx);
+        phase("module editor");
+        crate::module_editor::show(self, &ctx);
         phase("about, keyboard");
         crate::about::show_about(self, &ctx);
         crate::welcome::show(self, &ctx);

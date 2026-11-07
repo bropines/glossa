@@ -906,7 +906,7 @@ by tests.
 | `--hidden`, `--tray` | Start in the tray, whatever `[general] startup_action` says. Autostart uses this. |
 | `--home DIR` | The data folder, as `GLOSSA_HOME`. |
 | `--popup TEXT` | Show `TEXT` translated in the popup at start. |
-| `--screenshot WHAT [FILE]` | Development aid: draw one window (`main`, `popup`, `options`, `options:PAGE`, `dictionary`, `history`, `keyboard`, `about`, `welcome`, `ocr-result`) to a PNG and exit. `options:font` opens Options with the font list open; `options:autostart` shows the note given after turning on starting at login, without changing anything. It exits with 2 when the picture is blank, 3 when no picture came within 90 seconds of starting, 4 when a string has no text in any language and 6 for an unknown window. |
+| `--screenshot WHAT [FILE]` | Development aid: draw one window (`main`, `popup`, `options`, `options:PAGE`, `dictionary`, `history`, `keyboard`, `about`, `welcome`, `ocr-result`, `module-editor`, `module-editor:test`) to a PNG and exit. `module-editor` opens the module editor on the folder in `GLOSSA_SCREENSHOT_MODULE`, or on a new module from the translator template; `module-editor:test` also runs its tests. `options:font` opens Options with the font list open; `options:autostart` shows the note given after turning on starting at login, without changing anything. It exits with 2 when the picture is blank, 3 when no picture came within 90 seconds of starting, 4 when a string has no text in any language and 6 for an unknown window. |
 | `--screenshot-list` | Print every window `--screenshot` can draw, one per line, and exit. `scripts/screenshot-smoke.sh` renders them all. |
 
 Starting `glossa` while it is already running shows the running program's

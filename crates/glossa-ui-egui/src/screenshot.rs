@@ -53,9 +53,20 @@ const SPECIAL_OPTIONS: [&str; 3] = ["font", "autostart", "presets"];
 
 /// Every window `--screenshot` can draw, as `--screenshot-list` prints them.
 pub fn targets() -> Vec<String> {
-    let mut all: Vec<String> = ["main", "popup", "dictionary", "history", "keyboard", "about", "welcome", "ocr-result"]
-        .map(String::from)
-        .to_vec();
+    let mut all: Vec<String> = [
+        "main",
+        "popup",
+        "dictionary",
+        "history",
+        "keyboard",
+        "about",
+        "welcome",
+        "ocr-result",
+        "module-editor",
+        "module-editor:test",
+    ]
+    .map(String::from)
+    .to_vec();
     all.extend(crate::options::page_names().into_iter().map(|p| format!("options:{p}")));
     all.extend(SPECIAL_OPTIONS.map(|v| format!("options:{v}")));
     all
@@ -130,6 +141,23 @@ fn open(app: &mut GlossaApp, what: &str) -> bool {
         }
         "dictionary" => crate::dictionary::open(app, Some("serendipity".into())),
         "history" => crate::history::open(app),
+        "module-editor" | "module-editor:test" => {
+            // `GLOSSA_SCREENSHOT_MODULE`: a module folder to open; else a
+            // new module from the translator template.
+            let target = match std::env::var_os("GLOSSA_SCREENSHOT_MODULE") {
+                Some(dir) => crate::module_editor::Target::Dir(dir.into()),
+                None => crate::module_editor::Target::New(
+                    glossa_engine::module_dev::Template::Translator,
+                    "Screenshot module".into(),
+                ),
+            };
+            crate::module_editor::open(app, target);
+            if what.ends_with(":test") {
+                if let Some(ed) = app.module_editor.as_mut() {
+                    ed.test_when_ready();
+                }
+            }
+        }
         "about" => app.about_open = true,
         "welcome" => crate::welcome::open(app),
         "keyboard" => app.keyboard_open = true,
@@ -153,6 +181,7 @@ fn viewport(what: &str) -> Option<ViewportId> {
         w if w == "options" || w.starts_with("options:") => viewport(OPTIONS),
         "dictionary" => viewport(DICTIONARY),
         "history" => viewport(HISTORY),
+        "module-editor" | "module-editor:test" => viewport(crate::module_editor::VIEWPORT),
         "keyboard" => viewport(KEYBOARD),
         "about" => viewport(ABOUT),
         "welcome" => viewport(WELCOME),

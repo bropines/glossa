@@ -37,6 +37,21 @@ the notes of its GitHub release.
   settings installed modules declare and never sets an address (URL,
   endpoint, host), so a shared file cannot send your stored keys to
   another server.
+- A module editor inside Glossa (*Options → Modules → Module editor*). Start
+  a module from a template (translator, dictionary, text recognition), or
+  edit your own, or copy a bundled or installed one to your modules folder
+  and edit the copy. The window has the module's files, editor tabs with
+  colours for JavaScript, TOML, JSON and Python, line numbers, find (Ctrl+F),
+  go to line (Ctrl+G) and comment toggling (Ctrl+/), a preview of the
+  module's settings page, and a drawer with Problems, the module's own log
+  and test results. Ctrl+S saves (atomically), checks the manifest and the
+  script with line and column, and reloads only that module; F5 runs its
+  tests. See [docs/modules/editor.md](docs/modules/editor.md).
+- The control API can check, reload and test one module:
+  `POST /v1/modules/<id>/check`, `…/reload`, `…/test`.
+- Module errors may carry an optional `location` (`file`, `line`, `column`).
+  JavaScript modules fill it, and an error thrown while a script runs now
+  names the place in the message, as `(at main.js:23:14)`.
 - The interface language switches at once, without a restart: every
   window, the tray menu and the macOS menu bar follow the setting as soon
   as it is applied.
