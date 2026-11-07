@@ -326,7 +326,7 @@ pub fn import_options(text: &str, config: &mut Config) -> Result<Vec<String>, St
     }
     flag!(config.mouse_mode.ctrl_only, "Advanced", "EnableMouseModeOnCtrl");
     if let Some(on) = b(&["Advanced", "SwitchMouseModeOnTrayClick"]) {
-        config.tray.adopt_tray_click_toggles(Some(on), crate::config::Os::current());
+        config.tray.import_classic_switch(on, crate::config::Os::current());
     }
     flag!(config.mouse_mode.enabled, "General", "MouseModeOn");
     if let Some(m) = n(&["General", "MouseMode"]) {

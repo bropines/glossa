@@ -24,7 +24,7 @@
 
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{self, Receiver, RecvTimeoutError, Sender};
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 
 use glossa_core::config::{TrayAction, TrayConfig};
 use glossa_core::{Action, Locale};
@@ -54,18 +54,46 @@ pub enum ClickKind {
     Middle,
 }
 
-/// What a click asks for, by the settings. Mouse mode where it cannot run
-/// falls back to the main window, as the classic click did.
-pub fn click_action(cfg: &TrayConfig, kind: ClickKind) -> TrayAction {
+/// What a click comes to, decided in one place for both the tray-only loop
+/// (GUI unloaded) and the GUI; each only carries it out its own way.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ClickPlan {
+    Nothing,
+    Menu,
+    Quit,
+    ToggleMouseMode,
+    ShowMain,
+    HideMain,
+    /// Read the selection, from the window marked at the click, for this
+    /// action.
+    Selection(Action),
+    Perform(Action),
+}
+
+/// Decide what a click does, by the settings. Mouse mode where it cannot
+/// run falls back to the main window, and a single click set to show the
+/// main window hides it again while it is showing, as the classic click
+/// did.
+pub fn plan_click(cfg: &TrayConfig, kind: ClickKind, main_visible: bool, mouse_supported: bool) -> ClickPlan {
     let chosen = match kind {
         ClickKind::Single => cfg.click,
         ClickKind::Double => cfg.double_click,
         ClickKind::Middle => cfg.middle_click,
     };
-    if chosen == TrayAction::Run(Action::ToggleMouseMode) && !crate::mouse::MouseHub::supported() {
-        TrayAction::Run(Action::ShowMainWindow)
-    } else {
-        chosen
+    match chosen {
+        TrayAction::Nothing => ClickPlan::Nothing,
+        TrayAction::Menu => ClickPlan::Menu,
+        TrayAction::Run(Action::Quit) => ClickPlan::Quit,
+        TrayAction::Run(Action::ToggleMouseMode) if mouse_supported => ClickPlan::ToggleMouseMode,
+        TrayAction::Run(Action::ShowMainWindow | Action::ToggleMouseMode) => {
+            if kind == ClickKind::Single && main_visible {
+                ClickPlan::HideMain
+            } else {
+                ClickPlan::ShowMain
+            }
+        }
+        TrayAction::Run(a) if crate::actions::needs_selection(a) => ClickPlan::Selection(a),
+        TrayAction::Run(a) => ClickPlan::Perform(a),
     }
 }
 
@@ -221,22 +249,19 @@ fn install_handlers(wake: WakeFn, clicks: Arc<ClickSettings>) -> Receiver<TrayEv
         }
     }));
     let releases = spawn_click_thread(tx2, c2, clicks.clone());
-    // The window the user was in, taken while the pointer is over the icon:
-    // by the time the click arrives the taskbar has the focus (Windows).
-    let mark: Mutex<Option<FocusMark>> = Mutex::new(None);
+    // The window the user was in, taken at the click itself: the taskbar
+    // or the overflow flyout is in front by then (Windows), and the
+    // platform remembers what was before it.
+    glossa_platform::window::track_foreground();
     TrayIconEvent::set_event_handler(Some(move |e: TrayIconEvent| {
         let release = match e {
-            TrayIconEvent::Enter { .. } => {
-                *mark.lock().unwrap_or_else(|p| p.into_inner()) = glossa_platform::window::focus_mark();
-                None
-            }
             TrayIconEvent::Click { button: MouseButton::Left, button_state: MouseButtonState::Up, .. }
                 if !clicks.left_is_menu.load(Ordering::Relaxed) =>
             {
-                Some(Release::Left(*mark.lock().unwrap_or_else(|p| p.into_inner())))
+                Some(Release::Left(glossa_platform::window::focus_mark()))
             }
             TrayIconEvent::Click { button: MouseButton::Middle, button_state: MouseButtonState::Up, .. } => {
-                Some(Release::Middle(*mark.lock().unwrap_or_else(|p| p.into_inner())))
+                Some(Release::Middle(glossa_platform::window::focus_mark()))
             }
             _ => None,
         };
@@ -419,21 +444,22 @@ impl Tray {
 pub fn handle(app: &mut GlossaApp, e: TrayEvent) {
     match e {
         TrayEvent::ShowMain => app.show_main(),
-        TrayEvent::Click(kind, mark) => match click_action(&app.cfg.tray, kind) {
-            TrayAction::Nothing => {}
-            TrayAction::Menu => {
-                if let Some(t) = &app.tray {
-                    t.show_menu();
+        TrayEvent::Click(kind, mark) => {
+            match plan_click(&app.cfg.tray, kind, app.main_visible, crate::mouse::MouseHub::supported()) {
+                ClickPlan::Nothing => {}
+                ClickPlan::Menu => {
+                    if let Some(t) = &app.tray {
+                        t.show_menu();
+                    }
                 }
+                ClickPlan::Quit => app.perform(Action::Quit, None),
+                ClickPlan::ToggleMouseMode => app.perform(Action::ToggleMouseMode, None),
+                ClickPlan::ShowMain => app.show_main(),
+                ClickPlan::HideMain => app.hide_main(),
+                ClickPlan::Selection(a) => crate::actions::capture_after_click(app, a, mark),
+                ClickPlan::Perform(a) => app.perform(a, None),
             }
-            // A single click shows the window and hides it again, as the
-            // classic click did.
-            TrayAction::Run(Action::ShowMainWindow) if kind == ClickKind::Single && app.main_visible => app.hide_main(),
-            TrayAction::Run(a) if crate::actions::needs_selection(a) => {
-                crate::actions::capture_after_click(app, a, mark)
-            }
-            TrayAction::Run(a) => app.perform(a, None),
-        },
+        }
         TrayEvent::ToggleMouseMode => app.perform(Action::ToggleMouseMode, None),
         TrayEvent::Action(a) => app.perform(a, None),
         TrayEvent::ToggleHotkeys => {
@@ -442,5 +468,49 @@ pub fn handle(app: &mut GlossaApp, e: TrayEvent) {
         }
         TrayEvent::About => app.open_about(),
         TrayEvent::Support => app.open_url(glossa_core::SUPPORT_URL),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use glossa_core::config::Os;
+
+    fn cfg(click: TrayAction, double_click: TrayAction, middle_click: TrayAction) -> TrayConfig {
+        TrayConfig { click, double_click, middle_click }
+    }
+
+    #[test]
+    fn each_click_reads_its_own_setting() {
+        let c =
+            cfg(TrayAction::Run(Action::TextRecognition), TrayAction::Run(Action::ShowMainWindow), TrayAction::Menu);
+        assert_eq!(plan_click(&c, ClickKind::Single, false, true), ClickPlan::Perform(Action::TextRecognition));
+        assert_eq!(plan_click(&c, ClickKind::Double, false, true), ClickPlan::ShowMain);
+        assert_eq!(plan_click(&c, ClickKind::Middle, false, true), ClickPlan::Menu);
+    }
+
+    #[test]
+    fn the_main_window_click_hides_a_showing_window_on_a_single_click_only() {
+        let c =
+            cfg(TrayAction::Run(Action::ShowMainWindow), TrayAction::Run(Action::ShowMainWindow), TrayAction::Nothing);
+        assert_eq!(plan_click(&c, ClickKind::Single, true, true), ClickPlan::HideMain);
+        assert_eq!(plan_click(&c, ClickKind::Single, false, true), ClickPlan::ShowMain);
+        assert_eq!(plan_click(&c, ClickKind::Double, true, true), ClickPlan::ShowMain);
+        assert_eq!(plan_click(&c, ClickKind::Middle, false, true), ClickPlan::Nothing);
+    }
+
+    #[test]
+    fn mouse_mode_falls_back_to_the_main_window_where_it_cannot_run() {
+        let c = TrayConfig::for_os(Os::Windows);
+        assert_eq!(plan_click(&c, ClickKind::Single, false, true), ClickPlan::ToggleMouseMode);
+        assert_eq!(plan_click(&c, ClickKind::Single, false, false), ClickPlan::ShowMain);
+        assert_eq!(plan_click(&c, ClickKind::Single, true, false), ClickPlan::HideMain);
+    }
+
+    #[test]
+    fn selection_actions_and_quit_get_their_own_plans() {
+        let c = cfg(TrayAction::Run(Action::ShowPopup), TrayAction::Run(Action::Quit), TrayAction::Nothing);
+        assert_eq!(plan_click(&c, ClickKind::Single, false, true), ClickPlan::Selection(Action::ShowPopup));
+        assert_eq!(plan_click(&c, ClickKind::Double, false, true), ClickPlan::Quit);
     }
 }

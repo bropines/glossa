@@ -530,27 +530,26 @@ fn collect_wake_events(shell: &mut Shell, events: &std::sync::mpsc::Receiver<glo
                 tray::TrayEvent::Action(Action::Quit) => shell.quit = true,
                 tray::TrayEvent::ToggleMouseMode => toggle_mouse_mode(shell),
                 tray::TrayEvent::Click(kind, mark) => {
-                    use glossa_core::config::TrayAction;
+                    use tray::ClickPlan;
                     let cfg = shell.engine.config();
-                    match tray::click_action(&cfg.tray, kind) {
-                        TrayAction::Nothing => {}
-                        TrayAction::Menu => {
+                    // No GUI, so no main window showing.
+                    match tray::plan_click(&cfg.tray, kind, false, mouse::MouseHub::supported()) {
+                        ClickPlan::Nothing | ClickPlan::HideMain => {}
+                        ClickPlan::Menu => {
                             if let Some(t) = &shell.tray {
                                 t.show_menu();
                             }
                         }
-                        TrayAction::Run(Action::Quit) => shell.quit = true,
-                        TrayAction::Run(Action::ToggleMouseMode) => toggle_mouse_mode(shell),
-                        TrayAction::Run(Action::ShowMainWindow) => {
-                            shell.pending.push(tray::Pending::Tray(tray::TrayEvent::ShowMain))
-                        }
+                        ClickPlan::Quit => shell.quit = true,
+                        ClickPlan::ToggleMouseMode => toggle_mouse_mode(shell),
+                        ClickPlan::ShowMain => shell.pending.push(tray::Pending::Tray(tray::TrayEvent::ShowMain)),
                         // Read now, before the windows exist (see `read_selection`).
-                        TrayAction::Run(a) if actions::needs_selection(a) => {
+                        ClickPlan::Selection(a) => {
                             if let Some(task) = actions::read_selection_after_click(&cfg, a, mark) {
                                 shell.pending.push(tray::Pending::Task(task));
                             }
                         }
-                        TrayAction::Run(a) => shell.pending.push(tray::Pending::Action(a, None)),
+                        ClickPlan::Perform(a) => shell.pending.push(tray::Pending::Action(a, None)),
                     }
                 }
                 tray::TrayEvent::ToggleHotkeys => {

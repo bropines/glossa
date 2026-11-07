@@ -1287,8 +1287,11 @@ impl<'de> Deserialize<'de> for TrayAction {
 
 /// What clicks on the tray icon do. Linux's indicators report no clicks at
 /// all (a click opens the menu there), so these apply to Windows and macOS.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(default)]
+///
+/// Read leniently: a value that names no action (a typo, an action from a
+/// newer build) falls back to that click's default with a warning, rather
+/// than failing the whole file, which would set the config aside.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct TrayConfig {
     /// A single left click. Showing the main window hides it again when it
     /// is already showing.
@@ -1300,6 +1303,23 @@ pub struct TrayConfig {
     pub middle_click: TrayAction,
 }
 
+impl<'de> Deserialize<'de> for TrayConfig {
+    fn deserialize<D: serde::Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
+        #[derive(Deserialize, Default)]
+        #[serde(default)]
+        struct Raw {
+            click: Option<String>,
+            double_click: Option<String>,
+            middle_click: Option<String>,
+        }
+        let raw = Raw::deserialize(d)?;
+        Ok(TrayConfig::from_ids(
+            [raw.click.as_deref(), raw.double_click.as_deref(), raw.middle_click.as_deref()],
+            Os::current(),
+        ))
+    }
+}
+
 impl TrayConfig {
     /// The defaults on `os`: what the icon did before the clicks could be
     /// chosen. The macOS menu-bar icon opens its menu, as menu-bar items do;
@@ -1309,17 +1329,61 @@ impl TrayConfig {
             Os::MacOs => TrayAction::Menu,
             _ => TrayAction::Run(Action::ToggleMouseMode),
         };
-        TrayConfig { click, double_click: TrayAction::Run(Action::ShowMainWindow), middle_click: TrayAction::Nothing }
+        TrayConfig { click, double_click: double_click_default(click), middle_click: TrayAction::Nothing }
+    }
+
+    /// The settings from the ids a file gives (click, double click, middle
+    /// click; `None` where absent). An id that names nothing is replaced by
+    /// that click's default on `os`, with a warning; the double click's
+    /// default follows the click actually chosen.
+    pub fn from_ids(ids: [Option<&str>; 3], os: Os) -> TrayConfig {
+        let parse = |key: &str, id: Option<&str>| {
+            let id = id?;
+            let action = TrayAction::from_id(id);
+            if action.is_none() {
+                tracing::warn!("config: [tray] {key} = \"{id}\" names no action; using the default");
+            }
+            action
+        };
+        let click = parse("click", ids[0]).unwrap_or(TrayConfig::for_os(os).click);
+        TrayConfig {
+            click,
+            double_click: parse("double_click", ids[1]).unwrap_or(double_click_default(click)),
+            middle_click: parse("middle_click", ids[2]).unwrap_or(TrayAction::Nothing),
+        }
     }
 
     /// Fold the old `mouse_mode.tray_click_toggles` switch in. Turned off,
     /// it meant the click opens the main window; it never applied on macOS,
     /// where the click opened the menu. A click the file already sets to
     /// something else than the default wins.
+    /// The classic program's "click on the tray icon switches mouse mode",
+    /// imported over whatever the click was: on, the click toggles mouse
+    /// mode; off, it opens the main window. Not on macOS, where the classic
+    /// switch never applied and the click opens the menu.
+    pub fn import_classic_switch(&mut self, on: bool, os: Os) {
+        if os == Os::MacOs {
+            return;
+        }
+        self.click =
+            if on { TrayAction::Run(Action::ToggleMouseMode) } else { TrayAction::Run(Action::ShowMainWindow) };
+    }
+
     pub fn adopt_tray_click_toggles(&mut self, toggles: Option<bool>, os: Os) {
         if toggles == Some(false) && os != Os::MacOs && self.click == TrayConfig::for_os(os).click {
             self.click = TrayAction::Run(Action::ShowMainWindow);
         }
+    }
+}
+
+/// A double click cannot be told apart while the click opens the menu, so
+/// it does nothing by default there (and the options page has nothing to
+/// warn about on a fresh macOS install).
+fn double_click_default(click: TrayAction) -> TrayAction {
+    if click == TrayAction::Menu {
+        TrayAction::Nothing
+    } else {
+        TrayAction::Run(Action::ShowMainWindow)
     }
 }
 
@@ -2356,7 +2420,9 @@ copy_joined_lines = true",
         assert_eq!(win.double_click, TrayAction::Run(Action::ShowMainWindow));
         assert_eq!(win.middle_click, TrayAction::Nothing);
         assert_eq!(TrayConfig::for_os(Os::Unix), win);
-        assert_eq!(TrayConfig::for_os(Os::MacOs).click, TrayAction::Menu);
+        let mac = TrayConfig::for_os(Os::MacOs);
+        assert_eq!(mac.click, TrayAction::Menu);
+        assert_eq!(mac.double_click, TrayAction::Nothing);
         assert_eq!(Config::default().tray, TrayConfig::for_os(Os::current()));
     }
 
@@ -2371,7 +2437,37 @@ copy_joined_lines = true",
         assert_eq!(c.tray.middle_click, TrayAction::Nothing);
         let again = Config::from_toml(&c.to_toml()).unwrap();
         assert_eq!(again.tray, c.tray);
-        assert!(Config::from_toml("[tray]\nclick = \"fly\"\n").is_err());
+    }
+
+    #[test]
+    fn a_tray_value_that_names_nothing_falls_back_to_its_default() {
+        // The rest of the file still loads.
+        let c = Config::from_toml(
+            "[general]\ninstant_translation = true\n[tray]\nclick = \"fly\"\nmiddle_click = \"show_history\"\n",
+        )
+        .unwrap();
+        assert!(c.general.instant_translation);
+        assert_eq!(c.tray.click, TrayConfig::default().click);
+        assert_eq!(c.tray.middle_click, TrayAction::Run(Action::ShowHistory));
+        let t = TrayConfig::from_ids([Some("text_recognition"), Some("nope"), None], Os::Windows);
+        assert_eq!(t.click, TrayAction::Run(Action::TextRecognition));
+        assert_eq!(t.double_click, TrayAction::Run(Action::ShowMainWindow));
+        // A click set to open the menu takes the double click's default
+        // with it, on any system.
+        let m = TrayConfig::from_ids([Some("menu"), None, None], Os::Windows);
+        assert_eq!(m.double_click, TrayAction::Nothing);
+    }
+
+    #[test]
+    fn the_classic_switch_is_imported_both_ways() {
+        let mut t = TrayConfig::for_os(Os::Windows);
+        t.import_classic_switch(false, Os::Windows);
+        assert_eq!(t.click, TrayAction::Run(Action::ShowMainWindow));
+        t.import_classic_switch(true, Os::Windows);
+        assert_eq!(t.click, TrayAction::Run(Action::ToggleMouseMode));
+        let mut m = TrayConfig::for_os(Os::MacOs);
+        m.import_classic_switch(false, Os::MacOs);
+        assert_eq!(m.click, TrayAction::Menu);
     }
 
     #[test]

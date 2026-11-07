@@ -1,5 +1,8 @@
 //! Windows and monitors on Windows (Win32).
 
+use std::sync::atomic::{AtomicIsize, Ordering};
+use std::sync::Once;
+
 use super::{Monitor, WindowInfo};
 use glossa_core::ocr::Rect;
 use windows::core::{BOOL, PWSTR};
@@ -10,11 +13,13 @@ use windows::Win32::Graphics::Gdi::{
 use windows::Win32::System::Threading::{
     GetCurrentProcessId, OpenProcess, QueryFullProcessImageNameW, PROCESS_NAME_WIN32, PROCESS_QUERY_LIMITED_INFORMATION,
 };
+use windows::Win32::UI::Accessibility::{SetWinEventHook, HWINEVENTHOOK};
 use windows::Win32::UI::HiDpi::{GetDpiForMonitor, MDT_EFFECTIVE_DPI};
 use windows::Win32::UI::WindowsAndMessaging::{
     EnumWindows, GetClassNameW, GetCursorPos, GetForegroundWindow, GetGUIThreadInfo, GetWindowLongPtrW,
     GetWindowTextLengthW, GetWindowTextW, GetWindowThreadProcessId, IsWindow, SetForegroundWindow, SetWindowLongPtrW,
-    GUITHREADINFO, GWL_EXSTYLE, MONITORINFOF_PRIMARY, WS_EX_NOACTIVATE,
+    EVENT_SYSTEM_FOREGROUND, GUITHREADINFO, GWL_EXSTYLE, MONITORINFOF_PRIMARY, WINEVENT_OUTOFCONTEXT,
+    WINEVENT_SKIPOWNPROCESS, WS_EX_NOACTIVATE,
 };
 
 struct TitleSearch {
@@ -75,9 +80,10 @@ pub fn keep_from_activating(hwnd: isize) -> bool {
     }
 }
 
-/// The taskbar's windows, and the overflow flyouts the tray icons may sit
-/// in: what the foreground is while the user clicks a tray icon, never a
-/// window to give the focus back to.
+/// The taskbar's windows, the overflow flyout the tray icons may sit in, and
+/// the shell's own surfaces (Start, the notification centre): what the
+/// foreground is while the user clicks a tray icon, never a window to give
+/// the focus back to.
 const SHELL_CLASSES: [&str; 5] = [
     "Shell_TrayWnd",
     "Shell_SecondaryTrayWnd",
@@ -86,27 +92,84 @@ const SHELL_CLASSES: [&str; 5] = [
     "Windows.UI.Core.CoreWindow",
 ];
 
-pub fn focus_mark() -> Option<isize> {
-    // SAFETY: the handle comes straight from the OS; the class buffer is a
-    // correctly sized local.
+/// The last foreground window that was neither the shell nor this program,
+/// kept by the hook [`track_foreground`] installs. 0: none yet.
+static LAST_FOREGROUND: AtomicIsize = AtomicIsize::new(0);
+static TRACKING: Once = Once::new();
+
+/// A window the focus may be given back to: not the shell, not ours.
+fn is_user_window(hwnd: HWND) -> bool {
+    if hwnd.is_invalid() {
+        return false;
+    }
+    // SAFETY: the handle comes straight from the OS and may go stale, which
+    // the calls tolerate by failing; the class buffer is a sized local.
     unsafe {
-        let hwnd = GetForegroundWindow();
-        if hwnd.is_invalid() {
-            return None;
-        }
         let mut pid = 0u32;
         GetWindowThreadProcessId(hwnd, Some(&mut pid));
-        if pid == GetCurrentProcessId() {
-            return None;
+        if pid == 0 || pid == GetCurrentProcessId() {
+            return false;
         }
         let mut class = [0u16; 256];
         let n = GetClassNameW(hwnd, &mut class).max(0) as usize;
         let class = String::from_utf16_lossy(&class[..n]);
-        if SHELL_CLASSES.contains(&class.as_str()) {
-            return None;
-        }
-        Some(hwnd.0 as isize)
+        !SHELL_CLASSES.contains(&class.as_str())
     }
+}
+
+unsafe extern "system" fn on_foreground(
+    _hook: HWINEVENTHOOK,
+    _event: u32,
+    hwnd: HWND,
+    _object: i32,
+    _child: i32,
+    _thread: u32,
+    _time: u32,
+) {
+    if is_user_window(hwnd) {
+        LAST_FOREGROUND.store(hwnd.0 as isize, Ordering::Relaxed);
+    }
+}
+
+pub fn track_foreground() {
+    TRACKING.call_once(|| {
+        // The window in front now counts as the first one.
+        // SAFETY: no preconditions.
+        let now = unsafe { GetForegroundWindow() };
+        if is_user_window(now) {
+            LAST_FOREGROUND.store(now.0 as isize, Ordering::Relaxed);
+        }
+        // SAFETY: an out-of-context hook calls back on this thread's message
+        // loop, which the tray keeps running for as long as the process
+        // lives; the hook is never removed.
+        let hook = unsafe {
+            SetWinEventHook(
+                EVENT_SYSTEM_FOREGROUND,
+                EVENT_SYSTEM_FOREGROUND,
+                None,
+                Some(on_foreground),
+                0,
+                0,
+                WINEVENT_OUTOFCONTEXT | WINEVENT_SKIPOWNPROCESS,
+            )
+        };
+        if hook.is_invalid() {
+            tracing::debug!("no foreground hook; tray clicks read the selection from what is in front");
+        }
+    });
+}
+
+pub fn focus_mark() -> Option<isize> {
+    // SAFETY: no preconditions.
+    let now = unsafe { GetForegroundWindow() };
+    if is_user_window(now) {
+        return Some(now.0 as isize);
+    }
+    // The shell is in front (the taskbar after the click, or the overflow
+    // flyout): the window the user was in before it, while it still exists.
+    let last = LAST_FOREGROUND.load(Ordering::Relaxed);
+    // SAFETY: a stale handle makes IsWindow fail, which is the check.
+    (last != 0 && unsafe { IsWindow(Some(HWND(last as *mut core::ffi::c_void))) }.as_bool()).then_some(last)
 }
 
 pub fn refocus(hwnd: isize) -> bool {

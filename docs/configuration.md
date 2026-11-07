@@ -395,16 +395,18 @@ What clicks on the tray icon (the menu-bar icon on macOS) do. Set in
 `[hotkeys]` binds (`show_main_window`, `show_popup`,
 `translate_clipboard_in_popup`, `text_recognition`, `show_dictionary`,
 `show_history`, `toggle_mouse_mode`…), or `"menu"` (open the tray menu) or
-`"none"`. Actions that work on the selection read it from the program that
-was in front before the click: on Windows the click activates the taskbar,
-so Glossa gives the focus back to that program first; on macOS a menu-bar
-click leaves it in front. Linux indicators report no clicks at all, so
+`"none"`. A value that names nothing falls back to that click's default,
+with a warning in the log. Actions that work on the selection read it from
+the program that was in front before the click: on Windows the click
+activates the taskbar (or the overflow flyout is in front), so Glossa gives
+the focus back to the last window that was neither the shell nor Glossa;
+on macOS a menu-bar click leaves it in front. Linux indicators report no clicks at all, so
 these settings do nothing there: any click opens the menu.
 
 | key | type | default | what it does |
 |---|---|---|---|
 | `click` | action | `"toggle_mouse_mode"`; `"menu"` on macOS | A single left click. `show_main_window` here hides the window again when it is showing. Where mouse mode cannot run, `toggle_mouse_mode` shows the main window instead. |
-| `double_click` | action | `"show_main_window"` | A double left click. While it is anything but `"none"`, a single click waits out the system's double-click time before it acts. Not told apart while `click` is `"menu"`. |
+| `double_click` | action | `"show_main_window"`; `"none"` while `click` is `"menu"` (so on macOS) | A double left click. While it is anything but `"none"`, a single click waits out the system's double-click time before it acts. Not told apart while `click` is `"menu"`. |
 | `middle_click` | action | `"none"` | A click with the middle button (the wheel). |
 
 ### `[ocr]`
