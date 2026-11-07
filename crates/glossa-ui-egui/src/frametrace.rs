@@ -37,7 +37,10 @@ pub fn init(cache: &std::path::Path) {
         };
         tracing::info!("tracing frames to {}", path.display());
         let mut out = BufWriter::new(file);
-        let _ = writeln!(out, "start_ms,window,since_last_ms,ui_ms,wheel_events,wheel_dy,wheel_kinds");
+        let _ = writeln!(
+            out,
+            "start_ms,window,since_last_ms,ui_ms,wheel_events,wheel_dy,wheel_kinds,wheel_dx,smooth_dx,smooth_dy"
+        );
         Some(Trace { out: Mutex::new(out), start: Instant::now(), last: Mutex::new(Default::default()) })
     });
 }
@@ -46,7 +49,9 @@ pub fn init(cache: &std::path::Path) {
 pub struct Frame {
     window: &'static str,
     began: Instant,
-    wheel: (usize, f32, String),
+    /// Events, their summed dy, their kinds, their summed dx, and the
+    /// smoothed delta the scroll areas get this frame.
+    wheel: (usize, f32, String, f32, egui::Vec2),
 }
 
 /// Start tracing a frame of `window`; keep the guard for the frame's UI.
@@ -55,11 +60,13 @@ pub fn begin(ctx: &egui::Context, window: &'static str) -> Option<Frame> {
     let wheel = ctx.input(|i| {
         let mut n = 0;
         let mut dy = 0.0;
+        let mut dx = 0.0;
         let mut kinds = String::new();
         for e in &i.raw.events {
             if let egui::Event::MouseWheel { delta, phase, source, .. } = e {
                 n += 1;
                 dy += delta.y;
+                dx += delta.x;
                 let p = match phase {
                     egui::TouchPhase::Start => 'S',
                     egui::TouchPhase::Move => 'M',
@@ -76,7 +83,7 @@ pub fn begin(ctx: &egui::Context, window: &'static str) -> Option<Frame> {
                 kinds.push(s);
             }
         }
-        (n, dy, kinds)
+        (n, dy, kinds, dx, i.smooth_scroll_delta())
     });
     Some(Frame { window, began: Instant::now(), wheel })
 }
@@ -91,9 +98,13 @@ impl Drop for Frame {
             let prev = last.insert(self.window, start_ms);
             prev.map_or(0.0, |p| start_ms - p)
         };
-        let (n, dy, kinds) = &self.wheel;
+        let (n, dy, kinds, dx, smooth) = &self.wheel;
         let mut out = t.out.lock().unwrap_or_else(|e| e.into_inner());
-        let _ = writeln!(out, "{start_ms:.2},{},{since:.2},{ui_ms:.2},{n},{dy:.1},{kinds}", self.window);
+        let _ = writeln!(
+            out,
+            "{start_ms:.2},{},{since:.2},{ui_ms:.2},{n},{dy:.1},{kinds},{dx:.1},{:.1},{:.1}",
+            self.window, smooth.x, smooth.y
+        );
         // A trace is read while the program runs: keep the file current.
         let _ = out.flush();
     }

@@ -73,6 +73,16 @@ the notes of its GitHub release.
   `scripts/screenshot-smoke.sh` renders them all in several themes; CI runs
   it on Linux, macOS and Windows and keeps the pictures.
 
+### Changed
+
+- Scrolling follows the system. A mouse-wheel notch moves as far as in
+  native programs: on Windows the "lines to scroll at a time" setting (100
+  points a notch by default, or a page when set to "one screen at a time"),
+  53 points on Linux, 40 points on macOS as before. A touchpad swipe keeps to
+  the axis it started on, momentum included, so a vertical swipe no longer
+  drifts sideways where a view scrolls both ways. `GLOSSA_FRAME_TRACE` also
+  records the sideways movement and the delta the scroll areas got.
+
 ### Fixed
 
 - History: when favourites alone filled the limit, a new translation was

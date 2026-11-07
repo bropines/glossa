@@ -197,6 +197,8 @@ impl GlossaApp {
         // Ctrl+plus/minus/0 zoom the text areas (see `text_zoom_keys`), not
         // the whole interface as egui would by default.
         ctx.options_mut(|o| o.zoom_with_keyboard = false);
+        // Wheel steps and touchpad axis lock, for every window of this context.
+        crate::scroll::install(&ctx);
         let mut fonts = Fonts::default();
         fonts.install_base(&ctx, &cfg.appearance.font_family, &look.theme);
         *shell.wake.ctx.lock() = Some(ctx.clone());

@@ -30,6 +30,7 @@ mod popup;
 mod preview;
 mod rich;
 mod screenshot;
+mod scroll;
 mod spell;
 mod style;
 mod text_menu;
