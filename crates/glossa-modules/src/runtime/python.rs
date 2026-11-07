@@ -77,6 +77,13 @@ pub fn transport(dir: &Path, manifest: &Manifest, ctx: &RuntimeContext) -> Resul
 
 // -- finding Python and the SDK ---------------------------------------------------
 
+/// The Python 3 interpreter modules would run with (the configured one, else
+/// the first found), for checks that want to know before the first call
+/// (`glossa-cli module test`).
+pub fn find_python(configured: &str) -> Option<OsString> {
+    interpreter(configured).map(|(program, _)| program)
+}
+
 /// The interpreter to run: the configured one, else the first Python 3 found.
 fn interpreter(configured: &str) -> Option<(OsString, Vec<String>)> {
     let configured = configured.trim().trim_matches('"');

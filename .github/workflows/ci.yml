@@ -73,6 +73,18 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
       - run: cargo test --workspace --locked
+      # Every module in modules/ against its fixtures, with nothing skipped:
+      # the native and Java examples are built first, and the runner has
+      # Python, Node and a JDK. Copies go into the checkout only, never into
+      # a commit (.gitignore covers them).
+      - name: Module fixtures (glossa-cli module test)
+        run: |
+          cargo build --locked -p glossa-cli -p glossa-example-rot13 -p glossa-example-lines
+          cp target/debug/libglossa_example_rot13.so modules/native/example-rot13/
+          cp target/debug/libglossa_example_lines.so modules/native/example-lines/
+          (cd modules/native/example-c && cc -shared -fPIC -std=c99 -I ../../../include -o libshout.so shout.c)
+          (cd modules/java/example-upper && ./build.sh)
+          target/debug/glossa-cli module test --strict --require-runtimes modules
       # The Tesseract provider against the real program, on a picture the
       # test draws itself.
       - name: Tesseract live test

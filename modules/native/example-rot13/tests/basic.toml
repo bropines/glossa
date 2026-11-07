@@ -1,0 +1,24 @@
+# Cases for `glossa-cli module test`. Build the library and copy it beside
+# module.toml first (see the comment there). See docs/modules/testing.md.
+
+[[case]]
+name = "rotates Latin letters"
+op = "translate"
+text = "Hello, World!"
+from = "en"
+to = "en"
+expect = { text = "Uryyb, Jbeyq!", detected = "en" }
+
+[[case]]
+name = "claims English"
+op = "detect"
+text = "Uryyb"
+expect = { detected = "en" }
+
+[[case]]
+name = "writes an article"
+op = "dictionary"
+text = "abc"
+from = "en"
+to = "en"
+expect = { headword = "abc", contains = ["nop", "cipher"] }

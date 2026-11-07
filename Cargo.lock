@@ -2161,6 +2161,7 @@ dependencies = [
  "glossa-core",
  "glossa-dict",
  "glossa-engine",
+ "glossa-module-test",
  "glossa-modules",
  "glossa-net",
  "glossa-ocr",
@@ -2250,6 +2251,21 @@ dependencies = [
  "base64 0.22.1",
  "serde",
  "serde_json",
+]
+
+[[package]]
+name = "glossa-module-test"
+version = "0.1.0-beta.2"
+dependencies = [
+ "base64 0.22.1",
+ "glossa-core",
+ "glossa-modules",
+ "glossa-net",
+ "image",
+ "serde",
+ "serde_ignored",
+ "serde_json",
+ "toml 0.9.12+spec-1.1.0",
 ]
 
 [[package]]
@@ -5067,6 +5083,16 @@ dependencies = [
  "proc-macro2",
  "quote",
  "syn 3.0.9",
+]
+
+[[package]]
+name = "serde_ignored"
+version = "0.1.14"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "115dffd5f3853e06e746965a20dcbae6ee747ae30b543d91b0e089668bb07798"
+dependencies = [
+ "serde",
+ "serde_core",
 ]
 
 [[package]]

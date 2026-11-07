@@ -1,0 +1,30 @@
+# Recorded answers from crates/glossa-engine/src/bundled/tests.rs.
+
+[[case]]
+name = "posts the page form and reads the route data"
+op = "translate"
+text = "Guten Morgen"
+from = "auto"
+to = "ru"
+[case.expect]
+text = "Доброе утро"
+detected = "de"
+
+[[case.http]]
+method = "POST"
+url = "https://www.modernmt.com/translate?_data=routes%2Ftranslate"
+body = '{"status":"success","fields":["text","targetLanguage"],"value":{"translation":"Доброе утро","detectedLanguage":"de"}}'
+
+[[case]]
+name = "an unsupported pair is a target language error"
+op = "translate"
+text = "Hi"
+from = "en"
+to = "eu"
+[case.expect]
+error = "target_language"
+
+[[case.http]]
+method = "POST"
+url = "https://www.modernmt.com/translate"
+body = '{"status":"error","error":{"":["Language pair not supported: en > eu"]}}'

@@ -9,6 +9,15 @@ the notes of its GitHub release.
 
 ### Added
 
+- `glossa-cli module test` and `module check`: a test harness for module
+  authors. It checks `module.toml` (unknown keys, language codes, options,
+  permissions, hard-coded keys), loads the module as the program does, runs
+  the cases in its `tests/` folder against recorded HTTP answers, offline,
+  and checks every answer against the module protocol (empty results, OCR
+  boxes outside the picture, audio that is not what it says, error kinds),
+  with timings. `--record` refreshes the recordings from the real service.
+  Every bundled and example module now has fixtures, and CI runs them. See
+  [docs/modules/testing.md](docs/modules/testing.md).
 - `GLOSSA_FRAME_TRACE`: a per-frame trace of the main window, the popup and
   Options to a CSV file, for diagnosing stutter.
 
@@ -20,6 +29,8 @@ the notes of its GitHub release.
   in before pasting.
 - macOS: the main window's tooltips named the shortcuts Ctrl+Enter, Ctrl+N
   and Ctrl+I; on macOS they are Cmd+Enter, Cmd+N and Cmd+I.
+- The Google Lens Python example module returned an empty result for a
+  picture without text; it now reports that no text was found.
 - macOS: with the main window open behind other windows, the popup did not
   show (selection translation, the control API) until Glossa was switched
   to with Cmd+Tab. It now shows at once.

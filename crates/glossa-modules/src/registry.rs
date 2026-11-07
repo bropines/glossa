@@ -198,6 +198,25 @@ impl Registry {
         report
     }
 
+    /// Load the one module at `path` (a folder with a `module.toml`, a
+    /// classic script, a pot-app plugin, or a `.potext` archive) exactly as
+    /// [`Self::load_dir`] would, without adding it anywhere. For tools that
+    /// check a single module (`glossa-cli module test`), so they exercise the
+    /// same loading code as the program. The provider comes back behind the
+    /// usual panic barrier.
+    pub fn load_module(path: &Path, ctx: &RuntimeContext) -> Result<Entry, String> {
+        match Registry::new().load_one(path, ctx) {
+            Ok(Some(mut entry)) => {
+                entry.provider = crate::provider::Guarded::wrap(entry.provider);
+                Ok(entry)
+            }
+            Ok(None) => {
+                Err(format!("{} holds no module (no module.toml, Service.js or info.json + main.js)", path.display()))
+            }
+            Err(Skip::Reason(why) | Skip::Failed(why)) => Err(why),
+        }
+    }
+
     fn load_one(&self, path: &Path, ctx: &RuntimeContext) -> Result<Option<Entry>, Skip> {
         if path.is_file() {
             if path.extension().is_some_and(|e| e.eq_ignore_ascii_case("potext")) {

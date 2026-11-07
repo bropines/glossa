@@ -1,0 +1,15 @@
+# Cases for `glossa-cli module test`. Build module.jar first (./build.sh);
+# a Java 17+ runtime runs it. See docs/modules/testing.md.
+
+[[case]]
+name = "uppercases in any script"
+op = "translate"
+text = "Hello, мир"
+to = "ru"
+expect = { text = "HELLO, МИР", detected = "en" }
+
+[[case]]
+name = "answers a recognition request"
+op = "ocr"
+image = { width = 160, height = 40 }
+expect = { contains = "Recognised by Java", detected = "en" }

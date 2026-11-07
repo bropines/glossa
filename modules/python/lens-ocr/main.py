@@ -76,8 +76,13 @@ def recognize(req, host):
             raise ModuleError("network", str(e))
         raise ModuleError("other", "%s: %s" % (name, e))
 
+    text = result.get("ocr_text") or ""
+    if not text.strip():
+        # An empty result is not an answer: not_found lets Glossa say there
+        # was no text instead of showing an empty window.
+        raise ModuleError("not_found", "no text in the picture")
     return {
-        "text": result.get("ocr_text") or "",
+        "text": text,
         "translation": result.get("translated_text") or None,
         "detected_lang": result.get("detected_language") or None,
     }

@@ -1,0 +1,47 @@
+# Recorded answers from crates/glossa-engine/src/bundled/tests.rs.
+
+[[case]]
+name = "groups cards by dictionary"
+op = "dictionary"
+text = "lamp"
+from = "en"
+to = "ru"
+[case.expect]
+headword = "lamp"
+contains = ["Universal (En-Ru)", "лампа; светильник", "Engineering (En-Ru)", "street lamp — фонарь"]
+result = { explanations = [{ trait = "Universal (En-Ru)", explains = ["лампа; светильник", "светоч"] }, { trait = "Engineering (En-Ru)" }], examples = [{ source = "table lamp", target = "настольная лампа" }, { source = "street lamp", target = "фонарь" }] }
+
+[[case.http]]
+url = "https://api.lingvolive.com/Translation/tutor-cards"
+body = '''[{"dictionaryName":"Universal (En-Ru)","heading":"lamp","transcription":"læmp","translations":"лампа; светильник",
+  "examples":"table lamp — настольная лампа \r\nstreet lamp — фонарь"},
+ {"dictionaryName":"Universal (En-Ru)","heading":"lamp","transcription":"læmp","translations":"светоч","examples":""},
+ {"dictionaryName":"Engineering (En-Ru)","heading":"lamp","transcription":"","translations":"осветительный прибор","examples":""}]'''
+
+[[case]]
+name = "an unknown word is not found"
+op = "dictionary"
+text = "qwzxv"
+from = "en"
+to = "ru"
+[case.expect]
+error = "not_found"
+error_contains = "qwzxv"
+
+[[case.http]]
+url = "https://api.lingvolive.com/"
+body = "null"
+
+[[case]]
+name = "a server error for an unsupported pair is a source language error"
+op = "dictionary"
+text = "lamp"
+from = "fr"
+to = "es"
+[case.expect]
+error = "source_language"
+
+[[case.http]]
+url = "https://api.lingvolive.com/"
+status = 500
+body = '{"message":"An error has occurred."}'

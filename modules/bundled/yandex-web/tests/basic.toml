@@ -1,0 +1,97 @@
+# Recorded answers from crates/glossa-engine/src/bundled/tests.rs.
+
+[[case]]
+name = "translates a word with a detected source and a dictionary entry"
+op = "translate"
+text = "house"
+from = "auto"
+to = "ru"
+[case.expect]
+text = "дом"
+detected = "en"
+result = { parts_of_speech = [{ part_of_speech = "noun", senses = [{ word = "дом", back_translations = ["home", "building"] }] }] }
+
+[[case.http]]
+method = "POST"
+url = "https://translate.yandex.net/api/v1/tr.json/translate"
+body = '{"code":200,"lang":"en-ru","text":["дом"]}'
+
+[[case.http]]
+url = "https://translate.yandex.net/dicservice.json/lookup"
+body = '''{"head":{},"def":[{"text":"house","pos":"noun","ts":"haʊs","tr":[
+  {"text":"дом","pos":"noun","mean":[{"text":"home"},{"text":"building"}]},
+  {"text":"здание","pos":"noun"}]}]}'''
+
+[[case]]
+name = "an unsupported direction is a target language error"
+op = "translate"
+text = "a long sentence here"
+from = "en"
+to = "ru"
+[case.expect]
+error = "target_language"
+
+[[case.http]]
+method = "POST"
+url = "https://translate.yandex.net/api/v1/tr.json/translate"
+status = 400
+body = '{"code":501,"message":"The specified translation direction is not supported"}'
+
+[[case]]
+name = "a captcha page is a bad response"
+op = "translate"
+text = "a long sentence here"
+from = "en"
+to = "ru"
+[case.expect]
+error = "bad_response"
+
+[[case.http]]
+method = "POST"
+url = "https://translate.yandex.net/api/v1/tr.json/translate"
+body = "<html>captcha</html>"
+
+[[case]]
+name = "detects German"
+op = "detect"
+text = "Guten Morgen"
+[case.expect]
+detected = "de"
+
+[[case.http]]
+url = "https://translate.yandex.net/api/v1/tr.json/detect"
+body = '{"code":200,"lang":"de"}'
+
+[[case]]
+name = "looks up a word with the detected language"
+op = "dictionary"
+text = "Haus"
+from = "auto"
+to = "ru"
+[case.expect]
+headword = "Haus"
+contains = ["дом, здание (Gebäude)", "ein großes Haus", "большой дом"]
+
+[[case.http]]
+url = "https://translate.yandex.net/api/v1/tr.json/detect"
+body = '{"code":200,"lang":"de"}'
+
+[[case.http]]
+url = "https://translate.yandex.net/dicservice.json/lookup"
+body = '''{"def":[{"text":"Haus","pos":"noun","ts":"haʊ̯s","tr":[
+  {"text":"дом","pos":"noun","syn":[{"text":"здание"}],"mean":[{"text":"Gebäude"}],
+   "ex":[{"text":"ein großes Haus","tr":[{"text":"большой дом"}]}]}]}]}'''
+
+[[case]]
+name = "an unknown word is not found"
+op = "dictionary"
+text = "qwzxv"
+from = "en"
+to = "ru"
+[case.expect]
+error = "not_found"
+error_contains = "qwzxv"
+
+[[case.http]]
+url = "https://translate.yandex.net/dicservice.json/lookup"
+body = '{"def":[]}'

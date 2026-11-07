@@ -260,6 +260,16 @@ glossa-cli dict -s free-dictionary -f en serendipity
 glossa-cli -v translate -s my-translator -t de "Hi"   # with the module's log lines
 ```
 
+To test a module on its own, with cases you write beside it and recorded
+answers instead of the network:
+
+```bash
+glossa-cli module test modules/my-translator   # checks, loads and runs tests/*.toml
+```
+
+[testing.md](testing.md) has the fixture format, a checklist for a new
+module and the templates to start from.
+
 `GLOSSA_HOME=<dir>` points Glossa at a separate data folder, handy for a
 clean test with only your module in `<dir>/modules`. Each guide ends with
 the debugging tips for its runtime.
@@ -329,5 +339,6 @@ classic **QTranslate** `Service.js` services and **pot-app** plugins
 | [native-modules.md](native-modules.md) | shared libraries in Rust, C, C++, Zig |
 | [ocr-modules.md](ocr-modules.md) | text recognition modules and the image API |
 | [protocol.md](protocol.md) | the requests, results, errors and host calls every module uses |
+| [testing.md](testing.md) | testing a module with `glossa-cli module test`, a checklist, templates, rules for AI agents |
 | [classic-scripts.md](classic-scripts.md) | classic QTranslate services and pot-app plugins |
 | [agents-template.md](agents-template.md) | an `AGENTS.md` to copy into your module's repository for an AI coding assistant |

@@ -1,0 +1,49 @@
+# Recorded answers from crates/glossa-engine/src/bundled/tests.rs.
+
+[[case]]
+name = "reads an English entry"
+op = "dictionary"
+text = "lamp"
+from = "en"
+to = "zh-Hans"
+[case.expect]
+headword = "lamp"
+contains = ["灯", "台灯", "Turn on the lamp.", "开灯。"]
+result = { pronunciations = [{ audio_url = "https://dict.youdao.com/dictvoice?audio=lamp&type=1" }, {}], explanations = [{ trait = "n.", explains = ["灯", "台灯"] }, { trait = "v." }], associations = ["lamps"] }
+
+[[case.http]]
+url = "https://dict.youdao.com/jsonapi?q=lamp"
+body = '''{"ec":{"word":[{"ukphone":"læmp","ukspeech":"lamp&type=1","usphone":"læmp","usspeech":"lamp&type=2",
+   "trs":[{"tr":[{"l":{"i":["n. 灯；台灯"]}}]},{"tr":[{"l":{"i":["v. 照亮"]}}]}],
+   "wfs":[{"wf":{"name":"复数","value":"lamps"}}],
+   "return-phrase":{"l":{"i":"lamp"}}}]},
+ "blng_sents_part":{"sentence-pair":[{"sentence":"Turn on the <b>lamp</b>.","sentence-translation":"开灯。"}]}}'''
+
+[[case]]
+name = "reads a Chinese entry"
+op = "dictionary"
+text = "灯"
+from = "zh-Hans"
+to = "en"
+[case.expect]
+headword = "灯"
+contains = ["lamp (灯，台灯)"]
+result = { pronunciations = [{ symbol = "dēng" }] }
+
+[[case.http]]
+url = "https://dict.youdao.com/jsonapi?q=%E7%81%AF"
+body = '''{"ce":{"word":[{"phone":"dēng","trs":[{"tr":[{"l":{"i":["",{"#text":"lamp","@action":"link"}],"#tran":"灯，台灯"}}]}]}]}}'''
+
+[[case]]
+name = "an unknown word is not found"
+op = "dictionary"
+text = "qwzxv"
+from = "en"
+to = "zh-Hans"
+[case.expect]
+error = "not_found"
+error_contains = "qwzxv"
+
+[[case.http]]
+url = "https://dict.youdao.com/"
+body = '{"input":"qwzxv","meta":{}}'

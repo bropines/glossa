@@ -1,0 +1,32 @@
+# Recorded answers from crates/glossa-engine/src/bundled/tests.rs.
+
+[[case]]
+name = "reads the summary from the source language's Wikipedia"
+op = "dictionary"
+text = "Lampe"
+from = "de"
+to = "ru"
+[case.expect]
+headword = "Lampe"
+contains = ["Lichtquelle", "Eine Lampe ist eine Lichtquelle.", "Sie leuchtet."]
+result = { link = "https://de.wikipedia.org/wiki/Lampe", explanations = [{ trait = "Lichtquelle", explains = ["Eine Lampe ist eine Lichtquelle.", "Sie leuchtet."] }] }
+
+[[case.http]]
+url = "https://de.wikipedia.org/api/rest_v1/page/summary/Lampe"
+body = '''{"type":"standard","title":"Lampe","description":"Lichtquelle","extract":"Eine Lampe ist eine Lichtquelle.\nSie leuchtet.",
+  "content_urls":{"desktop":{"page":"https://de.wikipedia.org/wiki/Lampe"}}}'''
+
+[[case]]
+name = "an unknown word with an unknown source asks English Wikipedia"
+op = "dictionary"
+text = "qwzxv"
+from = "auto"
+to = "ru"
+[case.expect]
+error = "not_found"
+error_contains = "qwzxv"
+
+[[case.http]]
+url = "https://en.wikipedia.org/"
+status = 404
+body = '{"status":404}'

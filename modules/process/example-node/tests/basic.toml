@@ -1,0 +1,15 @@
+# Cases for `glossa-cli module test` (needs `node` on PATH).
+# See docs/modules/testing.md.
+
+[[case]]
+name = "reverses the words"
+op = "translate"
+text = "one two  three"
+to = "de"
+expect = { text = "three two one" }
+
+[[case]]
+name = "claims English"
+op = "detect"
+text = "anything at all"
+expect = { detected = "en", result = { confidence = 0.5 } }

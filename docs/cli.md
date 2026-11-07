@@ -23,7 +23,8 @@ glossa-cli doctor                             # what works on this machine
 - [Exit codes](#exit-codes)
 - [Commands](#commands): [`translate`](#translate), [`detect`](#detect),
   [`dict`](#dict), [`ocr`](#ocr), [`speak`](#speak),
-  [`services`](#services), [`modules`](#modules), [`history`](#history),
+  [`services`](#services), [`modules`](#modules), [`module`](#module),
+  [`history`](#history),
   [`import-classic`](#import-classic), [`theme`](#theme),
   [`locale`](#locale), [`config`](#config), [`serve`](#serve),
   [`action`](#action), [`doctor`](#doctor)
@@ -113,6 +114,7 @@ the `[service · …]` line on stderr, to see who answered.
 | [`speak`](#speak) | Write text to speech to a file. |
 | [`services`](#services) | List providers with a capability. |
 | [`modules`](#modules) | Show which modules loaded, failed or were skipped. |
+| [`module`](#module) | Check a module folder and run its fixtures (`module test`, `module check`). |
 | [`history`](#history) | List, search or export the translation history. |
 | [`import-classic`](#import-classic) | Import a classic QTranslate installation. |
 | [`theme`](#theme) | List, show or convert themes. |
@@ -408,6 +410,44 @@ empty. `--json`:
 ```json
 {"loaded": ["my-translator"], "failed": [{"path": "…", "error": "…"}], "skipped": [{"path": "…", "reason": "…"}]}
 ```
+
+### module
+
+```
+glossa-cli module test [--live | --record] [--case NAME] [--set-from-env KEY=VAR]… [--set KEY=VALUE]…
+                       [--timeout SECS] [--strict] [--require-runtimes] [--ignore-recordings] DIR…
+glossa-cli module check [--strict] DIR…
+```
+
+The module test harness, for module authors. `module test` checks each
+module's `module.toml` and files, loads the module through the same code
+the program uses, runs the cases in its `tests/*.toml` (or `*.json`) with
+recorded HTTP answers, and checks every answer against the module
+protocol. `module check` does the first step only and runs no code. A
+`DIR` without a `module.toml` is searched for modules below it. Neither
+needs a data folder or reads `config.toml`. The fixture format and every
+check are described in [modules/testing.md](modules/testing.md).
+
+| option | default | meaning |
+|---|---|---|
+| `--live` | off | Call the real services instead of the recorded answers. |
+| `--record` | off | Call the real services and write their answers to `tests/recorded/`, without the values given by `--set` or `--set-from-env`. Later replays prefer these recordings over the fixtures' own `[[case.http]]` entries. |
+| `--ignore-recordings` | off | Replay only the fixtures' own entries, ignoring `tests/recorded/`. |
+| `--set-from-env KEY=VAR` | none | An option value read from the environment variable `VAR`; use this for keys, which `--set` would leave in the shell's history. Repeatable. |
+| `--case NAME` | all | Only the cases whose name contains `NAME`. |
+| `--set KEY=VALUE` | none | An option value over the fixtures' own (a number or `true`/`false` is passed as one). Repeatable. |
+| `--timeout SECS` | 30 | The budget for one call. |
+| `--strict` | off | Warnings fail a module too, not only errors. |
+| `--require-runtimes` | off | A module that cannot run here (no interpreter, not built) fails instead of being skipped. |
+
+The text report has one line per module (`PASS`, `FAIL` or `SKIP`, its id,
+runtime, folder, load time and size), its findings (`error:`, `warning:`,
+`note:`), and one line per case with its time, the number of HTTP requests
+and the result. With several modules a summary line follows. `--json`
+prints `{"modules": [...], "passed": N, "failed": N, "skipped": N}`, each
+module with `dir`, `id`, `runtime`, `status`, `skipped`, `size_bytes`,
+`load_ms`, `findings` and `cases`. The exit code is 1 when any module
+failed.
 
 ### history
 

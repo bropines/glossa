@@ -1,0 +1,15 @@
+# This module talks to Google itself through chrome-lens-py, not through
+# Glossa's HTTP, so its traffic cannot be recorded and replayed. The case is
+# marked `live`: an offline run skips it, and
+#   glossa-cli module test --live modules/python/lens-ocr
+# runs it (with `pip install chrome-lens-py` in the Python Glossa uses).
+# See docs/modules/testing.md.
+
+[[case]]
+name = "recognises a drawn picture"
+op = "ocr"
+live = true
+image = { width = 320, height = 80, lines = 1 }
+# Bars are not letters: Lens may read nothing, which is the documented
+# not_found error rather than a crash or an empty result.
+expect = { error = "not_found" }

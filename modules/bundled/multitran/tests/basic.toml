@@ -1,0 +1,31 @@
+# Recorded answers from crates/glossa-engine/src/bundled/tests.rs.
+
+[[case]]
+name = "reads parts of speech and subjects"
+op = "dictionary"
+text = "lamp"
+from = "en"
+to = "ru"
+[case.expect]
+headword = "lamp"
+contains = ["General: лампа (a device for giving light); светильник", "Mining: шахтёрская лампа", "Slang: отдыхать"]
+result = { pronunciations = [{ symbol = "læmp" }], explanations = [{ trait = "lamp n" }, { trait = "lamp v" }], associations = ["table lamp", "lava lamp"] }
+
+[[case.http]]
+url = "https://www.multitran.com/m.exe"
+body_file = "responses/lamp.html"
+
+[[case]]
+name = "an unknown word is not found"
+op = "dictionary"
+text = "дом"
+from = "auto"
+to = "ru"
+options = { labels = "ru" }
+[case.expect]
+error = "not_found"
+error_contains = "дом"
+
+[[case.http]]
+url = "https://www.multitran.com/m.exe"
+body = "<html>nothing here</html>"
