@@ -94,10 +94,32 @@ codegen-units = 1
 panic = "unwind"
 strip = true
 
+# Font parsing and rasterising (skrifa, read-fonts) and egui's tessellator
+# and font atlas (epaint) run whenever a window opens, and every window
+# opens anew after the graphics unload in the tray. At opt-level 3 the main
+# window's first frame took 6 ms instead of 14 and Options' 28 ms instead of
+# 65 (Apple M-series), for 0.26 MB (1.7%) more in glossa. The image codecs
+# gained nothing measurable and cost 0.8 MB, so they stay at "z".
+[profile.release.package.epaint]
+opt-level = 3
+[profile.release.package.skrifa]
+opt-level = 3
+[profile.release.package.read-fonts]
+opt-level = 3
+
 [profile.release-perf]
 inherits = "release"
 opt-level = 3
 strip = "debuginfo"
+
+# Dependencies slightly optimised and with line tables only: the debug app
+# and the tests run faster (the workspace tests 45 s instead of 56, a
+# screenshot run a third quicker) and the target folder is 20% smaller, for
+# about a minute more on a clean build. The workspace's own crates keep full
+# debug info and no optimisation, so rebuilds after an edit cost the same.
+[profile.dev.package."*"]
+opt-level = 1
+debug = "line-tables-only"
 
 # Local fixes to upstream crates; see third_party/README.md.
 [patch.crates-io]
