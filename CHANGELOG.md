@@ -11,6 +11,11 @@ the notes of its GitHub release.
 
 - `GLOSSA_FRAME_TRACE`: a per-frame trace of the main window, the popup and
   Options to a CSV file, for diagnosing stutter.
+- Options: turning "start at login" on or off says right under the checkbox
+  that it waits for OK or Apply, then what it did. On macOS the note
+  explains the "Background Items Added" notice and that Glossa must be
+  allowed in System Settings > General > Login Items, with a button that
+  opens them. An error shows there too.
 
 ### Fixed
 
@@ -18,8 +23,19 @@ the notes of its GitHub release.
   clicking the popup made Glossa the active application, so the paste went
   to Glossa. The focus now goes back to the program the text was selected
   in before pasting.
-- macOS: the main window's tooltips named the shortcuts Ctrl+Enter, Ctrl+N
-  and Ctrl+I; on macOS they are Cmd+Enter, Cmd+N and Cmd+I.
+- The on-screen keyboard follows the system: on a Mac it reads Delete and
+  Return, and its bottom row is fn, Control, Option, Cmd, the space bar,
+  Cmd, Option (it showed Ctrl, Win and Alt); on Linux the Windows key is
+  Super. The national layouts are unchanged.
+- The font list in Options showed only two rows: a list that grows after it
+  opens (the installed fonts arrive a moment later) stayed as short as its
+  first frame. Lists inside dropdowns now fill the room they have, about
+  fifteen rows, with the search box kept in view, and a dropdown short of
+  room in its window opens in a window of its own.
+- macOS: shortcuts spelt into the interface say Cmd and Option where they
+  said Ctrl and Alt (the main window's tooltips, the keyboard size tip,
+  mouse mode's key, the copy keys). Ctrl + Insert, which a Mac has no key
+  for, is no longer offered there.
 - macOS: with the main window open behind other windows, the popup did not
   show (selection translation, the control API) until Glossa was switched
   to with Cmd+Tab. It now shows at once.

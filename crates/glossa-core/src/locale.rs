@@ -394,6 +394,13 @@ pub static STRINGS: &[(&str, &str, Option<&str>)] = &[
     ("keyboard.ctrl", "Ctrl", None),
     ("keyboard.alt", "Alt", None),
     ("keyboard.win", "Win", None),
+    ("keyboard.super", "Super", None),
+    ("keyboard.mac.delete", "Delete", None),
+    ("keyboard.mac.return", "Return", None),
+    ("keyboard.mac.fn", "Fn", None),
+    ("keyboard.mac.control", "Control", None),
+    ("keyboard.mac.option", "Option", None),
+    ("keyboard.mac.cmd", "Cmd", None),
     ("keyboard.size_tip", "Ctrl + mouse wheel, or drag the window's edge, to resize the keyboard", None),
     // -- about window -------------------------------------------------------
     (
@@ -808,6 +815,17 @@ pub static STRINGS: &[(&str, &str, Option<&str>)] = &[
     // -- options: updates ------------------------------------------------------------------
     ("options.basics.start_with_system_macos", "Open at login", None),
     ("options.basics.start_with_system_linux", "Start at login", None),
+    ("options.basics.autostart_pending", "Takes effect when you press OK or Apply.", None),
+    ("options.basics.autostart_note", "Done: Glossa will start with Windows, in the tray. Task Manager's Startup apps list can switch it off.", None),
+    (
+        "options.basics.autostart_note_macos",
+        "Done: Glossa will open at login, in the menu bar. macOS may show a \"Background Items Added\" notice about it. If Glossa is switched off in System Settings > General > Login Items & Extensions, it will not open: allow it there.",
+        None,
+    ),
+    ("options.basics.autostart_note_linux", "Done: Glossa will start at login, in the tray (an entry in ~/.config/autostart). Your desktop's startup settings can switch it off.", None),
+    ("options.basics.autostart_off", "Done: Glossa will no longer start at login.", None),
+    ("options.basics.autostart_failed", "Could not change starting at login: %s", None),
+    ("options.basics.open_login_items", "Open Login Items", None),
     ("options.permissions", "Permissions", None),
     ("options.permissions.intro", "macOS asks you before a program may read other programs' text or the screen. Grant these once; Glossa notices without a restart, except where noted.", None),
     ("options.permissions.accessibility", "Accessibility", None),

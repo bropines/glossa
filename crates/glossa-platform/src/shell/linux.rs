@@ -20,8 +20,11 @@ pub const SHELL: Shell = Shell {
     switcher_follows_windows: false,
     portable_beside_exe: true,
     autostart_label: "options.basics.start_with_system_linux",
+    autostart_note: "options.basics.autostart_note_linux",
+    login_items_url: None,
     backdrop_names: super::WINDOWS_BACKDROP_NAMES,
     modifier_names: super::ModifierNames { ctrl: "Ctrl", alt: "Alt", shift: "Shift", meta: "Super" },
+    keyboard: super::LINUX_KEYBOARD,
     window_classes: true,
     program_example: "firefox",
 };

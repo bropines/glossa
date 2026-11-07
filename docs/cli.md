@@ -723,7 +723,7 @@ by tests.
 | `--hidden`, `--tray` | Start in the tray, whatever `[general] startup_action` says. Autostart uses this. |
 | `--home DIR` | The data folder, as `GLOSSA_HOME`. |
 | `--popup TEXT` | Show `TEXT` translated in the popup at start. |
-| `--screenshot WHAT [FILE]` | Development aid: draw one window (`main`, `options`, `dictionary`, `history`, `welcome`…) to a PNG and exit. |
+| `--screenshot WHAT [FILE]` | Development aid: draw one window (`main`, `options`, `options:PAGE`, `dictionary`, `history`, `welcome`, `keyboard`…) to a PNG and exit. `options:font` opens Options with the font list open; `options:autostart` shows the note given after turning on starting at login, without changing anything. |
 
 Starting `glossa` while it is already running shows the running program's
 main window instead of starting a second copy (with `--popup TEXT`, the

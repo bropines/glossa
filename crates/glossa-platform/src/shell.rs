@@ -11,7 +11,7 @@
 //! one file per system: `window/win.rs`, `backdrop/{win,mac,x11}.rs`.
 
 /// How this system's windows behave. See [`SHELL`].
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Shell {
     /// The system's name, for logs and diagnostics.
     pub name: &'static str,
@@ -56,6 +56,12 @@ pub struct Shell {
     pub portable_beside_exe: bool,
     /// The interface text for "start with the system", by its locale key.
     pub autostart_label: &'static str,
+    /// What turning it on did, said next to the checkbox, by its locale key:
+    /// where the system lists the entry and how it can be switched off there.
+    pub autostart_note: &'static str,
+    /// A link that opens the system's own list of programs starting at
+    /// login, where the user can allow or stop Glossa (macOS: Login Items).
+    pub login_items_url: Option<&'static str>,
     /// What the backdrops are called here, by their locale keys: Windows'
     /// own names (Mica, Acrylic…) there and on Linux, the vibrancy
     /// materials they become on macOS.
@@ -64,6 +70,9 @@ pub struct Shell {
     /// showing a hotkey (the settings file keeps `Ctrl`, `Alt`, `Shift`,
     /// `Meta` everywhere).
     pub modifier_names: ModifierNames,
+    /// How this system's keyboards are laid out and labelled, for the
+    /// on-screen keyboard.
+    pub keyboard: KeyboardKeys,
     /// The system tells which class a window and its focused control are
     /// (Windows, X11), so exception rules can name one. macOS tells only
     /// the app.
@@ -82,6 +91,34 @@ pub struct ModifierNames {
     pub alt: &'static str,
     pub shift: &'static str,
     pub meta: &'static str,
+}
+
+/// The keys of a keyboard that do not type a character: what this system's
+/// keyboards print on them (by locale key) and the order of the bottom row.
+/// The character keys are the same everywhere; a language's layout decides
+/// what they type. See [`Shell::keyboard`].
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct KeyboardKeys {
+    pub backspace: &'static str,
+    pub enter: &'static str,
+    pub tab: &'static str,
+    pub caps: &'static str,
+    pub shift: &'static str,
+    /// The bottom row, left to right, each key with its width in key units
+    /// (one letter key is one unit). The widths add up to 15, the width of
+    /// the rows above.
+    pub bottom: &'static [(BottomKey, f32)],
+}
+
+/// A key of the bottom row. See [`KeyboardKeys::bottom`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BottomKey {
+    Space,
+    /// A modifier or other key that types nothing, by the locale key of its
+    /// label (Ctrl, Alt, Win; Fn, Control, Option, Cmd; Super).
+    Named(&'static str),
+    /// The context menu key, drawn as a little page rather than named.
+    Menu,
 }
 
 /// Locale keys for the backdrop choices and the hint under the backdrop
@@ -112,6 +149,67 @@ pub const MAC_BACKDROP_NAMES: BackdropNames = BackdropNames {
     acrylic: "options.backdrop.mac.popover",
     blur: "options.backdrop.mac.full_screen",
     opacity_hint: "options.appearance.backdrop_opacity_hint_mac",
+};
+
+/// A PC keyboard as Windows labels it: Ctrl, Win, Alt, the space bar, then
+/// Alt, Win, the menu key and Ctrl.
+pub const WINDOWS_KEYBOARD: KeyboardKeys = KeyboardKeys {
+    bottom: &[
+        (BottomKey::Named("keyboard.ctrl"), 1.25),
+        (BottomKey::Named("keyboard.win"), 1.25),
+        (BottomKey::Named("keyboard.alt"), 1.25),
+        (BottomKey::Space, 6.25),
+        (BottomKey::Named("keyboard.alt"), 1.25),
+        (BottomKey::Named("keyboard.win"), 1.25),
+        (BottomKey::Menu, 1.25),
+        (BottomKey::Named("keyboard.ctrl"), 1.25),
+    ],
+    ..PC_KEYS
+};
+
+/// The same PC keyboard on Linux, whose desktops call the Windows key Super.
+pub const LINUX_KEYBOARD: KeyboardKeys = KeyboardKeys {
+    bottom: &[
+        (BottomKey::Named("keyboard.ctrl"), 1.25),
+        (BottomKey::Named("keyboard.super"), 1.25),
+        (BottomKey::Named("keyboard.alt"), 1.25),
+        (BottomKey::Space, 6.25),
+        (BottomKey::Named("keyboard.alt"), 1.25),
+        (BottomKey::Named("keyboard.super"), 1.25),
+        (BottomKey::Menu, 1.25),
+        (BottomKey::Named("keyboard.ctrl"), 1.25),
+    ],
+    ..PC_KEYS
+};
+
+/// A Mac keyboard: Delete and Return, and fn, Control, Option, Command
+/// around the space bar, then Command and Option (where a Mac has its arrow
+/// keys, which the on-screen keyboard leaves out).
+pub const MAC_KEYBOARD: KeyboardKeys = KeyboardKeys {
+    backspace: "keyboard.mac.delete",
+    enter: "keyboard.mac.return",
+    tab: "keyboard.tab",
+    caps: "keyboard.caps",
+    shift: "keyboard.shift",
+    bottom: &[
+        (BottomKey::Named("keyboard.mac.fn"), 1.25),
+        (BottomKey::Named("keyboard.mac.control"), 1.25),
+        (BottomKey::Named("keyboard.mac.option"), 1.5),
+        (BottomKey::Named("keyboard.mac.cmd"), 1.75),
+        (BottomKey::Space, 6.0),
+        (BottomKey::Named("keyboard.mac.cmd"), 1.75),
+        (BottomKey::Named("keyboard.mac.option"), 1.5),
+    ],
+};
+
+/// The PC keyboards' names for the keys above the bottom row.
+const PC_KEYS: KeyboardKeys = KeyboardKeys {
+    backspace: "keyboard.backspace",
+    enter: "keyboard.enter",
+    tab: "keyboard.tab",
+    caps: "keyboard.caps",
+    shift: "keyboard.shift",
+    bottom: &[],
 };
 
 #[cfg(windows)]
@@ -156,6 +254,25 @@ mod tests {
         );
         assert_eq!(SHELL.modifier_names.alt, if mac { "Option" } else { "Alt" });
         assert_eq!(SHELL.backdrop_names, if mac { MAC_BACKDROP_NAMES } else { WINDOWS_BACKDROP_NAMES });
+        assert_eq!(SHELL.login_items_url.is_some(), mac);
+    }
+
+    #[test]
+    fn keyboard_rows_are_fifteen_units_and_named_in_the_locale() {
+        let known = |key: &str| glossa_core::locale::STRINGS.iter().any(|(k, _, _)| *k == key);
+        for (name, kb) in [("Windows", WINDOWS_KEYBOARD), ("Mac", MAC_KEYBOARD), ("Linux", LINUX_KEYBOARD)] {
+            let width: f32 = kb.bottom.iter().map(|(_, w)| w).sum();
+            assert!((width - 15.0).abs() < 1e-4, "{name}: the bottom row is {width} units");
+            assert_eq!(kb.bottom.iter().filter(|(k, _)| *k == BottomKey::Space).count(), 1, "{name}");
+            let named = kb.bottom.iter().filter_map(|(k, _)| match k {
+                BottomKey::Named(n) => Some(*n),
+                _ => None,
+            });
+            for key in [kb.backspace, kb.enter, kb.tab, kb.caps, kb.shift].into_iter().chain(named) {
+                assert!(known(key), "{name}: {key} is not in the locale");
+            }
+        }
+        assert!(known(SHELL.autostart_note));
     }
 
     #[test]

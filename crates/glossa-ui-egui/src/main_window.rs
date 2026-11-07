@@ -166,7 +166,14 @@ fn top_pane(app: &mut GlossaApp, ui: &mut egui::Ui) {
     let look = app.look.clone();
     ui.horizontal(|ui| {
         ui.spacing_mut().item_spacing.x = 2.0;
-        let back = icons::sized_button(ui, &look, Icon::Back, &app.t("msg.back_tip"), 24.0, !app.main.back.is_empty());
+        let back = icons::sized_button(
+            ui,
+            &look,
+            Icon::Back,
+            &crate::widgets::shortcut_text(&app.t("msg.back_tip")),
+            24.0,
+            !app.main.back.is_empty(),
+        );
         if back.clicked() {
             navigate(app, true);
         }
@@ -174,7 +181,7 @@ fn top_pane(app: &mut GlossaApp, ui: &mut egui::Ui) {
             ui,
             &look,
             Icon::Forward,
-            &app.t("msg.forward_tip"),
+            &crate::widgets::shortcut_text(&app.t("msg.forward_tip")),
             24.0,
             !app.main.forward.is_empty(),
         );
