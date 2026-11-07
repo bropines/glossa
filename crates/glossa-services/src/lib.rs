@@ -1,7 +1,8 @@
 //! Built-in translation, dictionary and speech services, in Rust.
 //!
 //! Each module here is one online service implementing
-//! [`glossa_modules::Provider`]. They hold no global state and reach the
+//! [`glossa_modules::Provider`]. They hold no global state (Google's memory
+//! of which of its endpoints are refusing lives in the provider) and reach the
 //! network only through the [`Host`](glossa_modules::Host) they are handed,
 //! so the same code runs against the real client in the app and against
 //! canned responses in the tests below each module. The exception is
@@ -30,6 +31,7 @@ use std::sync::Arc;
 
 use glossa_modules::Provider;
 
+mod backoff;
 mod common;
 
 pub mod bing;
@@ -59,9 +61,12 @@ pub use yandex::Yandex;
 /// system voice comes after Google, so Google stays the default speech
 /// service.
 pub fn builtin_providers() -> Vec<Arc<dyn Provider>> {
+    // The translator and the dictionary ask the same Google endpoints, so a
+    // refusal one of them meets keeps the other away too.
+    let google_limits = Arc::new(backoff::Backoff::default());
     vec![
-        Arc::new(Google::new()),
-        Arc::new(GoogleDictionary::new()),
+        Arc::new(Google::sharing(google_limits.clone())),
+        Arc::new(GoogleDictionary::sharing(google_limits)),
         Arc::new(Bing::new()),
         Arc::new(DeepL::new()),
         Arc::new(DeepLx::new()),

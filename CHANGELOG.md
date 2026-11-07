@@ -35,6 +35,11 @@ the notes of its GitHub release.
   asks the system whether Login Items lets it run and says so, also when
   Options opens with it switched off there, with a button that opens Login
   Items.
+- When the popup's translation came from another service because the first
+  one failed (fail-over), the popup says so under the text ("From Bing:
+  Google Translate did not answer", the reason on hover), and its title
+  names the service that answered. `glossa-cli translate` prints the same
+  on stderr.
 
 ### Fixed
 
@@ -60,6 +65,20 @@ the notes of its GitHub release.
   mouse mode's key, the copy keys). Ctrl + Insert, which a Mac has no key
   for, is no longer offered there; kept from an older setting, it says that
   it sends Cmd + C.
+- "Google Translate is rate-limiting us" no longer stops Google Translate.
+  It now asks three keyless addresses in turn (`clients5.google.com`,
+  `translate.googleapis.com`, `translate.google.<domain>`), moving on when
+  one answers 429 or shows Google's captcha page, and leaves a refusing
+  address alone for 30 s, doubling to 10 minutes, instead of asking it
+  again (and again on retry) at every popup. Speech does the same with its
+  own three addresses. An address that cannot be reached (blocked by a
+  firewall or DNS) is passed over for the next as well. Only when all of
+  them refuse is the error shown, at once and with the wait, and fail-over
+  moves on to the next service.
+- Google Translate translates up to 50 000 characters (it was 5 000, the
+  rest cut off): a long text goes in requests of up to 10 000 characters,
+  cut at line breaks or between sentences, and the line breaks and spaces
+  are kept.
 - macOS: with the main window open behind other windows, the popup did not
   show (selection translation, the control API) until Glossa was switched
   to with Cmd+Tab. It now shows at once.

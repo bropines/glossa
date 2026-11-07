@@ -88,6 +88,7 @@
     "popup.listen": "Прослушать выделенный текст",
     "popup.copy": "Скопировать перевод в буфер обмена",
     "popup.title_direction": "%s → %s (%s)",
+    "popup.answered_instead": "Перевёл %s: %s не ответил",
     "popup.reset_size": "Вернуть автоматический размер",
     "popup.change_target": "Щёлкните, чтобы перевести на другой язык",
     "popup.target_auto": "Автоматическое направление",

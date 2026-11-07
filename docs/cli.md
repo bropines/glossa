@@ -93,7 +93,16 @@ glossa-cli: unknown service "gogle"; did you mean google, google-dictionary?
 
 With a valid id, fail-over to the other enabled services still applies when
 `[services] fail_over` is on: check the `service` field of the output, or
-the `[service · …]` line on stderr, to see who answered.
+the `[service · …]` line on stderr, to see who answered. Each service that
+was asked first and failed adds a line on stderr before it (and an entry
+in `failed` with `--json`):
+
+```console
+$ glossa-cli translate -t ru "Hello"
+Привет
+[google did not answer: Google Translate is rate-limiting us (try again in 30 s)]
+[bing · English → Russian · 412 ms]
+```
 
 ## Exit codes
 

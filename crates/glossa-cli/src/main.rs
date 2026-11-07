@@ -548,6 +548,9 @@ fn run(args: &Args) -> Result<(), Fail> {
                 if let Some(back) = out.back {
                     eprintln!("\n↩ {}", back.text);
                 }
+                for (id, why) in &out.failed {
+                    eprintln!("[{id} did not answer: {why}]");
+                }
                 eprintln!(
                     "[{} · {} → {} · {} ms]",
                     out.translation.provider_id,
