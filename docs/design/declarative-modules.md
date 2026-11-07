@@ -845,6 +845,12 @@ Two follow-ups this choice makes worth doing:
    a C dependency and re-testing the three JS dialects. That is its own
    decision, outside this RFC; the module format does not depend on it.
 
+   *Update, November 2026:* done. JavaScript now runs on QuickJS through
+   `rquickjs`, with a 128 MB heap limit and a 10-second script-time limit
+   per call; `glossa` shrank by 3.1 MB on macOS (see the CHANGELOG). The
+   rest of this RFC still says boa where it describes the state it was
+   written in.
+
 Lua is the fallback if a measured need appears (for example, heavy text
 processing in modules that must not need an installed runtime). It is not
 part of the plan.
