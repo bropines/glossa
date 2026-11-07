@@ -501,7 +501,7 @@ fn middle_bar(app: &mut GlossaApp, ui: &mut egui::Ui) {
     let look = app.look.clone();
     ui.add_space(4.0);
     ui.horizontal(|ui| {
-        if icons::sized_button(ui, &look, Icon::Clear, &app.t("msg.clear"), 26.0, true).clicked() {
+        if icons::sized_button(ui, &look, Icon::Clear, &shortcut_tip(app, "msg.clear"), 26.0, true).clicked() {
             clear_all(app);
         }
         // Recent direction pairs, as the classic ⋮ next to the clear button.
@@ -560,7 +560,7 @@ fn middle_bar(app: &mut GlossaApp, ui: &mut egui::Ui) {
             app.set_pair(LangPair::new(l, pair.to));
             retranslate(app);
         }
-        if icons::sized_button(ui, &look, Icon::Swap, &app.t("msg.swap_tip"), 26.0, true).clicked() {
+        if icons::sized_button(ui, &look, Icon::Swap, &shortcut_tip(app, "msg.swap_tip"), 26.0, true).clicked() {
             let p = app.cfg.general.pair;
             let resolved = app.main.outcome.as_ref().map(|o| o.pair).unwrap_or(p);
             let swapped = if p.is_swappable() { p.swapped() } else { resolved.swapped() };
@@ -582,7 +582,7 @@ fn middle_bar(app: &mut GlossaApp, ui: &mut egui::Ui) {
             retranslate(app);
         }
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-            let tip = app.t("msg.translate_tip");
+            let tip = shortcut_tip(app, "msg.translate_tip");
             let b = if compact {
                 icons::sized_button(ui, &look, Icon::Translate, &tip, 26.0, true)
             } else {
@@ -594,6 +594,19 @@ fn middle_bar(app: &mut GlossaApp, ui: &mut egui::Ui) {
         });
     });
     ui.add_space(4.0);
+}
+
+/// A tooltip whose text names a Ctrl shortcut. The strings (and classic
+/// `lang.json` files) spell it "Ctrl+Enter"; the shortcut itself is egui's
+/// `command` modifier, which is Cmd on macOS.
+fn shortcut_tip(app: &GlossaApp, key: &str) -> String {
+    let text = app.t(key);
+    let shell = glossa_platform::shell::SHELL;
+    if shell.command_is_ctrl {
+        text
+    } else {
+        text.replace("Ctrl+", &format!("{}+", shell.command_key))
+    }
 }
 
 fn retranslate(app: &mut GlossaApp) {

@@ -375,6 +375,24 @@ pub fn lift_over_everything(title: &str) -> bool {
     }
 }
 
+/// Before a synthetic paste: if clicking one of this program's windows made
+/// it the active application (macOS activates the application whose window
+/// is clicked, the popup's included), give the focus back to the program
+/// the user was working in, so the keystroke reaches it. Waits up to
+/// `timeout`. Elsewhere the popup does not take the focus and this does
+/// nothing. Any thread.
+pub fn give_focus_back(timeout: std::time::Duration) -> bool {
+    #[cfg(target_os = "macos")]
+    {
+        mac::give_focus_back(timeout)
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        let _ = timeout;
+        true
+    }
+}
+
 /// Whether [`float_free`] does anything here (macOS), so callers can skip
 /// looking the window up elsewhere.
 pub const CAN_FLOAT_FREE: bool = cfg!(target_os = "macos");
