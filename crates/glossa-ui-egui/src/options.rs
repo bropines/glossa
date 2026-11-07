@@ -9,10 +9,12 @@
 
 use egui::{vec2, Color32, RichText};
 use glossa_core::config::{
-    CopyAction, ExceptionMode, ExceptionRule, LensMode, MouseBehaviour, ProxyMode, ProxyScheme, VisionLevel,
+    CopyAction, ExceptionMode, ExceptionRule, LensMode, MouseBehaviour, ProxyMode, ProxyScheme, TrayAction, TrayConfig,
+    VisionLevel,
 };
 use glossa_core::{Action, Capabilities, Config, LangId};
 use glossa_modules::{OptionKind, OptionSpec};
+use glossa_platform::shell::SHELL;
 
 use crate::app::GlossaApp;
 use crate::icons::Icon;
@@ -1671,6 +1673,66 @@ fn advanced(app: &mut GlossaApp, ui: &mut egui::Ui, st: &mut OptionsState) {
         }
         ui.add_enabled_ui(supported, |ui| mouse_mode_options(app, ui, &look, d));
     });
+    let tray_title =
+        if SHELL.app_menu { "options.advanced.tray_group_menu_bar" } else { "options.advanced.tray_group" };
+    group(ui, &look, &app.t(tray_title), |ui| tray_click_options(app, ui, &look, &mut d.tray));
+}
+
+/// What tray clicks can be set to, in the order the list shows them. A file
+/// may name any action; one not listed here is shown too while chosen.
+const TRAY_CHOICES: [TrayAction; 12] = [
+    TrayAction::Run(Action::ShowMainWindow),
+    TrayAction::Run(Action::ShowPopup),
+    TrayAction::Run(Action::TranslateClipboardInPopup),
+    TrayAction::Run(Action::TextRecognition),
+    TrayAction::Run(Action::RecognizeAndTranslate),
+    TrayAction::Run(Action::TranslateRegionInPlace),
+    TrayAction::Run(Action::ShowDictionary),
+    TrayAction::Run(Action::ShowHistory),
+    TrayAction::Run(Action::ToggleMouseMode),
+    TrayAction::Run(Action::ShowOptions),
+    TrayAction::Menu,
+    TrayAction::Nothing,
+];
+
+fn tray_action_label(app: &GlossaApp, a: TrayAction) -> String {
+    match a {
+        TrayAction::Nothing => app.t("options.tray.nothing"),
+        TrayAction::Menu => app.t("options.tray.menu"),
+        TrayAction::Run(action) => app.t(&format!("action.{}", action.id())),
+    }
+}
+
+/// The tray click settings, greyed out where the tray reports no clicks.
+fn tray_click_options(app: &GlossaApp, ui: &mut egui::Ui, look: &crate::style::Look, d: &mut TrayConfig) {
+    if !SHELL.tray_clicks {
+        ui.label(RichText::new(app.t("options.tray.unsupported")).color(look.weak_text()));
+    }
+    ui.add_enabled_ui(SHELL.tray_clicks, |ui| {
+        let rows = [
+            ("tray-click", "options.tray.click", &mut d.click),
+            ("tray-double-click", "options.tray.double_click", &mut d.double_click),
+            ("tray-middle-click", "options.tray.middle_click", &mut d.middle_click),
+        ];
+        for (salt, label, value) in rows {
+            row(ui, &app.t(label), |ui| {
+                crate::dropdown::ComboBox::from_id_salt(salt)
+                    .width(280.0)
+                    .selected_text(tray_action_label(app, *value))
+                    .show_ui(ui, |ui| {
+                        let current = *value;
+                        let extra = (!TRAY_CHOICES.contains(&current)).then_some(current);
+                        for choice in TRAY_CHOICES.into_iter().chain(extra) {
+                            ui.selectable_value(value, choice, tray_action_label(app, choice));
+                        }
+                    });
+            });
+        }
+        if d.click == TrayAction::Menu && d.double_click != TrayAction::Nothing {
+            hint(ui, look, &app.t("options.tray.menu_hint"));
+        }
+        hint(ui, look, &app.t("options.tray.hint"));
+    });
 }
 
 /// The mouse mode switches, greyed out by the caller where it cannot work.
@@ -1687,8 +1749,6 @@ fn mouse_mode_options(app: &GlossaApp, ui: &mut egui::Ui, look: &crate::style::L
     });
     ui.checkbox(&mut d.mouse_mode.ctrl_only, app.t("options.advanced.mouse_ctrl_only"));
     hint(ui, look, &app.t("options.advanced.mouse_ctrl_only_hint"));
-    ui.checkbox(&mut d.mouse_mode.tray_click_toggles, app.t("options.advanced.tray_toggles_mouse"));
-    hint(ui, look, &app.t("options.advanced.tray_toggles_mouse_hint"));
     ui.label(RichText::new(app.t("options.advanced.mouse_mode_note")).small().color(look.weak_text()));
 }
 

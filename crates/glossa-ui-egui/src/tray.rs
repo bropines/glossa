@@ -1,9 +1,11 @@
 //! The tray icon and its menu.
 //!
-//! A click toggles mouse mode, as the classic program did (or shows the main
-//! window, if so configured); a double click shows the main window; right
-//! click opens the classic menu (text recognition, dictionary, history,
-//! mouse mode and global hotkeys on/off, options, about, exit), with copy
+//! What a left click, a double click and a middle click do is set in
+//! `[tray]` (by default a click toggles mouse mode, as the classic program
+//! did, and a double click shows the main window; on macOS a click opens
+//! the menu, as menu-bar items do). Right click opens the classic menu
+//! (text recognition, dictionary, history, mouse mode and global hotkeys
+//! on/off, options, about, exit), with copy
 //! mode, in-place translation and the other recognition actions beside text
 //! recognition. The icon is drawn in the theme's accent colour, another hue
 //! while mouse mode is on, and on Windows the menu is dark or light with the
@@ -11,12 +13,22 @@
 //! app through channels and wake its loop, so they work while every window
 //! is hidden.
 //!
+//! The system's own double-click events are not used: Windows sends the
+//! single click first and macOS sends none, so a small thread of our own
+//! counts the button releases instead, waiting out the double-click time
+//! only while a double click has something to do.
+//!
 //! On Linux the indicator needs GTK running on the thread that owns it, so
-//! the icon lives on a thread of its own there.
+//! the icon lives on a thread of its own there. AppIndicator reports no
+//! clicks at all: a click there opens the menu, whatever the settings say.
 
-use std::sync::mpsc::{self, Receiver};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::mpsc::{self, Receiver, RecvTimeoutError, Sender};
+use std::sync::{Arc, Mutex};
 
+use glossa_core::config::{TrayAction, TrayConfig};
 use glossa_core::{Action, Locale};
+use glossa_platform::window::FocusMark;
 use tray_icon::menu::{CheckMenuItem, Menu, MenuEvent, MenuItem, PredefinedMenuItem, Submenu};
 use tray_icon::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
 
@@ -24,14 +36,52 @@ use crate::app::GlossaApp;
 
 pub enum TrayEvent {
     ShowMain,
-    /// A single left click: mouse mode, or the main window.
-    Click,
+    /// A click on the icon, single and double told apart, with the window
+    /// that had the focus before it (Windows; see `focus_mark`).
+    Click(ClickKind, Option<FocusMark>),
     ToggleMouseMode,
     Action(Action),
     ToggleHotkeys,
     About,
     /// Open the page where the project can be supported.
     Support,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ClickKind {
+    Single,
+    Double,
+    Middle,
+}
+
+/// What a click asks for, by the settings. Mouse mode where it cannot run
+/// falls back to the main window, as the classic click did.
+pub fn click_action(cfg: &TrayConfig, kind: ClickKind) -> TrayAction {
+    let chosen = match kind {
+        ClickKind::Single => cfg.click,
+        ClickKind::Double => cfg.double_click,
+        ClickKind::Middle => cfg.middle_click,
+    };
+    if chosen == TrayAction::Run(Action::ToggleMouseMode) && !crate::mouse::MouseHub::supported() {
+        TrayAction::Run(Action::ShowMainWindow)
+    } else {
+        chosen
+    }
+}
+
+/// What the click thread needs to know of the settings.
+#[derive(Default)]
+struct ClickSettings {
+    /// The left click opens the menu, which the icon does by itself.
+    left_is_menu: AtomicBool,
+    /// A double click does something, so a single one waits it out.
+    double: AtomicBool,
+}
+
+/// A button released over the icon, with the focus mark of the moment.
+enum Release {
+    Left(Option<FocusMark>),
+    Middle(Option<FocusMark>),
 }
 
 /// Something that woke the GUI while it was unloaded.
@@ -54,6 +104,7 @@ pub type WakeFn = std::sync::Arc<dyn Fn() + Send + Sync>;
 
 pub struct Tray {
     events: Receiver<TrayEvent>,
+    clicks: Arc<ClickSettings>,
     #[cfg(not(target_os = "linux"))]
     icon: tray_icon::TrayIcon,
     #[cfg(not(target_os = "linux"))]
@@ -146,7 +197,7 @@ fn build_menu(locale: &Locale) -> (Menu, CheckMenuItem, CheckMenuItem) {
     (menu, hotkeys, mouse)
 }
 
-fn install_handlers(wake: WakeFn) -> Receiver<TrayEvent> {
+fn install_handlers(wake: WakeFn, clicks: Arc<ClickSettings>) -> Receiver<TrayEvent> {
     let (tx, rx) = mpsc::channel();
     let (tx2, c1, c2) = (tx.clone(), wake.clone(), wake);
     MenuEvent::set_event_handler(Some(move |e: MenuEvent| {
@@ -169,35 +220,89 @@ fn install_handlers(wake: WakeFn) -> Receiver<TrayEvent> {
             c1();
         }
     }));
+    let releases = spawn_click_thread(tx2, c2, clicks.clone());
+    // The window the user was in, taken while the pointer is over the icon:
+    // by the time the click arrives the taskbar has the focus (Windows).
+    let mark: Mutex<Option<FocusMark>> = Mutex::new(None);
     TrayIconEvent::set_event_handler(Some(move |e: TrayIconEvent| {
-        let ev = match e {
-            TrayIconEvent::Click { button: MouseButton::Left, button_state: MouseButtonState::Up, .. }
-                if !cfg!(target_os = "macos") =>
-            {
-                Some(TrayEvent::Click)
+        let release = match e {
+            TrayIconEvent::Enter { .. } => {
+                *mark.lock().unwrap_or_else(|p| p.into_inner()) = glossa_platform::window::focus_mark();
+                None
             }
-            TrayIconEvent::DoubleClick { button: MouseButton::Left, .. } => Some(TrayEvent::ShowMain),
+            TrayIconEvent::Click { button: MouseButton::Left, button_state: MouseButtonState::Up, .. }
+                if !clicks.left_is_menu.load(Ordering::Relaxed) =>
+            {
+                Some(Release::Left(*mark.lock().unwrap_or_else(|p| p.into_inner())))
+            }
+            TrayIconEvent::Click { button: MouseButton::Middle, button_state: MouseButtonState::Up, .. } => {
+                Some(Release::Middle(*mark.lock().unwrap_or_else(|p| p.into_inner())))
+            }
             _ => None,
         };
-        if let Some(ev) = ev {
-            let _ = tx2.send(ev);
-            c2();
+        if let (Some(r), Some(releases)) = (release, releases.as_ref()) {
+            let _ = releases.send(r);
         }
     }));
     rx
 }
 
+/// The thread that tells a single click from a double one. A single click
+/// is held for the system's double-click time only while a double click
+/// has something to do; otherwise it goes straight through.
+fn spawn_click_thread(events: Sender<TrayEvent>, wake: WakeFn, clicks: Arc<ClickSettings>) -> Option<Sender<Release>> {
+    if !glossa_platform::shell::SHELL.tray_clicks {
+        return None;
+    }
+    let (tx, rx) = mpsc::channel::<Release>();
+    let emit = move |kind: ClickKind, mark: Option<FocusMark>| {
+        let _ = events.send(TrayEvent::Click(kind, mark));
+        wake();
+    };
+    std::thread::Builder::new()
+        .name("glossa-tray-clicks".into())
+        .stack_size(64 * 1024)
+        .spawn(move || {
+            while let Ok(first) = rx.recv() {
+                let mark = match first {
+                    Release::Middle(m) => {
+                        emit(ClickKind::Middle, m);
+                        continue;
+                    }
+                    Release::Left(m) => m,
+                };
+                if !clicks.double.load(Ordering::Relaxed) {
+                    emit(ClickKind::Single, mark);
+                    continue;
+                }
+                match rx.recv_timeout(glossa_platform::window::double_click_time()) {
+                    Ok(Release::Left(_)) => emit(ClickKind::Double, mark),
+                    Ok(Release::Middle(m)) => {
+                        emit(ClickKind::Single, mark);
+                        emit(ClickKind::Middle, m);
+                    }
+                    Err(RecvTimeoutError::Timeout) => emit(ClickKind::Single, mark),
+                    Err(RecvTimeoutError::Disconnected) => break,
+                }
+            }
+        })
+        .map_err(|e| tracing::warn!("no tray click thread: {e}"))
+        .ok()?;
+    Some(tx)
+}
+
 impl Tray {
     #[cfg(not(target_os = "linux"))]
-    pub fn new(wake: WakeFn, locale: &Locale) -> Result<Tray, String> {
-        let events = install_handlers(wake);
+    pub fn new(wake: WakeFn, locale: &Locale, clicks_cfg: &TrayConfig) -> Result<Tray, String> {
+        let clicks = Arc::new(ClickSettings::default());
+        let events = install_handlers(wake, clicks.clone());
         let (menu, hotkeys_item, mouse_item) = build_menu(locale);
         let mut b = TrayIconBuilder::new()
             .with_tooltip("Glossa")
             .with_menu(Box::new(menu))
-            // A menu bar item opens its menu on click on macOS; elsewhere a
-            // click toggles mouse mode or shows the window.
-            .with_menu_on_left_click(cfg!(target_os = "macos"));
+            // The icon opens its menu on a left click by itself when that
+            // is the setting (`set_clicks` keeps it in step).
+            .with_menu_on_left_click(clicks_cfg.click == TrayAction::Menu);
         if let Some(i) = tray_icon_image([0.16, 0.55, 0.89], false) {
             // macOS paints a template icon to suit the menu bar.
             #[cfg(target_os = "macos")]
@@ -210,12 +315,17 @@ impl Tray {
             }
         }
         let icon = b.build().map_err(|e| e.to_string())?;
-        Ok(Tray { events, icon, hotkeys_item, mouse_item })
+        let tray = Tray { events, clicks, icon, hotkeys_item, mouse_item };
+        tray.set_clicks(clicks_cfg);
+        Ok(tray)
     }
 
     #[cfg(target_os = "linux")]
-    pub fn new(wake: WakeFn, locale: &Locale) -> Result<Tray, String> {
-        let events = install_handlers(wake);
+    pub fn new(wake: WakeFn, locale: &Locale, clicks_cfg: &TrayConfig) -> Result<Tray, String> {
+        // The indicator reports no clicks; the settings have nothing to do.
+        let _ = clicks_cfg;
+        let clicks = Arc::new(ClickSettings::default());
+        let events = install_handlers(wake, clicks.clone());
         let locale = locale.clone();
         let (ready_tx, ready_rx) = mpsc::channel::<Result<(), String>>();
         let (looks, new_looks) = mpsc::channel::<tray_icon::Icon>();
@@ -254,7 +364,24 @@ impl Tray {
             })
             .map_err(|e| e.to_string())?;
         ready_rx.recv_timeout(std::time::Duration::from_secs(3)).map_err(|e| e.to_string())??;
-        Ok(Tray { events, looks })
+        Ok(Tray { events, clicks, looks })
+    }
+
+    /// Follow the click settings: whether the icon opens its menu on a
+    /// left click by itself, and whether a single click waits for a second.
+    pub fn set_clicks(&self, cfg: &TrayConfig) {
+        let left_is_menu = cfg.click == TrayAction::Menu;
+        self.clicks.left_is_menu.store(left_is_menu, Ordering::Relaxed);
+        self.clicks.double.store(!left_is_menu && cfg.double_click != TrayAction::Nothing, Ordering::Relaxed);
+        #[cfg(not(target_os = "linux"))]
+        self.icon.set_show_menu_on_left_click(left_is_menu);
+    }
+
+    /// Open the tray menu at the icon, for a click set to do that. Nothing
+    /// on Linux, where only the indicator itself opens it.
+    pub fn show_menu(&self) {
+        #[cfg(not(target_os = "linux"))]
+        self.icon.show_menu();
     }
 
     pub fn poll(&self) -> Vec<TrayEvent> {
@@ -292,15 +419,21 @@ impl Tray {
 pub fn handle(app: &mut GlossaApp, e: TrayEvent) {
     match e {
         TrayEvent::ShowMain => app.show_main(),
-        TrayEvent::Click => {
-            if app.cfg.mouse_mode.tray_click_toggles && crate::mouse::MouseHub::supported() {
-                app.perform(Action::ToggleMouseMode, None);
-            } else if app.main_visible {
-                app.hide_main();
-            } else {
-                app.show_main();
+        TrayEvent::Click(kind, mark) => match click_action(&app.cfg.tray, kind) {
+            TrayAction::Nothing => {}
+            TrayAction::Menu => {
+                if let Some(t) = &app.tray {
+                    t.show_menu();
+                }
             }
-        }
+            // A single click shows the window and hides it again, as the
+            // classic click did.
+            TrayAction::Run(Action::ShowMainWindow) if kind == ClickKind::Single && app.main_visible => app.hide_main(),
+            TrayAction::Run(a) if crate::actions::needs_selection(a) => {
+                crate::actions::capture_after_click(app, a, mark)
+            }
+            TrayAction::Run(a) => app.perform(a, None),
+        },
         TrayEvent::ToggleMouseMode => app.perform(Action::ToggleMouseMode, None),
         TrayEvent::Action(a) => app.perform(a, None),
         TrayEvent::ToggleHotkeys => {

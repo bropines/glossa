@@ -467,6 +467,63 @@ fn distance_sq(r: Rect, x: f32, y: f32) -> f32 {
     dx * dx + dy * dy
 }
 
+/// A window to give the keyboard focus back to; see [`focus_mark`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct FocusMark(#[allow(dead_code)] isize);
+
+/// The window the user is working in, to give the focus back to after a
+/// click elsewhere took it: a click on a Windows tray icon activates the
+/// taskbar, so the selection a tray action should read is no longer in the
+/// foreground window. `None` when nothing will need giving back — on macOS
+/// (a click on a menu-bar item leaves the active app active), on Linux, and
+/// when the foreground window is the taskbar or this program.
+pub fn focus_mark() -> Option<FocusMark> {
+    #[cfg(windows)]
+    {
+        win::focus_mark().map(FocusMark)
+    }
+    #[cfg(not(windows))]
+    {
+        None
+    }
+}
+
+/// Bring a window marked by [`focus_mark`] back to the foreground. `false`
+/// when it is gone or the system refused.
+pub fn refocus(mark: FocusMark) -> bool {
+    #[cfg(windows)]
+    {
+        win::refocus(mark.0)
+    }
+    #[cfg(not(windows))]
+    {
+        let _ = mark;
+        false
+    }
+}
+
+/// The longest gap between the two clicks of a double click, as the user
+/// set it in the system (500 ms on Windows by default; macOS lets the
+/// accessibility settings stretch it). 400 ms where the system will not tell.
+pub fn double_click_time() -> std::time::Duration {
+    #[cfg(windows)]
+    {
+        win::double_click_time()
+    }
+    #[cfg(target_os = "macos")]
+    {
+        let secs = objc2_app_kit::NSEvent::doubleClickInterval();
+        if secs.is_finite() && secs > 0.05 {
+            return std::time::Duration::from_secs_f64(secs.min(5.0));
+        }
+        std::time::Duration::from_millis(400)
+    }
+    #[cfg(not(any(windows, target_os = "macos")))]
+    {
+        std::time::Duration::from_millis(400)
+    }
+}
+
 #[cfg(target_os = "macos")]
 mod mac;
 #[cfg(windows)]

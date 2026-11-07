@@ -13,8 +13,8 @@ use windows::Win32::System::Threading::{
 use windows::Win32::UI::HiDpi::{GetDpiForMonitor, MDT_EFFECTIVE_DPI};
 use windows::Win32::UI::WindowsAndMessaging::{
     EnumWindows, GetClassNameW, GetCursorPos, GetForegroundWindow, GetGUIThreadInfo, GetWindowLongPtrW,
-    GetWindowTextLengthW, GetWindowTextW, GetWindowThreadProcessId, SetWindowLongPtrW, GUITHREADINFO, GWL_EXSTYLE,
-    MONITORINFOF_PRIMARY, WS_EX_NOACTIVATE,
+    GetWindowTextLengthW, GetWindowTextW, GetWindowThreadProcessId, IsWindow, SetForegroundWindow, SetWindowLongPtrW,
+    GUITHREADINFO, GWL_EXSTYLE, MONITORINFOF_PRIMARY, WS_EX_NOACTIVATE,
 };
 
 struct TitleSearch {
@@ -73,6 +73,54 @@ pub fn keep_from_activating(hwnd: isize) -> bool {
         SetWindowLongPtrW(hwnd, GWL_EXSTYLE, wanted);
         true
     }
+}
+
+/// The taskbar's windows, and the overflow flyouts the tray icons may sit
+/// in: what the foreground is while the user clicks a tray icon, never a
+/// window to give the focus back to.
+const SHELL_CLASSES: [&str; 5] = [
+    "Shell_TrayWnd",
+    "Shell_SecondaryTrayWnd",
+    "NotifyIconOverflowWindow",
+    "TopLevelWindowForOverflowXamlIsland",
+    "Windows.UI.Core.CoreWindow",
+];
+
+pub fn focus_mark() -> Option<isize> {
+    // SAFETY: the handle comes straight from the OS; the class buffer is a
+    // correctly sized local.
+    unsafe {
+        let hwnd = GetForegroundWindow();
+        if hwnd.is_invalid() {
+            return None;
+        }
+        let mut pid = 0u32;
+        GetWindowThreadProcessId(hwnd, Some(&mut pid));
+        if pid == GetCurrentProcessId() {
+            return None;
+        }
+        let mut class = [0u16; 256];
+        let n = GetClassNameW(hwnd, &mut class).max(0) as usize;
+        let class = String::from_utf16_lossy(&class[..n]);
+        if SHELL_CLASSES.contains(&class.as_str()) {
+            return None;
+        }
+        Some(hwnd.0 as isize)
+    }
+}
+
+pub fn refocus(hwnd: isize) -> bool {
+    let hwnd = HWND(hwnd as *mut core::ffi::c_void);
+    // SAFETY: a stale handle makes both calls fail, which is harmless. The
+    // shell lets the owner of a clicked tray icon set the foreground window,
+    // which is what makes this allowed right after the click.
+    unsafe { IsWindow(Some(hwnd)).as_bool() && SetForegroundWindow(hwnd).as_bool() }
+}
+
+pub fn double_click_time() -> std::time::Duration {
+    // SAFETY: no preconditions.
+    let ms = unsafe { windows::Win32::UI::Input::KeyboardAndMouse::GetDoubleClickTime() };
+    std::time::Duration::from_millis(u64::from(ms.clamp(100, 5000)))
 }
 
 pub fn foreground_window() -> Option<WindowInfo> {

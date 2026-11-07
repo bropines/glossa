@@ -369,11 +369,13 @@ fn launch_once_only(start_visible: &mut bool) {
 
 /// The parts that live as long as the process.
 /// The tray icon in the theme's accent colour, changed while mouse mode is
-/// on, with the menu's check marks, and the menus dark or light as the theme.
+/// on, with the menu's check marks, the menus dark or light as the theme,
+/// and what clicks on it do.
 pub fn refresh_tray_look(shell: &Shell) {
     let Some(t) = &shell.tray else { return };
     let (accent, dark) = tray::look_of(&shell.engine);
     t.set_look(accent, dark, shell.mouse.running());
+    t.set_clicks(&shell.engine.config().tray);
 }
 
 /// Mouse mode on or off from the tray, with no GUI needed. A failure to
@@ -420,7 +422,7 @@ fn build_shell(engine: Engine, wake: Arc<Wake>) -> Shell {
     };
     let tray = {
         let w = wake.clone();
-        tray::Tray::new(Arc::new(move || w.wake()), &engine.locale())
+        tray::Tray::new(Arc::new(move || w.wake()), &engine.locale(), &cfg.tray)
             .map_err(|e| tracing::warn!("no tray icon: {e}"))
             .ok()
     };
@@ -527,11 +529,28 @@ fn collect_wake_events(shell: &mut Shell, events: &std::sync::mpsc::Receiver<glo
             match e {
                 tray::TrayEvent::Action(Action::Quit) => shell.quit = true,
                 tray::TrayEvent::ToggleMouseMode => toggle_mouse_mode(shell),
-                tray::TrayEvent::Click => {
-                    if shell.engine.config().mouse_mode.tray_click_toggles && mouse::MouseHub::supported() {
-                        toggle_mouse_mode(shell);
-                    } else {
-                        shell.pending.push(tray::Pending::Tray(tray::TrayEvent::ShowMain));
+                tray::TrayEvent::Click(kind, mark) => {
+                    use glossa_core::config::TrayAction;
+                    let cfg = shell.engine.config();
+                    match tray::click_action(&cfg.tray, kind) {
+                        TrayAction::Nothing => {}
+                        TrayAction::Menu => {
+                            if let Some(t) = &shell.tray {
+                                t.show_menu();
+                            }
+                        }
+                        TrayAction::Run(Action::Quit) => shell.quit = true,
+                        TrayAction::Run(Action::ToggleMouseMode) => toggle_mouse_mode(shell),
+                        TrayAction::Run(Action::ShowMainWindow) => {
+                            shell.pending.push(tray::Pending::Tray(tray::TrayEvent::ShowMain))
+                        }
+                        // Read now, before the windows exist (see `read_selection`).
+                        TrayAction::Run(a) if actions::needs_selection(a) => {
+                            if let Some(task) = actions::read_selection_after_click(&cfg, a, mark) {
+                                shell.pending.push(tray::Pending::Task(task));
+                            }
+                        }
+                        TrayAction::Run(a) => shell.pending.push(tray::Pending::Action(a, None)),
                     }
                 }
                 tray::TrayEvent::ToggleHotkeys => {

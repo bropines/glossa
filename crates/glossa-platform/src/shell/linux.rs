@@ -24,6 +24,7 @@ pub const SHELL: Shell = Shell {
     modifier_names: super::ModifierNames { ctrl: "Ctrl", alt: "Alt", shift: "Shift", meta: "Super" },
     window_classes: true,
     program_example: "firefox",
+    tray_clicks: false,
 };
 
 pub fn open(target: &str) -> std::io::Result<()> {

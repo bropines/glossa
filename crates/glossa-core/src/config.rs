@@ -30,6 +30,8 @@ pub struct Config {
     pub exceptions: Exceptions,
     pub advanced: Advanced,
     pub mouse_mode: MouseMode,
+    /// What clicks on the tray icon (the menu-bar icon on macOS) do.
+    pub tray: TrayConfig,
     pub ocr: OcrConfig,
     pub dictionary: DictionaryConfig,
     pub updates: Updates,
@@ -1229,14 +1231,101 @@ pub struct MouseMode {
     pub behaviour: MouseBehaviour,
     /// Only react while Ctrl is held.
     pub ctrl_only: bool,
-    /// A click on the tray icon toggles mouse mode instead of opening the
-    /// main window.
-    pub tray_click_toggles: bool,
+    /// The old switch for the tray click (`false`: the click opens the main
+    /// window instead of toggling mouse mode). Read from old files and moved
+    /// into [`TrayConfig::click`] on load; never written back.
+    #[serde(skip_serializing)]
+    pub tray_click_toggles: Option<bool>,
 }
 
 impl Default for MouseMode {
     fn default() -> Self {
-        Self { enabled: false, behaviour: MouseBehaviour::ShowIcon, ctrl_only: false, tray_click_toggles: true }
+        Self { enabled: false, behaviour: MouseBehaviour::ShowIcon, ctrl_only: false, tray_click_toggles: None }
+    }
+}
+
+/// What a click on the tray icon does: an action, the same ones hotkeys
+/// run, the tray menu, or nothing. Written as the action's id, `"menu"` or
+/// `"none"`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum TrayAction {
+    Nothing,
+    Menu,
+    Run(Action),
+}
+
+impl TrayAction {
+    pub fn id(self) -> &'static str {
+        match self {
+            TrayAction::Nothing => "none",
+            TrayAction::Menu => "menu",
+            TrayAction::Run(a) => a.id(),
+        }
+    }
+
+    pub fn from_id(id: &str) -> Option<TrayAction> {
+        match id {
+            "none" | "nothing" | "" => Some(TrayAction::Nothing),
+            "menu" => Some(TrayAction::Menu),
+            other => Action::from_id(other).map(TrayAction::Run),
+        }
+    }
+}
+
+impl Serialize for TrayAction {
+    fn serialize<S: serde::Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
+        s.serialize_str(self.id())
+    }
+}
+
+impl<'de> Deserialize<'de> for TrayAction {
+    fn deserialize<D: serde::Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
+        let id = String::deserialize(d)?;
+        TrayAction::from_id(&id).ok_or_else(|| serde::de::Error::custom(format!("unknown tray action `{id}`")))
+    }
+}
+
+/// What clicks on the tray icon do. Linux's indicators report no clicks at
+/// all (a click opens the menu there), so these apply to Windows and macOS.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct TrayConfig {
+    /// A single left click. Showing the main window hides it again when it
+    /// is already showing.
+    pub click: TrayAction,
+    /// A double left click. Anything but `none` makes a single click wait
+    /// out the system's double-click time before it acts.
+    pub double_click: TrayAction,
+    /// A click with the middle button (the wheel).
+    pub middle_click: TrayAction,
+}
+
+impl TrayConfig {
+    /// The defaults on `os`: what the icon did before the clicks could be
+    /// chosen. The macOS menu-bar icon opens its menu, as menu-bar items do;
+    /// elsewhere a click toggles mouse mode, as the classic program did.
+    pub fn for_os(os: Os) -> TrayConfig {
+        let click = match os {
+            Os::MacOs => TrayAction::Menu,
+            _ => TrayAction::Run(Action::ToggleMouseMode),
+        };
+        TrayConfig { click, double_click: TrayAction::Run(Action::ShowMainWindow), middle_click: TrayAction::Nothing }
+    }
+
+    /// Fold the old `mouse_mode.tray_click_toggles` switch in. Turned off,
+    /// it meant the click opens the main window; it never applied on macOS,
+    /// where the click opened the menu. A click the file already sets to
+    /// something else than the default wins.
+    pub fn adopt_tray_click_toggles(&mut self, toggles: Option<bool>, os: Os) {
+        if toggles == Some(false) && os != Os::MacOs && self.click == TrayConfig::for_os(os).click {
+            self.click = TrayAction::Run(Action::ShowMainWindow);
+        }
+    }
+}
+
+impl Default for TrayConfig {
+    fn default() -> Self {
+        TrayConfig::for_os(Os::current())
     }
 }
 
@@ -1646,6 +1735,8 @@ impl Config {
         self.appearance.window_transparency = self.appearance.window_transparency.min(90);
         self.dictionary.zoom = self.dictionary.zoom.clamp(50, 400);
         self.advanced.migrate_terminal_rules();
+        let toggles = self.mouse_mode.tray_click_toggles.take();
+        self.tray.adopt_tray_click_toggles(toggles, Os::current());
         self.exceptions.adopt_platform_defaults(Os::current());
         self.general.instant_delay_ms = self.general.instant_delay_ms.clamp(150, 5000);
         // Keep the first (newest) of each pair, wherever the repeats are.
@@ -2256,5 +2347,61 @@ copy_joined_lines = true",
         check(&root, "", "", &sections, &mut missing);
         missing.dedup();
         assert!(missing.is_empty(), "config keys not described in docs/configuration.md: {missing:?}");
+    }
+
+    #[test]
+    fn tray_clicks_default_to_what_the_icon_did_before() {
+        let win = TrayConfig::for_os(Os::Windows);
+        assert_eq!(win.click, TrayAction::Run(Action::ToggleMouseMode));
+        assert_eq!(win.double_click, TrayAction::Run(Action::ShowMainWindow));
+        assert_eq!(win.middle_click, TrayAction::Nothing);
+        assert_eq!(TrayConfig::for_os(Os::Unix), win);
+        assert_eq!(TrayConfig::for_os(Os::MacOs).click, TrayAction::Menu);
+        assert_eq!(Config::default().tray, TrayConfig::for_os(Os::current()));
+    }
+
+    #[test]
+    fn tray_actions_are_written_as_ids() {
+        let c = Config::from_toml(
+            "[tray]\nclick = \"text_recognition\"\ndouble_click = \"menu\"\nmiddle_click = \"none\"\n",
+        )
+        .unwrap();
+        assert_eq!(c.tray.click, TrayAction::Run(Action::TextRecognition));
+        assert_eq!(c.tray.double_click, TrayAction::Menu);
+        assert_eq!(c.tray.middle_click, TrayAction::Nothing);
+        let again = Config::from_toml(&c.to_toml()).unwrap();
+        assert_eq!(again.tray, c.tray);
+        assert!(Config::from_toml("[tray]\nclick = \"fly\"\n").is_err());
+    }
+
+    #[test]
+    fn the_old_tray_click_switch_moves_into_the_tray_section() {
+        let off = Config::from_toml("[mouse_mode]\ntray_click_toggles = false\n").unwrap();
+        let expected =
+            if Os::current() == Os::MacOs { TrayAction::Menu } else { TrayAction::Run(Action::ShowMainWindow) };
+        assert_eq!(off.tray.click, expected);
+        assert_eq!(off.mouse_mode.tray_click_toggles, None);
+        // Never written back.
+        assert!(!off.to_toml().contains("tray_click_toggles"));
+        // On: the default, nothing to change.
+        let on = Config::from_toml("[mouse_mode]\ntray_click_toggles = true\n").unwrap();
+        assert_eq!(on.tray, TrayConfig::default());
+        // A click the file chooses itself wins over the old switch.
+        let both =
+            Config::from_toml("[mouse_mode]\ntray_click_toggles = false\n[tray]\nclick = \"show_history\"\n").unwrap();
+        assert_eq!(both.tray.click, TrayAction::Run(Action::ShowHistory));
+    }
+
+    #[test]
+    fn the_old_switch_is_read_per_system() {
+        let mut t = TrayConfig::for_os(Os::Windows);
+        t.adopt_tray_click_toggles(Some(false), Os::Windows);
+        assert_eq!(t.click, TrayAction::Run(Action::ShowMainWindow));
+        let mut m = TrayConfig::for_os(Os::MacOs);
+        m.adopt_tray_click_toggles(Some(false), Os::MacOs);
+        assert_eq!(m.click, TrayAction::Menu);
+        let mut n = TrayConfig::for_os(Os::Unix);
+        n.adopt_tray_click_toggles(None, Os::Unix);
+        assert_eq!(n, TrayConfig::for_os(Os::Unix));
     }
 }

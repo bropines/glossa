@@ -9,6 +9,14 @@ the notes of its GitHub release.
 
 ### Added
 
+- What a click, a double click and a middle click on the tray icon (the
+  menu-bar icon on macOS) do can be chosen in *Options → Advanced → Tray
+  icon* (`[tray]`): any hotkey action, such as text recognition, the
+  popup or the dictionary, the menu, or nothing. Actions on the selection
+  read it from the program you were in before the click. The defaults keep
+  today's behaviour, and the old `tray_click_toggles` switch is carried
+  over. Linux indicators report no clicks, so there a click still opens the
+  menu.
 - `GLOSSA_FRAME_TRACE`: a per-frame trace of the main window, the popup and
   Options to a CSV file, for diagnosing stutter.
 
