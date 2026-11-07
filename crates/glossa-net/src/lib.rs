@@ -1,7 +1,7 @@
 //! HTTP for every provider and module.
 //!
 //! All network traffic goes through one [`HttpClient`], built from the user's
-//! [`Network`](glossa_core::config::Network) settings, so the proxy, the
+//! [`glossa_core::config::Network`] settings, so the proxy, the
 //! timeout and the retry policy apply everywhere — to built-in services, to
 //! JavaScript and Python modules (which reach the network through the host),
 //! and to native ones. Providers take `&dyn Http` rather than the concrete
