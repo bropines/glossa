@@ -779,6 +779,7 @@ pub static STRINGS: &[(&str, &str, Option<&str>)] = &[
     ("options.advanced.api_keys", "API keys", Some("w:17:1158")),
     ("options.advanced.ocr_key", "OCR API key:", Some("w:17:1195")),
     ("options.advanced.browser_default", "system default", None),
+    ("options.advanced.copy_insert_no_key", "Ctrl + Insert (no Insert key here: sends %s + C)", None),
     ("options.advanced.copy_accessibility", "Accessibility only", None),
     ("options.advanced.copy_wait", "Selection copy wait, ms:", None),
     (
@@ -819,7 +820,17 @@ pub static STRINGS: &[(&str, &str, Option<&str>)] = &[
     ("options.basics.autostart_note", "Done: Glossa will start with Windows, in the tray. Task Manager's Startup apps list can switch it off.", None),
     (
         "options.basics.autostart_note_macos",
-        "Done: Glossa will open at login, in the menu bar. macOS may show a \"Background Items Added\" notice about it. If Glossa is switched off in System Settings > General > Login Items & Extensions, it will not open: allow it there.",
+        "Done: Glossa will open at login, in the menu bar. macOS may show a \"Background Items Added\" notice about it. If Glossa is switched off in System Settings > General > Login Items (Login Items & Extensions on macOS 15), it will not open: allow it there.",
+        None,
+    ),
+    (
+        "options.basics.autostart_allowed_macos",
+        "Done: Glossa will open at login, in the menu bar, and macOS allows it: it is listed in System Settings > General > Login Items. macOS may show a \"Background Items Added\" notice about it.",
+        None,
+    ),
+    (
+        "options.basics.autostart_needs_approval",
+        "Glossa is set to open at login, but macOS has it switched off. Allow it in System Settings > General > Login Items (Login Items & Extensions on macOS 15).",
         None,
     ),
     ("options.basics.autostart_note_linux", "Done: Glossa will start at login, in the tray (an entry in ~/.config/autostart). Your desktop's startup settings can switch it off.", None),

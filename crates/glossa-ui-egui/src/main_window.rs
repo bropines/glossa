@@ -170,7 +170,7 @@ fn top_pane(app: &mut GlossaApp, ui: &mut egui::Ui) {
             ui,
             &look,
             Icon::Back,
-            &crate::widgets::shortcut_text(&app.t("msg.back_tip")),
+            &shortcut_tip(app, "msg.back_tip"),
             24.0,
             !app.main.back.is_empty(),
         );
@@ -181,7 +181,7 @@ fn top_pane(app: &mut GlossaApp, ui: &mut egui::Ui) {
             ui,
             &look,
             Icon::Forward,
-            &crate::widgets::shortcut_text(&app.t("msg.forward_tip")),
+            &shortcut_tip(app, "msg.forward_tip"),
             24.0,
             !app.main.forward.is_empty(),
         );
@@ -603,17 +603,11 @@ fn middle_bar(app: &mut GlossaApp, ui: &mut egui::Ui) {
     ui.add_space(4.0);
 }
 
-/// A tooltip whose text names a Ctrl shortcut. The strings (and classic
-/// `lang.json` files) spell it "Ctrl+Enter"; the shortcut itself is egui's
-/// `command` modifier, which is Cmd on macOS.
+/// A tooltip whose text names a shortcut ("Ctrl+Enter", "Alt+Left Arrow"
+/// in the strings and classic `lang.json` files), as this system names it:
+/// see [`crate::widgets::shortcut_text`].
 fn shortcut_tip(app: &GlossaApp, key: &str) -> String {
-    let text = app.t(key);
-    let shell = glossa_platform::shell::SHELL;
-    if shell.command_is_ctrl {
-        text
-    } else {
-        text.replace("Ctrl+", &format!("{}+", shell.command_key))
-    }
+    crate::widgets::shortcut_text(&app.t(key))
 }
 
 fn retranslate(app: &mut GlossaApp) {

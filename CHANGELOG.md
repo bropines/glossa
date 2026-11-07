@@ -12,10 +12,12 @@ the notes of its GitHub release.
 - `GLOSSA_FRAME_TRACE`: a per-frame trace of the main window, the popup and
   Options to a CSV file, for diagnosing stutter.
 - Options: turning "start at login" on or off says right under the checkbox
-  that it waits for OK or Apply, then what it did. On macOS the note
-  explains the "Background Items Added" notice and that Glossa must be
-  allowed in System Settings > General > Login Items, with a button that
-  opens them. An error shows there too.
+  that it waits for OK or Apply, then what it did; after turning it on, or
+  when it failed, OK keeps Options open on that note (a second OK closes
+  it), and the error also shows at the bottom. On macOS 13 and later Glossa
+  asks the system whether Login Items lets it run and says so, also when
+  Options opens with it switched off there, with a button that opens Login
+  Items.
 
 ### Fixed
 
@@ -35,7 +37,8 @@ the notes of its GitHub release.
 - macOS: shortcuts spelt into the interface say Cmd and Option where they
   said Ctrl and Alt (the main window's tooltips, the keyboard size tip,
   mouse mode's key, the copy keys). Ctrl + Insert, which a Mac has no key
-  for, is no longer offered there.
+  for, is no longer offered there; kept from an older setting, it says that
+  it sends Cmd + C.
 - macOS: with the main window open behind other windows, the popup did not
   show (selection translation, the control API) until Glossa was switched
   to with Cmd+Tab. It now shows at once.

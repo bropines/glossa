@@ -281,12 +281,13 @@ pub fn show<R>(
     let last_size_id = id.with("last-size");
     if st.in_window.is_none() {
         let last: Option<Vec2> = ctx.data(|d| d.get_temp(last_size_id));
-        // A list that fills whatever room it gets (see [`list_room`]) was
-        // measured at the room it had last time, maybe a cramped corner or
-        // a list still loading: it wants its full height.
-        let fills = ctx.data(|d| d.get_temp::<bool>(fills_id(id))).unwrap_or(false);
+        // A list that fills whatever room it gets (see [`list_room`]) and
+        // filled all of it last time was cut short by that room (a cramped
+        // corner, or a list still loading): it wants its full height. One
+        // that came out shorter than its room is as tall as it measured.
+        let filled_room: Option<f32> = ctx.data(|d| d.get_temp(fills_id(id)));
         let wanted = match last {
-            Some(l) if fills => vec2(l.x, max_height),
+            Some(l) if filled_room.is_some_and(|room| l.y >= room + 2.0 * EDGE - 6.0) => vec2(l.x, max_height),
             Some(l) => l,
             None => vec2(min_width, max_height),
         };
@@ -657,6 +658,9 @@ fn body<R>(
                         ui.ctx().data_mut(|d| d.insert_temp(room_id(), Room { id, top, height: max_height }));
                         ui.with_layout(egui::Layout::top_down_justified(egui::Align::Min), |ui| add(ui, settling)).inner
                     });
+                // The room belongs to this content only: a list drawn later
+                // outside any dropdown must not find it.
+                ui.ctx().data_mut(|d| d.remove::<Room>(room_id()));
                 (scroll.inner, scroll.content_size, ui.should_close())
             })
             .inner
@@ -685,12 +689,12 @@ fn fills_id(id: Id) -> Id {
 /// the content has drawn so far (a search box, say), so the list fills the
 /// dropdown and the search box stays in view instead of scrolling away with
 /// it. Calling it marks the dropdown as one that fills its room: the next
-/// time it opens it asks for its full height wherever it goes.
+/// time it opens it asks for its full height if it filled that room.
 pub fn list_room(ui: &Ui) -> f32 {
     let row = ui.spacing().interact_size.y + ui.spacing().item_spacing.y;
     let least = MIN_LIST_ROWS * row;
     let Some(room) = ui.ctx().data(|d| d.get_temp::<Room>(room_id())) else { return least };
-    ui.ctx().data_mut(|d| d.insert_temp(fills_id(room.id), true));
+    ui.ctx().data_mut(|d| d.insert_temp(fills_id(room.id), room.height));
     // The frame's margin and the scroll area's own slack below the list.
     let used = ui.cursor().top() - room.top + 2.0;
     (room.height - used).max(least)
