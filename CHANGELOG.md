@@ -20,6 +20,24 @@ the notes of its GitHub release.
   [docs/modules/testing.md](docs/modules/testing.md).
 - `GLOSSA_FRAME_TRACE`: a per-frame trace of the main window, the popup and
   Options to a CSV file, for diagnosing stutter.
+- Module files: a module can declare the files it needs (ML models,
+  dictionaries, helper programs) as `[[assets]]` in `module.toml`, with
+  mirror URLs, SHA-256, size, zip / tar.gz / gz unpacking, per-system
+  selectors and optional entries. Glossa never downloads them at start-up:
+  the module's settings show their state with Download, progress, Cancel,
+  Check files and Delete; `glossa-cli assets` and the control API's
+  `/v1/assets` do the same, and `[modules] auto_download_assets` fetches
+  them on first use. Downloads resume, are checked against their hash
+  before use, and go to the local data folder (`models/`). A module whose
+  files are missing is listed but not started. Modules find the files
+  through the new `assets` host call, `host.assetPath` in JavaScript,
+  `asset_path` / `assetPath` in the Python and Java SDKs, and
+  `GLOSSA_ASSET_*` / `${ASSETS_DIR}` for process modules.
+
+### Changed
+
+- Native modules open their library on the first call instead of when
+  Glossa starts, so an installed native module costs nothing until used.
 
 ### Fixed
 

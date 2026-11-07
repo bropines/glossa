@@ -941,6 +941,92 @@ fn one_line(s: &str) -> String {
     }
 }
 
+/// `glossa-cli assets …`: the files modules declare.
+fn assets(args: &Args, words: &[String]) -> Result<(), Fail> {
+    let e = engine(args)?;
+    let op = words.first().map(String::as_str).unwrap_or("list");
+    let id = || words.get(1).map(String::as_str).ok_or_else(|| Fail::Usage(format!("assets {op} needs a module id")));
+    let print = |r: &glossa_engine::AssetReport| {
+        if args.json {
+            out!("{}", serde_json::to_string_pretty(r).unwrap_or_default());
+            return;
+        }
+        out!("{} — {} ({})", r.module, if r.ready { "ready" } else { "needs download" }, r.dir.display());
+        for a in &r.assets {
+            let state = match &a.state {
+                glossa_engine::AssetState::Ready => "ready".to_owned(),
+                glossa_engine::AssetState::Missing => "missing".to_owned(),
+                glossa_engine::AssetState::Partial { have } => format!("partial, {have} of {} bytes", a.size),
+                glossa_engine::AssetState::Outdated => "out of date".to_owned(),
+                glossa_engine::AssetState::Corrupt => "damaged, deleted".to_owned(),
+            };
+            let optional = if a.optional { ", optional" } else { "" };
+            out!("  {:24} {:>12} bytes  {state}{optional}", a.name, a.size);
+        }
+    };
+    match op {
+        "list" => {
+            let all = e.modules_with_assets();
+            if args.json {
+                out!("{}", serde_json::to_string_pretty(&all).unwrap_or_default());
+            } else if all.is_empty() {
+                out!("no module declares files to download");
+            }
+            if !args.json {
+                all.iter().for_each(print);
+            }
+            Ok(())
+        }
+        "status" => {
+            print(&e.module_assets(id()?).map_err(Fail::from)?);
+            Ok(())
+        }
+        "download" => {
+            let id = id()?;
+            let cancel = glossa_modules::CancelToken::new();
+            let last = Mutex::new((String::new(), 0u64));
+            let quiet = args.json || !std::io::stderr().is_terminal();
+            let r = e
+                .download_module_assets(id, &words[2..], &cancel, &|p| {
+                    if quiet {
+                        return;
+                    }
+                    // One line per asset, rewritten in place at each whole percent.
+                    let pct = (p.done * 100).checked_div(p.total).unwrap_or(0);
+                    let mut last = last.lock().unwrap_or_else(|e| e.into_inner());
+                    if last.0 != p.asset || last.1 != pct {
+                        *last = (p.asset.clone(), pct);
+                        eprint!("\r{}: {pct}% ({} of {} bytes)   ", p.asset, p.done, p.total);
+                    }
+                })
+                .map_err(Fail::from);
+            if !quiet {
+                eprintln!();
+            }
+            print(&r?);
+            Ok(())
+        }
+        "verify" => {
+            let r = e.verify_module_assets(id()?).map_err(Fail::from)?;
+            print(&r);
+            if r.assets.iter().all(|a| a.state == glossa_engine::AssetState::Ready) {
+                Ok(())
+            } else {
+                Err(Fail::Op("some files are missing or damaged; `glossa-cli assets download` fetches them".into()))
+            }
+        }
+        "remove" => {
+            let id = id()?;
+            e.remove_module_assets(id).map_err(Fail::from)?;
+            if !args.json {
+                out!("deleted the files of {id}");
+            }
+            Ok(())
+        }
+        other => Err(Fail::Usage(format!("unknown assets command {other:?} (list, status, download, verify, remove)"))),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1038,91 +1124,5 @@ mod tests {
     fn long_lines_are_shortened_for_listing() {
         assert_eq!(one_line("a\n  b"), "a b");
         assert_eq!(one_line(&"x".repeat(100)).chars().count(), 60);
-    }
-}
-
-/// `glossa-cli assets …`: the files modules declare.
-fn assets(args: &Args, words: &[String]) -> Result<(), Fail> {
-    let e = engine(args)?;
-    let op = words.first().map(String::as_str).unwrap_or("list");
-    let id = || words.get(1).map(String::as_str).ok_or_else(|| Fail::Usage(format!("assets {op} needs a module id")));
-    let print = |r: &glossa_engine::AssetReport| {
-        if args.json {
-            out!("{}", serde_json::to_string_pretty(r).unwrap_or_default());
-            return;
-        }
-        out!("{} — {} ({})", r.module, if r.ready { "ready" } else { "needs download" }, r.dir.display());
-        for a in &r.assets {
-            let state = match &a.state {
-                glossa_engine::AssetState::Ready => "ready".to_owned(),
-                glossa_engine::AssetState::Missing => "missing".to_owned(),
-                glossa_engine::AssetState::Partial { have } => format!("partial, {have} of {} bytes", a.size),
-                glossa_engine::AssetState::Outdated => "out of date".to_owned(),
-                glossa_engine::AssetState::Corrupt => "damaged, deleted".to_owned(),
-            };
-            let optional = if a.optional { ", optional" } else { "" };
-            out!("  {:24} {:>12} bytes  {state}{optional}", a.name, a.size);
-        }
-    };
-    match op {
-        "list" => {
-            let all = e.modules_with_assets();
-            if args.json {
-                out!("{}", serde_json::to_string_pretty(&all).unwrap_or_default());
-            } else if all.is_empty() {
-                out!("no module declares files to download");
-            }
-            if !args.json {
-                all.iter().for_each(print);
-            }
-            Ok(())
-        }
-        "status" => {
-            print(&e.module_assets(id()?).map_err(Fail::from)?);
-            Ok(())
-        }
-        "download" => {
-            let id = id()?;
-            let cancel = glossa_modules::CancelToken::new();
-            let last = Mutex::new((String::new(), 0u64));
-            let quiet = args.json || !std::io::stderr().is_terminal();
-            let r = e
-                .download_module_assets(id, &words[2..], &cancel, &|p| {
-                    if quiet {
-                        return;
-                    }
-                    // One line per asset, rewritten in place at each whole percent.
-                    let pct = if p.total > 0 { p.done * 100 / p.total } else { 0 };
-                    let mut last = last.lock().unwrap_or_else(|e| e.into_inner());
-                    if last.0 != p.asset || last.1 != pct {
-                        *last = (p.asset.clone(), pct);
-                        eprint!("\r{}: {pct}% ({} of {} bytes)   ", p.asset, p.done, p.total);
-                    }
-                })
-                .map_err(Fail::from);
-            if !quiet {
-                eprintln!();
-            }
-            print(&r?);
-            Ok(())
-        }
-        "verify" => {
-            let r = e.verify_module_assets(id()?).map_err(Fail::from)?;
-            print(&r);
-            if r.assets.iter().all(|a| a.state == glossa_engine::AssetState::Ready) {
-                Ok(())
-            } else {
-                Err(Fail::Op("some files are missing or damaged; `glossa-cli assets download` fetches them".into()))
-            }
-        }
-        "remove" => {
-            let id = id()?;
-            e.remove_module_assets(id).map_err(Fail::from)?;
-            if !args.json {
-                out!("deleted the files of {id}");
-            }
-            Ok(())
-        }
-        other => Err(Fail::Usage(format!("unknown assets command {other:?} (list, status, download, verify, remove)"))),
     }
 }

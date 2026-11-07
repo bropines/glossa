@@ -132,7 +132,9 @@ Rules that keep it robust:
   with the process; exit then.
 
 Glossa also sets `GLOSSA_MODULE_ID` and `GLOSSA_PROTOCOL` (the protocol
-version, `1`) in the module's environment.
+version, `1`) in the module's environment, and for a module with
+[assets](README.md#assets) `GLOSSA_ASSETS_DIR` and one
+`GLOSSA_ASSET_<NAME>` per file.
 
 ## Lifetime
 

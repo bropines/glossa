@@ -189,6 +189,12 @@ type = "select"
 label = "Formality"
 default = "default"
 choices = [{ value = "default", label = "Default" }, { value = "more", label = "Formal" }]
+
+[[assets]]                    # files downloaded on demand: see Assets below
+name = "model.onnx"
+url = "https://example.com/model.onnx"
+sha256 = "9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08"
+size = 4718592
 ```
 
 ### Capabilities
@@ -249,6 +255,77 @@ Options are stored in the user's `config.toml` under
 - A `required` option is marked with `*` on the settings page. When it is
   empty, fail with `missing_credential` and the option's key as the
   message, and Glossa tells the user which setting to fill in.
+
+### Assets
+
+A module that needs files too big for its folder (an ML model, a
+dictionary, a helper program) lists them as `[[assets]]`. Glossa downloads
+them into its own data folder, checks each against its SHA-256 and gives
+the module their paths.
+
+```toml
+[[assets]]
+name = "det"                         # saved as <assets folder>/det (a folder when unpacked)
+url = ["https://example.com/det.tar.gz", "https://mirror.example.org/det.tar.gz"]  # or one string
+sha256 = "…64 hex digits of the downloaded file…"
+size = 4718592                       # bytes of the downloaded file
+unpack = "tar.gz"                    # none (default) | zip | tar.gz | gz
+
+[[assets]]
+name = "ocr-helper"
+url = "https://example.com/ocr-helper-win-x64.exe"
+sha256 = "…"
+size = 1048576
+os = ["windows"]                     # windows | macos | linux | unix; omit for all
+arch = ["x86_64"]                    # x86_64 | aarch64 | …; omit for all
+executable = true                    # mark it runnable (Unix)
+
+[[assets]]
+name = "ru-en"
+url = "https://example.com/models/ru-en.bin.gz"
+sha256 = "…"
+size = 17825792
+unpack = "gz"
+optional = true                      # fetched only when the user picks it
+```
+
+- **Names** are letters, digits, `.`, `-` and `_`. Two entries may share a
+  name when their `os` / `arch` never overlap (a binary per system); the
+  one that applies here is used.
+- **When.** Nothing is downloaded at start-up. The module is listed, but
+  it is not loaded (no process, no interpreter, no library) until its
+  required files are there. The user downloads them from the module's
+  settings (*Options → Services → the module*), with `glossa-cli assets
+  download <id>` or through the control API; a call to the module before
+  that fails with "needs its files downloaded" and the settings page
+  offers the download. With `[modules] auto_download_assets = true` the
+  first call downloads them instead.
+- **Optional** assets (one language pair, voice or recogniser of many) do
+  not hold the module back. They are downloaded one by one, by name; the
+  `assets` host call says which are still missing.
+- **Integrity.** A download resumes a partial file (`Range` requests), is
+  checked against `sha256` and `size` before it is put in place, and is
+  deleted if it does not match. Afterwards, knowing a file is ready costs a
+  file-system check, never a re-hash; *Check files* (or `glossa-cli assets
+  verify`) hashes them again. An unpacked archive is checked by its files
+  and their sizes, since the archive itself is not kept.
+- **Where.** `<local data>/Glossa/models/<module id>/` (`data/models/` in a
+  portable copy). `glossa-cli assets status <id>` prints the folder.
+- **Network.** Asset URLs need not be in `[permissions] network`: they are
+  fixed in the manifest and checked by hash. Downloads use the user's
+  proxy settings.
+
+The module finds its files
+
+| runtime | how |
+|---|---|
+| any | the `assets` host call: `{"dir": …, "files": {"det": "/…/det"}, "missing": […]}` ([protocol](protocol.md#assets)) |
+| JavaScript | `host.assetPath("det")`, `host.assets()` |
+| Python | `host.asset_path("det")`, `host.assets()` in the SDK |
+| Java | `host.assetPath("det")`, `host.assets()` in the SDK |
+| Python, Java, process | the environment: `GLOSSA_ASSETS_DIR`, and `GLOSSA_ASSET_DET` per asset (upper case, other characters as `_`) |
+| Python, Java, process | `${ASSETS_DIR}` in `command`, `args`, `env`, `cwd`, `classpath` and `jvm_args`, e.g. `command = ["${ASSETS_DIR}/ocr-helper"]` |
+| native | the `assets` host call |
 
 ## Trying a module
 

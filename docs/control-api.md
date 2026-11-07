@@ -25,7 +25,7 @@ bus, with no token: see [D-Bus](#d-bus).
   [`/v1/services`](#get-v1services), [`/v1/translate`](#v1translate),
   [`/v1/detect`](#post-v1detect), [`/v1/dictionary`](#v1dictionary),
   [`/v1/ocr`](#post-v1ocr), [`/v1/speak`](#post-v1speak),
-  [`/v1/action`](#v1actionaction)
+  [`/v1/action`](#v1actionaction), [`/v1/assets`](#v1assets)
 - [pot-app compatibility](#pot-app-compatibility)
 - [D-Bus](#d-bus)
 - [Binding hotkeys to it](#binding-hotkeys-to-it)
@@ -164,7 +164,7 @@ Errors have a status code and a body of the form:
 | 403 | The request came from a browser: it carries an `Origin`, `Sec-Fetch-Site`, `Sec-Fetch-Mode`, `Sec-Fetch-Dest`, `Sec-Fetch-User` or `Referer` header (any value). Or its `Host` header is a name other than `localhost` (see [Security](#security)). |
 | 404 | No such route or action; no service can do what was asked (no speech service). |
 | 405 | The path exists but not for this method; the `Allow` header lists the methods it answers. |
-| 412 | The service needs a key that is not set. |
+| 412 | The service needs a key that is not set, or a module's files have not been downloaded ([`/v1/assets`](#v1assets)). |
 | 413 | The body is larger than 32 MiB. |
 | 422 | No text was found in the image, or the language could not be detected. |
 | 429 | The service is rate-limiting. |
@@ -185,6 +185,7 @@ Errors have a status code and a body of the form:
 | POST | [`/v1/ocr`](#post-v1ocr) | Recognise the text in an image, optionally translate it. |
 | POST | [`/v1/speak`](#post-v1speak) | Text to speech, as audio. |
 | GET, POST | [`/v1/action/<action>`](#v1actionaction) | Ask the desktop program to perform an action. |
+| GET, POST | [`/v1/assets…`](#v1assets) | Files modules declare (models, dictionaries): state, download, check, delete. |
 | any | [pot-app routes](#pot-app-compatibility) | `/selection_translate`, `/input_translate`, `/ocr_recognize`, `/ocr_translate`, `POST /translate`. |
 
 The examples use `$T` for the token and the default address.
@@ -388,6 +389,33 @@ The action ids are listed in [cli.md](cli.md#action): `show_main_window`,
 
 [`glossa-cli action`](cli.md#action) sends these requests for you, reading
 the address and token from `config.toml`.
+
+### /v1/assets
+
+The files modules declare in `[[assets]]`
+([modules/README.md](modules/README.md#assets)).
+
+| method | path | does |
+|---|---|---|
+| GET | `/v1/assets` | Every module that declares files, with their state. |
+| GET | `/v1/assets/<id>` | One module's files. |
+| POST | `/v1/assets/<id>/download` | Start downloading the required files that are missing, or with `?names=a,b` those named (optional ones). Returns `202` at once; poll the GET for `job.progress`. |
+| POST | `/v1/assets/<id>/cancel` | Stop the download; the next one resumes. |
+| POST | `/v1/assets/<id>/verify` | Hash the files again, deleting damaged ones. Waits until done. |
+| POST | `/v1/assets/<id>/remove` | Delete the module's files. |
+
+```console
+$ curl -s -X POST -H "Authorization: Bearer $T" http://127.0.0.1:60828/v1/assets/my-ocr/download
+{"module":"my-ocr","dir":"/home/me/.local/share/glossa/models/my-ocr","ready":false,"total_size":4718592,
+ "assets":[{"name":"det","path":"…/det","size":4718592,"sha256":"…","optional":false,"state":"missing"}],
+ "job":{"running":true,"progress":{"asset":"","done":0,"total":4718592}}}
+```
+
+`state` is `ready`, `missing`, `partial` (with `have`, the bytes so far),
+`outdated` (a file is there but not the one the manifest names now) or
+`corrupt` (a check found it damaged and deleted it). `job.error` says why
+the last download failed. An unknown module is a 404; one without files a
+400.
 
 ## pot-app compatibility
 

@@ -36,6 +36,7 @@ data: /home/me/.config/glossa  (portable: false)
 | `themes/` | data | Your themes, `.toml` or `.json` ([theming.md](theming.md)). |
 | `locales/` | data | Interface languages and rewordings ([below](#interface-languages)). |
 | `modules/` | data | Your modules ([modules/README.md](modules/README.md)). |
+| `models/` | local data | Files modules download (models, dictionaries), one folder per module ([modules/README.md](modules/README.md#assets)). Windows `%LOCALAPPDATA%\Glossa\models`, Linux `~/.local/share/glossa/models`, macOS `~/Library/Application Support/Glossa/models`; `models/` in the data folder for a portable copy or `GLOSSA_HOME`. |
 | `remote-desktop-token` | data | Wayland only: the desktop's permission for Glossa to copy and paste through the RemoteDesktop portal, so it asks once. Delete it, or revoke the permission in the desktop's settings, to be asked again. |
 | `glossa.log` | cache | The desktop program's log. `GLOSSA_LOG` sets how much goes into it ([cli.md](cli.md#environment-variables)). |
 | `modules/` | cache | Module caches; unpacked pot-app `.potext` archives under `modules/potext/`. |
@@ -493,6 +494,7 @@ Set in *Options → Modules*, except `disabled`. See
 | `allow_legacy_scripts` | bool | `true` | Load classic QTranslate `Service.js` scripts. |
 | `call_timeout_ms` | integer | `30000` | Time limit for one call into a module, 1000–600 000 ms. |
 | `disabled` | array of ids | `[]` | Module ids not to load. File only. |
+| `auto_download_assets` | bool | `false` | Download the files a module declares (models, dictionaries) on its first use without asking. Off, a module whose files are missing fails with a message and its settings offer the download. See [modules/README.md](modules/README.md#assets). |
 
 ### `[contents]`
 

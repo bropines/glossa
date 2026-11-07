@@ -24,6 +24,7 @@ glossa-cli doctor                             # what works on this machine
 - [Commands](#commands): [`translate`](#translate), [`detect`](#detect),
   [`dict`](#dict), [`ocr`](#ocr), [`speak`](#speak),
   [`services`](#services), [`modules`](#modules), [`module`](#module),
+  [`assets`](#assets),
   [`history`](#history),
   [`import-classic`](#import-classic), [`theme`](#theme),
   [`locale`](#locale), [`config`](#config), [`serve`](#serve),
@@ -448,6 +449,39 @@ prints `{"modules": [...], "passed": N, "failed": N, "skipped": N}`, each
 module with `dir`, `id`, `runtime`, `status`, `skipped`, `size_bytes`,
 `load_ms`, `findings` and `cases`. The exit code is 1 when any module
 failed.
+
+### assets
+
+```
+glossa-cli assets [list]
+glossa-cli assets status ID
+glossa-cli assets download ID [NAME…]
+glossa-cli assets verify ID
+glossa-cli assets remove ID
+```
+
+The files modules declare in `[[assets]]` (models, dictionaries, helper
+programs; see [modules/README.md](modules/README.md#assets)).
+`glossa-cli module assets …` (or `modules assets …`) is the same command.
+
+- `list` (the default) shows every module that declares files, `status`
+  one module: each file with its size and state (`ready`, `missing`,
+  `partial`, `out of date`), and the folder they go to.
+- `download` fetches the required files that are missing, or the files
+  named (optional ones, such as one language pair of many). It resumes a
+  partial download, checks each file's SHA-256 before putting it in place
+  and shows progress on stderr when it is a terminal.
+- `verify` hashes the files again and deletes damaged ones; it exits with
+  1 if anything is missing or damaged.
+- `remove` deletes the module's files.
+
+`--json` prints the same report the [control API](control-api.md#v1assets)
+returns:
+
+```json
+{"module": "my-ocr", "dir": "…/models/my-ocr", "ready": true, "total_size": 4718592,
+ "assets": [{"name": "det", "path": "…/models/my-ocr/det", "size": 4718592, "sha256": "…", "optional": false, "state": "ready"}]}
+```
 
 ### history
 
