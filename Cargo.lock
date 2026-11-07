@@ -2275,6 +2275,7 @@ dependencies = [
  "base64 0.22.1",
  "boa_engine",
  "boa_gc",
+ "flate2",
  "glossa-core",
  "glossa-module-sdk",
  "glossa-net",

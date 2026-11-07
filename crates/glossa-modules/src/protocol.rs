@@ -43,12 +43,22 @@ pub struct ProtocolProvider<T: Transport> {
     info: ProviderInfo,
     transport: T,
     cache: Arc<ModuleCache>,
+    /// The `assets` host call's answer, for a module with assets.
+    assets: Option<wire::AssetsInfo>,
 }
 
 impl<T: Transport> ProtocolProvider<T> {
     pub fn new(manifest: Manifest, transport: T, cache: Arc<ModuleCache>) -> Self {
         let info = manifest.provider_info();
-        Self { manifest, info, transport, cache }
+        let assets = manifest.assets_dir.as_ref().map(|dir| wire::AssetsInfo {
+            dir: dir.to_string_lossy().into_owned(),
+            files: crate::assets::select(&manifest.assets, std::env::consts::OS, std::env::consts::ARCH)
+                .unwrap_or_default()
+                .into_iter()
+                .map(|a| (a.name.clone(), dir.join(&a.name).to_string_lossy().into_owned()))
+                .collect(),
+        });
+        Self { manifest, info, transport, cache, assets }
     }
 
     pub fn manifest(&self) -> &Manifest {
@@ -84,7 +94,8 @@ impl<T: Transport> ProtocolProvider<T> {
                 module_id: &self.manifest.module.id,
             },
             &self.cache,
-        );
+        )
+        .with_assets(self.assets.as_ref());
         let params = serde_json::to_value(params(&api)).map_err(|e| Error::module(&self.info.id, e))?;
         let started = Instant::now();
         let value = self.transport.call(method, params, &|m, p| api.handle(m, p)).map_err(|e| match e.kind {

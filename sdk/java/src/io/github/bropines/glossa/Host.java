@@ -110,6 +110,37 @@ public final class Host {
         call("cache_set", params);
     }
 
+    /**
+     * Where the files from the manifest's {@code [[assets]]} are:
+     * {@code {"dir": "...", "files": {"name": "/abs/path"}}}. Glossa starts
+     * the module only once they are all downloaded and verified; the same
+     * paths are in the environment as {@code GLOSSA_ASSETS_DIR} and
+     * {@code GLOSSA_ASSET_<NAME>}.
+     */
+    @SuppressWarnings("unchecked")
+    public Map<String, Object> assets() throws ModuleError {
+        Object r = call("assets", null);
+        return r instanceof Map ? (Map<String, Object>) r : new LinkedHashMap<>();
+    }
+
+    /** One asset's path, or null when the manifest has no asset by that name. */
+    public String assetPath(String name) throws ModuleError {
+        StringBuilder env = new StringBuilder("GLOSSA_ASSET_");
+        for (char c : name.toCharArray()) {
+            env.append(Character.isLetterOrDigit(c) && c < 128 ? Character.toUpperCase(c) : '_');
+        }
+        String fromEnv = System.getenv(env.toString());
+        if (fromEnv != null && !fromEnv.isEmpty()) {
+            return fromEnv;
+        }
+        Object files = assets().get("files");
+        if (files instanceof Map) {
+            Object p = ((Map<?, ?>) files).get(name);
+            return p == null ? null : p.toString();
+        }
+        return null;
+    }
+
     /** The request being handled (for its options). */
     public Request request() {
         return request;

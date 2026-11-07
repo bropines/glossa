@@ -76,6 +76,19 @@ var host = {
     }
   },
 
+  /**
+   * Where the files from the manifest's [[assets]] are:
+   * { dir: "…", files: { name: "/abs/path", … } }. The module only runs
+   * once they are all downloaded and verified.
+   */
+  assets: function () { return __call("assets", null); },
+
+  /** One asset's path, or null when the manifest declares none by that name. */
+  assetPath: function (name) {
+    var files = __call("assets", null).files || {};
+    return Object.prototype.hasOwnProperty.call(files, name) ? files[name] : null;
+  },
+
   /** The module's settings, also passed as req.options. */
   options: {},
 

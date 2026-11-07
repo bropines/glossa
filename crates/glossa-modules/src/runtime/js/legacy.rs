@@ -209,6 +209,8 @@ impl LegacyMeta {
                     placeholder: String::new(),
                 })
                 .collect(),
+            assets: Vec::new(),
+            assets_dir: None,
         }
     }
 }

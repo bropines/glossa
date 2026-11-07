@@ -66,6 +66,18 @@ pub enum Error {
     #[error("module {module} exceeded its {limit_ms} ms budget")]
     ModuleTimeout { module: String, limit_ms: u64 },
 
+    /// A module needs files it declares in its manifest (a model, a
+    /// dictionary) that have not been downloaded yet. The front end offers
+    /// the download; nothing is fetched without the user's say-so unless
+    /// automatic downloads are switched on.
+    #[error("module {module} needs its files downloaded first ({})", missing.join(", "))]
+    AssetsMissing { module: String, missing: Vec<String> },
+
+    /// A downloaded module file did not match the checksum its manifest
+    /// gives. The file has been deleted; downloading again fetches it anew.
+    #[error("file {asset} of module {module} is damaged or was changed on the server (SHA-256 {actual}, expected {expected}); it was deleted")]
+    AssetCorrupt { module: String, asset: String, expected: String, actual: String },
+
     /// We were asked for a module that is not installed or not enabled.
     #[error("no module with id {0:?}")]
     NoSuchModule(String),

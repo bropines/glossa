@@ -207,6 +207,43 @@ pub trait Http: Send + Sync {
         }
         Ok(response)
     }
+
+    /// Like [`Http::send_streaming`], for a large file: no cap on the body
+    /// size, and `request.timeout` bounds the whole transfer while waiting
+    /// for the response headers keeps the client's usual limit. Module
+    /// assets (models of hundreds of megabytes) come through here.
+    ///
+    /// A successful response is announced with [`DownloadEvent::Status`]
+    /// before its body arrives as [`DownloadEvent::Chunk`]s, so a caller
+    /// resuming with `Range` can tell a 206 (append) from a 200 (start
+    /// over). The callback returns `false` to stop. Any other status comes
+    /// back whole, without events.
+    ///
+    /// The default sends normally and delivers the body as one chunk, which
+    /// suits test doubles.
+    fn send_download(
+        &self,
+        request: HttpRequest,
+        on_event: &mut dyn FnMut(DownloadEvent<'_>) -> bool,
+    ) -> Result<HttpResponse, Error> {
+        let mut response = self.send(request)?;
+        if (200..300).contains(&response.status) {
+            let body = std::mem::take(&mut response.body);
+            if on_event(DownloadEvent::Status(response.status)) {
+                on_event(DownloadEvent::Chunk(&body));
+            }
+        }
+        Ok(response)
+    }
+}
+
+/// What [`Http::send_download`] reports as a download goes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DownloadEvent<'a> {
+    /// The response's (successful) status, before any of its body.
+    Status(u16),
+    /// The next piece of the body.
+    Chunk(&'a [u8]),
 }
 
 /// The real client.
@@ -460,6 +497,63 @@ impl Http for HttpClient {
             }
         }
         Ok(HttpResponse { status, headers, body: Vec::new(), codepage: request.codepage })
+    }
+
+    fn send_download(
+        &self,
+        request: HttpRequest,
+        on_event: &mut dyn FnMut(DownloadEvent<'_>) -> bool,
+    ) -> Result<HttpResponse, Error> {
+        use std::io::Read as _;
+        let provider = if request.provider.is_empty() { "http" } else { request.provider.as_str() };
+        let whole = request.timeout.unwrap_or(self.timeout);
+        let mut builder = ureq::http::Request::builder().method(request.method.as_str()).uri(request.url.as_str());
+        for (name, value) in &request.headers {
+            if name.eq_ignore_ascii_case("accept-encoding") || name.eq_ignore_ascii_case("content-length") {
+                continue;
+            }
+            builder = builder.header(name.as_str(), value.as_str());
+        }
+        let req = builder.body(()).map_err(|e| Error::network(format!("bad request: {e}")))?;
+        let agent = self.agent();
+        // The whole transfer may take as long as the request says; the
+        // server still has to start answering within the usual timeout, so
+        // a dead host is given up on early.
+        let req = agent
+            .configure_request(req)
+            .timeout_global(Some(whole))
+            .timeout_recv_response(Some(self.timeout))
+            .build();
+        let mut response = agent.run(req).map_err(|e| match e {
+            ureq::Error::Timeout(_) => Error::Timeout(self.timeout.as_millis() as u64),
+            other => Error::Network(format!("{provider}: {other}")),
+        })?;
+        let (status, headers) = status_and_headers(&response);
+        if !(200..300).contains(&status) {
+            let body = response.body_mut().with_config().limit(64 * 1024).read_to_vec().unwrap_or_default();
+            return Ok(HttpResponse { status, headers, body, codepage: None });
+        }
+        if !on_event(DownloadEvent::Status(status)) {
+            return Ok(HttpResponse { status, headers, body: Vec::new(), codepage: None });
+        }
+        let mut reader = response.body_mut().with_config().limit(u64::MAX).reader();
+        let mut buf = vec![0u8; 64 * 1024];
+        loop {
+            match reader.read(&mut buf) {
+                Ok(0) => break,
+                Ok(n) => {
+                    if !on_event(DownloadEvent::Chunk(&buf[..n])) {
+                        break;
+                    }
+                }
+                Err(e) if e.kind() == std::io::ErrorKind::Interrupted => continue,
+                Err(e) if e.kind() == std::io::ErrorKind::TimedOut => {
+                    return Err(Error::Timeout(whole.as_millis() as u64));
+                }
+                Err(e) => return Err(Error::Network(format!("{provider}: reading body: {e}"))),
+            }
+        }
+        Ok(HttpResponse { status, headers, body: Vec::new(), codepage: None })
     }
 
     fn send(&self, request: HttpRequest) -> Result<HttpResponse, Error> {

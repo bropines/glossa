@@ -342,6 +342,23 @@ class Host:
             params["ttl_secs"] = int(ttl_secs)
         self._channel.host_call("cache_set", params)
 
+    def assets(self):
+        """Where the files from the manifest's ``[[assets]]`` are:
+        ``{"dir": "...", "files": {"name": "/abs/path", ...}}``.
+
+        Glossa starts the module only once they are all downloaded and
+        verified. The same paths are in the environment as
+        ``GLOSSA_ASSETS_DIR`` and ``GLOSSA_ASSET_<NAME>``.
+        """
+        return self._channel.host_call("assets", None) or {"dir": "", "files": {}}
+
+    def asset_path(self, name):
+        """One asset's path, or ``None`` when the manifest has no asset by that name."""
+        env = "GLOSSA_ASSET_" + "".join(c.upper() if c.isalnum() else "_" for c in name)
+        if os.environ.get(env):
+            return os.environ[env]
+        return (self.assets().get("files") or {}).get(name)
+
     def option(self, key, default=None):
         """An option value (manifest default overlaid with the user's setting)."""
         value = self.options.get(key)

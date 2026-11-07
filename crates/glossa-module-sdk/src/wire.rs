@@ -440,6 +440,21 @@ impl ImageInfo {
 
 // -- host calls ----------------------------------------------------------------
 
+/// What the `assets` host call returns: where the files a module declares
+/// in `[[assets]]` are. Each path is where the file (or the folder an
+/// archive was unpacked into) is once downloaded; Glossa starts a module
+/// with assets only when they are all there. Empty for a module without
+/// assets.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AssetsInfo {
+    /// The module's assets folder (`GLOSSA_ASSETS_DIR` for process modules).
+    #[serde(default)]
+    pub dir: String,
+    /// Asset name -> absolute path.
+    #[serde(default)]
+    pub files: BTreeMap<String, String>,
+}
+
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct HttpRequest {
     #[serde(default = "get")]

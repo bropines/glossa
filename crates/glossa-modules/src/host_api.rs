@@ -1,7 +1,7 @@
 //! The host side of the module protocol: what a module may ask of us.
 //!
 //! Modules of every runtime call back with `http`, `log`, `cache_get`,
-//! `cache_set` and the `image.*` operations. [`HostApi`] answers those for
+//! `cache_set`, `assets` and the `image.*` operations. [`HostApi`] answers those for
 //! one module during one call, applying its network permissions — a module
 //! asking for a host outside its allowlist gets an error, not a request —
 //! and holding that call's images. The dispatch is by method name only, so
@@ -96,6 +96,8 @@ pub struct HostApi<'a> {
     /// The images of this call (`image.*` host calls); dropped with it.
     #[cfg(feature = "image")]
     pub images: Mutex<crate::image_ops::ImageStore>,
+    /// Where the module's assets are, for the `assets` host call.
+    pub assets: Option<&'a wire::AssetsInfo>,
 }
 
 impl<'a> HostApi<'a> {
@@ -105,7 +107,14 @@ impl<'a> HostApi<'a> {
             cache,
             #[cfg(feature = "image")]
             images: Mutex::new(crate::image_ops::ImageStore::new()),
+            assets: None,
         }
+    }
+
+    /// Answer the `assets` host call with `assets`.
+    pub fn with_assets(mut self, assets: Option<&'a wire::AssetsInfo>) -> Self {
+        self.assets = assets;
+        self
     }
 
     /// Register encoded image bytes with this call's image API, decoded on
@@ -171,6 +180,10 @@ impl<'a> HostApi<'a> {
                 let ttl = params.get("ttl_secs").and_then(|v| v.as_u64()).filter(|t| *t > 0).map(Duration::from_secs);
                 self.cache.set(module, key, value, ttl);
                 Ok(serde_json::Value::Null)
+            }
+            "assets" => {
+                let info = self.assets.cloned().unwrap_or_default();
+                Ok(serde_json::to_value(info).expect("assets info serialises"))
             }
             op if op.starts_with("image.") => self.image_op(&op["image.".len()..], params),
             other => Err(ModuleError::new(ErrorKind::Unsupported, format!("unknown host call {other:?}"))),

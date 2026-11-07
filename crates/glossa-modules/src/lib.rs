@@ -3,6 +3,8 @@
 //! * [`provider`] — the [`Provider`] trait every translation, dictionary,
 //!   speech and OCR source implements, built-in or loaded.
 //! * [`manifest`] — `module.toml`.
+//! * [`assets`] — files a module declares (models, dictionaries), downloaded
+//!   and verified on demand.
 //! * [`registry`] — finding modules on disk and keeping the provider list.
 //! * [`protocol`] / [`host_api`] — the module protocol, shared by the stdio
 //!   (Python, Java, any program) and native runtimes.
@@ -13,6 +15,7 @@
 //! * [`child`] — running a helper program with a deadline, for providers
 //!   built on one (Tesseract, the system voice).
 
+pub mod assets;
 pub mod child;
 pub mod host_api;
 #[cfg(feature = "image")]
@@ -24,6 +27,7 @@ pub mod registry;
 pub mod runtime;
 
 pub use glossa_module_sdk::PROTOCOL_VERSION;
+pub use assets::{AssetState, AssetStatus, ModuleAssets};
 pub use manifest::{Manifest, Runtime};
 pub use provider::{CancelToken, Host, OptionKind, OptionSpec, OptionValues, Provider};
 pub use registry::{Entry, LoadReport, Origin, Registry, RuntimeContext};
