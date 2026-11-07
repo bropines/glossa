@@ -2,7 +2,7 @@
 
 use std::path::{Path, PathBuf};
 
-use glossa_core::locale::{Locale, BUILTIN_LOCALES};
+use glossa_core::locale::{IssueKind, Locale, LocaleIssue, BUILTIN_LOCALES};
 use glossa_core::theme::{builtin, Theme};
 
 /// A theme the picker can offer.
@@ -117,6 +117,9 @@ pub struct LocaleEntry {
 #[derive(Debug, Clone, Default)]
 pub struct LocaleCatalog {
     entries: Vec<LocaleEntry>,
+    /// Native locale files that could not be read, so the user learns why
+    /// their language is not in the list.
+    broken: Vec<LocaleIssue>,
 }
 
 impl LocaleCatalog {
@@ -142,6 +145,7 @@ impl LocaleCatalog {
         }));
         // Which files are classic, to order the layers once all are found.
         let mut classic_files: Vec<PathBuf> = Vec::new();
+        let mut broken = Vec::new();
         for dir in dirs {
             let Ok(rd) = std::fs::read_dir(dir) else { continue };
             let mut items: Vec<PathBuf> = rd.flatten().map(|e| e.path()).collect();
@@ -158,9 +162,25 @@ impl LocaleCatalog {
                     continue;
                 };
                 let Ok(text) = std::fs::read_to_string(&file) else { continue };
-                let Ok(locale) = Locale::parse(&text) else {
-                    tracing::debug!("not a locale file: {}", file.display());
-                    continue;
+                // Only the header: the strings load when the language is
+                // chosen, so unused packs cost nothing.
+                let locale = match Locale::parse_header(&text) {
+                    Ok(h) => h,
+                    Err(e) => {
+                        // A classic folder can hold other JSON; a native
+                        // file in a locales folder is meant to be a language.
+                        if folder.is_empty() {
+                            tracing::warn!("locale {}: {e}", file.display());
+                            broken.push(LocaleIssue {
+                                file: Some(file),
+                                key: String::new(),
+                                kind: IssueKind::Unreadable(e),
+                            });
+                        } else {
+                            tracing::debug!("not a locale file: {}", file.display());
+                        }
+                        continue;
+                    }
                 };
                 if locale.code.is_empty() {
                     continue;
@@ -174,6 +194,11 @@ impl LocaleCatalog {
                 if locale.classic {
                     classic_files.push(file.clone());
                 }
+                let shown_name = [&locale.name, &folder, &locale.native_name, &locale.code]
+                    .into_iter()
+                    .find(|s| !s.is_empty())
+                    .cloned()
+                    .unwrap_or_default();
                 match entries.iter_mut().find(|e| e.code.eq_ignore_ascii_case(&locale.code)) {
                     Some(existing) => {
                         if !locale.name.is_empty() && existing.name.is_empty() {
@@ -189,8 +214,12 @@ impl LocaleCatalog {
                     }
                     None => entries.push(LocaleEntry {
                         code: locale.code.clone(),
-                        name: if locale.name.is_empty() { folder.clone() } else { locale.name.clone() },
-                        native_name: locale.native_name.clone(),
+                        name: shown_name,
+                        native_name: if locale.native_name.is_empty() {
+                            locale.name.clone()
+                        } else {
+                            locale.native_name.clone()
+                        },
                         folder,
                         builtin: false,
                         files: vec![file],
@@ -202,11 +231,16 @@ impl LocaleCatalog {
             // Stable: discovery order holds within each kind.
             e.files.sort_by_key(|f| !classic_files.contains(f));
         }
-        LocaleCatalog { entries }
+        LocaleCatalog { entries, broken }
     }
 
     pub fn entries(&self) -> &[LocaleEntry] {
         &self.entries
+    }
+
+    /// Files in the locale folders that are not readable locale files.
+    pub fn broken(&self) -> &[LocaleIssue] {
+        &self.broken
     }
 
     /// Find a locale by code (`ru`), name (`Russian`), classic folder name or
@@ -230,8 +264,16 @@ impl LocaleCatalog {
     /// the user's native files. A layer that fails to load is skipped, with
     /// the reason logged, and the rest still apply.
     pub fn load(&self, wanted: &str) -> Locale {
-        let Some(entry) = self.find(wanted) else { return Locale::english() };
+        self.load_checked(wanted).0
+    }
+
+    /// [`Self::load`], with what was wrong in the files: each file is
+    /// validated before it is laid on, so a string with broken placeholders
+    /// leaves the layer below showing. Problems are also logged.
+    pub fn load_checked(&self, wanted: &str) -> (Locale, Vec<LocaleIssue>) {
+        let Some(entry) = self.find(wanted) else { return (Locale::english(), Vec::new()) };
         let mut out = Locale::english();
+        let mut issues = Vec::new();
         if entry.builtin {
             if let Some(pack) = Locale::builtin(&entry.code) {
                 out.merge(pack);
@@ -239,15 +281,29 @@ impl LocaleCatalog {
         }
         for path in &entry.files {
             match std::fs::read_to_string(path).map_err(|e| e.to_string()).and_then(|t| Locale::parse(&t)) {
-                Ok(l) => out.merge(l),
-                Err(e) => tracing::warn!("locale {}: {e}; skipped", path.display()),
+                Ok(mut l) => {
+                    for mut issue in l.validate() {
+                        tracing::warn!("locale {}: {}", path.display(), issue.message(&Locale::english()));
+                        issue.file = Some(path.clone());
+                        issues.push(issue);
+                    }
+                    out.merge(l)
+                }
+                Err(e) => {
+                    tracing::warn!("locale {}: {e}; skipped", path.display());
+                    issues.push(LocaleIssue {
+                        file: Some(path.clone()),
+                        key: String::new(),
+                        kind: IssueKind::Unreadable(e),
+                    });
+                }
             }
         }
         out.code = entry.code.clone();
         out.name = entry.name.clone();
         out.native_name = entry.native_name.clone();
         tracing::debug!(wanted, code = %out.code, builtin = entry.builtin, files = ?entry.files, "interface language");
-        out
+        (out, issues)
     }
 }
 
@@ -456,6 +512,46 @@ mod tests {
             assert_eq!(en.get("main.title"), "Glossa");
         }
         std::fs::remove_dir_all(&classic).ok();
+        std::fs::remove_dir_all(&user).ok();
+    }
+
+    /// A user's file fixes single strings of a built-in language; a string
+    /// with broken placeholders is skipped so the pack's own shows, and a new
+    /// language falls back to English where it is silent.
+    #[test]
+    fn user_packs_override_key_by_key_and_bad_strings_fall_through() {
+        let user = temp("user-packs");
+        std::fs::write(
+            user.join("ru.json"),
+            r#"{ "code": "ru", "strings": { "options.modules": "Плагины", "msg.ms": "мс", "nope.key": "x" } }"#,
+        )
+        .unwrap();
+        std::fs::write(
+            user.join("eo.json"),
+            r#"{ "code": "eo", "native_name": "Esperanto", "strings": { "main.translate": "Traduki" } }"#,
+        )
+        .unwrap();
+        std::fs::write(user.join("broken.json"), "{ \"code\": ").unwrap();
+        let cat = LocaleCatalog::discover(std::slice::from_ref(&user));
+        assert_eq!(cat.broken().len(), 1);
+        assert!(matches!(cat.broken()[0].kind, IssueKind::Unreadable(_)));
+        let eo = cat.find("eo").expect("a user pack joins the list");
+        assert!(!eo.builtin);
+        assert_eq!(eo.name, "Esperanto", "the native name stands in for a missing English one");
+
+        let builtin = Locale::builtin("ru").unwrap();
+        let (ru, issues) = cat.load_checked("ru");
+        assert_eq!(ru.get("options.modules"), "Плагины", "the user's string wins");
+        assert_eq!(ru.get("msg.ms"), builtin.get("msg.ms"), "a string without its %s is skipped");
+        assert_eq!(ru.get("options.server"), builtin.get("options.server"), "the rest stays from the pack");
+        let keys: Vec<&str> = issues.iter().map(|i| i.key.as_str()).collect();
+        assert_eq!(keys, ["msg.ms", "nope.key"]);
+        assert!(issues.iter().all(|i| i.file.as_deref() == Some(user.join("ru.json").as_path())));
+
+        let (eo, issues) = cat.load_checked("eo");
+        assert!(issues.is_empty());
+        assert_eq!(eo.get("main.translate"), "Traduki");
+        assert_eq!(eo.get("options.server"), "Control API", "missing keys fall back to English");
         std::fs::remove_dir_all(&user).ok();
     }
 }

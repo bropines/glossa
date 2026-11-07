@@ -86,7 +86,7 @@ pub struct GlossaApp {
     pub launch: crate::Launch,
 
     pub hotkeys: Option<HotkeyService>,
-    pub hotkey_errors: Vec<String>,
+    pub hotkey_errors: Vec<crate::HotkeyFailure>,
     pub clipboard: Option<Clipboard>,
     pub audio: AudioPlayer,
     pub session: Session,
@@ -201,18 +201,15 @@ impl GlossaApp {
         fonts.install_base(&ctx, &cfg.appearance.font_family, &look.theme);
         *shell.wake.ctx.lock() = Some(ctx.clone());
 
-        crate::langs::set_locale(engine.locale());
         let events = engine.subscribe();
         let (tasks_tx, tasks) = mpsc::channel();
         let start_visible = !launch.hidden;
         if let Some(t) = &shell.tray {
             t.set_hotkeys_checked(cfg.hotkeys.enabled);
         }
-        // After winit put up its default menu (it does so before the app is
-        // created), so this one replaces it.
-        let app_menu = crate::app_menu::AppMenu::install(&ctx, &engine.locale());
-        GlossaApp {
-            app_menu,
+        let mut app = GlossaApp {
+            // Put up by `apply_locale` below.
+            app_menu: crate::app_menu::AppMenu::none(),
             locale: engine.locale(),
             main: MainState::new(&cfg),
             engine,
@@ -273,7 +270,42 @@ impl GlossaApp {
             popup_target: None,
             last_region: None,
             startup_warnings: shell.startup_warnings,
+        };
+        // After winit put up its default menu (it does so before the app is
+        // created), so the app menu replaces it.
+        app.apply_locale(true);
+        app
+    }
+
+    /// Bring the whole interface into the engine's current language: the one
+    /// place a language change lands, at start-up and whenever the setting
+    /// (or a locale file) changes. Windows draw their text through
+    /// `self.locale` every frame, and egui hands a changed viewport title to
+    /// the window, so what is left are the things built once: the language
+    /// names, the macOS app menu and the tray menu. Nothing needs a restart.
+    fn apply_locale(&mut self, force: bool) {
+        let locale = self.engine.locale();
+        if !force && Arc::ptr_eq(&locale, &self.locale) {
+            return;
         }
+        tracing::debug!(code = %locale.code, "interface language applied");
+        self.locale = locale.clone();
+        crate::langs::set_locale(locale.clone());
+        if glossa_platform::shell::SHELL.app_menu {
+            self.app_menu = crate::app_menu::AppMenu::install(&self.ctx, &locale);
+        }
+        if let Some(t) = self.tray.as_mut() {
+            t.set_locale(&locale);
+        }
+        // Child windows are found by their titles, which have just changed:
+        // forget the old ones so frames, corners and backdrops are applied
+        // to the windows under their new names.
+        self.child_backdrops.clear();
+        self.rounded_windows.clear();
+        self.floating_windows.clear();
+        self.child_frames.clear();
+        self.backdrop_dirty = true;
+        self.ctx.request_repaint();
     }
 
     /// The translated interface string for `key`.
@@ -291,7 +323,7 @@ impl GlossaApp {
         for (action, hotkey) in &self.cfg.hotkeys.bindings {
             if let Err(e) = h.register(*action, hotkey) {
                 tracing::warn!("hotkey {hotkey} for {}: {e}", action.id());
-                self.hotkey_errors.push(crate::hotkey_error_text(&self.locale, Some(*action), &e));
+                self.hotkey_errors.push((Some(*action), e));
             }
         }
     }
@@ -687,12 +719,7 @@ impl GlossaApp {
         if self.cfg.windows.is_empty() {
             self.cfg.windows = windows;
         }
-        let locale = self.engine.locale();
-        if glossa_platform::shell::SHELL.app_menu && !Arc::ptr_eq(&locale, &self.locale) {
-            self.app_menu = crate::app_menu::AppMenu::install(&self.ctx, &locale);
-        }
-        self.locale = locale;
-        crate::langs::set_locale(self.locale.clone());
+        self.apply_locale(false);
         if let Some(scale) = unsaved_zoom {
             self.cfg.appearance.text_scale = scale;
         }

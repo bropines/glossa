@@ -9,6 +9,20 @@ the notes of its GitHub release.
 
 ### Added
 
+- The interface language switches at once, without a restart: every
+  window, the tray menu and the macOS menu bar follow the setting as soon
+  as it is applied.
+- Your own interface languages: drop a pack (`<code>.json`, the same shape
+  as the built-in Russian one) into the `locales` folder of the data folder
+  (*Options → Basics → Language folder*). A new language joins the list; a
+  file for a built-in one fixes or adds strings key by key, and missing
+  strings fall back to English. Files are checked when loaded: unknown keys
+  are warnings, strings with mismatched `%s` placeholders are skipped, and
+  both are shown in Options and the log. Only the chosen pack is loaded.
+- `glossa-cli locale check FILE` validates a pack, and `glossa-cli locale
+  template [LANG]` exports every key with its English text and classic id
+  for translators to start from.
+
 - `glossa-cli module test` and `module check`: a test harness for module
   authors. It checks `module.toml` (unknown keys, language codes, options,
   permissions, hard-coded keys), loads the module as the program does, runs

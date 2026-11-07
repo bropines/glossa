@@ -123,6 +123,12 @@ impl Paths {
             .unwrap_or_else(|| self.data_dir.join("models"))
     }
 
+    /// Where the user's own interface languages and rewordings go. It is
+    /// searched last, so its files win over everything else.
+    pub fn user_locale_dir(&self) -> PathBuf {
+        self.data_dir.join("locales")
+    }
+
     pub fn user_theme_dir(&self) -> PathBuf {
         self.data_dir.join("themes")
     }

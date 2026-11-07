@@ -15,6 +15,11 @@ pub struct AppMenu {
 }
 
 impl AppMenu {
+    /// No menu yet: a channel nothing sends on.
+    pub fn none() -> AppMenu {
+        AppMenu { rx: mpsc::channel().1 }
+    }
+
     /// Put the menu up (again, after the interface language changed). Main
     /// thread only, like everything in the GUI.
     pub fn install(ctx: &egui::Context, locale: &Locale) -> AppMenu {

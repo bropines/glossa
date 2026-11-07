@@ -91,7 +91,9 @@ fn parse_args() -> Launch {
 pub struct Shell {
     pub engine: Engine,
     pub hotkeys: Option<glossa_platform::HotkeyService>,
-    pub hotkey_errors: Vec<String>,
+    /// Hotkeys that failed, kept as data and put into words when shown,
+    /// so they follow the interface language.
+    pub hotkey_errors: Vec<HotkeyFailure>,
     pub tray: Option<tray::Tray>,
     pub server: Option<glossa_engine::server::ServerHandle>,
     pub server_error: Option<String>,
@@ -427,7 +429,7 @@ fn build_shell(engine: Engine, wake: Arc<Wake>) -> Shell {
             Some(h)
         }
         Err(e) => {
-            hotkey_errors.push(hotkey_error_text(&engine.locale(), None, &e));
+            hotkey_errors.push((None, e));
             None
         }
     };
@@ -495,14 +497,17 @@ pub fn register_hotkeys(shell: &mut Shell) {
     for (action, hotkey) in &cfg.hotkeys.bindings {
         if let Err(e) = h.register(*action, hotkey) {
             tracing::warn!("hotkey {hotkey} for {}: {e}", action.id());
-            let text = hotkey_error_text(&shell.engine.locale(), Some(*action), &e);
-            shell.hotkey_errors.push(text);
+            shell.hotkey_errors.push((Some(*action), e));
         }
     }
 }
 
 /// A hotkey failure in the interface language, after the action's name when
 /// there is one; the options page lists these.
+/// A hotkey that could not be set up, and for which action (none when the
+/// hotkey service itself failed).
+pub type HotkeyFailure = (Option<Action>, glossa_platform::HotkeyError);
+
 pub fn hotkey_error_text(
     locale: &glossa_core::Locale,
     action: Option<Action>,
@@ -582,12 +587,22 @@ fn collect_wake_events(shell: &mut Shell, events: &std::sync::mpsc::Receiver<glo
         }
     }
     while let Ok(ev) = events.try_recv() {
-        if let glossa_engine::Event::Action { action, text } = ev {
-            if action == Action::Quit {
-                shell.quit = true;
-            } else {
-                shell.pending.push(tray::Pending::Action(action, text));
+        match ev {
+            glossa_engine::Event::Action { action, text } => {
+                if action == Action::Quit {
+                    shell.quit = true;
+                } else {
+                    shell.pending.push(tray::Pending::Action(action, text));
+                }
             }
+            // The tray's menu is up while the windows are not: it follows a
+            // language chosen from the command line or the control API.
+            glossa_engine::Event::ConfigChanged => {
+                if let Some(t) = shell.tray.as_mut() {
+                    t.set_locale(&shell.engine.locale());
+                }
+            }
+            _ => {}
         }
     }
 }

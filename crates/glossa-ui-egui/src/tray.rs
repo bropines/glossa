@@ -139,9 +139,18 @@ pub struct Tray {
     hotkeys_item: CheckMenuItem,
     #[cfg(not(target_os = "linux"))]
     mouse_item: CheckMenuItem,
-    /// New icons for the GTK thread that owns the indicator.
+    /// New icons and menus for the GTK thread that owns the indicator.
     #[cfg(target_os = "linux")]
-    looks: mpsc::Sender<tray_icon::Icon>,
+    looks: mpsc::Sender<LinuxUpdate>,
+    /// The interface language the menu was built in.
+    locale: Arc<Locale>,
+}
+
+/// What the GTK thread is asked to change.
+#[cfg(target_os = "linux")]
+enum LinuxUpdate {
+    Icon(tray_icon::Icon),
+    Menu(Arc<Locale>),
 }
 
 /// The accent of the current theme, as the icon's base colour, and whether
@@ -318,7 +327,7 @@ fn spawn_click_thread(events: Sender<TrayEvent>, wake: WakeFn, clicks: Arc<Click
 
 impl Tray {
     #[cfg(not(target_os = "linux"))]
-    pub fn new(wake: WakeFn, locale: &Locale, clicks_cfg: &TrayConfig) -> Result<Tray, String> {
+    pub fn new(wake: WakeFn, locale: &Arc<Locale>, clicks_cfg: &TrayConfig) -> Result<Tray, String> {
         let clicks = Arc::new(ClickSettings::default());
         let events = install_handlers(wake, clicks.clone());
         let (menu, hotkeys_item, mouse_item) = build_menu(locale);
@@ -340,20 +349,21 @@ impl Tray {
             }
         }
         let icon = b.build().map_err(|e| e.to_string())?;
-        let tray = Tray { events, clicks, icon, hotkeys_item, mouse_item };
+        let tray = Tray { events, clicks, icon, hotkeys_item, mouse_item, locale: locale.clone() };
         tray.set_clicks(clicks_cfg);
         Ok(tray)
     }
 
     #[cfg(target_os = "linux")]
-    pub fn new(wake: WakeFn, locale: &Locale, clicks_cfg: &TrayConfig) -> Result<Tray, String> {
+    pub fn new(wake: WakeFn, locale: &Arc<Locale>, clicks_cfg: &TrayConfig) -> Result<Tray, String> {
         // The indicator reports no clicks; the settings have nothing to do.
         let _ = clicks_cfg;
         let clicks = Arc::new(ClickSettings::default());
         let events = install_handlers(wake, clicks.clone());
+        let built_for = locale.clone();
         let locale = locale.clone();
         let (ready_tx, ready_rx) = mpsc::channel::<Result<(), String>>();
-        let (looks, new_looks) = mpsc::channel::<tray_icon::Icon>();
+        let (looks, new_looks) = mpsc::channel::<LinuxUpdate>();
         std::thread::Builder::new()
             .name("glossa-tray".into())
             .spawn(move || {
@@ -369,13 +379,21 @@ impl Tray {
                 match b.build() {
                     Ok(icon) => {
                         let _ = ready_tx.send(Ok(()));
-                        // New icons arrive on a channel; the indicator may
-                        // only be touched from this thread.
+                        // New icons and menus arrive on a channel; the
+                        // indicator may only be touched from this thread.
                         let icon = std::rc::Rc::new(icon);
                         let held = icon.clone();
                         gtk::glib::timeout_add_local(std::time::Duration::from_millis(300), move || {
-                            if let Some(i) = new_looks.try_iter().last() {
-                                let _ = held.set_icon(Some(i));
+                            for update in new_looks.try_iter() {
+                                match update {
+                                    LinuxUpdate::Icon(i) => {
+                                        let _ = held.set_icon(Some(i));
+                                    }
+                                    LinuxUpdate::Menu(locale) => {
+                                        let (menu, _hotkeys, _mouse) = build_menu(&locale);
+                                        held.set_menu(Some(Box::new(menu)));
+                                    }
+                                }
                             }
                             gtk::glib::ControlFlow::Continue
                         });
@@ -389,7 +407,7 @@ impl Tray {
             })
             .map_err(|e| e.to_string())?;
         ready_rx.recv_timeout(std::time::Duration::from_secs(3)).map_err(|e| e.to_string())??;
-        Ok(Tray { events, clicks, looks })
+        Ok(Tray { events, clicks, looks, locale: built_for })
     }
 
     /// Follow the click settings: whether the icon opens its menu on a
@@ -430,7 +448,27 @@ impl Tray {
             self.mouse_item.set_checked(mouse_mode);
         }
         #[cfg(target_os = "linux")]
-        let _ = self.looks.send(image);
+        let _ = self.looks.send(LinuxUpdate::Icon(image));
+    }
+
+    /// Rebuild the menu in `locale`'s language, keeping the check marks.
+    /// Nothing happens when the menu is already in that language.
+    pub fn set_locale(&mut self, locale: &Arc<Locale>) {
+        if Arc::ptr_eq(locale, &self.locale) {
+            return;
+        }
+        self.locale = locale.clone();
+        #[cfg(not(target_os = "linux"))]
+        {
+            let (menu, hotkeys_item, mouse_item) = build_menu(locale);
+            hotkeys_item.set_checked(self.hotkeys_item.is_checked());
+            mouse_item.set_checked(self.mouse_item.is_checked());
+            self.icon.set_menu(Some(Box::new(menu)));
+            self.hotkeys_item = hotkeys_item;
+            self.mouse_item = mouse_item;
+        }
+        #[cfg(target_os = "linux")]
+        let _ = self.looks.send(LinuxUpdate::Menu(locale.clone()));
     }
 
     pub fn set_hotkeys_checked(&self, on: bool) {

@@ -26,6 +26,9 @@ pub const EXIT_UNKNOWN: i32 = 6;
 /// Frames drawn before the picture is taken: fonts for other scripts and
 /// the window's own size arrive a frame or two after it opens.
 const SETTLE_FRAMES: u32 = 10;
+/// The frame at which `GLOSSA_SCREENSHOT_SWITCH` changes the language: the
+/// window is open by then, and the rest of the settling follows it.
+const SWITCH_FRAME: u32 = 3;
 /// And at least this long, for a new window to be mapped and composited.
 const SETTLE_TIME: Duration = Duration::from_millis(1500);
 /// A run that has not finished by then is stuck; the watchdog ends it.
@@ -72,6 +75,16 @@ pub fn flow(app: &mut GlossaApp, ctx: &egui::Context, what: &str, path: &Path) {
     });
     let Some(target) = viewport(what) else { return };
     let frames = FRAMES.fetch_add(1, Ordering::SeqCst);
+    // `GLOSSA_SCREENSHOT_SWITCH=ru`: change the interface language once the
+    // window is up, the way Options does, so the picture shows whether
+    // everything followed without a restart.
+    if frames == SWITCH_FRAME {
+        if let Ok(lang) = std::env::var("GLOSSA_SCREENSHOT_SWITCH") {
+            if let Err(e) = app.engine.update_config(move |c| c.general.ui_language = lang) {
+                eprintln!("glossa: --screenshot: cannot switch the language: {e}");
+            }
+        }
+    }
     if !SHOT.load(Ordering::SeqCst) && frames >= SETTLE_FRAMES && start.elapsed() >= SETTLE_TIME {
         SHOT.store(true, Ordering::SeqCst);
         let path = path.to_owned();

@@ -236,6 +236,9 @@ struct Inner {
     themes: RwLock<ThemeCatalog>,
     locales: RwLock<LocaleCatalog>,
     locale: RwLock<Arc<Locale>>,
+    /// What was wrong in the locale files: unreadable ones, and the chosen
+    /// language's skipped strings.
+    locale_issues: RwLock<Vec<glossa_core::locale::LocaleIssue>>,
     modules: RwLock<ModuleStatus>,
     module_cache: Arc<ModuleCache>,
     subscribers: Mutex<Vec<Sender<Event>>>,
@@ -349,6 +352,7 @@ impl Engine {
             themes: RwLock::new(ThemeCatalog::default()),
             locales: RwLock::new(LocaleCatalog::default()),
             locale: RwLock::new(Arc::new(Locale::english())),
+            locale_issues: RwLock::new(Vec::new()),
             modules: RwLock::new(ModuleStatus::default()),
             module_cache,
             subscribers: Mutex::new(Vec::new()),
@@ -650,7 +654,10 @@ impl Engine {
         let mut locale_dirs: Vec<PathBuf> = cfg.classic.locales_dir().into_iter().collect();
         locale_dirs.extend(paths.locale_dirs());
         let locales = LocaleCatalog::discover(&locale_dirs);
-        *self.inner.locale.write() = Arc::new(locales.load(&cfg.general.ui_language));
+        let (locale, mut issues) = locales.load_checked(&cfg.general.ui_language);
+        issues.splice(0..0, locales.broken().iter().cloned());
+        *self.inner.locale.write() = Arc::new(locale);
+        *self.inner.locale_issues.write() = issues;
         *self.inner.locales.write() = locales;
     }
 
@@ -774,6 +781,17 @@ impl Engine {
 
     pub fn locales(&self) -> Vec<LocaleEntry> {
         self.inner.locales.read().entries().to_vec()
+    }
+
+    /// An interface language by code or name, with the user's files laid
+    /// over it, whatever language the program itself shows.
+    pub fn load_locale(&self, wanted: &str) -> Locale {
+        self.inner.locales.read().load(wanted)
+    }
+
+    /// Problems in the locale files, for Options.
+    pub fn locale_issues(&self) -> Vec<glossa_core::locale::LocaleIssue> {
+        self.inner.locale_issues.read().clone()
     }
 
     pub fn locale(&self) -> Arc<Locale> {

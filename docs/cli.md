@@ -592,17 +592,28 @@ Writing themes: [theming.md](theming.md).
 ```
 glossa-cli locale list
 glossa-cli locale convert FILE
+glossa-cli locale check FILE
+glossa-cli locale template [LANG]
 ```
 
 | subcommand | does |
 |---|---|
 | `list` (the default) | Interface languages: code, English name, native name. |
 | `convert FILE` | A classic `lang.json` as a native locale file (JSON) on stdout; stderr says how many of Glossa's strings it covers. |
+| `check FILE` | Check a language pack (native or classic) against the program's keys: how many strings it translates, unknown keys and language tags (warnings), and strings whose `%s` placeholders differ from English (errors: the program skips them). `-v` lists the keys that fall back to English. Exits 1 when there are errors. With `--json`: `{code, name, native_name, translated, total, missing, issues: [{key, severity, message}]}`. |
+| `template [LANG]` | A pack to translate from, on stdout: every key with its English text and its classic address (`[classic w:10:1070]`) in a comment above it, and the language table's names. Values are empty, or with `LANG` (a code or name from `list`) that language's current strings, user files included, so an existing pack can be brought up to date. Empty values fall back to English, so a half-filled template already loads. |
 
 ```console
 $ glossa-cli locale list
 en       English                  English
 ru       Russian                  Русский
+$ glossa-cli locale template > eo.json
+$ glossa-cli locale check eo.json
+Esperanto (eo): 7 of 691 strings
+error: msg.ms: 0 placeholders where English has 1; the string is skipped
+warning: no.such.key: unknown key, ignored
+684 strings fall back to English (-v lists them)
+glossa-cli: 1 strings skipped
 ```
 
 ### config
@@ -786,6 +797,7 @@ Desktop portal
 | `GLOSSA_LANG` | desktop program | The interface language when `[general] ui_language` is empty (`ru`, `de-DE`). Overrides the system language. |
 | `LC_ALL`, `LC_MESSAGES`, `LANG` | desktop program | The system language, when `GLOSSA_LANG` is not set (on Windows, the display language comes first). |
 | `HTTPS_PROXY`, `ALL_PROXY`, `HTTP_PROXY` (and lower-case), `NO_PROXY` | both programs | With `[network.proxy] mode = "system"`, the first one set is the proxy, and `NO_PROXY` lists hosts that bypass it. On Windows, if none is set, the system (WinINet) proxy is used. |
+| `GLOSSA_SCREENSHOT_SWITCH` | desktop program | With `--screenshot`: a language (`ru`) to switch the interface to once the window is open, through the settings as Options does, to check that every part follows without a restart. Writes `ui_language` to the settings, so use a throwaway `GLOSSA_HOME`. |
 | `GLOSSA_FRAME_TRACE` | desktop program | Diagnosing stutter: a file path (or `1` for `frames.csv` in the cache folder) that gets one CSV line per frame of the main window, the popup and Options: when the frame started, the time since that window's previous frame, how long its UI took, and the scroll events it consumed. |
 | `GLOSSA_RENDERER` | desktop program | Overrides `[appearance] renderer` for one run, with the same names `config.toml` takes: `open_gl` (or `glow`, `opengl`, `gl`), `gpu` (or `wgpu`), `software` (or `cpu`, `warp`). An unknown value is ignored. |
 | `GLOSSA_PYTHON_SDK` | both programs | A folder holding `glossa_module.py`, searched first when starting Python modules. |
