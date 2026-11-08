@@ -86,16 +86,12 @@ help = "Bigger pictures are scaled down to this before lines are looked for. Low
 # The program and ONNX Runtime, one archive per system. Built by
 # .github/workflows/paddle-ocr.yml and attached to the `paddle-ocr-v<version>`
 # GitHub release (README.md, "Releasing the binary").
-# TODO(release): replace each sha256 and size below with the values the
-# workflow prints for that archive (its SIZES file). Until then Glossa
-# refuses the all-zero placeholders and the module does not load; to try
-# it, see README.md, "Testing a local build".
 
 [[assets]]
 name = "bin"
 url = "https://github.com/bropines/glossa/releases/download/paddle-ocr-v0.1.0/paddle-ocr-0.1.0-macos-aarch64.tar.gz"
-sha256 = "0000000000000000000000000000000000000000000000000000000000000000"
-size = 14200000
+sha256 = "cd99fe26b0b4eb865d3f7041e83907a23041d0c05afef229eebcfed650a8739f"
+size = 14098688
 unpack = "tar.gz"
 os = ["macos"]
 arch = ["aarch64"]
@@ -103,8 +99,8 @@ arch = ["aarch64"]
 [[assets]]
 name = "bin"
 url = "https://github.com/bropines/glossa/releases/download/paddle-ocr-v0.1.0/paddle-ocr-0.1.0-windows-x86_64.zip"
-sha256 = "0000000000000000000000000000000000000000000000000000000000000000"
-size = 9000000
+sha256 = "66f6e413f8e3588a04f6c4e8a30f95f7798b5efa3c709ba9ad0b2d0044060813"
+size = 7671937
 unpack = "zip"
 os = ["windows"]
 arch = ["x86_64"]
@@ -112,8 +108,8 @@ arch = ["x86_64"]
 [[assets]]
 name = "bin"
 url = "https://github.com/bropines/glossa/releases/download/paddle-ocr-v0.1.0/paddle-ocr-0.1.0-windows-aarch64.zip"
-sha256 = "0000000000000000000000000000000000000000000000000000000000000000"
-size = 9000000
+sha256 = "7b47347cc5ed68a12f1308aeb108ddd7f2011b291f5f6d4f0de74fdfe736d7b7"
+size = 7505612
 unpack = "zip"
 os = ["windows"]
 arch = ["aarch64"]
@@ -121,8 +117,8 @@ arch = ["aarch64"]
 [[assets]]
 name = "bin"
 url = "https://github.com/bropines/glossa/releases/download/paddle-ocr-v0.1.0/paddle-ocr-0.1.0-linux-x86_64.tar.gz"
-sha256 = "0000000000000000000000000000000000000000000000000000000000000000"
-size = 12000000
+sha256 = "bd6e236a4f88c969f1024e678429accc7cfab13256a5e927ec610467da007d7b"
+size = 12840508
 unpack = "tar.gz"
 os = ["linux"]
 arch = ["x86_64"]
@@ -130,8 +126,8 @@ arch = ["x86_64"]
 [[assets]]
 name = "bin"
 url = "https://github.com/bropines/glossa/releases/download/paddle-ocr-v0.1.0/paddle-ocr-0.1.0-linux-aarch64.tar.gz"
-sha256 = "0000000000000000000000000000000000000000000000000000000000000000"
-size = 11000000
+sha256 = "1e9bcdcf111cc3f0f8a9f5c31ab00c08db454f370518a0dd9ec6370cdc538c8f"
+size = 11640118
 unpack = "tar.gz"
 os = ["linux"]
 arch = ["aarch64"]
