@@ -256,6 +256,8 @@ mod tests {
         .unwrap();
         std::fs::write(m.join("main.js"), "function translate(req) { return 'echo: ' + req.text; }").unwrap();
         e.reload_modules();
+        // Dropped in after the start, it waits for approval.
+        e.approve_module("echo", None).unwrap();
     }
 
     #[test]
