@@ -531,6 +531,14 @@ six languages paired with English.
 
 ### 4. Local LLM translation without Ollama (process module)
 
+**Built:** [`modules/process/local-llm`](../../modules/process/local-llm/README.md),
+with measured speed, memory and quality in its README. Differences from
+the plan below: Qwen3 comes from the llama.cpp team's Q4_K_M conversion
+(1.28 GB; Qwen publishes only Q8_0); the module does not offer language
+detection, because Hy-MT2 misnames languages when asked; and Glossa's
+unpacker drops symbolic links, so the module recreates the version links
+the macOS and Linux llama.cpp builds load their libraries through.
+
 Better context and idiom than Bergamot. It costs a second or two per popup
 and a 1.1 GB download. It reuses the existing OpenAI-compatible provider
 code.

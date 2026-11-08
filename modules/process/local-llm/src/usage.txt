@@ -1,0 +1,11 @@
+local-llm: offline translation with a small language model, for Glossa
+
+Run by Glossa as a process module, it speaks the module protocol on stdin
+and stdout. It starts llama-server (from the llama.cpp release the module
+downloads) on the first request and stops it when stdin closes.
+
+  local-llm --version
+
+Environment:
+  LOCAL_LLM_SERVER       a llama-server to use instead of the downloaded one
+  LOCAL_LLM_FAKE_SERVER  1: a model-free stand-in, for tests

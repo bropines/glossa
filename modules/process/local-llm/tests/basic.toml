@@ -1,0 +1,62 @@
+# Cases for `glossa-cli module test`. Translation runs for real, offline,
+# so the module's files and the default model must be downloaded first:
+#
+#   glossa-cli assets download local-llm
+#   glossa-cli assets download local-llm hy-mt2-1.8b-q4_k_m.gguf
+#   glossa-cli module test --strict modules/process/local-llm
+#
+# Without them the harness skips the module. The protocol itself is tested
+# without any model by `cargo test` in this folder (tests/protocol.rs, with
+# a stand-in for llama-server). A model's wording can vary between
+# llama.cpp builds and machines, so the expectations are loose.
+
+[[case]]
+name = "translates English into Russian"
+op = "translate"
+text = "The weather is nice today."
+from = "en"
+to = "ru"
+[case.expect]
+# The first call starts llama-server and loads the model.
+max_ms = 30000
+contains = "погода"
+
+[[case]]
+name = "translates Russian into English"
+op = "translate"
+text = "Сегодня хорошая погода."
+from = "ru"
+to = "en"
+expect = { contains = "weather" }
+
+[[case]]
+name = "translates Japanese into English"
+op = "translate"
+text = "今日はいい天気ですね。"
+from = "ja"
+to = "en"
+expect = { contains = "weather" }
+
+[[case]]
+name = "keeps line breaks"
+op = "translate"
+text = "Open file\nSave as\nQuit"
+from = "en"
+to = "de"
+expect = { contains = "\n" }
+
+[[case]]
+name = "a language the model does not know"
+op = "translate"
+text = "Hello"
+from = "en"
+to = "sw"
+expect = { error = "target_language" }
+
+[[case]]
+name = "a custom model that is not chosen yet"
+op = "translate"
+text = "Hello"
+to = "ru"
+options = { model = "custom" }
+expect = { error = "missing_credential" }

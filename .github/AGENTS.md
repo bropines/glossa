@@ -30,13 +30,14 @@ fail) run as extra steps. The Linux job also builds the native and Java
 example modules and runs `glossa-cli module test --strict
 --require-runtimes --download` over every module in `modules/`, so each
 passes its fixtures with nothing skipped (`--download` fetches the managed
-Python and packages a Python example declares). The one exception is
-`modules/process/paddle-ocr`, left out of that list until its program is
-released: its `bin` asset's sha256 is still the all-zero placeholder, which
-Glossa refuses, so it cannot load. `repo_modules.rs` (`UNRELEASED`) asserts
-that it fails for exactly that reason; filling in the real hashes makes
-that assertion fail, which is the reminder to drop both exceptions (the
-module's README, "Releasing the binary"). Locally
+Python and packages a Python example declares). The exceptions are
+`modules/process/paddle-ocr` and `modules/process/local-llm`, left out of
+that list until their programs are released: each `bin` asset's sha256 is
+still the all-zero placeholder, which Glossa refuses, so they cannot load.
+`repo_modules.rs` (`UNRELEASED`) asserts that they fail for exactly that
+reason; filling in a module's real hashes makes that assertion fail, which
+is the reminder to drop both of its exceptions (the module's README,
+"Releasing the binary"). Locally
 the same checks run in WSL ([AGENTS.md](../AGENTS.md#build-and-test-in-wsl-never-on-the-windows-host)).
 
 ## release.yml
@@ -80,6 +81,21 @@ and its crates' licence notices into the module's `bin` archives
 - The toolchain is pinned to the module's `rust-version`, and each ONNX
   Runtime archive is checked against the SHA-256 pinned beside
   `ORT_VERSION`. A new ONNX Runtime version needs all five hashes updated.
+- The main release workflow (tags `v*`) does not build this program.
+
+## local-llm.yml
+
+Builds the local LLM module's program (`modules/process/local-llm`, its
+own cargo project outside the workspace) and packs it with its crates'
+licence notices into the module's `bin` archives (`package.sh`,
+`third_party.py`). llama.cpp and the models are separate assets from their
+own releases; this workflow does not touch them.
+
+- Tags `local-llm-v<version>`, runs by hand and pull requests work as for
+  `paddle-ocr.yml`: five platforms and a **draft** release for a tag, the
+  Linux x64 job alone (tests with the stand-in llama-server, clippy,
+  build, archive, smoke test) for a pull request.
+- The toolchain is pinned to the module's `rust-version`.
 - The main release workflow (tags `v*`) does not build this program.
 
 ## Templates

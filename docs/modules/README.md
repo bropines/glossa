@@ -736,6 +736,7 @@ Larger modules live in `modules/` as source and fetch what they need as
 | id | name | does | downloads |
 |---|---|---|---|
 | `paddle-ocr` | PaddleOCR (offline) | text recognition on this machine: Chinese, Japanese, Korean, Cyrillic, Latin scripts, with line outlines ([README](../../modules/process/paddle-ocr/README.md)) | a Rust program with ONNX Runtime (9–14 MB), PP-OCRv5 models (6 MB, then 8–17 MB per script) |
+| `local-llm` | Local LLM (offline) | translation by a small language model on this machine, through llama.cpp: Hy-MT2 1.8B (33 languages) or Qwen3 1.7B ([README](../../modules/process/local-llm/README.md)) | a Rust program (0.35 MB), llama.cpp (13–25 MB), one model (1.1–1.3 GB) |
 
 ## Scripts from other programs
 
