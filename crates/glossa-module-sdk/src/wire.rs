@@ -578,18 +578,44 @@ impl Reply {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+/// A typed failure. Build one with [`ModuleError::new`] (and [`ModuleError::at`]);
+/// a struct literal should end in `..Default::default()`, since optional
+/// fields are added to the protocol over time.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct ModuleError {
     pub kind: ErrorKind,
     pub message: String,
     /// For `rate_limited`: seconds until a retry may work.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub retry_after_secs: Option<u64>,
+    /// Where in the module's own code the error was raised, when the runtime
+    /// can tell (a JavaScript exception, a Python traceback). Optional, and
+    /// only for showing the author the line: the host never acts on it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub location: Option<ErrorLocation>,
+}
+
+/// A place in a module's source: a file relative to the module's folder, a
+/// 1-based line and a 1-based column (0 when unknown). Every field may be left
+/// out: a partial location still parses.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct ErrorLocation {
+    pub file: String,
+    pub line: u32,
+    #[serde(default)]
+    pub column: u32,
 }
 
 impl ModuleError {
     pub fn new(kind: ErrorKind, message: impl Into<String>) -> Self {
-        Self { kind, message: message.into(), retry_after_secs: None }
+        Self { kind, message: message.into(), retry_after_secs: None, location: None }
+    }
+
+    /// The same error, pointing at `location`.
+    pub fn at(mut self, location: Option<ErrorLocation>) -> Self {
+        self.location = location;
+        self
     }
 
     pub fn other(message: impl Into<String>) -> Self {
@@ -620,7 +646,7 @@ impl std::error::Error for ModuleError {}
 
 /// Error kinds, chosen to map onto the host's own error type so the UI can say
 /// something specific.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ErrorKind {
     /// The request was malformed.
@@ -643,6 +669,7 @@ pub enum ErrorKind {
     RateLimited,
     /// Nothing was found (dictionary miss, no text in image).
     NotFound,
+    #[default]
     Other,
 }
 
@@ -664,6 +691,27 @@ mod tests {
         assert_eq!(ok, serde_json::json!({"result": {"text": "hi"}}));
         let err = serde_json::to_value(Reply::err(ModuleError::missing_option("api_key"))).unwrap();
         assert_eq!(err, serde_json::json!({"error": {"kind": "missing_credential", "message": "api_key"}}));
+    }
+
+    #[test]
+    fn an_error_location_is_optional_both_ways() {
+        let old: ModuleError = serde_json::from_str(r#"{"kind": "other", "message": "x"}"#).unwrap();
+        assert_eq!(old.location, None);
+        let e = ModuleError::other("boom").at(Some(ErrorLocation { file: "main.js".into(), line: 3, column: 7 }));
+        let v = serde_json::to_value(&e).unwrap();
+        assert_eq!(v["location"], serde_json::json!({"file": "main.js", "line": 3, "column": 7}));
+        let back: ModuleError =
+            serde_json::from_str(r#"{"kind": "other", "message": "x", "location": {"file": "m.py", "line": 9}}"#)
+                .unwrap();
+        assert_eq!(back.location, Some(ErrorLocation { file: "m.py".into(), line: 9, column: 0 }));
+        // A partial location parses too.
+        let partial: ModuleError =
+            serde_json::from_str(r#"{"kind": "other", "message": "x", "location": {"line": 4}}"#).unwrap();
+        assert_eq!(partial.location, Some(ErrorLocation { line: 4, ..Default::default() }));
+        // Literals that name what they set and default the rest keep
+        // compiling as optional fields are added.
+        let literal = ModuleError { kind: ErrorKind::Http, message: "x".into(), ..Default::default() };
+        assert_eq!(literal.location, None);
     }
 
     #[test]

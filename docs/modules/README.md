@@ -581,7 +581,10 @@ glossa-cli module test modules/my-translator   # checks, loads and runs tests/*.
 ```
 
 [testing.md](testing.md) has the fixture format, a checklist for a new
-module and the templates to start from.
+module and the templates to start from. In the desktop program, the
+[module editor](editor.md) (*Options → Modules → Module editor*) does the
+same from a window: it checks on every save, reloads only that module, and
+runs the tests with F5.
 
 `GLOSSA_HOME=<dir>` points Glossa at a separate data folder, handy for a
 clean test with only your module in `<dir>/modules`. Each guide ends with
@@ -653,5 +656,6 @@ classic **QTranslate** `Service.js` services and **pot-app** plugins
 | [ocr-modules.md](ocr-modules.md) | text recognition modules and the image API |
 | [protocol.md](protocol.md) | the requests, results, errors and host calls every module uses |
 | [testing.md](testing.md) | testing a module with `glossa-cli module test`, a checklist, templates, rules for AI agents |
+| [editor.md](editor.md) | the module editor inside Glossa: templates, check, reload and test on every save |
 | [classic-scripts.md](classic-scripts.md) | classic QTranslate services and pot-app plugins |
 | [agents-template.md](agents-template.md) | an `AGENTS.md` to copy into your module's repository for an AI coding assistant |

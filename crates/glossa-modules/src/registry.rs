@@ -39,6 +39,7 @@ pub enum Origin {
     Module { dir: PathBuf, runtime: Runtime, version: String },
 }
 
+#[derive(Clone)]
 pub struct Entry {
     pub provider: Arc<dyn Provider>,
     pub origin: Origin,
@@ -164,6 +165,32 @@ impl Registry {
 
     pub fn entry(&self, id: &str) -> Option<&Entry> {
         self.entries.iter().find(|e| e.info().id == id)
+    }
+
+    /// The module loaded from `dir`, if any.
+    pub fn entry_from_dir(&self, dir: &Path) -> Option<&Entry> {
+        self.entries.iter().find(|e| matches!(&e.origin, Origin::Module { dir: d, .. } if d == dir))
+    }
+
+    /// A copy of this list with `entry` in place of the provider with its id,
+    /// everything else shared, for reloading one module without rescanning
+    /// every folder. A provider loaded earlier from the same folder under
+    /// another id (the module's id was edited) is dropped. Displaced
+    /// providers are suspended, so a process module's old process stops.
+    pub fn with_replaced(&self, entry: Entry) -> Registry {
+        let mut next = Registry { entries: self.entries.clone() };
+        if let Origin::Module { dir, .. } = &entry.origin {
+            let id = entry.info().id.clone();
+            next.entries.retain(|e| {
+                let stale = matches!(&e.origin, Origin::Module { dir: d, .. } if d == dir) && e.info().id != id;
+                if stale {
+                    e.provider.suspend();
+                }
+                !stale
+            });
+        }
+        next.insert(entry);
+        next
     }
 
     /// Every provider that can do `cap`, in registration order.

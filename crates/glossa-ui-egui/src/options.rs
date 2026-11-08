@@ -181,11 +181,24 @@ pub struct OptionsState {
     /// A running check of a module's files, and the last outcome.
     assets_check: Option<std::sync::mpsc::Receiver<Result<String, String>>>,
     assets_note: Option<(String, bool)>,
+    /// The module editor's "New module" row: the template and the name.
+    new_module_template: glossa_engine::module_dev::Template,
+    new_module_name: String,
+    /// The modules the editor group lists, read once and again after a
+    /// reload, not every frame.
+    module_list: Option<Vec<glossa_engine::module_dev::ModuleListing>>,
     /// The installed font families, for the font picker.
     fonts: FontList,
     /// The Presets tab of the Services page is showing, and its state.
     presets_tab: bool,
     pub presets: crate::presets::PresetsPage,
+}
+
+impl OptionsState {
+    /// Modules were loaded again: list them afresh when next drawn.
+    pub fn modules_changed(&mut self) {
+        self.module_list = None;
+    }
 }
 
 /// The installed font families, listed on a worker the first time the font
@@ -376,6 +389,9 @@ pub fn open(app: &mut GlossaApp) {
             ai_status: None,
             assets_check: None,
             assets_note: None,
+            new_module_template: glossa_engine::module_dev::Template::Translator,
+            new_module_name: String::new(),
+            module_list: None,
             fonts: FontList::default(),
             presets_tab: false,
             presets: Default::default(),
@@ -2524,6 +2540,7 @@ fn modules(app: &mut GlossaApp, ui: &mut egui::Ui, st: &mut OptionsState) {
             }
         }
     });
+    module_editor_group(app, ui, st);
     group(
         ui,
         &look,
@@ -2547,6 +2564,78 @@ fn modules(app: &mut GlossaApp, ui: &mut egui::Ui, st: &mut OptionsState) {
         // The classic program's "start with Windows" comes in with its
         // settings: offered as the checkbox, written to the system on Apply.
         st.autostart = st.draft.general.start_with_system;
+    }
+}
+
+/// Writing modules: a new one from a template, and every module with what
+/// the editor can do with it (edit in place, or copy to the user's folder
+/// and edit the copy, which replaces the original by id).
+fn module_editor_group(app: &mut GlossaApp, ui: &mut egui::Ui, st: &mut OptionsState) {
+    use crate::module_editor::Target;
+    use glossa_engine::module_dev::{ModuleSource, Template};
+    let look = app.look.clone();
+    let mut target = None;
+    group(ui, &look, &app.t("options.modules.editor"), |ui| {
+        ui.label(RichText::new(app.t("options.modules.editor_hint")).small().color(look.weak_text()));
+        ui.horizontal_wrapped(|ui| {
+            ui.label(app.t("options.modules.new"));
+            let name_of = |t: Template| app.t(&format!("options.modules.template.{}", t.name()));
+            crate::dropdown::ComboBox::from_id_salt("new-module-template")
+                .selected_text(name_of(st.new_module_template))
+                .show_ui(ui, |ui| {
+                    for t in Template::ALL {
+                        if ui.selectable_label(st.new_module_template == t, name_of(t)).clicked() {
+                            st.new_module_template = t;
+                        }
+                    }
+                });
+            ui.add(
+                egui::TextEdit::singleline(&mut st.new_module_name)
+                    .hint_text(app.t("options.modules.new_name"))
+                    .desired_width(180.0),
+            );
+            if ui.button(app.t("options.modules.create")).clicked() {
+                let name = if st.new_module_name.trim().is_empty() {
+                    name_of(st.new_module_template)
+                } else {
+                    st.new_module_name.trim().to_owned()
+                };
+                target = Some(Target::New(st.new_module_template, name));
+                st.new_module_name.clear();
+            }
+        });
+        ui.add_space(4.0);
+        egui::ScrollArea::vertical().id_salt("module-editor-list").max_height(220.0).show(ui, |ui| {
+            for m in st.module_list.get_or_insert_with(|| app.engine.module_sources()).clone() {
+                ui.horizontal(|ui| {
+                    ui.label(&m.name);
+                    let kind = match (&m.failed, &m.source) {
+                        (Some(_), _) => app.t("options.modules.failed_short"),
+                        (None, ModuleSource::User(_)) => format!("{}, {}", m.kind, app.t("options.modules.mine")),
+                        (None, _) => origin_label(app, &m.kind),
+                    };
+                    let tip = m.failed.clone().unwrap_or_else(|| m.id.clone());
+                    let colour = if m.failed.is_some() { look.error() } else { look.weak_text() };
+                    ui.label(RichText::new(kind).small().color(colour)).on_hover_text(tip);
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| match &m.source {
+                        ModuleSource::User(dir) => {
+                            if ui.small_button(app.t("options.modules.edit")).clicked() {
+                                target = Some(Target::Dir(dir.clone()));
+                            }
+                        }
+                        ModuleSource::Installed(_) | ModuleSource::Bundled => {
+                            if ui.small_button(app.t("options.modules.copy_edit")).clicked() {
+                                target = Some(Target::Copy(m.id.clone()));
+                            }
+                        }
+                        ModuleSource::Builtin => {}
+                    });
+                });
+            }
+        });
+    });
+    if let Some(t) = target {
+        crate::module_editor::open(app, t);
     }
 }
 

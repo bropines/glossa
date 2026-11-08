@@ -62,6 +62,12 @@ pub enum Error {
     #[error("module {module} failed: {detail}")]
     Module { module: String, detail: String },
 
+    /// A module failed at a known place in its own code (a script's
+    /// exception). Shown exactly like [`Error::Module`]: the place is for the
+    /// module's author (the module editor, the test harness), not the user.
+    #[error("module {module} failed: {detail}")]
+    ModuleAt { module: String, detail: String, place: SourcePlace },
+
     /// A module took longer than its budget and was abandoned.
     #[error("module {module} exceeded its {limit_ms} ms budget")]
     ModuleTimeout { module: String, limit_ms: u64 },
@@ -129,7 +135,34 @@ pub enum Error {
     Internal(String),
 }
 
+/// A place in a module's source: a file relative to its folder, 1-based line
+/// and column (0 when unknown).
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct SourcePlace {
+    pub file: String,
+    pub line: u32,
+    pub column: u32,
+}
+
+impl std::fmt::Display for SourcePlace {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match (self.line, self.column) {
+            (0, _) => write!(f, "{}", self.file),
+            (l, 0) => write!(f, "{}:{l}", self.file),
+            (l, c) => write!(f, "{}:{l}:{c}", self.file),
+        }
+    }
+}
+
 impl Error {
+    /// Where in a module's own code this happened, when known.
+    pub fn source_place(&self) -> Option<&SourcePlace> {
+        match self {
+            Error::ModuleAt { place, .. } => Some(place),
+            _ => None,
+        }
+    }
+
     /// Whether retrying the identical request could plausibly work. The UI uses
     /// this to decide between "try again" and "fix something first".
     pub fn is_transient(&self) -> bool {

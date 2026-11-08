@@ -1,0 +1,38 @@
+# Cases for the module test (F5 in the module editor, or
+# `glossa-cli module test`). The [[case.http]] entries stand in for the
+# service, so the cases run offline. The key is an obvious fake.
+# See docs/modules/testing.md.
+
+options = { api_key = "test-key" }
+
+[[case]]
+name = "translates a phrase"
+op = "translate"
+text = "Hello, world"
+from = "auto"
+to = "ru"
+expect = { text = "Привет, мир", detected = "en" }
+[[case.http]]
+method = "POST"
+url = "https://api.example.com/v1/translate"
+body = '{"translation": "Привет, мир", "detected_source": "en"}'
+
+[[case]]
+name = "no key, no call"
+op = "translate"
+text = "Hello"
+to = "ru"
+options = { api_key = "" }
+expect = { error = "missing_credential" }
+
+[[case]]
+name = "a rejected key asks for a new one"
+op = "translate"
+text = "Hello"
+to = "ru"
+expect = { error = "missing_credential" }
+[[case.http]]
+method = "POST"
+url = "https://api.example.com/v1/translate"
+status = 401
+body = '{"error": "bad key"}'

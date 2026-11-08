@@ -17,6 +17,7 @@ pub mod bundled;
 pub mod catalog;
 pub mod dbus;
 pub mod export;
+pub mod module_dev;
 pub mod ocr;
 pub mod pipeline;
 pub mod presets;
@@ -560,21 +561,7 @@ impl Engine {
         let started = Instant::now();
         let cfg = self.config();
         let paths = &self.inner.paths;
-        let ctx = RuntimeContext {
-            python: cfg.modules.python.clone(),
-            python_dirs: self.python_dirs(),
-            java: cfg.modules.java.clone(),
-            allow_native: cfg.modules.allow_native,
-            allow_legacy_scripts: cfg.modules.allow_legacy_scripts,
-            call_timeout: Duration::from_millis(cfg.modules.call_timeout_ms),
-            cache: self.inner.module_cache.clone(),
-            cache_dir: paths.cache_dir.join("modules"),
-            models_dir: paths.models_dir(),
-            auto_download_assets: cfg.modules.auto_download_assets,
-            disabled: cfg.modules.disabled.clone(),
-            preferred_domain: cfg.advanced.preferred_domain.clone(),
-            ui_language_code: self.locale().code.clone(),
-        };
+        let ctx = self.runtime_context(&cfg);
         let mut reg = Registry::new();
         let ocr_builtins = {
             let mut ocr = self.inner.ocr_builtins.lock();
@@ -633,6 +620,26 @@ impl Engine {
             ModuleStatus { loaded: report.loaded, failed: report.failed, skipped: report.skipped };
         self.adopt_providers();
         self.emit(Event::ModulesReloaded);
+    }
+
+    /// What the module runtimes get from the settings.
+    fn runtime_context(&self, cfg: &Config) -> RuntimeContext {
+        let paths = &self.inner.paths;
+        RuntimeContext {
+            python: cfg.modules.python.clone(),
+            python_dirs: self.python_dirs(),
+            java: cfg.modules.java.clone(),
+            allow_native: cfg.modules.allow_native,
+            allow_legacy_scripts: cfg.modules.allow_legacy_scripts,
+            call_timeout: Duration::from_millis(cfg.modules.call_timeout_ms),
+            cache: self.inner.module_cache.clone(),
+            cache_dir: paths.cache_dir.join("modules"),
+            models_dir: paths.models_dir(),
+            auto_download_assets: cfg.modules.auto_download_assets,
+            disabled: cfg.modules.disabled.clone(),
+            preferred_domain: cfg.advanced.preferred_domain.clone(),
+            ui_language_code: self.locale().code.clone(),
+        }
     }
 
     /// Bring the service lists up to date with the providers that exist now.

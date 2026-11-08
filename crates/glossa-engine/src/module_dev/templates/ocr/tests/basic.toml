@@ -1,0 +1,33 @@
+# Cases for the module test (F5 in the module editor, or
+# `glossa-cli module test`). The harness draws the picture and the
+# [[case.http]] entries stand in for the service, so the cases run offline.
+# The key is an obvious fake. See docs/modules/testing.md.
+
+options = { api_key = "test-key" }
+
+[[case]]
+name = "reads a line"
+op = "ocr"
+image = { width = 200, height = 60 }
+expect = { text = "Hello world" }
+[[case.http]]
+method = "POST"
+url = "https://api.example.com/v1/ocr"
+body = '{"lines": [{"text": "Hello world", "box": [10, 20, 190, 40]}]}'
+
+[[case]]
+name = "no key, no call"
+op = "ocr"
+image = { width = 200, height = 60 }
+options = { api_key = "" }
+expect = { error = "missing_credential" }
+
+[[case]]
+name = "a picture without text is not found"
+op = "ocr"
+image = { width = 200, height = 60 }
+expect = { error = "not_found" }
+[[case.http]]
+method = "POST"
+url = "https://api.example.com/v1/ocr"
+body = '{"lines": []}'

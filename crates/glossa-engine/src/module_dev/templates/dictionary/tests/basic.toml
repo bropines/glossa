@@ -1,0 +1,27 @@
+# Cases for the module test (F5 in the module editor, or
+# `glossa-cli module test`). The [[case.http]] entries stand in for the
+# service, so the cases run offline. See docs/modules/testing.md.
+
+[[case]]
+name = "looks up a word"
+op = "dictionary"
+text = "Hello"
+from = "en"
+to = "ru"
+[case.expect]
+headword = "hello"
+contains = ["a greeting"]
+[[case.http]]
+url = "https://api.dictionaryapi.dev/api/v2/entries/en/hello"
+body = '[{"word": "hello", "phonetics": [{"text": "/həˈləʊ/"}], "meanings": [{"partOfSpeech": "noun", "definitions": [{"definition": "a greeting", "example": "She said hello."}]}]}]'
+
+[[case]]
+name = "an unknown word is not found"
+op = "dictionary"
+text = "qwzxv"
+from = "en"
+expect = { error = "not_found", error_contains = "qwzxv" }
+[[case.http]]
+url = "https://api.dictionaryapi.dev/api/v2/entries/en/qwzxv"
+status = 404
+body = '{"title": "No Definitions Found"}'

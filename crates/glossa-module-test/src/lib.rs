@@ -574,7 +574,10 @@ fn run_case(
                         }
                     }
                 }
-                Some(want) => report.problems.push(format!("expected a {want} error, got {kind}: {err}")),
+                Some(want) => {
+                    let at = err.source_place().map(|p| format!(" (at {p})")).unwrap_or_default();
+                    report.problems.push(format!("expected a {want} error, got {kind}: {err}{at}"))
+                }
                 None => {
                     let hint = match &err {
                         glossa_core::Error::BadResponse { detail, .. } if detail.contains(" reply: ") => {
@@ -585,7 +588,9 @@ fn run_case(
                         }
                         _ => "",
                     };
-                    report.problems.push(format!("failed with {kind}: {err}{hint}"));
+                    // Where the module threw, for its author (the editor links it).
+                    let at = err.source_place().map(|p| format!(" (at {p})")).unwrap_or_default();
+                    report.problems.push(format!("failed with {kind}: {err}{hint}{at}"));
                 }
             }
         }

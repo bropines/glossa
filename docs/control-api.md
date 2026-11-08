@@ -26,7 +26,8 @@ bus, with no token: see [D-Bus](#d-bus).
   [`/v1/detect`](#post-v1detect), [`/v1/dictionary`](#v1dictionary),
   [`/v1/ocr`](#post-v1ocr), [`/v1/speak`](#post-v1speak),
   [`/v1/action`](#v1actionaction), [`/v1/assets`](#v1assets), [`/v1/python`](#v1python),
-  [`/v1/presets`](#presets)
+  [`/v1/presets`](#presets),
+  [`/v1/modules`](#post-v1modules)
 - [pot-app compatibility](#pot-app-compatibility)
 - [D-Bus](#d-bus)
 - [Binding hotkeys to it](#binding-hotkeys-to-it)
@@ -188,6 +189,7 @@ Errors have a status code and a body of the form:
 | GET, POST | [`/v1/action/<action>`](#v1actionaction) | Ask the desktop program to perform an action. |
 | GET, POST | [`/v1/assets…`](#v1assets) | Files modules declare (models, dictionaries): state, download, check, delete. |
 | GET, POST | [`/v1/presets…`](#presets) | List, apply, save, export and import presets. |
+| POST | [`/v1/modules/<id>/…`](#post-v1modules) | Check, reload or test one module from its folder. |
 | any | [pot-app routes](#pot-app-compatibility) | `/selection_translate`, `/input_translate`, `/ocr_recognize`, `/ocr_translate`, `POST /translate`. |
 
 The examples use `$T` for the token and the default address.
@@ -462,6 +464,23 @@ $ curl -s -X POST -H "Authorization: Bearer $T" -d '{"name":"Private"}' http://1
 An unknown preset is a 404; a bad name or a built-in one where only your
 own will do is a 400. [`glossa-cli preset`](cli.md#preset) uses these
 routes when Glossa is running.
+
+### POST /v1/modules
+
+The [module editor](modules/editor.md)'s loop, for an editor outside
+Glossa. The module must have been loaded from a folder (not a built-in or
+bundled one; copy those first).
+
+| method | path | does |
+|---|---|---|
+| POST | `/v1/modules/<id>/check` | Check the folder without running it: the manifest's TOML, what it declares, the script's syntax, the fixtures' syntax. Returns a list of `{file, line, column, severity, message}`. |
+| POST | `/v1/modules/<id>/reload` | Load the folder again and replace this one provider, leaving the rest alone. Returns `{"outcome": "reloaded" \| "needs_restart" \| "disabled", "id": …}`; a module that fails to load is an error and the old one keeps running. |
+| POST | `/v1/modules/<id>/test` | Run its `tests/` cases offline, as `glossa-cli module test` does. Returns the same report as `glossa-cli --json module test`. |
+
+```console
+$ curl -s -X POST -H "Authorization: Bearer $T" http://127.0.0.1:60828/v1/modules/my-translator/check
+[{"file":"main.js","line":9,"column":35,"severity":"error","message":"SyntaxError: unexpected token in expression: ';'"}]
+```
 
 ## pot-app compatibility
 

@@ -299,6 +299,7 @@ fn allowed_methods(path: &str) -> Option<&'static str> {
         p if p.starts_with("/v1/presets/") => Some("POST"),
         "/v1/python/install" | "/v1/python/cancel" => Some("POST"),
         p if p.starts_with("/v1/python/") => Some(if p.matches('/').count() == 3 { "GET" } else { "POST" }),
+        p if p.starts_with("/v1/modules/") => Some("POST"),
         _ => None,
     }
 }
@@ -494,6 +495,24 @@ fn python_route(engine: &Engine, rest: &str) -> Reply {
     match engine.module_python(id) {
         Some(m) => Reply::json(if op == "install" { 202 } else { 200 }, json!(m)),
         None => Reply::error(404, format!("no Python module {id:?}")),
+    }
+}
+
+/// `/v1/modules/<id>/check|reload|test`: the module editor's loop, for a
+/// module with a folder of its own (an editor outside Glossa can drive it).
+fn modules_route(engine: &Engine, rest: &str) -> Reply {
+    let (id, op) = rest.split_once('/').unwrap_or((rest, ""));
+    let Some(dir) = engine.module_source(id).and_then(|s| s.dir().map(std::path::Path::to_owned)) else {
+        return Reply::error(404, format!("no module {id:?} loaded from a folder"));
+    };
+    match op {
+        "check" => Reply::json(200, json!(engine.check_module(&dir))),
+        "test" => Reply::json(200, json!(engine.test_module(&dir))),
+        "reload" => match engine.reload_module(&dir) {
+            Ok(outcome) => Reply::json(200, json!(outcome)),
+            Err(e) => Reply::from_error(&e),
+        },
+        other => Reply::error(404, format!("no module operation {other:?} (check, reload, test)")),
     }
 }
 
@@ -703,6 +722,7 @@ fn route(engine: &Engine, req: &mut Request) -> Reply {
         p if p.starts_with("/v1/python/") => python_route(engine, &p["/v1/python/".len()..]),
         "/v1/presets" => Reply::json(200, presets_list(engine)),
         p if p.starts_with("/v1/presets/") => presets_route(engine, req, &p["/v1/presets/".len()..], &url),
+        p if p.starts_with("/v1/modules/") => modules_route(engine, &p["/v1/modules/".len()..]),
         _ => Reply::error(404, format!("no route {path}")),
     }
 }
@@ -846,6 +866,8 @@ mod tests {
         assert_eq!(get("/v1/python/nope", "GET").0, 404);
         assert_eq!(get("/v1/python/nope/install", "POST").0, 404);
         assert_eq!(get("/v1/python/nope/install", "GET").0, 405);
+        assert_eq!(get("/v1/modules/nope/check", "POST").0, 404);
+        assert_eq!(get("/v1/modules/nope/check", "GET").0, 405);
         server.stop();
         std::fs::remove_dir_all(&dir).ok();
     }

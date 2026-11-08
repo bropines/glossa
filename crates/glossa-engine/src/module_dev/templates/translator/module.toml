@@ -1,0 +1,22 @@
+# A translator. Replace api.example.com with your service, here and in
+# main.js, and describe its settings under [[options]].
+# Reference: docs/modules/README.md and docs/modules/js-modules.md.
+capabilities = ["translate"]
+
+[module]
+id = "{{id}}"
+name = "{{name}}"
+version = "0.1.0"
+runtime = "js"
+entry = "main.js"
+max_input_chars = 5000
+description = "Translates through api.example.com."
+
+[permissions]
+network = ["api.example.com"]
+
+[[options]]
+key = "api_key"
+type = "secret"
+label = "API key"
+required = true

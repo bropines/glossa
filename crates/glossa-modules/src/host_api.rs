@@ -168,6 +168,7 @@ impl<'a> HostApi<'a> {
                     "error" => tracing::error!(module, "{message}"),
                     _ => tracing::info!(module, "{message}"),
                 }
+                crate::log_tap::emit(module, level, message);
                 Ok(serde_json::Value::Null)
             }
             "cache_get" => {
@@ -253,7 +254,7 @@ pub fn to_module_error(e: Error) -> ModuleError {
         Error::RateLimited { retry_after_secs, .. } => *retry_after_secs,
         _ => None,
     };
-    ModuleError { kind, message: e.to_string(), retry_after_secs }
+    ModuleError { kind, message: e.to_string(), retry_after_secs, location: None }
 }
 
 /// A module's error, as the engine sees it.
@@ -273,7 +274,14 @@ pub fn from_module_error(module: &str, name: &str, e: ModuleError) -> Error {
         ErrorKind::TargetLanguage => {
             Error::TargetLanguageUnsupported { provider: name.to_owned(), lang: glossa_core::LangId::UNKNOWN }
         }
-        _ => Error::Module { module: module.to_owned(), detail: e.message },
+        _ => match e.location {
+            Some(l) if !l.file.is_empty() => Error::ModuleAt {
+                module: module.to_owned(),
+                detail: e.message,
+                place: glossa_core::error::SourcePlace { file: l.file, line: l.line, column: l.column },
+            },
+            _ => Error::Module { module: module.to_owned(), detail: e.message },
+        },
     }
 }
 

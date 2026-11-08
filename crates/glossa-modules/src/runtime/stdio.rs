@@ -410,6 +410,7 @@ fn read_frames(
                         _ => {
                             let text = clip(&String::from_utf8_lossy(&line));
                             tracing::info!(module = %module, "stdout: {text}");
+                            crate::log_tap::emit(&module, "stdout", &text);
                             push_recent(&recent, text);
                         }
                     }
@@ -436,6 +437,7 @@ fn drain_stderr(
             let text = clip(&String::from_utf8_lossy(&line));
             if !text.trim().is_empty() {
                 tracing::info!(module = %module, "{text}");
+                crate::log_tap::emit(&module, "stderr", &text);
                 push_recent(&recent, text);
             }
         }

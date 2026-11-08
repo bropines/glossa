@@ -127,6 +127,8 @@ pub struct GlossaApp {
     pub welcome: Option<crate::welcome::WelcomeState>,
     pub dictionary: Option<crate::dictionary::DictState>,
     pub history: Option<crate::history::HistoryState>,
+    /// The module editor, while open.
+    pub module_editor: Option<crate::module_editor::ModuleEditor>,
     pub about_open: bool,
     pub keyboard_open: bool,
 
@@ -248,6 +250,7 @@ impl GlossaApp {
             welcome,
             dictionary: None,
             history: None,
+            module_editor: None,
             about_open: false,
             keyboard_open: false,
             tasks_tx,
@@ -814,7 +817,13 @@ impl GlossaApp {
                     self.notify(m, true);
                 }
             },
-            Event::ConfigChanged | Event::ModulesReloaded => self.refresh_from_config(),
+            Event::ConfigChanged => self.refresh_from_config(),
+            Event::ModulesReloaded => {
+                if let Some(o) = self.options.as_mut() {
+                    o.modules_changed();
+                }
+                self.refresh_from_config();
+            }
             Event::HistoryChanged => {
                 if let Some(h) = self.history.as_mut() {
                     h.dirty = true;
@@ -921,8 +930,28 @@ impl GlossaApp {
     }
 
     pub fn quit(&mut self) {
+        if self.hold_quit() {
+            return;
+        }
         self.quitting = true;
         self.ctx.send_viewport_cmd_to(egui::ViewportId::ROOT, egui::ViewportCommand::Close);
+    }
+
+    /// Whether quitting has to wait: the module editor has unsaved files and
+    /// now asks what to do with them (it quits again once answered).
+    fn hold_quit(&mut self) -> bool {
+        let Some(ed) = self.module_editor.as_mut() else { return false };
+        if !ed.hold_quit() {
+            return false;
+        }
+        crate::chrome::raise(&self.ctx, crate::chrome::viewport(crate::module_editor::VIEWPORT));
+        self.ctx.request_repaint();
+        true
+    }
+
+    /// The user went back to editing instead of quitting.
+    pub fn cancel_quit(&mut self) {
+        self.restarting = false;
     }
 
     /// Quit, and start a fresh copy once everything is shut down: for
@@ -1055,6 +1084,8 @@ impl eframe::App for GlossaApp {
             if self.cfg.general.minimize_to_tray_on_close && self.tray.is_some() {
                 ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
                 self.hide_main();
+            } else if self.hold_quit() {
+                ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
             } else {
                 self.quitting = true;
             }
@@ -1078,6 +1109,7 @@ impl eframe::App for GlossaApp {
             || self.options.is_some()
             || self.dictionary.is_some()
             || self.history.is_some()
+            || self.module_editor.is_some()
             || self.about_open
             || self.keyboard_open
             || self.welcome.is_some();
@@ -1098,6 +1130,7 @@ impl eframe::App for GlossaApp {
             || self.options.is_some()
             || self.dictionary.is_some()
             || self.history.is_some()
+            || self.module_editor.is_some()
             || self.about_open
             || self.keyboard_open
             || self.welcome.is_some();
@@ -1158,6 +1191,8 @@ impl eframe::App for GlossaApp {
         crate::dictionary::show(self, &ctx);
         phase("history");
         crate::history::show(self, &ctx);
+        phase("module editor");
+        crate::module_editor::show(self, &ctx);
         phase("about, keyboard");
         crate::about::show_about(self, &ctx);
         crate::welcome::show(self, &ctx);
