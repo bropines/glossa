@@ -465,9 +465,19 @@ function testKey(ev, host) {
 - `glossa-cli module action <id> <action> [--option KEY=VALUE]` runs one from
   the command line, and fixtures test them with `op = "action"`
   ([testing.md](testing.md#case-fields)).
-- `call` and `builtin` actions (no code) belong to module panels, which
-  come later; this version parses them and `module check` says they do not
-  run yet.
+- `call` and `builtin` actions (no code) run in module panels; see
+  [panels.md](panels.md#actions-in-a-panel). From the command line they run
+  with `--panel`.
+
+### Panels
+
+A module can have windows of its own, described in `module.toml` as
+`[[ui.panels]]`: fields, buttons, lists, results (a translation, an
+article, Markdown, a table), images and progress bars, opened from the tray,
+the main menu, a hotkey, the control API or the CLI. Glossa draws them and
+keeps their state; buttons run the module's actions, and a handler can
+stream partial results. Everything is in [panels.md](panels.md); the
+[Pocket Glossary](../../modules/js/pocket-glossary) example shows it all.
 
 [`js/google-vision-ocr`](../../modules/js/google-vision-ocr) has a "Test the
 key" button with `needs`, and "All languages" filling a multiselect with
@@ -844,6 +854,7 @@ classic **QTranslate** `Service.js` services and **pot-app** plugins
 | [sdk/java](../../sdk/java/README.md) | the Java SDK |
 | [native-modules.md](native-modules.md) | shared libraries in Rust, C, C++, Zig |
 | [ocr-modules.md](ocr-modules.md) | text recognition modules and the image API |
+| [panels.md](panels.md) | windows of a module's own: elements, state, actions, streaming |
 | [protocol.md](protocol.md) | the requests, results, errors and host calls every module uses |
 | [testing.md](testing.md) | testing a module with `glossa-cli module test`, a checklist, templates, rules for AI agents |
 | [editor.md](editor.md) | the module editor inside Glossa: templates, check, reload and test on every save |

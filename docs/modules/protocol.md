@@ -23,7 +23,7 @@ bumps `api`.
 - [Errors](#errors)
 - [Host calls](#host-calls): [`http`](#http), [`log`](#log),
   [`cache_get` / `cache_set`](#cache_get--cache_set), [`assets`](#assets),
-  [`image`](#image), [`t`](#t)
+  [`image`](#image), [`t`](#t), [`ui_update`](#ui_update)
 - [Versioning](#versioning)
 
 ## Conventions
@@ -160,8 +160,12 @@ the manifest declares, so a module without `[[actions]]` never sees it.
 
 `action` is the entry's `id`; `handler` is the function to run (the entry's
 `handler`, or its id). `options` are the values on the settings page,
-applied or not, so "Test" checks what the user typed. `state` and `panel`
-belong to module panels and are empty or absent on the settings page.
+applied or not, so "Test" checks what the user typed. From a
+[panel](panels.md), `panel` is the panel's id, `state` its state, `options`
+the saved settings, and `event` says what set the action off: `type` is
+`click`, `submit`, `change`, `open` or `shortcut`, `element` the element's
+id, and `item` a clicked list row. On the settings page `panel` is absent
+and `state` empty.
 `ui_lang` is Glossa's interface language, and `strings` the module's
 `[strings]` in it (from `locales/<lang>.toml`, falling back to
 `locales/en.toml` key by key), so an SDK's `t()` needs no round trip.
@@ -174,8 +178,11 @@ belong to module panels and are empty or absent on the settings page.
   "notice_level": "success" }
 ```
 
-Every field is optional, and `{}` (or `null`) is "done". `options` is merged
-into the settings being edited (the user still applies them); only the
+Every field is optional, and `{}` (or `null`) is "done". `state` is merged
+into a panel's state (only keys the panel declares, within its
+[limits](panels.md#limits)). `options` is merged
+into the settings being edited (the user still applies them; a panel
+ignores it, and `choices`); only the
 module's own option keys are taken, and a value of the wrong type for its
 option fails the action (`bad_response`). `choices` replaces the choices of
 `select` and `multiselect` options, by key; a choice is `{value, label?}` or
@@ -342,9 +349,23 @@ sent with the call instead.
 "t"  { "key": "key_refused", "args": ["HTTP 400"] }   → "Ключ не подошёл: HTTP 400"
 ```
 
+### `ui_update`
+
+During an [`action`](#action) from a [panel](panels.md#streaming): partial
+state, merged into the panel at once, while the handler is still working
+(an answer as it is written). The params are an object of state keys; the
+answer is `null`. Bounded like a reply; outside a panel it is accepted and
+does nothing.
+
+```json
+"ui_update"  { "result": "The word comes from…", "progress": 40 }   → null
+```
+
 ## Versioning
 
 The engine refuses a module whose `api` is not the version it speaks, and
 `glossa-cli modules` says so. Additions that old modules can ignore do not
-change the version: the `action` method and the `t` host call came with
-`api = 1`, and only modules that declare `[[actions]]` receive the method.
+change the version: the `action` method and the `t` and `ui_update` host
+calls came with `api = 1`, and only modules that declare `[[actions]]`
+receive the method. Panels added only optional uses of fields the method
+already had (`panel`, `state`, `event.item`).

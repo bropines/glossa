@@ -1,0 +1,131 @@
+# Pocket Glossary: a small offline glossary of translation terms, with a
+# panel of its own. An example of a module window (`[[ui.panels]]`): a
+# search field, a list of matching words, the chosen word's article, a
+# "word of the day" that streams its progress, and Glossa's own copy and
+# listen buttons. No network, no key.
+capabilities = ["dictionary"]
+languages = ["en"]
+
+[module]
+id = "pocket-glossary"
+name = "Pocket Glossary"
+version = "1.0.0"
+runtime = "js"
+entry = "main.js"
+description = "A pocket glossary of translation terms, in a panel of its own."
+homepage = "https://github.com/bropines/glossa"
+license = "MIT"
+min_glossa = "0.1.0-beta.2"                # panels
+ready_to_use = true
+# One term at a time.
+max_input_chars = 100
+
+[ui]
+format = 1
+
+# ---- Actions: what the panel's buttons, list and fields run ---------------
+
+[[actions]]
+id = "search"
+label = "Search"
+help = "Words whose name or meaning contains the text"
+
+[[actions]]
+id = "word_of_the_day"
+label = "Word of the day"
+handler = "wordOfTheDay"
+
+[[actions]]
+id = "look_up"
+label = "Look up"
+call = "dictionary"                  # no code: this module's own dictionary
+args = { text = "item.title", from = "en", to = "en" }
+into = "state.article"
+
+[[actions]]
+id = "copy_word"
+label = "Copy"
+builtin = "copy"
+args = { text = "state.article.headword" }
+shortcut = "Ctrl+Shift+C"
+
+[[actions]]
+id = "listen"
+label = "Listen"
+builtin = "speak"                    # Glossa's current voice
+args = { text = "state.article.headword", lang = "en" }
+
+# ---- The panel -------------------------------------------------------------
+
+[[ui.panels]]
+id = "glossary"
+title = "Glossary"
+open_from = ["tray", "main_menu"]
+size = [520, 560]
+layout = ["query", "bar", "words", "status", "word_box"]
+persist = ["query"]
+on_open = "search"
+
+[ui.panels.state]
+query = ""
+words = []
+article = {}
+status = ""
+progress = 0
+
+[[ui.panels.items]]
+id = "query"
+type = "text"
+bind = "state.query"
+placeholder = "Search the glossary"
+width = "fill"
+on_change = "search"
+on_submit = "search"
+
+[[ui.panels.items]]
+id = "bar"
+type = "row"
+children = ["@search", "@word_of_the_day", "busy"]
+
+[[ui.panels.items]]
+id = "busy"
+type = "progress"
+bind = "state.progress"
+visible_if = "state.progress > 0 && state.progress < 100"
+
+[[ui.panels.items]]
+id = "words"
+type = "list"
+bind = "state.words"
+on_click = "look_up"
+height = 200
+
+[[ui.panels.items]]
+id = "status"
+type = "label"
+bind = "state.status"
+style = "weak"
+
+[[ui.panels.items]]
+id = "word_box"
+type = "group"
+label = "Entry"
+visible_if = "state.article.headword"
+children = ["article", "word_bar"]
+
+[[ui.panels.items]]
+id = "article"
+type = "result"
+kind = "article"
+bind = "state.article"
+
+[[ui.panels.items]]
+id = "word_bar"
+type = "row"
+children = ["@copy_word", "@listen", "source"]
+
+[[ui.panels.items]]
+id = "source"
+type = "link"
+label = "About these terms"
+url = "https://en.wikipedia.org/wiki/Glossary_of_translation"

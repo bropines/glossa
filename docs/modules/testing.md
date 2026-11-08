@@ -221,6 +221,8 @@ the fixture instead of passing it by checking nothing.
 | `translate_to` | `ocr` | Ask for a translation in the same call. |
 | `action` | `action` | The id of one of the manifest's `[[actions]]` to run, as its button does. `needs` is not checked here: give the options the action needs. |
 | `state` | `action` | Panel state sent with the action (empty on the settings page). |
+| `panel` | `action` | Run as the [panel](panels.md) with this id runs it: the handler sees `ev.panel`, and its `ui_update` calls come back as the result's `updates` (a list of the partial states, in order). |
+| `item` | `action` | A clicked `list` row, as `ev.event.item`. |
 | `ui_lang` | `action` | The interface language whose `[strings]` `host.t` reads; default `en`. |
 | `options` | all | Option values for this case, over the file's. |
 | `http` | all | Recorded answers for this case, tried before the file's. |
@@ -348,6 +350,7 @@ fixtures. Copy the one for your runtime, change the `id`, and keep the
 | runtime | template | shows |
 |---|---|---|
 | JavaScript | [`modules/js/free-dictionary`](../../modules/js/free-dictionary) | `host.fetch`, `host.cache`, typed errors, recorded answers |
+| JavaScript (panel) | [`modules/js/pocket-glossary`](../../modules/js/pocket-glossary) | a module window: list, article result, `call` and `builtin` actions, `host.ui.update`, panel fixtures, a Russian locale |
 | JavaScript (OCR) | [`modules/js/google-vision-ocr`](../../modules/js/google-vision-ocr) | the image API, a layout result, a secret option with a fake in tests |
 | Python | [`modules/python/example-reverse`](../../modules/python/example-reverse) | the smallest SDK module |
 | Python (dependencies) | [`modules/python/example-idna`](../../modules/python/example-idna) | `requirements` installed by Glossa; test with `--download` |

@@ -124,7 +124,7 @@ $ glossa-cli translate -t ru "Hello"
 | [`speak`](#speak) | Write text to speech to a file. |
 | [`services`](#services) | List providers with a capability. |
 | [`modules`](#modules) | Show which modules loaded, failed or were skipped. |
-| [`module`](#module) | Check a module folder and run its fixtures (`module test`, `module check`); run an installed module's action (`module action`); approve modules installed by hand (`module pending`, `approve`, `revoke`, `decline`). |
+| [`module`](#module) | Check a module folder and run its fixtures (`module test`, `module check`); run an installed module's action (`module action`); approve modules installed by hand (`module pending`, `approve`, `revoke`, `decline`); list, show, run or open module panels (`module panel`). |
 | [`history`](#history) | List, search or export the translation history. |
 | [`import-classic`](#import-classic) | Import a classic QTranslate installation. |
 | [`theme`](#theme) | List, show or convert themes. |
@@ -432,6 +432,7 @@ glossa-cli module pending
 glossa-cli module approve ID [--local] [--force]
 glossa-cli module revoke ID [--local] [--force]
 glossa-cli module decline ID [--local] [--force]
+glossa-cli module panel [ID/PANEL [--action ACTION] [--state KEY=VALUE]… [--item JSON] [--open]]
 ```
 
 The module test harness, for module authors. `module test` checks each
@@ -465,7 +466,9 @@ check are described in [modules/testing.md](modules/testing.md).
 page would, with the saved settings and `--option KEY=VALUE` (or `--set`,
 or `--set-from-env KEY=VAR` for a key) over them, and prints the reply: the
 notice, the messages for fields, loaded choices and options it would set.
-`--state` and `--panel` are for module panels. An action whose `needs` are
+With `--panel PANEL` the action runs as that [panel](modules/panels.md)
+runs it, `call` and `builtin` actions included, with `--state` as the
+panel's state. An action whose `needs` are
 not filled in fails before the module is called. The exit code is 1 when
 the reply marks a field or its notice is an error. `--json` prints the
 reply as the module sent it: `{"notice", "notice_level", "choices",
@@ -484,6 +487,17 @@ reached holds the data folder (as `preset` does: `--local` skips the
 running Glossa, `--force` changes the file anyway). `--json` prints
 `pending` as a list of `{id, name, dir, pending, first_time, request, new,
 hash}`.
+
+`module panel` without a name lists the panels the loaded modules declare
+(`module/panel`, the window title, where they are offered). With a name it
+prints the panel's elements and its state as it opens (`--json`: the panel
+as written and that state). `--action ACTION` runs one of its actions with
+the declared state and `--state KEY=VALUE` over it (a JSON list or object
+is taken as one), `--item JSON` as a clicked list row; the streamed updates
+go to stderr as `update KEY = VALUE`, then the notice, what Glossa would do
+(`would {"copy": "…"}`, `{"open_url": …}`, `{"play": …}`) and the state
+after it. `--open` asks a running Glossa to open the panel, through the
+[control API](control-api.md#panels).
 
 The text report has one line per module (`PASS`, `FAIL` or `SKIP`, its id,
 runtime, folder, load time and size), its findings (`error:`, `warning:`,
@@ -919,7 +933,7 @@ Desktop portal
 | `GLOSSA_SCREENSHOT_SWITCH` | desktop program | With `--screenshot`: a language (`ru`) to switch the interface to once the window is open, through the settings as Options does, to check that every part follows without a restart. Writes `ui_language` to the settings, so use a throwaway `GLOSSA_HOME`. |
 | `GLOSSA_SCREENSHOT_SERVICE` | desktop program | With `--screenshot options:services`: a provider id (`google-vision-ocr`) whose settings to show, in the first service group it belongs to. |
 | `GLOSSA_SCREENSHOT_TAB` | desktop program | With `GLOSSA_SCREENSHOT_SERVICE`: `<tabs id>=<n>`, the tab (from 0) to show of a `tabs` item on that provider's settings page, as `pages=1`. |
-| `GLOSSA_SCREENSHOT_ACTION` | desktop program | With `GLOSSA_SCREENSHOT_SERVICE`, or with `--screenshot module-editor` (its preview): the id of one of the module's [actions](modules/README.md#actions) to press when the page is first drawn, so the picture shows its result (or its spinner, if it takes longer than the window takes to settle). It runs for real, network included, so use a throwaway `GLOSSA_HOME`. A button greyed out by `needs` is not pressed. |
+| `GLOSSA_SCREENSHOT_ACTION` | desktop program | With `--screenshot panel:MODULE/PANEL`: an action of that panel to run once it is open. With `GLOSSA_SCREENSHOT_SERVICE`, or with `--screenshot module-editor` (its preview): the id of one of the module's [actions](modules/README.md#actions) to press when the page is first drawn, so the picture shows its result (or its spinner, if it takes longer than the window takes to settle). It runs for real, network included, so use a throwaway `GLOSSA_HOME`. A button greyed out by `needs` is not pressed. |
 | `GLOSSA_FRAME_TRACE` | desktop program | Diagnosing stutter: a file path (or `1` for `frames.csv` in the cache folder) that gets one CSV line per frame of the main window, the popup and Options: when the frame started, the time since that window's previous frame, how long its UI took, the scroll events it consumed (both axes) and the scroll delta the window's scroll areas got. |
 | `GLOSSA_RENDERER` | desktop program | Overrides `[appearance] renderer` for one run, with the same names `config.toml` takes: `open_gl` (or `glow`, `opengl`, `gl`), `gpu` (or `wgpu`), `software` (or `cpu`, `warp`). An unknown value is ignored. |
 | `GLOSSA_PYTHON_SDK` | both programs | A folder holding `glossa_module.py`, searched first when starting Python modules. |
@@ -941,7 +955,7 @@ by tests.
 | `--hidden`, `--tray` | Start in the tray, whatever `[general] startup_action` says. Autostart uses this. |
 | `--home DIR` | The data folder, as `GLOSSA_HOME`. |
 | `--popup TEXT` | Show `TEXT` translated in the popup at start. |
-| `--screenshot WHAT [FILE]` | Development aid: draw one window (`main`, `popup`, `options`, `options:PAGE`, `dictionary`, `history`, `keyboard`, `about`, `welcome`, `ocr-result`, `module-editor`, `module-editor:test`) to a PNG and exit. `module-editor` opens the module editor on the folder in `GLOSSA_SCREENSHOT_MODULE`, or on a new module from the translator template; `module-editor:test` also runs its tests. `options:font` opens Options with the font list open; `options:autostart` shows the note given after turning on starting at login, without changing anything. It exits with 2 when the picture is blank, 3 when no picture came within 90 seconds of starting, 4 when a string has no text in any language and 6 for an unknown window. |
+| `--screenshot WHAT [FILE]` | Development aid: draw one window (`main`, `popup`, `options`, `options:PAGE`, `dictionary`, `history`, `keyboard`, `about`, `welcome`, `ocr-result`, `module-editor`, `module-editor:test`, `panel:MODULE/PANEL`) to a PNG and exit. `panel:` opens a loaded module's panel. `module-editor` opens the module editor on the folder in `GLOSSA_SCREENSHOT_MODULE`, or on a new module from the translator template; `module-editor:test` also runs its tests. `options:font` opens Options with the font list open; `options:autostart` shows the note given after turning on starting at login, without changing anything. It exits with 2 when the picture is blank, 3 when no picture came within 90 seconds of starting, 4 when a string has no text in any language and 6 for an unknown window. |
 | `--screenshot-list` | Print every window `--screenshot` can draw, one per line, and exit. `scripts/screenshot-smoke.sh` renders them all. |
 
 Starting `glossa` while it is already running shows the running program's

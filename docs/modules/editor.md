@@ -30,9 +30,11 @@ without leaving the program or restarting it.
   file underlined with a mark beside the line (hover the mark for the
   message).
 - **Preview** on the right: the module's settings page as *Options →
-  Services* will show it, from the manifest as last checked. Values typed
-  there are not saved. On a narrow window the preview is a tab in the
-  drawer instead.
+  Services* will show it, from the manifest as last checked, and below it
+  the module's [panels](panels.md), live: their actions run in the module
+  as last reloaded. Values typed there are not saved, and a panel's
+  `persist` keys are neither read nor written. On a narrow window the
+  preview is a tab in the drawer instead.
 - **The drawer** at the bottom:
   - *Problems* — everything the last check found, and the places failed
     test cases point at, each with `file:line:col`; click one to go there.

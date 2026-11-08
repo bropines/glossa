@@ -87,6 +87,7 @@ UI responsive, because every call runs on a worker thread.
 | `host.log(level, message)` | Glossa's log; `console.log/info/warn/error/debug` go there too. |
 | `host.options` | The module's settings, the same object as `req.options`. |
 | `host.t(key, ...args)` | In an action: the module's string from `[strings]` in `locales/<lang>.toml`, in the interface language with English as the fallback, `{0}`, `{1}`… replaced by the arguments. |
+| `host.ui.update(state)` | In an action from a [panel](panels.md#streaming): partial state (an object of state keys), merged into the panel at once while the handler works. Nothing elsewhere. |
 | `host.image.crop(img, {…})`, `.resize`, `.grayscale`, `.deskew`, `.encode`… | The image API: preprocessing on handles, each result carrying the transform back to the original; `host.image.mapBoxBack(box, img)` maps a box back. See [ocr-modules.md](ocr-modules.md#the-image-api). |
 
 `host.fetch` only reaches hosts in `permissions.network`, goes through the

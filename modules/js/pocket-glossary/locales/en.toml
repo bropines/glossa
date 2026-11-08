@@ -1,0 +1,8 @@
+# Strings for the code (host.t). The manifest's own text is the English
+# default for everything else.
+[strings]
+found = "{0} words"
+nothing = "Nothing matches \"{0}\"."
+picking = "Picking a word…"
+of_the_day = "Word of the day"
+of_the_day_notice = "Today: {0}"

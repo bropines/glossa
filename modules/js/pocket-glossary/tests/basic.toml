@@ -1,0 +1,61 @@
+# Cases for `glossa-cli module test`. The glossary is built in, so there is
+# nothing to record. Panel actions run with `panel = "glossary"`: the
+# handler sees the panel and its state, and what it sends with
+# host.ui.update comes back as the result's `updates`.
+
+[[case]]
+name = "looks up a term"
+op = "dictionary"
+text = "Calque"
+from = "en"
+to = "en"
+[case.expect]
+headword = "calque"
+contains = ["borrowed by translating it literally", "gratte-ciel"]
+
+[[case]]
+name = "a word not in the glossary is not found"
+op = "dictionary"
+text = "banana"
+from = "en"
+to = "en"
+expect = { error = "not_found", error_contains = "banana" }
+
+[[case]]
+name = "only English words"
+op = "dictionary"
+text = "calque"
+from = "fr"
+to = "en"
+expect = { error = "source_language" }
+
+# ---- The panel's actions ----------------------------------------------------
+
+[[case]]
+name = "search lists matching words"
+op = "action"
+action = "search"
+panel = "glossary"
+state = { query = "word" }
+[case.expect]
+result = { state = { words = [{ title = "calque" }, { title = "cognate" }, { title = "false friend" }, { title = "gloss" }, { title = "idiom" }, { title = "loanword" }, { title = "transliteration" }], status = "7 words" } }
+
+[[case]]
+name = "search says when nothing matches, in Russian"
+op = "action"
+action = "search"
+panel = "glossary"
+state = { query = "zebra" }
+ui_lang = "ru"
+[case.expect]
+result = { state = { words = [], status = "Ничего не нашлось по запросу «zebra»." } }
+
+[[case]]
+name = "word of the day streams its progress"
+op = "action"
+action = "word_of_the_day"
+panel = "glossary"
+state = { day = 3 }
+[case.expect]
+text = "Today: gloss"
+result = { notice_level = "success", state = { query = "gloss", article = { headword = "gloss" }, progress = 100 }, updates = [{ progress = 30, status = "Picking a word…" }, { progress = 70 }] }
