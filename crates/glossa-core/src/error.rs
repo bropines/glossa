@@ -90,6 +90,14 @@ pub enum Error {
     )]
     RuntimeMissing { module: String, what: String },
 
+    /// A module installed by hand asks for something the user has not
+    /// approved yet (it is new, or an update widened its permissions), so it
+    /// is listed but does not run.
+    #[error(
+        "module {module} is waiting for your approval: approve it in Options > Modules, or run `glossa-cli module approve {module}`"
+    )]
+    NeedsApproval { module: String },
+
     /// A downloaded module file did not match the checksum its manifest
     /// gives. The file has been deleted; downloading again fetches it anew.
     #[error("file {asset} of module {module} is damaged or was changed on the server (SHA-256 {actual}, expected {expected}); it was deleted")]

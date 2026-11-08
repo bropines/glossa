@@ -493,6 +493,8 @@ impl Engine {
             .ok_or_else(|| Error::Config(format!("no free folder name for {base:?}")))?;
         let dir = user_dir.join(&id);
         write_template(template, &dir, &id, name)?;
+        // Its author is the user, here and now.
+        self.approve_dir(&dir);
         // Loading it is a convenience: a template that cannot load here
         // (no JavaScript in this build) is still there to edit.
         if let Err(e) = self.reload_module(&dir) {
@@ -535,6 +537,11 @@ impl Engine {
                 target
             }
         };
+        // Copied on purpose to be edited: approved, unless the original
+        // itself waits for approval (copying must not launder that).
+        if !self.registry().entry(id).is_some_and(|e| e.pending) {
+            self.approve_dir(&target);
+        }
         self.reload_module(&target)?;
         Ok(target)
     }

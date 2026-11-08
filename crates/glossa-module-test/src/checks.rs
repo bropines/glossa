@@ -328,6 +328,7 @@ pub fn error_kind(e: &Error) -> &'static str {
         Error::Module { .. } | Error::ModuleAt { .. } => "module",
         Error::AssetsMissing { .. } => "assets_missing",
         Error::RuntimeMissing { .. } => "runtime_missing",
+        Error::NeedsApproval { .. } => "needs_approval",
         _ => "other",
     }
 }

@@ -24,6 +24,7 @@ pub mod pipeline;
 pub mod presets;
 pub mod python;
 pub mod server;
+pub mod trust;
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -620,6 +621,9 @@ impl Engine {
         }
         *self.inner.modules.write() =
             ModuleStatus { loaded: report.loaded, failed: report.failed, skipped: report.skipped };
+        if !cfg.modules.trust_initialised {
+            self.initialise_trust();
+        }
         self.adopt_providers();
         self.emit(Event::ModulesReloaded);
     }
@@ -639,6 +643,7 @@ impl Engine {
             models_dir: paths.models_dir(),
             auto_download_assets: cfg.modules.auto_download_assets,
             disabled: cfg.modules.disabled.clone(),
+            trust: self.trust_policy(cfg),
             preferred_domain: cfg.advanced.preferred_domain.clone(),
             ui_language_code: self.locale().code.clone(),
         }
@@ -659,7 +664,9 @@ impl Engine {
         let s = &mut cfg.services;
         for entry in registry.entries() {
             let info = entry.info();
-            if s.seen.contains(&info.id) {
+            // Adopted once approved: switching on a module that cannot run
+            // yet would only make calls fail over past it.
+            if entry.pending || s.seen.contains(&info.id) {
                 continue;
             }
             s.seen.push(info.id.clone());
@@ -2026,6 +2033,7 @@ mod tests {
         .unwrap();
         std::fs::write(m.join("main.js"), "function translate(req) { return req.text; }").unwrap();
         e.reload_modules();
+        e.approve_module("ready", None).unwrap();
         let s = e.config().services;
         assert!(s.enabled.contains(&"ready".to_string()), "{:?}", s.enabled);
         assert!(Config::load(&e.paths().config_file()).unwrap().services.enabled.contains(&"ready".to_string()));
@@ -2055,6 +2063,7 @@ mod tests {
         .unwrap();
         std::fs::write(m.join("main.js"), "function translate(req) { return 'mine: ' + req.text; }").unwrap();
         e.reload_modules();
+        e.approve_module("yandex-web", None).unwrap();
         let p = e.providers(Capabilities::TRANSLATE).into_iter().find(|p| p.info.id == "yandex-web").unwrap();
         assert_eq!(p.info.name, "My Yandex");
         assert_eq!(p.origin, "JavaScript");

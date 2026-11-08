@@ -25,6 +25,7 @@ use crate::manifest::{Manifest, Runtime};
 use crate::provider::Provider;
 use crate::python_env::{PythonDirs, PythonEnv};
 use crate::runtime;
+use crate::trust::{PendingApproval, TrustPolicy, TrustRequest};
 
 /// Where a provider came from.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -47,6 +48,13 @@ pub struct Entry {
     pub assets: Option<Arc<ModuleAssets>>,
     /// A Python module's interpreter and environment.
     pub python: Option<Arc<PythonEnv>>,
+    /// What a module installed by hand asks to be allowed to do; `None` for
+    /// providers that need no approval (built in, bundled, shipped beside
+    /// the program, a classic installation's services).
+    pub trust: Option<Arc<TrustRequest>>,
+    /// The user has not approved [`Entry::trust`] yet: the provider is a
+    /// [`PendingApproval`] and nothing of the module runs.
+    pub pending: bool,
 }
 
 impl Entry {
@@ -79,6 +87,8 @@ pub struct RuntimeContext {
     pub auto_download_assets: bool,
     /// Module ids the user switched off.
     pub disabled: Vec<String>,
+    /// Which modules may run; the default approves everything.
+    pub trust: TrustPolicy,
     /// The Google domain and interface language some classic scripts read
     /// from their `Options` object.
     pub preferred_domain: String,
@@ -99,6 +109,7 @@ impl Default for RuntimeContext {
             models_dir: std::env::temp_dir().join("glossa-models"),
             auto_download_assets: false,
             disabled: Vec::new(),
+            trust: TrustPolicy::default(),
             preferred_domain: "com".into(),
             ui_language_code: "en".into(),
         }
@@ -132,13 +143,27 @@ impl Registry {
 
     /// Add a provider compiled into the program.
     pub fn add_builtin(&mut self, provider: Arc<dyn Provider>) {
-        self.insert(Entry { provider, origin: Origin::Builtin, assets: None, python: None });
+        self.insert(Entry {
+            provider,
+            origin: Origin::Builtin,
+            assets: None,
+            python: None,
+            trust: None,
+            pending: false,
+        });
     }
 
     /// Add a module compiled into the program. Add these before loading the
     /// module directories, so a module there with the same id wins.
     pub fn add_bundled(&mut self, provider: Arc<dyn Provider>) {
-        self.insert(Entry { provider, origin: Origin::Bundled, assets: None, python: None });
+        self.insert(Entry {
+            provider,
+            origin: Origin::Bundled,
+            assets: None,
+            python: None,
+            trust: None,
+            pending: false,
+        });
     }
 
     /// Add or replace by id. The provider is put behind a panic barrier
@@ -221,7 +246,8 @@ impl Registry {
         let mut items: Vec<PathBuf> = read.flatten().map(|e| e.path()).collect();
         items.sort();
         for path in items {
-            match self.load_one(&path, ctx) {
+            let gate = !ctx.trust.is_trusted(&path);
+            match self.load_one(&path, ctx, gate) {
                 Ok(Some(entry)) => {
                     let id = entry.info().id.clone();
                     if ctx.disabled.contains(&id) {
@@ -249,7 +275,7 @@ impl Registry {
     /// same loading code as the program. The provider comes back behind the
     /// usual panic barrier.
     pub fn load_module(path: &Path, ctx: &RuntimeContext) -> Result<Entry, String> {
-        match Registry::new().load_one(path, ctx) {
+        match Registry::new().load_one(path, ctx, !ctx.trust.is_trusted(path)) {
             Ok(Some(mut entry)) => {
                 entry.provider = crate::provider::Guarded::wrap(entry.provider);
                 Ok(entry)
@@ -261,11 +287,13 @@ impl Registry {
         }
     }
 
-    fn load_one(&self, path: &Path, ctx: &RuntimeContext) -> Result<Option<Entry>, Skip> {
+    /// `gate`: the module needs the user's approval to run (it is not in a
+    /// trusted folder); see [`crate::trust`].
+    fn load_one(&self, path: &Path, ctx: &RuntimeContext, gate: bool) -> Result<Option<Entry>, Skip> {
         if path.is_file() {
             if path.extension().is_some_and(|e| e.eq_ignore_ascii_case("potext")) {
                 let unpacked = runtime::pot::unpack(path, &ctx.cache_dir).map_err(Skip::Failed)?;
-                return self.load_one(&unpacked, ctx);
+                return self.load_one(&unpacked, ctx, gate);
             }
             return Ok(None);
         }
@@ -279,13 +307,23 @@ impl Registry {
             let version = manifest.module.version.clone();
             let runtime = manifest.module.runtime;
             let origin = Origin::Module { dir: path.to_owned(), runtime, version };
+            let trust = gate.then(|| Arc::new(TrustRequest::for_manifest(&manifest, path)));
+            if let Some(request) = &trust {
+                if !ctx.trust.allows(&manifest.module.id, request) {
+                    // Decided from the manifest alone: no runtime starts, no
+                    // environment is made, nothing is downloaded.
+                    tracing::info!(module = %manifest.module.id, "module waits for the user's approval");
+                    let provider = Arc::new(PendingApproval::from_manifest(&manifest));
+                    return Ok(Some(Entry { provider, origin, assets: None, python: None, trust, pending: true }));
+                }
+            }
             let assets = ModuleAssets::for_manifest(&manifest, &ctx.models_dir)
                 .map_err(|e| Skip::Failed(format!("{}: {e}", manifest_path.display())))?
                 .map(Arc::new);
             let python = python_env(path, &manifest, ctx)?;
             let Some(assets) = assets else {
                 let provider = instantiate(path, manifest, ctx, python.as_ref())?;
-                return Ok(Some(Entry { provider, origin, assets: None, python }));
+                return Ok(Some(Entry { provider, origin, assets: None, python, trust, pending: false }));
             };
             assets.apply_to(&mut manifest);
             // Ready files: load as usual, so a broken module is reported
@@ -303,7 +341,7 @@ impl Registry {
                 });
                 Arc::new(AssetGate::new(&manifest, assets.clone(), ctx.auto_download_assets, make))
             };
-            return Ok(Some(Entry { provider, origin, assets: Some(assets), python }));
+            return Ok(Some(Entry { provider, origin, assets: Some(assets), python, trust, pending: false }));
         }
 
         if path.join("Service.js").is_file() {
@@ -311,26 +349,34 @@ impl Registry {
                 return Err(Skip::Reason("classic scripts are switched off".into()));
             }
             let provider = runtime_js_qtranslate(path, ctx)?;
-            return Ok(Some(Entry {
-                provider,
-                origin: Origin::Module { dir: path.to_owned(), runtime: Runtime::Qtranslate, version: String::new() },
-                assets: None,
-                python: None,
-            }));
+            let origin = Origin::Module { dir: path.to_owned(), runtime: Runtime::Qtranslate, version: String::new() };
+            return Ok(Some(script_entry(provider, origin, Runtime::Qtranslate, ctx, gate)));
         }
 
         if path.join("info.json").is_file() && path.join("main.js").is_file() {
             let provider = runtime_js_pot(path, ctx)?;
-            return Ok(Some(Entry {
-                provider,
-                origin: Origin::Module { dir: path.to_owned(), runtime: Runtime::Pot, version: String::new() },
-                assets: None,
-                python: None,
-            }));
+            let origin = Origin::Module { dir: path.to_owned(), runtime: Runtime::Pot, version: String::new() };
+            return Ok(Some(script_entry(provider, origin, Runtime::Pot, ctx, gate)));
         }
 
         Ok(None)
     }
+}
+
+/// A classic script or pot-app plugin, behind [`PendingApproval`] when it
+/// needs approval it does not have. Those are sandboxed JavaScript, so
+/// setting one up to learn its id runs nothing that could reach out.
+fn script_entry(
+    provider: Arc<dyn Provider>,
+    origin: Origin,
+    runtime: Runtime,
+    ctx: &RuntimeContext,
+    gate: bool,
+) -> Entry {
+    let trust = gate.then(|| Arc::new(TrustRequest::unrestricted_script(runtime)));
+    let pending = trust.as_ref().is_some_and(|r| !ctx.trust.allows(&provider.info().id, r));
+    let provider: Arc<dyn Provider> = if pending { Arc::new(PendingApproval::wrapping(provider)) } else { provider };
+    Entry { provider, origin, assets: None, python: None, trust, pending }
 }
 
 /// A Python module's environment as the settings describe it; `None` for
@@ -566,6 +612,62 @@ size = 11
         let mut r = Registry::new();
         r.load_dir(&root.join("modules"), &ctx);
         assert!(r.entry("needs-model").unwrap().assets.as_ref().unwrap().ready());
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    #[cfg(feature = "js")]
+    #[test]
+    fn a_module_without_approval_is_listed_but_refuses_every_call() {
+        use std::collections::BTreeMap;
+        let root = std::env::temp_dir().join(format!("glossa-reg-trust-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        let shipped = root.join("shipped");
+        let user = root.join("user");
+        for (dir, id) in [(&shipped, "shipped-one"), (&user, "mine")] {
+            let m = dir.join(id);
+            std::fs::create_dir_all(&m).unwrap();
+            std::fs::write(
+                m.join("module.toml"),
+                format!("capabilities = [\"translate\"]\n[module]\nid = \"{id}\"\nname = \"N\"\nruntime = \"js\"\n[permissions]\nnetwork = [\"api.test\"]\n"),
+            )
+            .unwrap();
+            std::fs::write(m.join("main.js"), "function translate(req) { return 'ok'; }").unwrap();
+        }
+        let policy = |granted: BTreeMap<String, glossa_core::config::ModuleGrant>| TrustPolicy {
+            granted: Some(Arc::new(granted)),
+            trusted_dirs: vec![shipped.clone()],
+        };
+        let ctx = RuntimeContext { trust: policy(BTreeMap::new()), ..Default::default() };
+        let mut r = Registry::new();
+        r.load_dirs(&[shipped.clone(), user.clone()], &ctx);
+        let trusted = r.entry("shipped-one").unwrap();
+        assert!(!trusted.pending && trusted.trust.is_none(), "shipped modules need no approval");
+        let mine = r.entry("mine").unwrap();
+        assert!(mine.pending);
+        let request = mine.trust.clone().unwrap();
+        assert_eq!(request.network, ["api.test"]);
+
+        let req = glossa_core::TranslateRequest::new(
+            "hi",
+            glossa_core::LangPair::new(glossa_core::LangId::AUTO, glossa_core::LangId::ENGLISH),
+        );
+        let http = glossa_net::mock::MockHttp::new();
+        let p = mine.provider.clone();
+        let err = crate::provider::with_test_host(&http, &Default::default(), |h| p.translate(h, &req)).unwrap_err();
+        assert!(matches!(&err, glossa_core::Error::NeedsApproval { module } if module == "mine"), "{err:?}");
+
+        // Approved, it runs.
+        let ctx = RuntimeContext {
+            trust: policy(BTreeMap::from([("mine".to_owned(), request.to_grant())])),
+            ..Default::default()
+        };
+        let mut r = Registry::new();
+        r.load_dirs(&[shipped.clone(), user.clone()], &ctx);
+        let mine = r.entry("mine").unwrap();
+        assert!(!mine.pending);
+        let p = mine.provider.clone();
+        let out = crate::provider::with_test_host(&http, &Default::default(), |h| p.translate(h, &req)).unwrap();
+        assert_eq!(out.text, "ok");
         std::fs::remove_dir_all(&root).ok();
     }
 }

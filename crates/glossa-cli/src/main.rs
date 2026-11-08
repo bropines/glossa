@@ -82,6 +82,11 @@ COMMANDS
                                       a module whose files are not downloaded is skipped, unless
                                       --download fetches them first
     module check [--strict] DIR…      the same checks without loading or running anything
+    module pending                    modules installed by hand that wait for approval, and what
+                                      each asks for (hosts, programs, downloads, packages, actions)
+    module approve|revoke|decline ID [--local] [--force]
+                                      approve what a module asks for, withdraw the approval, or
+                                      switch it off; through a running Glossa when it answers
     module action ID ACTION [--option KEY=VALUE] [--set-from-env KEY=VAR] [--state KEY=VALUE]
                                       run one of an installed module's [[actions]] (a settings-page
                                       button) with the saved settings, KEY=VALUE over them, and print
@@ -238,6 +243,8 @@ fn command_flags(command: &str) -> Option<&'static [&'static str]> {
             "--option",
             "--state",
             "--panel",
+            "--local",
+            "--force",
         ],
         "detect" | "modules" | "assets" | "python" | "import-classic" | "theme" | "locale" | "config" | "serve"
         | "action" | "doctor" | "" | "help" | "version" => &[],
@@ -526,6 +533,153 @@ fn module_action(args: &Args) -> Result<(), Fail> {
     Ok(())
 }
 
+/// `module pending|approve|revoke|decline`: approving modules installed by
+/// hand. Through a running Glossa's control API when there is one, since it
+/// keeps its settings in memory; otherwise on the settings file.
+fn module_trust(args: &Args, op: &str) -> Result<(), Fail> {
+    let id = args.rest.get(1).map(String::as_str);
+    if op != "pending" && id.is_none() {
+        return Err(Fail::Usage(format!("module {op} needs a module id (see `glossa-cli module pending`)")));
+    }
+    let local = args.has(&["--local"]);
+    let remote = if local { None } else { running_glossa(args) };
+    if remote.is_none() && op != "pending" {
+        refuse_behind_a_running_glossa(args, local)?;
+    }
+    let local_engine = match remote {
+        Some(_) => None,
+        None => Some(engine(args)?),
+    };
+    let list = || -> Result<Vec<serde_json::Value>, Fail> {
+        match (&remote, &local_engine) {
+            (Some((addr, token)), _) => {
+                let v = parse_answer(&control_api(addr, token, false, "/v1/trust", vec![])?)?;
+                Ok(v.as_array().cloned().unwrap_or_default())
+            }
+            (None, Some(e)) => Ok(e.module_trust().iter().map(|m| json!(m)).collect()),
+            (None, None) => Ok(Vec::new()),
+        }
+    };
+    let call = |what: &str, body: serde_json::Value| -> Result<(), Fail> {
+        let id = id.unwrap_or_default();
+        match (&remote, &local_engine) {
+            (Some((addr, token)), _) => {
+                control_api(addr, token, true, &format!("/v1/trust/{id}/{what}"), body.to_string().into_bytes())?;
+                Ok(())
+            }
+            (None, Some(e)) => Ok(match what {
+                "approve" => e.approve_module(id, body["hash"].as_str()),
+                "revoke" => e.revoke_module(id),
+                _ => e.decline_module(id),
+            }?),
+            (None, None) => Ok(()),
+        }
+    };
+    match op {
+        "pending" => {
+            let waiting: Vec<_> = list()?.into_iter().filter(|m| m["pending"] == json!(true)).collect();
+            if args.json {
+                out!("{}", serde_json::to_string_pretty(&waiting).unwrap_or_default());
+            } else if waiting.is_empty() {
+                out!("no module is waiting for approval");
+            } else {
+                for m in &waiting {
+                    let why = if m["first_time"] == json!(true) { "new" } else { "asks for more since approved" };
+                    out!(
+                        "{} ({}): {why}",
+                        m["id"].as_str().unwrap_or_default(),
+                        m["name"].as_str().unwrap_or_default()
+                    );
+                    for line in describe_request(&m["request"]) {
+                        out!("  {line}");
+                    }
+                }
+                out!(
+                    "\napprove with `glossa-cli module approve ID`, or switch off with `glossa-cli module decline ID`"
+                );
+            }
+            Ok(())
+        }
+        "approve" => {
+            let all = list()?;
+            let id = id.unwrap_or_default();
+            let Some(m) = all.iter().find(|m| m["id"] == json!(id)) else {
+                return Err(Fail::Op(format!(
+                    "no module {id:?} that needs approval (shipped modules need none; a switched-off one is not loaded)"
+                )));
+            };
+            // The hash of what is printed here, so a manifest changed in
+            // between is not approved unseen.
+            call("approve", json!({ "hash": m["hash"] }))?;
+            if !args.json {
+                out!("approved {id}:");
+                for line in describe_request(&m["request"]) {
+                    out!("  {line}");
+                }
+            }
+            Ok(())
+        }
+        other => {
+            call(other, json!({}))?;
+            if !args.json {
+                let id = id.unwrap_or_default();
+                out!(
+                    "{}",
+                    if other == "revoke" {
+                        format!("{id} now waits for approval")
+                    } else {
+                        format!("switched {id} off")
+                    }
+                );
+            }
+            Ok(())
+        }
+    }
+}
+
+/// What a module asks for (a `TrustRequest` as JSON), in plain words.
+fn describe_request(r: &serde_json::Value) -> Vec<String> {
+    let list = |key: &str| -> Vec<String> {
+        r[key].as_array().into_iter().flatten().filter_map(|v| v.as_str().map(str::to_owned)).collect()
+    };
+    let mut out = Vec::new();
+    let program = list("program").join(" ");
+    out.push(match r["reach"].as_str() {
+        Some("native") => format!("loads a native library into Glossa ({program}): full trust, it runs inside Glossa"),
+        Some("program") => {
+            format!("runs a program on your computer with your rights, so it can read and change your files: {program}")
+        }
+        _ => "runs sandboxed: no access to your files or programs".to_owned(),
+    });
+    let hosts = list("network");
+    out.push(match hosts.as_slice() {
+        [] => "no network access".to_owned(),
+        h if h.iter().any(|x| x == "*") => "can reach any website".to_owned(),
+        h => format!("can reach: {}", h.join(", ")),
+    });
+    for a in r["assets"].as_array().into_iter().flatten() {
+        let hosts: Vec<&str> = a["hosts"].as_array().into_iter().flatten().filter_map(|h| h.as_str()).collect();
+        let mb = a["size"].as_u64().unwrap_or(0) as f64 / 1_048_576.0;
+        let optional = if a["optional"] == json!(true) { ", when asked for" } else { "" };
+        out.push(format!(
+            "downloads {}, {mb:.1} MB, from {}{optional}",
+            a["name"].as_str().unwrap_or("?"),
+            hosts.join(", ")
+        ));
+    }
+    let packages = list("packages");
+    let (index, packages): (Vec<String>, Vec<String>) = packages.into_iter().partition(|p| p.starts_with("index "));
+    if !packages.is_empty() {
+        let from = index.first().map(|i| format!(" from {}", &i["index ".len()..])).unwrap_or_default();
+        out.push(format!("installs Python packages{from}: {}", packages.join(", ")));
+    }
+    let actions = list("actions");
+    if !actions.is_empty() {
+        out.push(format!("has actions: {}", actions.join(", ")));
+    }
+    out
+}
+
 /// `module test` / `module check`: the module test harness
 /// (`glossa-module-test`). Needs no data folder, so it runs the same on a
 /// developer's machine and in CI.
@@ -536,8 +690,19 @@ fn module_command(args: &Args) -> Result<(), Fail> {
         "test" => false,
         "check" => true,
         "action" => return module_action(args),
-        "" => return Err(Fail::Usage("module test DIR…, module check DIR… or module action ID ACTION".into())),
-        other => return Err(Fail::Usage(format!("unknown module command {other:?}; use test, check or action"))),
+        "pending" | "approve" | "revoke" | "decline" => return module_trust(args, sub),
+        "" => {
+            return Err(Fail::Usage(
+                "module test DIR…, module check DIR…, module action ID ACTION, module pending, \
+                 module approve ID, module revoke ID or module decline ID"
+                    .into(),
+            ))
+        }
+        other => {
+            return Err(Fail::Usage(format!(
+                "unknown module command {other:?}; use test, check, action, pending, approve, revoke or decline"
+            )))
+        }
     };
     let roots = &args.rest[1..];
     if roots.is_empty() {
@@ -1367,7 +1532,12 @@ fn refuse_behind_a_running_glossa(args: &Args, local: bool) -> Result<(), Fail> 
 
 /// One call to `/v1/presets…` on a running Glossa; the body of its answer.
 fn preset_api(addr: &str, token: &str, post: bool, path: &str, body: Vec<u8>) -> Result<String, Fail> {
-    let url = format!("http://{addr}/v1/presets{path}");
+    control_api(addr, token, post, &format!("/v1/presets{path}"), body)
+}
+
+/// One call to the control API of a running Glossa; the body of its answer.
+fn control_api(addr: &str, token: &str, post: bool, path: &str, body: Vec<u8>) -> Result<String, Fail> {
+    let url = format!("http://{addr}{path}");
     let req = if post { glossa_net::HttpRequest::post(url).body(body) } else { glossa_net::HttpRequest::get(url) };
     let req = req.header("Authorization", format!("Bearer {token}")).timeout(Duration::from_secs(30));
     let resp = glossa_net::Http::send(&glossa_net::HttpClient::plain(), req)?;
@@ -1660,6 +1830,39 @@ mod tests {
         assert!(run(&["--force", "save", "A"]).is_ok());
         drop(guard);
         assert!(run(&["--local", "apply", "A"]).is_ok(), "nobody running");
+        std::fs::remove_dir_all(&home).ok();
+    }
+
+    #[test]
+    fn modules_are_approved_and_revoked_from_the_command_line() {
+        let home = std::env::temp_dir().join(format!("glossa-cli-trust-{}", std::process::id()));
+        std::fs::remove_dir_all(&home).ok();
+        let h = home.to_string_lossy().into_owned();
+        let args = |rest: &[&str]| {
+            let mut v = vec!["--home", h.as_str(), "--json", "module"];
+            v.extend_from_slice(rest);
+            p(&v)
+        };
+        let m = paths(&args(&[])).user_module_dir().join("hand-made");
+        std::fs::create_dir_all(&m).unwrap();
+        std::fs::write(
+            m.join("module.toml"),
+            "capabilities = [\"translate\"]\n[module]\nid = \"hand-made\"\nname = \"Hand made\"\nruntime = \"js\"\n\
+             [permissions]\nnetwork = [\"api.test\"]\n",
+        )
+        .unwrap();
+        std::fs::write(m.join("main.js"), "function translate(req) { return req.text; }").unwrap();
+        let config = paths(&args(&[])).config_file();
+        std::fs::write(&config, "[server]\nenabled = false\n[modules]\ntrust_initialised = true\n").unwrap();
+        let granted = || glossa_core::Config::load(&config).unwrap().modules.granted;
+
+        assert!(module_trust(&args(&["pending"]), "pending").is_ok());
+        assert!(matches!(module_trust(&args(&["approve"]), "approve"), Err(Fail::Usage(_))), "needs an id");
+        assert!(module_trust(&args(&["approve", "nope", "--local"]), "approve").is_err());
+        assert!(module_trust(&args(&["approve", "hand-made", "--local"]), "approve").is_ok());
+        assert_eq!(granted()["hand-made"].network, ["api.test"]);
+        assert!(module_trust(&args(&["revoke", "hand-made", "--local"]), "revoke").is_ok());
+        assert!(granted().is_empty());
         std::fs::remove_dir_all(&home).ok();
     }
 
