@@ -2,17 +2,24 @@
 # An example of an OCR module in JavaScript: it prepares the picture with the
 # host's image API, calls a network OCR service and returns the full layout
 # (blocks, paragraphs, lines, words with outlines and confidence).
+#
+# It also shows a richer settings page with no code: conditions
+# (`visible_if`, `enabled_if`), checks (`pattern`, `min_length`), a slider,
+# a multiselect, a tabbed `[ui.settings]` layout, and a Russian translation
+# in locales/ru.toml. See docs/modules/README.md#settings-pages.
 capabilities = ["ocr"]
 
 [module]
 id = "google-vision-ocr"
 name = "Google Cloud Vision OCR"
-version = "1.0.0"
+version = "1.1.0"
 runtime = "js"
 entry = "main.js"
 description = "Document text recognition with the Cloud Vision API: layout down to words, with confidence."
 homepage = "https://cloud.google.com/vision/docs/fulltext-annotations"
 license = "MIT"
+# The settings below need a Glossa that knows them.
+min_glossa = "0.1.0-beta.2"
 
 [permissions]
 network = ["vision.googleapis.com"]
@@ -23,12 +30,111 @@ type = "secret"
 label = "API key"
 required = true
 help = "A Google Cloud API key with the Cloud Vision API enabled."
+pattern = '^AIza[0-9A-Za-z_-]{35}$'
+pattern_message = "A Google API key starts with AIza and is 39 characters long."
+
+[[options]]
+key = "hints"
+type = "select"
+label = "Language hints"
+default = "request"
+help = "Telling Vision the language helps with short or unusual text."
+choices = [
+  { value = "request", label = "The language Glossa asks for" },
+  { value = "custom", label = "Always these languages" },
+  { value = "none", label = "None: let Vision guess" },
+]
+
+[[options]]
+key = "custom_hints"
+type = "multiselect"
+label = "Languages"
+visible_if = "options.hints == 'custom'"
+min_length = 1
+choices = [
+  { value = "en", label = "English" },
+  { value = "ru", label = "Russian" },
+  { value = "de", label = "German" },
+  { value = "fr", label = "French" },
+  { value = "ja", label = "Japanese" },
+  { value = "zh", label = "Chinese" },
+]
+
+[[options]]
+key = "enlarge"
+type = "bool"
+label = "Enlarge small captures"
+default = true
 
 [[options]]
 key = "min_height"
 type = "number"
-label = "Enlarge pictures shorter than (px)"
+widget = "slider"
+label = "shorter than (px)"
 default = 48
 min = 0
 max = 400
-help = "Small captures are scaled up first; Vision reads tiny text poorly. 0 turns this off."
+step = 8
+enabled_if = "options.enlarge"
+help = "Small captures are scaled up first; Vision reads tiny text poorly."
+
+[[options]]
+key = "feature"
+type = "select"
+label = "Detection"
+default = "DOCUMENT_TEXT_DETECTION"
+choices = [
+  { value = "DOCUMENT_TEXT_DETECTION", label = "Documents (dense text)" },
+  { value = "TEXT_DETECTION", label = "Scenes (signs, photos)" },
+]
+
+[[options]]
+key = "max_side"
+type = "number"
+label = "Longest side sent (px)"
+default = 4000
+min = 1000
+max = 4000
+step = 100
+
+# The page: three tabs. Without this table the options would be listed in
+# the order above.
+[ui]
+format = 1
+
+[ui.settings]
+layout = ["pages"]
+
+[[ui.settings.items]]
+id = "pages"
+type = "tabs"
+children = ["connection", "recognition", "advanced"]
+
+[[ui.settings.items]]
+id = "connection"
+type = "group"
+label = "Connection"
+children = ["key_note", "api_key"]
+
+[[ui.settings.items]]
+id = "key_note"
+type = "label"
+style = "weak"
+label = "Create a key in the Google Cloud console under APIs and services, Credentials."
+
+[[ui.settings.items]]
+id = "recognition"
+type = "group"
+label = "Recognition"
+children = ["hints", "custom_hints", "size"]
+
+[[ui.settings.items]]
+id = "size"
+type = "row"
+children = ["enlarge", "min_height"]
+
+[[ui.settings.items]]
+id = "advanced"
+type = "group"
+label = "Advanced"
+children = ["feature", "max_side"]

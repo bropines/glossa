@@ -40,6 +40,10 @@ hmac = "0.12"
 zip = { version = "6", default-features = false, features = ["deflate"] }
 # Unpacking `unpack = "tar.gz"` module assets; already in the tree through glossa-dict and png.
 flate2 = { version = "1.1", default-features = false, features = ["rust_backend"] }
+# `pattern` checks on settings fields. Already linked, with exactly these
+# features, through tracing-subscriber's env-filter, so it adds no code; the
+# `regex` crate (and regex-syntax's Unicode tables) would.
+regex-automata = { version = "0.4", default-features = false, features = ["std", "syntax", "dfa-build", "dfa-search"] }
 
 [dev-dependencies]
 glossa-net = { workspace = true }

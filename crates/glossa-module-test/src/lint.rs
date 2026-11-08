@@ -65,6 +65,7 @@ pub fn check(dir: &Path, ctx: &RuntimeContext) -> Lint {
     check_metadata(&manifest, &mut lint.findings);
     check_languages(&manifest, &mut lint.findings);
     check_options(&manifest, &mut lint.findings);
+    check_settings(dir, &manifest, &mut lint.findings);
     check_permissions(&manifest, &mut lint.findings);
     // A module with assets: its command line may name them (`${ASSETS_DIR}`),
     // so it is resolved the way the registry resolves it, and only once
@@ -229,6 +230,25 @@ fn check_options(m: &Manifest, out: &mut Vec<Finding>) {
             }
             _ => {}
         }
+    }
+}
+
+/// Richer settings: conditions, patterns, the `[ui.settings]` layout and the
+/// `locales/` files. The rules live in `glossa_modules::settings`, beside the
+/// code that applies them.
+fn check_settings(dir: &Path, m: &Manifest, out: &mut Vec<Finding>) {
+    let (strings, problems) = glossa_modules::settings::ModuleStrings::load(dir);
+    for issue in glossa_modules::settings::lint(m, &strings, &problems) {
+        let message = if issue.message.starts_with("locales/") {
+            issue.message
+        } else {
+            format!("module.toml: {}", issue.message)
+        };
+        out.push(match issue.level {
+            glossa_modules::settings::Level::Error => Finding::error(message),
+            glossa_modules::settings::Level::Warning => Finding::warning(message),
+            glossa_modules::settings::Level::Note => Finding::note(message),
+        });
     }
 }
 

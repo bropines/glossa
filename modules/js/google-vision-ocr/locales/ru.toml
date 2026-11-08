@@ -1,0 +1,59 @@
+# Russian text for the settings page. Keys name where a string appears; a
+# missing one falls back to module.toml. See docs/modules/README.md#translations.
+
+[module]
+description = "Распознавание документов через Cloud Vision API: разметка до отдельных слов, с уверенностью."
+
+[options.api_key]
+label = "Ключ API"
+help = "Ключ Google Cloud с включённым Cloud Vision API."
+pattern_message = "Ключ Google начинается с AIza, в нём 39 символов."
+
+[options.hints]
+label = "Подсказка языка"
+help = "Если сообщить Vision язык, короткий или необычный текст читается лучше."
+
+[options.hints.choices]
+request = "Язык, который запрашивает Glossa"
+custom = "Всегда эти языки"
+none = "Нет: пусть Vision угадывает"
+
+[options.custom_hints]
+label = "Языки"
+
+[options.custom_hints.choices]
+en = "Английский"
+ru = "Русский"
+de = "Немецкий"
+fr = "Французский"
+ja = "Японский"
+zh = "Китайский"
+
+[options.enlarge]
+label = "Увеличивать мелкие снимки"
+
+[options.min_height]
+label = "ниже (пикс.)"
+help = "Мелкие снимки сначала увеличиваются: крошечный текст Vision читает плохо."
+
+[options.feature]
+label = "Режим"
+
+[options.feature.choices]
+DOCUMENT_TEXT_DETECTION = "Документы (плотный текст)"
+TEXT_DETECTION = "Сцены (вывески, фото)"
+
+[options.max_side]
+label = "Длинная сторона, не больше (пикс.)"
+
+[settings.items.connection]
+label = "Подключение"
+
+[settings.items.key_note]
+label = "Ключ создаётся в консоли Google Cloud: APIs and services, Credentials."
+
+[settings.items.recognition]
+label = "Распознавание"
+
+[settings.items.advanced]
+label = "Дополнительно"

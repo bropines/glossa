@@ -9,6 +9,19 @@ the notes of its GitHub release.
 
 ### Added
 
+- Richer settings pages for modules and built-in services, with no module
+  code: options may show or grey out on a condition (`visible_if`,
+  `enabled_if`), check their values as you type with a message under the
+  field (`pattern`, `min_length`/`max_length`, `min`/`max`, the type
+  itself), use a slider, and be of three new types (`multiselect`, `lang`
+  with Glossa's language picker, `file` with a file dialog). An optional
+  `[ui.settings]` table lays the page out in groups, rows and tabs, and
+  `locales/<lang>.toml` translates a module's text into the interface
+  language. `min_glossa` keeps a module out of older builds. The services
+  list marks a module whose settings fail their checks, and `glossa-cli
+  module check` reports mistakes in all of the above. The Google Cloud
+  Vision example module shows every part (docs/modules/README.md,
+  *Settings pages*).
 - The interface language switches at once, without a restart: every
   window, the tray menu and the macOS menu bar follow the setting as soon
   as it is applied.

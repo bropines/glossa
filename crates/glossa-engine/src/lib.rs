@@ -201,6 +201,11 @@ fn provider_translation(ocr: &OcrResult, to: LangId) -> Option<TranslationOutcom
 pub struct ProviderSummary {
     pub info: ProviderInfo,
     pub options: Vec<OptionSpec>,
+    /// The settings page in the interface language: `options` laid out and
+    /// translated, with its conditions and checks. `info.name` and
+    /// `info.description` are already translated when the module
+    /// translates them.
+    pub page: Arc<glossa_modules::SettingsPage>,
     /// "Built-in", "JavaScript", "Python", "QTranslate script"…
     pub origin: String,
     pub dir: Option<PathBuf>,
@@ -705,6 +710,7 @@ impl Engine {
     /// page needs to show about each.
     pub fn providers(&self, cap: Capabilities) -> Vec<ProviderSummary> {
         let cfg = self.config();
+        let lang = self.locale().code.clone();
         let reg = self.registry();
         let (order, enabled) = if cap == Capabilities::DICTIONARY {
             (&cfg.services.dictionary_order, &cfg.services.dictionary_enabled)
@@ -721,9 +727,18 @@ impl Engine {
                     Origin::Bundled => ("Bundled".to_owned(), None),
                     Origin::Module { dir, runtime, .. } => (runtime.label().to_owned(), Some(dir.clone())),
                 };
+                let page = e.provider.settings_page(&lang);
+                let mut info = e.info().clone();
+                if let Some(name) = &page.name {
+                    info.name = name.clone();
+                }
+                if let Some(description) = &page.description {
+                    info.description = description.clone();
+                }
                 ProviderSummary {
-                    info: e.info().clone(),
+                    info,
                     options: e.provider.options().to_vec(),
+                    page,
                     origin,
                     dir,
                     enabled: enabled.contains(&e.info().id),

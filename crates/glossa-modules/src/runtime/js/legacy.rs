@@ -206,16 +206,13 @@ impl LegacyMeta {
                         OptionKind::Text
                     },
                     default: default.clone(),
-                    help: String::new(),
-                    required: false,
-                    choices: Vec::new(),
-                    min: None,
-                    max: None,
-                    placeholder: String::new(),
+                    ..OptionSpec::default()
                 })
                 .collect(),
             assets: Vec::new(),
             assets_dir: None,
+            ui: Default::default(),
+            strings: Default::default(),
         }
     }
 }

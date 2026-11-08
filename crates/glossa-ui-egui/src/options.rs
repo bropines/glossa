@@ -13,7 +13,6 @@ use glossa_core::config::{
     VisionLevel,
 };
 use glossa_core::{Action, Capabilities, Config, LangId};
-use glossa_modules::{OptionKind, OptionSpec};
 use glossa_platform::shell::SHELL;
 
 use crate::app::GlossaApp;
@@ -325,6 +324,21 @@ pub fn open_at(app: &mut GlossaApp, name: &str) {
     let page = Page::ALL.into_iter().find(|p| p.key().ends_with(name));
     if let (Some(st), Some(page)) = (app.options.as_mut(), page) {
         st.page = page;
+    }
+}
+
+/// Show provider `id` on the Services page, in the first group it belongs
+/// to. A development aid for `--screenshot` (`GLOSSA_SCREENSHOT_SERVICE`).
+pub fn select_service(app: &mut GlossaApp, id: &str) {
+    let Some(info) = app.engine.registry().get(id).map(|p| p.info().clone()) else { return };
+    let Some(st) = app.options.as_mut() else { return };
+    let group = [Capabilities::TRANSLATE, Capabilities::DICTIONARY, Capabilities::LISTEN, Capabilities::OCR]
+        .into_iter()
+        .find(|c| info.capabilities.contains(*c));
+    if let Some(group) = group {
+        st.page = Page::Services;
+        st.service_group = group;
+        st.selected_service = Some(id.to_owned());
     }
 }
 
@@ -1024,15 +1038,14 @@ fn service_list(
                         st.selected_service = Some(p.info.id.clone());
                     }
                     ui.label(RichText::new(origin_label(app, &p.origin)).small().color(look.weak_text()));
-                    if p.info.needs_credentials {
-                        let has = d
-                            .services
-                            .options
-                            .get(&p.info.id)
-                            .is_some_and(|o| o.values().any(|v| v.as_str().is_some_and(|s| !s.is_empty())));
-                        if !has {
-                            ui.label(RichText::new(app.t("options.services.needs_key")).small().color(look.error()));
-                        }
+                    let user = d.services.options.get(&p.info.id);
+                    let has = user.is_some_and(|o| o.values().any(|v| v.as_str().is_some_and(|s| !s.is_empty())));
+                    if p.info.needs_credentials && !has {
+                        ui.label(RichText::new(app.t("options.services.needs_key")).small().color(look.error()));
+                    } else if user.is_some_and(|u| !u.is_empty()) && !p.page.errors(user).is_empty() {
+                        // A field fails its checks: saved anyway (the user
+                        // may be half-way through), but marked.
+                        ui.label(RichText::new(app.t("options.services.check_settings")).small().color(look.error()));
                     }
                     if cap == Capabilities::LISTEN && ui.radio(d.services.tts == p.info.id, "").clicked() {
                         d.services.tts = p.info.id.clone();
@@ -1100,9 +1113,7 @@ fn service_details(
                 ai_tools(app, ui, &id, &mut st.draft, &st.ai_models, &mut st.ai_task, &st.ai_status);
             }
             let values = st.draft.services.options.entry(id.clone()).or_default();
-            for spec in &p.options {
-                option_field(ui, spec, values, st.show_secrets);
-            }
+            crate::module_settings::show(ui, &look, &app.locale, &p.page, values, st.show_secrets, &id);
         }
     });
 }
@@ -1661,78 +1672,6 @@ fn poll_ai_task(app: &GlossaApp, st: &mut OptionsState) {
         }
         Err(std::sync::mpsc::TryRecvError::Disconnected) => st.ai_task = None,
     }
-}
-
-/// One generated settings field.
-fn option_field(
-    ui: &mut egui::Ui,
-    spec: &OptionSpec,
-    values: &mut std::collections::BTreeMap<String, serde_json::Value>,
-    show_secrets: bool,
-) {
-    let label = if spec.label.is_empty() { spec.key.clone() } else { spec.label.clone() };
-    let label = if spec.required { format!("{label} *") } else { label };
-    let current = values.get(&spec.key).cloned().unwrap_or_else(|| spec.default.clone());
-    ui.horizontal(|ui| {
-        let l = ui.label(&label);
-        if !spec.help.is_empty() {
-            l.on_hover_text(&spec.help);
-        }
-        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| match spec.kind {
-            OptionKind::Bool => {
-                let mut b = current.as_bool().unwrap_or(false);
-                if ui.checkbox(&mut b, "").changed() {
-                    values.insert(spec.key.clone(), b.into());
-                }
-            }
-            OptionKind::Number => {
-                let mut n = current.as_f64().unwrap_or(0.0);
-                let mut dv = egui::DragValue::new(&mut n).speed(0.05);
-                if let (Some(min), Some(max)) = (spec.min, spec.max) {
-                    dv = dv.range(min..=max);
-                }
-                if ui.add(dv).changed() {
-                    values.insert(spec.key.clone(), serde_json::json!(n));
-                }
-            }
-            OptionKind::Select => {
-                let cur = current.as_str().unwrap_or("").to_owned();
-                let shown = spec
-                    .choices
-                    .iter()
-                    .find(|c| c.value == cur)
-                    .map(|c| if c.label.is_empty() { c.value.clone() } else { c.label.clone() })
-                    .unwrap_or(cur.clone());
-                crate::dropdown::ComboBox::from_id_salt(("opt", &spec.key)).width(280.0).selected_text(shown).show_ui(
-                    ui,
-                    |ui| {
-                        for c in &spec.choices {
-                            let name = if c.label.is_empty() { c.value.clone() } else { c.label.clone() };
-                            if ui.selectable_label(c.value == cur, name).clicked() {
-                                values.insert(spec.key.clone(), c.value.clone().into());
-                            }
-                        }
-                    },
-                );
-            }
-            OptionKind::Multiline => {
-                let mut s = current.as_str().unwrap_or("").to_owned();
-                if ui.add(egui::TextEdit::multiline(&mut s).desired_width(320.0).desired_rows(4)).changed() {
-                    values.insert(spec.key.clone(), s.into());
-                }
-            }
-            OptionKind::Text | OptionKind::Secret | OptionKind::Url => {
-                let mut s = current.as_str().unwrap_or("").to_owned();
-                let edit = egui::TextEdit::singleline(&mut s)
-                    .desired_width(320.0)
-                    .hint_text(&spec.placeholder)
-                    .password(spec.kind == OptionKind::Secret && !show_secrets);
-                if ui.add(edit).changed() {
-                    values.insert(spec.key.clone(), s.into());
-                }
-            }
-        });
-    });
 }
 
 fn languages(app: &mut GlossaApp, ui: &mut egui::Ui, st: &mut OptionsState) {
