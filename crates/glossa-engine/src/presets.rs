@@ -93,13 +93,13 @@ impl Engine {
     }
 
     /// Whether an option holds a credential: declared as a secret by its
-    /// module, or (for a module not loaded, whose declarations are unknown)
-    /// named like one.
+    /// module, of a type this build does not know (it may be a newer kind
+    /// of secret), or named like one.
     fn option_is_secret(&self, module: &str, key: &str) -> bool {
         let declared = self
             .registry()
             .get(module)
-            .is_some_and(|p| p.options().iter().any(|s| s.key == key && s.kind == OptionKind::Secret));
+            .is_some_and(|p| p.options().iter().any(|s| s.key == key && possibly_secret(&s.kind)));
         declared || preset::looks_secret(key)
     }
 
@@ -261,7 +261,7 @@ impl Engine {
                     dropped_options.push(label);
                     return false;
                 };
-                if spec.kind == OptionKind::Secret
+                if possibly_secret(&spec.kind)
                     || preset::looks_secret(key)
                     || value.as_str() == Some(glossa_core::secrets::IN_STORE)
                 {
@@ -306,6 +306,12 @@ impl Engine {
     fn presets_changed(&self, applied: Option<Preset>) {
         self.emit(Event::PresetsChanged { applied: applied.map(Arc::new) });
     }
+}
+
+/// A secret, or a type from a newer format whose nature is unknown: never
+/// put in a preset, so never exported.
+fn possibly_secret(kind: &OptionKind) -> bool {
+    matches!(kind, OptionKind::Secret | OptionKind::Unknown(_))
 }
 
 fn check_name(name: &str) -> Result<String> {
@@ -435,6 +441,38 @@ mod tests {
         let before = e.config().services.options.clone();
         e.apply_preset("Shared").unwrap();
         assert_eq!(e.config().services.options, before, "no option changed");
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// An option of a type this build does not know may be a newer kind of
+    /// secret: it is never saved into a preset, exported or imported.
+    #[test]
+    fn options_of_unknown_types_are_treated_as_secrets() {
+        let (e, dir) = engine("unknown-kind");
+        let m = e.paths().user_module_dir().join("future");
+        std::fs::create_dir_all(&m).unwrap();
+        std::fs::write(
+            m.join("module.toml"),
+            "capabilities = [\"translate\"]\n[module]\nid = \"future\"\nname = \"Future\"\nruntime = \"js\"\n\
+             [[options]]\nkey = \"passkey_blob\"\ntype = \"webauthn\"\nlabel = \"X\"\n\
+             [[options]]\nkey = \"style\"\ntype = \"text\"\nlabel = \"Style\"\n",
+        )
+        .unwrap();
+        std::fs::write(m.join("main.js"), "function translate(req) { return req.text; }").unwrap();
+        e.reload_modules();
+        assert!(e.registry().get("future").is_some());
+        e.update_config(|c| {
+            c.services.set_option("future", "passkey_blob", json!("blob-fake"));
+            c.services.set_option("future", "style", json!("plain"));
+        })
+        .unwrap();
+        let saved = e.save_preset("F", false).unwrap();
+        assert!(saved.dropped_secrets.contains(&"future.passkey_blob".to_owned()), "{saved:?}");
+        let text = e.export_preset_text("F").unwrap();
+        assert!(!text.contains("blob-fake") && text.contains("plain"), "{text}");
+        let report =
+            e.import_preset_text("name = \"G\"\n[options.future]\npasskey_blob = \"x\"\nstyle = \"bold\"\n").unwrap();
+        assert_eq!(report.dropped_secrets, vec!["future.passkey_blob".to_owned()]);
         std::fs::remove_dir_all(&dir).ok();
     }
 

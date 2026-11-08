@@ -160,7 +160,8 @@ use only services that need no key) are not written here; they cannot be
 changed, only duplicated.
 
 A preset never holds an API key, token or password. Saving and exporting
-leave out every option a service declares as secret, anything kept in the
+leave out every option a service declares as secret or of a type this
+version does not know (it may be a newer kind of secret), anything kept in the
 system keychain, and any option whose name looks like a credential
 (`api_key`, `token`, `password`, `authorization`, `cookie`, `session`…).
 Applying a preset uses the keys already set in
