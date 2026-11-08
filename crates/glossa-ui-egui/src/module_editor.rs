@@ -156,6 +156,8 @@ pub fn open(app: &mut GlossaApp, target: Target) {
             return;
         }
     }
+    // The preview's actions belonged to the module open before.
+    crate::module_actions::reset_pages(|id| id == PREVIEW_SALT);
     let (tx, rx) = mpsc::channel();
     let mut ed = ModuleEditor {
         dir: None,

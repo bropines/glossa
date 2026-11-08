@@ -176,7 +176,8 @@ belong to module panels and are empty or absent on the settings page.
 
 Every field is optional, and `{}` (or `null`) is "done". `options` is merged
 into the settings being edited (the user still applies them); only the
-module's own option keys are taken. `choices` replaces the choices of
+module's own option keys are taken, and a value of the wrong type for its
+option fails the action (`bad_response`). `choices` replaces the choices of
 `select` and `multiselect` options, by key; a choice is `{value, label?}` or
 a plain string. `errors` are shown under the named fields until they are
 edited. `notice` is shown beside the button; `notice_level` is `info` (the

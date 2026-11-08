@@ -270,10 +270,16 @@ class Host:
         none. Glossa sends the table with each action, so this costs no
         round trip.
         """
+        import re
+
         text = str(self._strings.get(key, key))
-        for i, a in enumerate(args):
-            text = text.replace("{%d}" % i, str(a))
-        return text
+
+        # One pass, so an argument containing "{1}" is not substituted again.
+        def arg(m):
+            i = int(m.group(1))
+            return str(args[i]) if i < len(args) else m.group(0)
+
+        return re.sub(r"\{(\d+)\}", arg, text)
 
     # -- network ---------------------------------------------------------
 

@@ -822,6 +822,9 @@ impl GlossaApp {
                 if let Some(o) = self.options.as_mut() {
                     o.modules_changed();
                 }
+                // A reply from the module as it was must not land on a page
+                // of the module as it is.
+                crate::module_actions::reset_pages(|_| true);
                 self.refresh_from_config();
             }
             Event::HistoryChanged => {

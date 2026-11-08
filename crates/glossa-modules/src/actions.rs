@@ -164,13 +164,75 @@ pub fn code_strings(strings: &ModuleStrings, lang: &str) -> BTreeMap<String, Str
     out
 }
 
+/// The longest choice value or label a reply may carry, in bytes. A longer
+/// value is dropped (cutting it would change it); a longer label is cut.
+pub const MAX_CHOICE_TEXT: usize = 1024;
+/// The longest notice or field message a reply may carry, in bytes; longer
+/// ones are cut.
+pub const MAX_MESSAGE: usize = 4096;
+
+/// Whether `v` is a value an option of `kind` can hold.
+pub fn value_fits(kind: &OptionKind, v: &serde_json::Value) -> bool {
+    match kind {
+        OptionKind::Bool => v.is_boolean(),
+        OptionKind::Number => v.is_number(),
+        OptionKind::Multiselect => v.as_array().is_some_and(|a| a.iter().all(|x| x.is_string())),
+        // A type from a newer format: whatever the module sends.
+        OptionKind::Unknown(_) => true,
+        _ => v.is_string(),
+    }
+}
+
+/// Check a reply before anything uses it: every value in `options` must
+/// fit its option's type (a mismatch is an error naming the key; keys that
+/// are not options are dropped), and its text is bounded: choice values
+/// and labels to [`MAX_CHOICE_TEXT`], the notice and field messages to
+/// [`MAX_MESSAGE`], the choices of one option to [`MAX_CHOICES`].
+pub fn check_reply(specs: &[OptionSpec], reply: &mut ActionReply) -> Result<(), String> {
+    reply.options.retain(|k, _| specs.iter().any(|s| s.key == *k));
+    for (k, v) in &reply.options {
+        let spec = specs.iter().find(|s| s.key == *k).expect("kept above");
+        if !value_fits(&spec.kind, v) {
+            return Err(format!("options.{k}: a {} option cannot be set to {v}", spec.kind.name()));
+        }
+    }
+    for list in reply.choices.values_mut() {
+        list.retain(|c| c.value.len() <= MAX_CHOICE_TEXT);
+        list.truncate(MAX_CHOICES);
+        for c in list.iter_mut() {
+            clip(&mut c.label, MAX_CHOICE_TEXT);
+        }
+    }
+    if let Some(n) = reply.notice.as_mut() {
+        clip(n, MAX_MESSAGE);
+    }
+    for msg in reply.errors.values_mut() {
+        clip(msg, MAX_MESSAGE);
+    }
+    Ok(())
+}
+
+/// Cut `s` to at most `max` bytes at a character boundary, marking the cut.
+fn clip(s: &mut String, max: usize) {
+    if s.len() > max {
+        let mut end = max;
+        while !s.is_char_boundary(end) {
+            end -= 1;
+        }
+        s.truncate(end);
+        s.push('…');
+    }
+}
+
 /// Merge a reply's `options` into `values` (the settings draft). Only the
-/// module's own option keys are taken: a reply cannot plant settings the
-/// page does not show. Returns whether anything changed.
+/// module's own option keys are taken, with values that fit their type: a
+/// reply cannot plant settings the page does not show. Returns whether
+/// anything changed.
 pub fn apply_options(specs: &[OptionSpec], reply: &ActionReply, values: &mut OptionValues) -> bool {
     let mut changed = false;
     for (k, v) in &reply.options {
-        if specs.iter().any(|s| s.key == *k) && values.get(k) != Some(v) {
+        let fits = specs.iter().any(|s| s.key == *k && value_fits(&s.kind, v));
+        if fits && values.get(k) != Some(v) {
             values.insert(k.clone(), v.clone());
             changed = true;
         }
@@ -399,6 +461,58 @@ mod tests {
             ..Default::default()
         };
         assert_eq!(choices_from_reply(&m.options, &many)["model"].len(), MAX_CHOICES);
+    }
+
+    #[test]
+    fn replies_are_type_checked_and_bounded() {
+        let m = manifest(
+            r#"
+            [[options]]
+            key = "n"
+            type = "number"
+            [[options]]
+            key = "on"
+            type = "bool"
+            [[options]]
+            key = "tags"
+            type = "multiselect"
+            choices = [{ value = "a" }]
+            [[options]]
+            key = "model"
+            type = "select"
+            choices = [{ value = "small" }]
+            choices_from = "x"
+            [[actions]]
+            id = "x"
+            "#,
+        );
+        let ok = |v: serde_json::Value| -> Result<ActionReply, String> {
+            let mut r: ActionReply = serde_json::from_value(v).unwrap();
+            check_reply(&m.options, &mut r).map(|_| r)
+        };
+        let r = ok(json!({ "options": { "n": 2.5, "on": true, "tags": ["a"], "model": "xl", "ghost": 1 } })).unwrap();
+        assert_eq!(r.options.len(), 4, "keys that are not options are dropped");
+        for bad in [json!({ "n": "2" }), json!({ "on": 1 }), json!({ "tags": "a" }), json!({ "model": 5 })] {
+            let e = ok(json!({ "options": bad })).unwrap_err();
+            assert!(e.contains("cannot be set to"), "{e}");
+        }
+        // apply_options never writes a misfit either, whoever calls it.
+        let raw: ActionReply = serde_json::from_value(json!({ "options": { "n": "two", "on": false } })).unwrap();
+        let mut values = OptionValues::new();
+        apply_options(&m.options, &raw, &mut values);
+        assert_eq!(values, [("on".to_owned(), json!(false))].into());
+
+        let long = "я".repeat(5000);
+        let r = ok(json!({
+            "notice": long, "errors": { "n": long },
+            "choices": { "model": [{ "value": "v".repeat(MAX_CHOICE_TEXT + 1) }, { "value": "ok", "label": long }] }
+        }))
+        .unwrap();
+        assert!(r.notice.as_ref().unwrap().len() <= MAX_MESSAGE + '…'.len_utf8());
+        assert!(r.notice.as_ref().unwrap().ends_with('…'));
+        assert!(r.errors["n"].len() <= MAX_MESSAGE + '…'.len_utf8());
+        assert_eq!(r.choices["model"].len(), 1, "an over-long value is dropped");
+        assert!(r.choices["model"][0].label.len() <= MAX_CHOICE_TEXT + '…'.len_utf8());
     }
 
     #[test]

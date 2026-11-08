@@ -56,10 +56,20 @@ pub fn show_with(
     id_salt: &str,
     runner: Option<Runner>,
 ) -> bool {
-    let runs = module_actions::for_page(ui.ctx(), id_salt);
+    let runs = module_actions::for_page(id_salt);
     // A reply that came back since the last frame lands in the draft first,
     // so this frame draws it.
     let mut changed = runs.lock().poll(&page.options, values, locale.get("module_action.done"));
+    // Choices a `choices_from` action loaded replace the declared ones, for
+    // drawing and for the checks.
+    let loaded = runs.lock().loaded_choices().clone();
+    let overlaid;
+    let page = if loaded.is_empty() {
+        page
+    } else {
+        overlaid = page.with_loaded_choices(&loaded);
+        &overlaid
+    };
     let states = page.states(Some(values));
     let placed = page.placed_actions().into_iter().map(str::to_owned).collect();
     let mut cx = Cx {
@@ -244,8 +254,7 @@ impl Cx<'_> {
         let pressed = enabled && self.runs.lock().take_press(id);
         if resp.clicked() || pressed {
             if let Some(run) = self.runner {
-                let rx = run(id, self.values.clone());
-                self.runs.lock().start(id, rx);
+                self.runs.lock().start(id, run, self.values.clone());
             }
         }
         if running.as_deref() == Some(id) {
@@ -331,24 +340,6 @@ impl Cx<'_> {
         });
     }
 
-    /// The choices to offer: those an action loaded, else the declared
-    /// ones. A loaded value the manifest also declares keeps the declared
-    /// label, which the module's locale file may translate.
-    fn choices_for(&self, spec: &OptionSpec) -> Vec<glossa_modules::provider::Choice> {
-        let Some(loaded) = self.runs.lock().choices(&spec.key).map(<[_]>::to_vec) else {
-            return spec.choices.clone();
-        };
-        loaded
-            .into_iter()
-            .map(|mut c| {
-                if let Some(d) = spec.choices.iter().find(|d| d.value == c.value && !d.label.is_empty()) {
-                    c.label = d.label.clone();
-                }
-                c
-            })
-            .collect()
-    }
-
     fn set(&mut self, key: &str, v: serde_json::Value) {
         self.values.insert(key.to_owned(), v);
         self.changed = true;
@@ -402,8 +393,7 @@ impl Cx<'_> {
                 }
             }
             OptionKind::Select => {
-                let choices = self.choices_for(spec);
-                let choices = choices.as_slice();
+                let choices = spec.choices.as_slice();
                 let cur = current.as_str().unwrap_or("").to_owned();
                 let shown = choices
                     .iter()
@@ -519,18 +509,22 @@ impl Cx<'_> {
     /// Checkboxes in a dropdown that stays open while they are ticked.
     fn multiselect(&mut self, ui: &mut egui::Ui, spec: &OptionSpec, current: &serde_json::Value, width: f32) {
         use crate::dropdown;
-        let choices = self.choices_for(spec);
-        let choices = choices.as_slice();
+        let choices = spec.choices.as_slice();
         let picked: Vec<String> = current
             .as_array()
             .map(|a| a.iter().filter_map(|v| v.as_str().map(str::to_owned)).collect())
             .unwrap_or_default();
+        // A saved value the list does not offer (one a module loaded before
+        // a restart, or one no longer offered) stays picked, marked as such.
+        let unlisted: Vec<String> =
+            picked.iter().filter(|v| !choices.iter().any(|c| c.value == **v)).cloned().collect();
+        let not_listed = |v: &str| self.locale.fmt("field.not_in_list", v);
         let name = |v: &str| {
             choices
                 .iter()
                 .find(|c| c.value == v)
                 .map(|c| if c.label.is_empty() { c.value.clone() } else { c.label.clone() })
-                .unwrap_or_else(|| v.to_owned())
+                .unwrap_or_else(|| not_listed(v))
         };
         let shown = match picked.len() {
             0 => self.t("field.none_selected"),
@@ -555,12 +549,45 @@ impl Cx<'_> {
                     }
                 }
             }
+            for v in &unlisted {
+                let mut on = next.contains(v);
+                if ui.checkbox(&mut on, not_listed(v)).changed() && !on {
+                    next.retain(|x| x != v);
+                }
+            }
         });
         if next != picked {
-            // Keep the declared order, whatever order they were ticked in.
-            let ordered: Vec<serde_json::Value> =
-                choices.iter().filter(|c| next.contains(&c.value)).map(|c| c.value.clone().into()).collect();
+            let ordered: Vec<serde_json::Value> = order_picks(choices, &next).into_iter().map(Into::into).collect();
             self.set(&spec.key, ordered.into());
         }
+    }
+}
+
+/// A multiselect's picks in the order to save them: the listed ones in the
+/// list's order, whatever order they were ticked in, then those the list
+/// does not offer, as they were. Nothing picked is dropped for being
+/// missing from the list.
+fn order_picks(choices: &[glossa_modules::provider::Choice], picked: &[String]) -> Vec<String> {
+    let listed = choices.iter().filter(|c| picked.contains(&c.value)).map(|c| c.value.clone());
+    let unlisted = picked.iter().filter(|v| !choices.iter().any(|c| c.value == **v)).cloned();
+    listed.chain(unlisted).collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use glossa_modules::provider::Choice;
+
+    #[test]
+    fn picks_keep_values_the_list_does_not_offer() {
+        let choices: Vec<Choice> =
+            ["en", "ru", "de"].iter().map(|v| Choice { value: (*v).into(), label: String::new() }).collect();
+        let picks = |v: &[&str]| v.iter().map(|s| (*s).to_owned()).collect::<Vec<_>>();
+        // "ja" was saved from a loaded list before a restart; ticking "en"
+        // keeps it.
+        assert_eq!(order_picks(&choices, &picks(&["ja", "de", "en"])), ["en", "de", "ja"]);
+        assert_eq!(order_picks(&choices, &picks(&["de", "ru"])), ["ru", "de"], "the list's order");
+        assert!(order_picks(&choices, &[]).is_empty());
+        assert_eq!(order_picks(&[], &picks(&["x", "y"])), ["x", "y"], "nothing listed: all kept");
     }
 }

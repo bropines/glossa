@@ -481,12 +481,31 @@ impl ActionParams {
 }
 
 /// `{0}`, `{1}`… in `template` replaced by `args`. Placeholders without an
-/// argument stay as written.
+/// argument stay as written. One pass over the template: an argument that
+/// itself contains `{1}` is inserted as it is, not substituted again.
 pub fn format_string(template: &str, args: &[&str]) -> String {
-    let mut out = template.to_owned();
-    for (i, a) in args.iter().enumerate() {
-        out = out.replace(&format!("{{{i}}}"), a);
+    let mut out = String::with_capacity(template.len());
+    let mut rest = template;
+    while let Some(open) = rest.find('{') {
+        out.push_str(&rest[..open]);
+        let after = &rest[open + 1..];
+        let digits = after.bytes().take_while(u8::is_ascii_digit).count();
+        let arg = (digits > 0 && after[digits..].starts_with('}'))
+            .then(|| after[..digits].parse::<usize>().ok())
+            .flatten()
+            .and_then(|i| args.get(i));
+        match arg {
+            Some(a) => {
+                out.push_str(a);
+                rest = &after[digits + 1..];
+            }
+            None => {
+                out.push('{');
+                rest = after;
+            }
+        }
     }
+    out.push_str(rest);
     out
 }
 
@@ -913,6 +932,10 @@ mod tests {
         assert_eq!(serde_json::from_value::<ActionParams>(v).unwrap(), p);
         assert_eq!(p.t("hi", &["мир"]), "Привет, мир!");
         assert_eq!(p.t("missing", &[]), "missing");
+        // One pass: an argument holding a placeholder stays as it is.
+        assert_eq!(format_string("{0} and {1}", &["{1}", "b"]), "{1} and b");
+        assert_eq!(format_string("{2} {x} {} {0", &["a"]), "{2} {x} {} {0");
+        assert_eq!(format_string("{{0}}", &["a"]), "{a}");
         let min: ActionParams = serde_json::from_str(r#"{"action":"x"}"#).unwrap();
         assert!(min.options.is_empty() && min.handler.is_empty());
 

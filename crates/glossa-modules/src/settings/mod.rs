@@ -292,17 +292,47 @@ impl SettingsPage {
     /// The options `action` needs that are empty or fail their checks for
     /// `user`'s values, as indices into [`SettingsPage::options`]. Empty:
     /// the action may run.
+    ///
+    /// A needed field that is hidden (`visible_if`) or greyed out
+    /// (`enabled_if`) does not block: the user could not fill it in, which
+    /// is the rule the page's own checks follow, and the condition that
+    /// hides it says the module does not need it in that state.
     pub fn action_blockers(&self, action: &ActionView, user: Option<&OptionValues>) -> Vec<usize> {
         let values = self.values(user);
+        let states = self.states(user);
         action
             .needs
             .iter()
             .filter_map(|key| self.options.iter().position(|o| o.key == *key))
+            .filter(|&i| states[i].visible && states[i].enabled)
             .filter(|&i| {
                 let v = values.get(&self.options[i].key).unwrap_or(&serde_json::Value::Null);
                 validate::is_empty(v) || self.check(i, &values).is_some()
             })
             .collect()
+    }
+
+    /// This page with the choices `choices_from` actions loaded, by option
+    /// key, in place of the declared ones; from then on the checks use the
+    /// loaded list. A loaded value the manifest also declares keeps the
+    /// declared label, which the module's locale file may translate.
+    pub fn with_loaded_choices(&self, loaded: &BTreeMap<String, Vec<crate::provider::Choice>>) -> SettingsPage {
+        let mut page = self.clone();
+        for o in &mut page.options {
+            let Some(list) = loaded.get(&o.key).filter(|_| !o.choices_from.is_empty()) else { continue };
+            o.choices = list
+                .iter()
+                .map(|c| {
+                    let mut c = c.clone();
+                    if let Some(d) = o.choices.iter().find(|d| d.value == c.value && !d.label.is_empty()) {
+                        c.label = d.label.clone();
+                    }
+                    c
+                })
+                .collect();
+            o.choices_loaded = true;
+        }
+        page
     }
 
     /// The actions the layout places as buttons (`@id`), at any depth.
@@ -1271,9 +1301,49 @@ mod tests {
         user.insert("url".into(), json!("https://x.test"));
         assert!(keys(&user).is_empty());
         assert!(page.action_blockers(page.action("list_models").unwrap(), None).is_empty());
-        // A loaded model is not "not one of the choices".
+        // Until a list is loaded, any model passes; then the list counts.
         user.insert("model".into(), json!("acme-xl"));
         assert!(page.errors(Some(&user)).is_empty(), "{:?}", page.errors(Some(&user)));
+        let loaded: BTreeMap<String, Vec<crate::provider::Choice>> = [(
+            "model".to_owned(),
+            vec![
+                crate::provider::Choice { value: "small".into(), label: "S".into() },
+                crate::provider::Choice { value: "large".into(), label: String::new() },
+            ],
+        )]
+        .into();
+        let with = page.with_loaded_choices(&loaded);
+        assert_eq!(with.options[2].choices.len(), 2);
+        assert_eq!(with.errors(Some(&user)).keys().collect::<Vec<_>>(), ["model"], "acme-xl is not in the loaded list");
+        user.insert("model".into(), json!("large"));
+        assert!(with.errors(Some(&user)).is_empty());
+
+        // A needed field that is hidden or greyed out does not block.
+        let m2 = manifest(
+            r#"
+            [[options]]
+            key = "mode"
+            type = "select"
+            default = "free"
+            choices = [{ value = "free" }, { value = "pro" }]
+            [[options]]
+            key = "key"
+            type = "secret"
+            visible_if = "options.mode == 'pro'"
+            [[options]]
+            key = "url"
+            type = "url"
+            enabled_if = "options.mode == 'pro'"
+            [[actions]]
+            id = "go"
+            needs = ["key", "url"]
+            "#,
+        );
+        let p2 = SettingsPage::for_manifest(&m2, "en");
+        let go = p2.action("go").unwrap();
+        assert!(p2.action_blockers(go, None).is_empty(), "both needed fields are out of reach");
+        let pro: OptionValues = [("mode".to_owned(), json!("pro"))].into();
+        assert_eq!(p2.action_blockers(go, Some(&pro)).len(), 2, "in reach and empty: they block");
         let issues = lint(&m, &ModuleStrings::default(), &[]);
         assert!(issues
             .iter()

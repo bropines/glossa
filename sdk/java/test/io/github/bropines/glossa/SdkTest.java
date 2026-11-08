@@ -154,7 +154,7 @@ public final class SdkTest {
             if (!"good".equals(ev.option("api_key", ""))) {
                 return Json.obj("errors", Json.obj("api_key", host.t("bad_key")));
             }
-            return host.t("plan", "pro") + " " + ev.action() + " " + ev.uiLang();
+            return host.t("plan", "pro {0}$1") + " " + ev.action() + " " + ev.uiLang();
         }
 
         @Action("quiet")
@@ -178,7 +178,8 @@ public final class SdkTest {
         Glossa.serve(new ActionModule(), new ByteArrayInputStream(input.getBytes(StandardCharsets.UTF_8)), out);
         String[] lines = out.toString(StandardCharsets.UTF_8).split("\n");
         eq(lines[0], "{\"id\":1,\"result\":{\"choices\":{\"model\":[\"small\",{\"value\":\"large\",\"label\":\"L\"}]}}}");
-        eq(lines[1], "{\"id\":2,\"result\":{\"notice\":\"Тариф: pro test ru\"}}");
+        // One pass: the argument's own "{0}" (and a "$1") stay as written.
+        eq(lines[1], "{\"id\":2,\"result\":{\"notice\":\"Тариф: pro {0}$1 test ru\"}}");
         eq(lines[2], "{\"id\":3,\"result\":{\"errors\":{\"api_key\":\"Не тот ключ\"}}}");
         eq(lines[3], "{\"id\":4,\"result\":{}}");
         eq(Json.string(Json.asMap(Json.parse(lines[4])).get("error"), "kind", ""), "unsupported");

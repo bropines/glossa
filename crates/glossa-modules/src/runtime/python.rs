@@ -451,6 +451,10 @@ def check(ev, host):
         return {"errors": {"api_key": host.t("bad_key")}}
     return host.t("plan", "pro") + " (" + host.ui_lang + ")"
 
+@mod.action("once")
+def once(ev, host):
+    return host.t("plan", "{0}{1}", "x")
+
 @mod.action("quiet")
 def quiet(ev, host):
     pass
@@ -481,6 +485,8 @@ mod.run()
         let out = t.call("action", params("test", "check", "bad"), &host).unwrap();
         assert_eq!(out["errors"]["api_key"], "Ключ не подошёл.");
         assert_eq!(t.call("action", params("quiet", "quiet", ""), &host).unwrap(), serde_json::json!({}));
+        let out = t.call("action", params("once", "once", ""), &host).unwrap();
+        assert_eq!(out["notice"], "Тариф: {0}{1}", "one pass: the argument is not substituted again");
         let e = t.call("action", params("x", "nothing", ""), &host).unwrap_err();
         assert_eq!(e.kind, ErrorKind::Unsupported);
 

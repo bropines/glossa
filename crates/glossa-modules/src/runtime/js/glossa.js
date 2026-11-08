@@ -109,8 +109,12 @@ var host = {
    */
   t: function (key) {
     var s = Object.prototype.hasOwnProperty.call(host.strings, key) ? String(host.strings[key]) : String(key);
-    for (var i = 1; i < arguments.length; i++) s = s.split("{" + (i - 1) + "}").join(String(arguments[i]));
-    return s;
+    var args = arguments;
+    // One pass, so an argument containing "{1}" is not substituted again.
+    return s.replace(/\{(\d+)\}/g, function (whole, n) {
+      var i = Number(n) + 1;
+      return i < args.length ? String(args[i]) : whole;
+    });
   },
 
   /**

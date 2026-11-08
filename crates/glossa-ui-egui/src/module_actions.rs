@@ -4,23 +4,31 @@
 //! `choices_from` action loaded.
 //!
 //! What a reply does to the draft is decided in `glossa_modules::actions`;
-//! this keeps the results and hands them to `module_settings` to draw. The
-//! state lives in egui's memory under the page's id, so it survives the
-//! Options window closing and opening again while the app runs, and the
-//! settings page needs no field of its own for it.
+//! this keeps the results and hands them to `module_settings` to draw.
+//!
+//! The state is kept by page id (the provider id; the editor's preview has
+//! its own), outside any window, so the settings page needs no field for
+//! it. A run belongs to the draft it was started from: [`reset_pages`]
+//! cancels the runs and forgets what they left when Options opens or
+//! closes and when modules are loaded again, and a reply from an earlier
+//! generation is dropped rather than written into a newer draft.
 
 use std::collections::{BTreeMap, HashMap};
 use std::sync::mpsc::Receiver;
-use std::sync::Arc;
+use std::sync::{Arc, LazyLock};
 
 use glossa_modules::provider::Choice;
 use glossa_modules::wire::ActionReply;
-use glossa_modules::{OptionSpec, OptionValues};
+use glossa_modules::{CancelToken, OptionSpec, OptionValues};
 use parking_lot::Mutex;
 
-/// Starts an action on a worker: `(action id, the values on the page)`.
-/// The receiver gets the reply, or the error already worded for the user.
-pub type Runner<'a> = &'a dyn Fn(&str, OptionValues) -> Receiver<Result<ActionReply, String>>;
+/// What a run sends back: the reply, or the error already worded for the
+/// user.
+pub type Outcome = Result<ActionReply, String>;
+
+/// Starts an action on a worker: `(action id, the values on the page, a
+/// flag that stops waiting for it)`.
+pub type Runner<'a> = &'a dyn Fn(&str, OptionValues, CancelToken) -> Receiver<Outcome>;
 
 /// A [`Runner`] for module `module`: each action runs in the engine on a
 /// worker thread, with the values on the page over the declared defaults,
@@ -28,17 +36,19 @@ pub type Runner<'a> = &'a dyn Fn(&str, OptionValues) -> Receiver<Result<ActionRe
 pub fn engine_runner(
     app: &crate::app::GlossaApp,
     module: &str,
-) -> impl Fn(&str, OptionValues) -> Receiver<Result<ActionReply, String>> {
+) -> impl Fn(&str, OptionValues, CancelToken) -> Receiver<Outcome> {
     let (engine, ctx, locale, module) = (app.engine.clone(), app.ctx.clone(), app.locale.clone(), module.to_owned());
-    move |action: &str, values: OptionValues| {
+    move |action: &str, values: OptionValues, cancel: CancelToken| {
         let (tx, rx) = std::sync::mpsc::channel();
         let (engine, ctx, locale, module, action) =
             (engine.clone(), ctx.clone(), locale.clone(), module.clone(), action.to_owned());
         std::thread::spawn(move || {
             let req = glossa_engine::ActionRequest { options: Some(values), ..Default::default() };
-            let r = engine.module_action(&module, &action, req);
-            let _ = tx.send(r.map_err(|e| crate::app::describe_error(&locale, &e)));
-            ctx.request_repaint();
+            let r = engine.module_action_with(&module, &action, req, &cancel);
+            if !cancel.is_cancelled() {
+                let _ = tx.send(r.map_err(|e| crate::app::describe_error(&locale, &e)));
+                ctx.request_repaint();
+            }
         });
         rx
     }
@@ -58,10 +68,21 @@ pub struct Notice {
     pub level: Level,
 }
 
+/// The action running on a page.
+struct Running {
+    action: String,
+    /// The page's generation when it started.
+    generation: u64,
+    rx: Receiver<Outcome>,
+    cancel: CancelToken,
+}
+
 /// One page's actions.
 #[derive(Default)]
 pub struct PageRuns {
-    running: Option<(String, Receiver<Result<ActionReply, String>>)>,
+    running: Option<Running>,
+    /// Bumped by [`PageRuns::reset`]: replies from before it are dropped.
+    generation: u64,
     notices: HashMap<String, Notice>,
     /// Key -> (message, the value it was about). Shown while the field
     /// still holds that value.
@@ -73,19 +94,44 @@ pub struct PageRuns {
 
 pub type Shared = Arc<Mutex<PageRuns>>;
 
+static PAGES: LazyLock<Mutex<HashMap<String, Shared>>> = LazyLock::new(Default::default);
+
 /// The state of the page drawn with `id_salt`.
-pub fn for_page(ctx: &egui::Context, id_salt: &str) -> Shared {
-    let id = egui::Id::unique(("module-actions", id_salt));
-    ctx.data_mut(|d| d.get_temp_mut_or_default::<Shared>(id).clone())
+pub fn for_page(id_salt: &str) -> Shared {
+    PAGES.lock().entry(id_salt.to_owned()).or_default().clone()
+}
+
+/// Cancel the runs of every page whose id `matches`, and forget their
+/// notices, field messages and loaded choices: the draft they were about
+/// is gone (Options closed or opened afresh), or the module was loaded
+/// again.
+pub fn reset_pages(matches: impl Fn(&str) -> bool) {
+    for (id, page) in PAGES.lock().iter() {
+        if matches(id) {
+            page.lock().reset();
+        }
+    }
 }
 
 /// Press `action`'s button on the page drawn with `id_salt` the next time
 /// it is drawn, for `--screenshot` (`GLOSSA_SCREENSHOT_ACTION`).
-pub fn press(ctx: &egui::Context, id_salt: &str, action: &str) {
-    for_page(ctx, id_salt).lock().pressed = Some(action.to_owned());
+pub fn press(id_salt: &str, action: &str) {
+    for_page(id_salt).lock().pressed = Some(action.to_owned());
 }
 
 impl PageRuns {
+    /// Cancel the running action, drop its reply when it comes, and forget
+    /// what earlier runs left.
+    pub fn reset(&mut self) {
+        if let Some(r) = self.running.take() {
+            r.cancel.cancel();
+        }
+        self.generation += 1;
+        self.notices.clear();
+        self.field_errors.clear();
+        self.choices.clear();
+    }
+
     /// Whether `action` was pressed from outside; true once.
     pub fn take_press(&mut self, action: &str) -> bool {
         if self.pressed.as_deref() == Some(action) {
@@ -97,25 +143,32 @@ impl PageRuns {
 
     /// The action running now, if any.
     pub fn running(&self) -> Option<&str> {
-        self.running.as_ref().map(|(a, _)| a.as_str())
+        self.running.as_ref().map(|r| r.action.as_str())
     }
 
-    pub fn start(&mut self, action: &str, rx: Receiver<Result<ActionReply, String>>) {
+    /// Start `action` with `run`, tied to this page's current generation.
+    pub fn start(&mut self, action: &str, run: Runner, values: OptionValues) {
+        let cancel = CancelToken::new();
+        let rx = run(action, values, cancel.clone());
         self.notices.remove(action);
-        self.running = Some((action.to_owned(), rx));
+        self.running = Some(Running { action: action.to_owned(), generation: self.generation, rx, cancel });
     }
 
     /// Take a finished reply and apply it to `values` (the draft). Returns
     /// whether a value changed.
     pub fn poll(&mut self, specs: &[OptionSpec], values: &mut OptionValues, done: &str) -> bool {
-        let Some((action, rx)) = &self.running else { return false };
-        let result = match rx.try_recv() {
+        let Some(run) = &self.running else { return false };
+        let result = match run.rx.try_recv() {
             Ok(r) => r,
             Err(std::sync::mpsc::TryRecvError::Empty) => return false,
             Err(std::sync::mpsc::TryRecvError::Disconnected) => Err("the action stopped without an answer".into()),
         };
-        let action = action.clone();
-        self.running = None;
+        let Some(run) = self.running.take() else { return false };
+        if run.generation != self.generation {
+            // Started for a draft that is gone.
+            return false;
+        }
+        let action = run.action;
         match result {
             Err(text) => {
                 self.notices.insert(action, Notice { text, level: Level::Error });
@@ -163,9 +216,9 @@ impl PageRuns {
         None
     }
 
-    /// The choices an action loaded for `key`, if one has.
-    pub fn choices(&self, key: &str) -> Option<&[Choice]> {
-        self.choices.get(key).map(Vec::as_slice)
+    /// The choices actions loaded, by option key.
+    pub fn loaded_choices(&self) -> &BTreeMap<String, Vec<Choice>> {
+        &self.choices
     }
 }
 
@@ -191,7 +244,9 @@ mod tests {
         let mut runs = PageRuns::default();
         let mut values = OptionValues::new();
         let (tx, rx) = std::sync::mpsc::channel();
-        runs.start("test", rx);
+        let rx = std::cell::RefCell::new(Some(rx));
+        let run = |_: &str, _: OptionValues, _: CancelToken| rx.borrow_mut().take().unwrap();
+        runs.start("test", &run, OptionValues::new());
         assert_eq!(runs.running(), Some("test"));
         assert!(!runs.poll(&specs, &mut values, "Done."), "nothing yet");
         tx.send(Ok(serde_json::from_value(json!({
@@ -204,21 +259,53 @@ mod tests {
         assert!(runs.poll(&specs, &mut values, "Done."));
         assert_eq!(runs.running(), None);
         assert_eq!(values["model"], "large");
-        assert_eq!(runs.choices("model").unwrap().len(), 2);
+        assert_eq!(runs.loaded_choices()["model"].len(), 2);
         assert!(runs.notice("test").is_none(), "something visible happened: no \"done\"");
         assert_eq!(runs.field_error(&specs, &values, "api_key").as_deref(), Some("refused"));
         values.insert("api_key".into(), json!("new"));
         assert_eq!(runs.field_error(&specs, &values, "api_key"), None, "an edit clears it");
 
-        let (tx, rx) = std::sync::mpsc::channel();
-        runs.start("test", rx);
+        let (tx, rx2) = std::sync::mpsc::channel();
+        *rx.borrow_mut() = Some(rx2);
+        runs.start("test", &run, OptionValues::new());
         tx.send(Ok(ActionReply::default())).unwrap();
         runs.poll(&specs, &mut values, "Done.");
         assert_eq!(runs.notice("test").unwrap().text, "Done.");
-        let (tx, rx) = std::sync::mpsc::channel();
-        runs.start("test", rx);
+        let (tx, rx2) = std::sync::mpsc::channel();
+        *rx.borrow_mut() = Some(rx2);
+        runs.start("test", &run, OptionValues::new());
         tx.send(Err("no connection".into())).unwrap();
         runs.poll(&specs, &mut values, "Done.");
         assert_eq!(runs.notice("test").unwrap().level, Level::Error);
+    }
+
+    #[test]
+    fn a_reset_cancels_the_run_and_drops_its_late_reply() {
+        let specs = vec![OptionSpec::select("model", "Model", "small", &[("small", "Small")])];
+        let mut runs = PageRuns::default();
+        let (tx, rx) = std::sync::mpsc::channel();
+        let rx = std::cell::RefCell::new(Some(rx));
+        let token = std::cell::RefCell::new(None);
+        let run = |_: &str, _: OptionValues, cancel: CancelToken| {
+            *token.borrow_mut() = Some(cancel);
+            rx.borrow_mut().take().unwrap()
+        };
+        runs.start("list_models", &run, OptionValues::new());
+        // Options closed and opened again: a fresh draft.
+        runs.reset();
+        assert!(token.borrow().as_ref().unwrap().is_cancelled(), "the worker is told to stop");
+        assert_eq!(runs.running(), None);
+        let _ = tx.send(Ok(serde_json::from_value(json!({ "options": { "model": "large" } })).unwrap()));
+        let mut fresh = OptionValues::new();
+        assert!(!runs.poll(&specs, &mut fresh, "Done."), "the late reply is dropped");
+        assert!(fresh.is_empty() && runs.notice("list_models").is_none());
+
+        // A run whose generation no longer matches is dropped too.
+        let (tx, rx2) = std::sync::mpsc::channel();
+        *rx.borrow_mut() = Some(rx2);
+        runs.start("list_models", &run, OptionValues::new());
+        runs.generation += 1;
+        tx.send(Ok(serde_json::from_value(json!({ "options": { "model": "large" } })).unwrap())).unwrap();
+        assert!(!runs.poll(&specs, &mut fresh, "Done.") && fresh.is_empty());
     }
 }

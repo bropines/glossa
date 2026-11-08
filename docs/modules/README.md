@@ -435,9 +435,21 @@ function testKey(ev, host) {
   under fields until they are edited) and a `notice` beside the button with
   a `notice_level` (`info`, `success`, `warning`, `error`). All are
   optional; returning nothing is fine, and a plain string is the notice.
+- A field in `needs` that is hidden (`visible_if`) or greyed out
+  (`enabled_if`) does not hold the button back: the user could not fill
+  it in, and the condition says the module does without it in that state.
+  The page's own checks skip such fields for the same reason.
 - A `choices_from` action that the layout does not place gets a small
-  button beside its field. Until it has run, the declared `choices` show,
-  and any value is accepted, since loaded ones are not in the manifest.
+  button beside its field. Until it has run, the declared `choices` show
+  and any value is accepted, since loaded ones are not in the manifest;
+  once a list is loaded, values are checked against that list. A saved
+  value the list does not offer stays, shown as not in the list.
+- A reply is checked before it is used: an `options` value of the wrong
+  type for its option (text for a number, say) fails the action with an
+  error, keys that are not options are ignored, choice values and labels
+  over 1 KB and notices or field messages over 4 KB are cut.
+- An action belongs to the settings it ran with: closing or reopening
+  Options, or reloading the module, cancels it and drops its answer.
 - Actions run on a worker: the page keeps responding, the button shows a
   spinner, and one action runs at a time. They use the module's network
   permissions like any other call.

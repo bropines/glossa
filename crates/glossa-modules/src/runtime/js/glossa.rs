@@ -504,6 +504,8 @@ mod tests {
             [[actions]]
             id = "escape"
             [[actions]]
+            id = "once"
+            [[actions]]
             id = "copy"
             builtin = "copy"
             "#,
@@ -522,6 +524,7 @@ mod tests {
                 return { notice: host.t("plan", "pro") + " " + host.t("nope"), notice_level: "success" };
             }
             function quiet() {}
+            function once(ev, host) { return host.t("plan", "{0}{1}", "x"); }
             function escape(ev, host) { return host.fetch("https://elsewhere.test/").text(); }
         "#;
         let p = ProtocolProvider::new(
@@ -563,6 +566,7 @@ mod tests {
         assert_eq!(call(&bad, "test", "en").unwrap().errors["api_key"], "refused");
 
         assert_eq!(call(&opts, "quiet", "en").unwrap(), Default::default(), "returning nothing is fine");
+        assert_eq!(call(&opts, "once", "en").unwrap().notice.as_deref(), Some("Plan: {0}{1}"), "one pass");
         let e = call(&opts, "escape", "en").unwrap_err();
         assert!(e.to_string().contains("permissions"), "actions keep the module's permissions: {e}");
         let e = call(&opts, "undeclared", "en").unwrap_err();

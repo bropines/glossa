@@ -140,7 +140,7 @@ fn open(app: &mut GlossaApp, what: &str) -> bool {
                 // `GLOSSA_SCREENSHOT_ACTION=<action id>`: press that action's
                 // button when the page is first drawn, to show its result.
                 if let Ok(action) = std::env::var("GLOSSA_SCREENSHOT_ACTION") {
-                    crate::module_actions::press(&app.ctx, &id, &action);
+                    crate::module_actions::press(&id, &action);
                 }
             }
         }
@@ -174,7 +174,7 @@ fn open(app: &mut GlossaApp, what: &str) -> bool {
             }
             // `GLOSSA_SCREENSHOT_ACTION`: press that action in the preview.
             if let Ok(action) = std::env::var("GLOSSA_SCREENSHOT_ACTION") {
-                crate::module_actions::press(&app.ctx, crate::module_editor::PREVIEW_SALT, &action);
+                crate::module_actions::press(crate::module_editor::PREVIEW_SALT, &action);
             }
             if what.ends_with(":test") {
                 if let Some(ed) = app.module_editor.as_mut() {

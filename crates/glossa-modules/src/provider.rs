@@ -324,9 +324,14 @@ pub struct OptionSpec {
     pub choices: Vec<Choice>,
     /// For `select` and `multiselect`: an [action](crate::actions) whose
     /// reply may replace `choices` ("Load models"). The declared choices
-    /// show until it has run.
+    /// show until it has run, and any value passes the checks until a list
+    /// has been loaded; after that, the loaded list is the one checked.
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub choices_from: String,
+    /// Set (never written) when `choices` holds a list `choices_from`
+    /// loaded; see [`crate::SettingsPage::with_loaded_choices`].
+    #[serde(skip)]
+    pub choices_loaded: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub min: Option<f64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]

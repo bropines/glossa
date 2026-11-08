@@ -262,7 +262,11 @@ impl<T: Transport> Provider for ProtocolProvider<T> {
             // A handler with nothing to say ("done").
             return Ok(wire::ActionReply::default());
         }
-        serde_json::from_value(reply).map_err(|e| Error::bad_response(&self.info.name, format!("action reply: {e}")))
+        let mut reply: wire::ActionReply = serde_json::from_value(reply)
+            .map_err(|e| Error::bad_response(&self.info.name, format!("action reply: {e}")))?;
+        crate::actions::check_reply(&self.manifest.options, &mut reply)
+            .map_err(|e| Error::bad_response(&self.info.name, format!("action reply: {e}")))?;
+        Ok(reply)
     }
 
     fn suspend(&self) {
