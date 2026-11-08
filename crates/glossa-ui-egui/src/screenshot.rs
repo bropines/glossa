@@ -69,7 +69,8 @@ pub fn targets() -> Vec<String> {
     .to_vec();
     all.extend(crate::options::page_names().into_iter().map(|p| format!("options:{p}")));
     all.extend(SPECIAL_OPTIONS.map(|v| format!("options:{v}")));
-    all.push("panel:MODULE/PANEL".into());
+    // `panel:MODULE/PANEL` also works, for a loaded module's panel; it is
+    // not listed, since which panels exist depends on the data folder.
     all
 }
 
