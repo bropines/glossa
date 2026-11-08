@@ -160,6 +160,13 @@ fn open(app: &mut GlossaApp, what: &str) -> bool {
                 }
             };
             crate::module_editor::open(app, crate::module_editor::Target::Dir(dir));
+            // `GLOSSA_SCREENSHOT_TAB=<tabs id>=<n>`: that tab of the preview.
+            if let Some((tabs, n)) =
+                std::env::var("GLOSSA_SCREENSHOT_TAB").ok().as_deref().and_then(|t| t.split_once('='))
+            {
+                let salt = crate::module_editor::PREVIEW_SALT;
+                crate::module_settings::select_tab(&app.ctx, salt, tabs, n.parse().unwrap_or(0));
+            }
             if what.ends_with(":test") {
                 if let Some(ed) = app.module_editor.as_mut() {
                     ed.test_when_ready();

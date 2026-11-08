@@ -122,6 +122,16 @@ fn manifest_problems_have_places() {
     let p = errors(&problems).into_iter().find(|p| p.message.contains("entyr")).expect("unknown key");
     assert_eq!((p.file.as_str(), p.line), ("module.toml", 11), "{p:?}");
 
+    // The settings page's own checks (conditions, layout) are listed too.
+    let bad_condition =
+        format!("{text}\n[[options]]\nkey = \"extra\"\ntype = \"text\"\nvisible_if = \"max_definitions >\"\n");
+    save_module_file(&dir, "module.toml", &bad_condition).unwrap();
+    let problems = e.check_module(&dir);
+    assert!(
+        problems.iter().any(|p| p.file == "module.toml" && p.message.contains("visible_if")),
+        "settings lint in Problems: {problems:?}"
+    );
+
     save_module_file(&dir, "module.toml", &text).unwrap();
     save_module_file(&dir, "tests/basic.toml", "[[case]\nname = 1").unwrap();
     let problems = e.check_module(&dir);

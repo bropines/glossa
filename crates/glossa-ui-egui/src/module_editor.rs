@@ -16,13 +16,16 @@ use glossa_engine::module_dev::{
     self, ModuleFile, ModuleReport, Problem, ReloadOutcome, Severity, Template, TestStatus,
 };
 use glossa_modules::log_tap::LogTap;
-use glossa_modules::{OptionSpec, OptionValues};
+use glossa_modules::{OptionValues, SettingsPage};
 
 use crate::app::GlossaApp;
 use crate::code_editor::{self, EditorState, Lang, Mark};
 
 /// The viewport's name.
 pub const VIEWPORT: &str = "glossa-module-editor";
+
+/// The id salt of the preview's settings page, for `module_settings::select_tab`.
+pub const PREVIEW_SALT: &str = "module-editor-preview";
 
 /// Files larger than this open read-only: every keystroke in a `TextEdit`
 /// costs time in proportion to the text.
@@ -90,7 +93,7 @@ struct Info {
     id: String,
     name: String,
     version: String,
-    options: Vec<OptionSpec>,
+    page: SettingsPage,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -232,9 +235,10 @@ impl ModuleEditor {
         let Some(dir) = self.dir.clone() else { return };
         self.after_check = then;
         let engine = app.engine.clone();
+        let lang = app.locale.code.clone();
         self.spawn(&app.ctx, move || {
             let problems = engine.check_module(&dir);
-            let info = module_dev::read_module_file(&dir, "module.toml").ok().and_then(|t| manifest_info(&t));
+            let info = manifest_info(&dir, &lang);
             Reply::Checked { problems, info }
         });
     }
@@ -509,11 +513,12 @@ fn mark_saved(tabs: &mut [Buffer], written: &[(String, String)]) {
     }
 }
 
-/// The id, name, version and options from `module.toml`'s text, if it
-/// parses.
-fn manifest_info(text: &str) -> Option<Info> {
-    let m = glossa_modules::Manifest::parse(text).ok()?;
-    Some(Info { id: m.module.id, name: m.module.name, version: m.module.version, options: m.options })
+/// The id, name, version and settings page (in `lang`, with the module's
+/// `locales/`) from the folder's `module.toml`, if it loads.
+fn manifest_info(dir: &std::path::Path, lang: &str) -> Option<Info> {
+    let m = glossa_modules::Manifest::load(&dir.join("module.toml")).ok()?;
+    let page = m.settings_page(lang);
+    Some(Info { id: m.module.id, name: m.module.name, version: m.module.version, page })
 }
 
 pub fn show(app: &mut GlossaApp, ctx: &egui::Context) {
@@ -913,11 +918,16 @@ fn preview(app: &mut GlossaApp, ui: &mut egui::Ui, ed: &mut ModuleEditor) {
     ui.label(RichText::new(app.t("editor.preview_note")).small().color(look.weak_text()));
     ui.separator();
     egui::ScrollArea::vertical().id_salt("editor-preview-scroll").auto_shrink([false, false]).show(ui, |ui| {
-        if ed.info.options.is_empty() {
+        let page = &ed.info.page;
+        if page.options.is_empty() {
             ui.label(RichText::new(app.t("editor.preview_none")).color(look.weak_text()));
-        }
-        for spec in &ed.info.options {
-            crate::options::option_field(ui, spec, &mut ed.preview_values, false);
+        } else {
+            if let Some(d) = &page.description {
+                ui.label(RichText::new(d).small());
+            }
+            // The renderer the Services page uses, on the page as last
+            // checked, in the interface language.
+            crate::module_settings::show(ui, &look, &app.locale, page, &mut ed.preview_values, false, PREVIEW_SALT);
         }
         ui.add_space(12.0);
         ui.label(RichText::new(app.t("editor.preview_panels")).small().color(look.weak_text()));

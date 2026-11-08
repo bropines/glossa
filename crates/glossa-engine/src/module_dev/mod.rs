@@ -638,6 +638,7 @@ impl Engine {
             python: cfg.modules.python.clone(),
             java: cfg.modules.java.clone(),
             models_dir: Some(self.inner.paths.models_dir()),
+            python_dirs: Some(self.python_dirs()),
             ..Default::default()
         };
         glossa_module_test::test_module(dir, &settings)
