@@ -21,7 +21,10 @@ use std::time::{Duration, Instant};
 
 use glossa_core::{Audio, Error, LangId, LangPair, Result};
 use glossa_modules::actions::ActionKind;
-use glossa_modules::panels::{safe_link, value_text, Bind, Element, PanelPage};
+use glossa_modules::panels::{
+    fit_merge, fit_size, safe_link, value_text, Bind, Element, PanelPage, MAX_PERSIST_BYTES, MAX_STATE_BYTES,
+    MAX_UPDATE_BYTES,
+};
 use glossa_modules::wire::{ActionEvent, ActionParams, ActionReply};
 use glossa_modules::{CancelToken, OptionValues};
 use serde::Serialize;
@@ -31,6 +34,11 @@ use crate::{Engine, TranslateOptions};
 
 /// How long an input must stay unchanged before its `on_change` action runs.
 pub const CHANGE_DEBOUNCE: Duration = Duration::from_millis(400);
+
+/// The events that are the user's own doing. Effects that reach beyond the
+/// panel (the clipboard, the browser) run only for these, never for
+/// `open` or `change`, which happen without a deliberate gesture.
+pub const GESTURES: [&str; 3] = ["click", "submit", "shortcut"];
 
 /// A panel's name from outside: `module/panel`.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
@@ -175,6 +183,14 @@ impl Engine {
         let started = Instant::now();
         let bounded = |mut u: OptionValues| {
             page.bound_state(&mut u);
+            let dropped = fit_size(&mut u, MAX_UPDATE_BYTES);
+            if !dropped.is_empty() {
+                tracing::debug!(
+                    module,
+                    ?dropped,
+                    "a streamed update over {MAX_UPDATE_BYTES} bytes lost its largest values"
+                );
+            }
             if !u.is_empty() {
                 updates(u);
             }
@@ -218,29 +234,37 @@ impl Engine {
                     let value = match spec.call.trim() {
                         "translate" => {
                             let to = lang_arg(&arg("to")).unwrap_or(cfg.general.first_language);
-                            let (tx, rx) = mpsc::channel::<String>();
+                            // A streaming service reports the whole text
+                            // so far each time, on this thread; only the
+                            // latest matters. A helper forwards it into the
+                            // panel a few times a second while the
+                            // translation goes on, instead of queueing every
+                            // step.
+                            let latest = Arc::new(parking_lot::Mutex::new(None::<String>));
+                            let done = std::sync::atomic::AtomicBool::new(false);
+                            let slot = latest.clone();
                             let opts = TranslateOptions {
                                 provider: Some(module.to_owned()),
                                 fail_over: Some(false),
                                 progress: Some(crate::Progress::new(move |t| {
-                                    let _ = tx.send(t.to_owned());
+                                    *slot.lock() = Some(t.to_owned());
                                 })),
                                 ..Default::default()
                             };
-                            // A streaming service reports the text so far
-                            // on this thread; a helper forwards it into the
-                            // panel while the translation goes on.
-                            let (into_ref, sink) = (&into, &bounded);
+                            let (into_ref, sink, done_ref, latest_ref) = (&into, &bounded, &done, &latest);
                             let outcome = std::thread::scope(|s| {
-                                s.spawn(move || {
-                                    for t in rx {
-                                        if let Some(k) = into_ref {
-                                            sink([(k.clone(), Value::String(t))].into());
-                                        }
+                                s.spawn(move || loop {
+                                    let finished = done_ref.load(std::sync::atomic::Ordering::SeqCst);
+                                    if let (Some(t), Some(k)) = (latest_ref.lock().take(), into_ref) {
+                                        sink([(k.clone(), Value::String(t))].into());
                                     }
+                                    if finished {
+                                        break;
+                                    }
+                                    std::thread::sleep(Duration::from_millis(80));
                                 });
                                 let r = p.translate(&text, LangPair::new(from, to), &opts);
-                                drop(opts);
+                                done.store(true, std::sync::atomic::Ordering::SeqCst);
                                 r
                             })?;
                             Value::String(outcome.translation.text)
@@ -272,6 +296,13 @@ impl Engine {
                     }
                 }
                 ActionKind::Builtin => match spec.builtin.trim() {
+                    b @ ("copy" | "open_url") if !GESTURES.contains(&req.event.kind.as_str()) => {
+                        return Err(Error::Config(format!(
+                            "action {action:?}: {b} runs only when the user clicks, presses Enter or a shortcut, \
+                             not on {:?}",
+                            req.event.kind
+                        )))
+                    }
                     "copy" => out.effects.push(Effect::Copy(value_text(&arg("text")))),
                     "open_url" => {
                         let url = value_text(&arg("url"));
@@ -303,6 +334,7 @@ impl Engine {
         out.reply.options.clear();
         out.reply.choices.clear();
         page.bound_state(&mut out.reply.state);
+        fit_size(&mut out.reply.state, MAX_STATE_BYTES);
         Ok(out)
     }
 
@@ -332,6 +364,8 @@ impl Engine {
         let mut panel = Panel {
             engine: self.clone(),
             revision: 0,
+            changed: BTreeMap::new(),
+            streamed: Arc::new(parking_lot::Mutex::new(None)),
             keeps,
             id: id.clone(),
             state: page.defaults.clone(),
@@ -347,7 +381,7 @@ impl Engine {
             effects: Vec::new(),
             touched: BTreeSet::new(),
             restored: false,
-            pending_change: None,
+            pending_changes: BTreeMap::new(),
             closed: false,
         };
         if panel.page.persist.is_empty() || !keeps {
@@ -355,10 +389,15 @@ impl Engine {
         } else {
             let (path, tx, waker) = (self.panel_state_file(&id), panel.tx.clone(), panel.waker.clone());
             self.spawn("panel state", move || {
-                let saved = std::fs::read(&path)
-                    .ok()
+                // A file grown past the limit (edited by hand, say) is
+                // ignored rather than read whole.
+                let small = std::fs::metadata(&path).is_ok_and(|m| m.len() <= MAX_PERSIST_BYTES as u64);
+                let mut saved = small
+                    .then(|| std::fs::read(&path).ok())
+                    .flatten()
                     .and_then(|b| serde_json::from_slice::<OptionValues>(&b).ok())
                     .unwrap_or_default();
+                fit_size(&mut saved, MAX_PERSIST_BYTES);
                 let _ = tx.send(Msg::Restored(saved));
                 waker();
             });
@@ -449,8 +488,9 @@ fn lang_arg(v: &Value) -> Option<LangId> {
 enum Msg {
     /// The kept keys, read from disk.
     Restored(OptionValues),
-    /// Partial state from the run of this generation.
-    Update(u64, OptionValues),
+    /// Partial state from the run of this generation is waiting in
+    /// [`Panel::streamed`].
+    Streamed,
     /// The run of this generation finished.
     Done(u64, String, Result<PanelOutcome>),
 }
@@ -489,6 +529,13 @@ pub struct Panel {
     engine: Engine,
     /// Bumped whenever the state changes, so a front end can tell.
     revision: u64,
+    /// The revision at which each state key last changed.
+    changed: BTreeMap<String, u64>,
+    /// Streamed updates not yet applied, coalesced (the latest value of
+    /// each key), with the generation of the run they came from. Workers
+    /// write here and [`Panel::poll`] takes it, so a module that streams
+    /// faster than the window draws queues nothing.
+    streamed: Arc<parking_lot::Mutex<Option<(u64, OptionValues)>>>,
     /// Reads and writes its `persist` keys (not a preview).
     keeps: bool,
     pub id: PanelId,
@@ -510,8 +557,9 @@ pub struct Panel {
     /// Keys the user changed before the kept ones were read: theirs wins.
     touched: BTreeSet<String>,
     restored: bool,
-    /// An `on_change` waiting out the debounce: (action, element, due).
-    pending_change: Option<(String, String, Instant)>,
+    /// `on_change` actions waiting out the debounce, one per element:
+    /// element -> (action, due).
+    pending_changes: BTreeMap<String, (String, Instant)>,
     closed: bool,
 }
 
@@ -527,6 +575,30 @@ impl Panel {
     /// A number that changes whenever the state does.
     pub fn revision(&self) -> u64 {
         self.revision
+    }
+
+    /// The [`Panel::revision`] at which state `key` last changed (0: never
+    /// since the panel opened), so a front end redoes work for a value (an
+    /// image to decode) only when that value changed.
+    pub fn changed_at(&self, key: &str) -> u64 {
+        self.changed.get(key).copied().unwrap_or(0)
+    }
+
+    /// Merge `incoming` into the state, within the total limit; a value that
+    /// would take the state over it keeps its old value.
+    fn merge(&mut self, mut incoming: OptionValues) {
+        let dropped = fit_merge(&self.state, &mut incoming, MAX_STATE_BYTES);
+        if !dropped.is_empty() {
+            tracing::debug!(panel = %self.id, ?dropped, "values over the panel's {MAX_STATE_BYTES} bytes were not taken");
+        }
+        if incoming.is_empty() {
+            return;
+        }
+        self.revision += 1;
+        for (k, v) in incoming {
+            self.changed.insert(k.clone(), self.revision);
+            self.state.insert(k, v);
+        }
     }
 
     pub fn options(&self) -> &OptionValues {
@@ -592,10 +664,9 @@ impl Panel {
     pub fn set(&mut self, key: &str, value: Value) {
         let mut one: OptionValues = [(key.to_owned(), value)].into();
         self.page.bound_state(&mut one);
-        if let Some((k, v)) = one.into_iter().next() {
-            self.touched.insert(k.clone());
-            self.state.insert(k, v);
-            self.revision += 1;
+        if let Some(k) = one.keys().next().cloned() {
+            self.touched.insert(k);
+            self.merge(one);
         }
     }
 
@@ -605,7 +676,9 @@ impl Panel {
         let Some(key) = el.bind.state_key() else { return };
         self.set(key, value);
         if !el.on_change.is_empty() {
-            self.pending_change = Some((el.on_change.clone(), el.id.clone(), Instant::now() + CHANGE_DEBOUNCE));
+            // One wait per element: a change in another field does not
+            // replace this one's.
+            self.pending_changes.insert(el.id.clone(), (el.on_change.clone(), Instant::now() + CHANGE_DEBOUNCE));
         }
     }
 
@@ -635,15 +708,39 @@ impl Panel {
             state: self.state.clone(),
             event: ActionEvent { kind: kind.to_owned(), element: element.map(str::to_owned), item },
         };
-        let (engine, page, tx, waker, action) =
-            (self.engine.clone(), self.page.clone(), self.tx.clone(), self.waker.clone(), action.to_owned());
+        *self.streamed.lock() = None;
+        let (engine, page, tx, waker, action, streamed) = (
+            self.engine.clone(),
+            self.page.clone(),
+            self.tx.clone(),
+            self.waker.clone(),
+            action.to_owned(),
+            self.streamed.clone(),
+        );
         self.engine.spawn("panel action", move || {
             let updates = {
                 let (tx, waker, cancel) = (std::sync::Mutex::new(tx.clone()), waker.clone(), cancel.clone());
                 move |u: OptionValues| {
-                    if !cancel.is_cancelled() {
+                    if cancel.is_cancelled() {
+                        return;
+                    }
+                    // Coalesce: the latest value of each key, within the
+                    // size of one update; announce only the first.
+                    let first = {
+                        let mut slot = streamed.lock();
+                        let first = slot.as_ref().is_none_or(|(g, _)| *g != generation);
+                        if first {
+                            *slot = Some((generation, OptionValues::new()));
+                        }
+                        if let Some((_, pending)) = slot.as_mut() {
+                            pending.extend(u);
+                            fit_size(pending, MAX_UPDATE_BYTES);
+                        }
+                        first
+                    };
+                    if first {
                         if let Ok(tx) = tx.lock() {
-                            let _ = tx.send(Msg::Update(generation, u));
+                            let _ = tx.send(Msg::Streamed);
                         }
                         waker();
                     }
@@ -667,37 +764,51 @@ impl Panel {
                 Msg::Restored(mut saved) => {
                     saved.retain(|k, _| self.page.persist.contains(k) && !self.touched.contains(k));
                     self.page.bound_state(&mut saved);
-                    self.state.extend(saved);
-                    self.revision += 1;
+                    self.merge(saved);
                     self.restored(OptionValues::new());
                 }
-                Msg::Update(generation, u) => {
-                    if self.running.as_ref().is_some_and(|r| r.generation == generation) {
-                        self.state.extend(u);
-                        self.revision += 1;
-                    }
-                }
+                Msg::Streamed => self.take_streamed(),
                 Msg::Done(generation, action, result) => {
                     if !self.running.as_ref().is_some_and(|r| r.generation == generation) {
                         continue;
                     }
+                    // What was streamed lands before the final reply.
+                    self.take_streamed();
                     self.running = None;
                     self.finish(action, result);
                 }
             }
         }
-        let (action, element, due) = self.pending_change.clone()?;
+        // `on_change` actions whose wait is over, earliest first, one at a
+        // time.
         let now = Instant::now();
-        if due > now {
-            return Some(due - now);
+        let next_due = self.pending_changes.values().map(|(_, due)| *due).min()?;
+        if next_due > now {
+            return Some(next_due - now);
         }
-        if self.running.is_none() {
-            self.pending_change = None;
+        if self.running.is_some() {
+            // Wait for the running action; its end wakes the panel.
+            return Some(Duration::from_millis(50));
+        }
+        let element = self
+            .pending_changes
+            .iter()
+            .filter(|(_, (_, due))| *due <= now)
+            .min_by_key(|(_, (_, due))| *due)
+            .map(|(el, _)| el.clone())?;
+        if let Some((action, _)) = self.pending_changes.remove(&element) {
             self.trigger(&action, "change", Some(&element), None);
-            None
-        } else {
-            // Wait for the running action; ask again shortly.
-            Some(CHANGE_DEBOUNCE)
+        }
+        (!self.pending_changes.is_empty()).then_some(Duration::from_millis(50))
+    }
+
+    /// Apply the streamed updates of the running action.
+    fn take_streamed(&mut self) {
+        let taken = self.streamed.lock().take();
+        if let Some((generation, u)) = taken {
+            if self.running.as_ref().is_some_and(|r| r.generation == generation) {
+                self.merge(u);
+            }
         }
     }
 
@@ -719,8 +830,7 @@ impl Panel {
             }
             Ok(out) => {
                 let r = out.reply;
-                self.state.extend(r.state);
-                self.revision += 1;
+                self.merge(r.state);
                 for (key, msg) in r.errors {
                     let about = self.state.get(&key).cloned().unwrap_or(Value::Null);
                     self.errors.insert(key, (msg, about));
@@ -753,7 +863,11 @@ impl Panel {
             // now would replace them with the defaults.
             return;
         }
-        let keep = self.page.persisted(&self.state);
+        let mut keep = self.page.persisted(&self.state);
+        let dropped = fit_size(&mut keep, MAX_PERSIST_BYTES);
+        if !dropped.is_empty() {
+            tracing::debug!(panel = %self.id, ?dropped, "kept keys over {MAX_PERSIST_BYTES} bytes are not written");
+        }
         let path = self.engine.panel_state_file(&self.id);
         self.engine.spawn("panel state", move || {
             if let Some(dir) = path.parent() {

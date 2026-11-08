@@ -828,6 +828,8 @@ fn basics(app: &mut GlossaApp, ui: &mut egui::Ui, st: &mut OptionsState) {
 }
 
 fn hotkeys(app: &mut GlossaApp, ui: &mut egui::Ui, st: &mut OptionsState) {
+    // Module panels, for their own hotkeys below.
+    let panels: Vec<(String, String)> = app.panel_list().iter().map(|p| (p.id.clone(), p.title.clone())).collect();
     let d = &mut st.draft;
     ui.checkbox(&mut d.hotkeys.enabled, app.t("options.hotkeys.enable"));
     // On Wayland the desktop portal may bind the hotkeys; without it, point
@@ -846,8 +848,8 @@ fn hotkeys(app: &mut GlossaApp, ui: &mut egui::Ui, st: &mut OptionsState) {
             }
         });
     }
-    for (action, e) in &app.hotkey_errors {
-        let text = crate::hotkey_error_text(&app.locale, *action, e);
+    for (action, panel, e) in &app.hotkey_errors {
+        let text = crate::hotkey_error_text(&app.locale, *action, panel.as_deref(), e);
         ui.label(RichText::new(text).color(app.look.error()));
     }
     ui.add_space(6.0);
@@ -888,6 +890,51 @@ fn hotkeys(app: &mut GlossaApp, ui: &mut egui::Ui, st: &mut OptionsState) {
                         ui.label(RichText::new("!").strong().color(app.look.error()))
                             .on_hover_text(app.locale.fmt("options.hotkeys.conflict", &names.join(", ")));
                     }
+                }
+            });
+            ui.end_row();
+        }
+    });
+    panel_hotkeys(app, ui, &mut st.draft, &panels);
+}
+
+/// `[hotkeys.panels]`: a hotkey per module panel, with the reason one
+/// could not be registered beside it. Panels bound in the file whose
+/// module is not loaded are listed too, so their hotkeys can be removed.
+fn panel_hotkeys(app: &GlossaApp, ui: &mut egui::Ui, d: &mut glossa_core::Config, panels: &[(String, String)]) {
+    let mut rows: Vec<(String, String)> = panels.to_vec();
+    for id in d.hotkeys.panels.keys() {
+        if !rows.iter().any(|(p, _)| p == id) {
+            rows.push((id.clone(), id.clone()));
+        }
+    }
+    if rows.is_empty() {
+        return;
+    }
+    ui.add_space(10.0);
+    ui.label(RichText::new(app.t("options.hotkeys.panels")).strong());
+    egui::Grid::new("panel-hotkeys").num_columns(2).striped(true).spacing(vec2(24.0, 6.0)).show(ui, |ui| {
+        for (id, title) in rows {
+            ui.label(&title).on_hover_text(&id);
+            let current = d.hotkeys.panels.get(&id).cloned();
+            ui.horizontal(|ui| {
+                let salt = format!("panel-hotkey-{id}");
+                if let Some(change) =
+                    crate::widgets::hotkey_field(ui, &salt, current.as_ref(), &app.t("options.hotkeys.press_keys"))
+                {
+                    match change {
+                        Some(hk) => {
+                            d.hotkeys.panels.insert(id.clone(), hk);
+                        }
+                        None => {
+                            d.hotkeys.panels.remove(&id);
+                        }
+                    }
+                }
+                let failed = app.hotkey_errors.iter().find(|(_, p, _)| p.as_deref() == Some(id.as_str()));
+                if let Some((action, panel, e)) = failed {
+                    let text = crate::hotkey_error_text(&app.locale, *action, panel.as_deref(), e);
+                    ui.label(RichText::new("!").strong().color(app.look.error())).on_hover_text(text);
                 }
             });
             ui.end_row();

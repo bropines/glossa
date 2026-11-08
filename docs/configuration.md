@@ -217,7 +217,7 @@ enabled = ["deepl", "google"]
 |---|---|---|---|---|
 | `enabled` | bool | `true` | Options → Hotkeys | Register the global hotkeys at all. |
 | `bindings` | table: action id → hotkey | see below | Options → Hotkeys | One hotkey per action. An action not listed has no hotkey. |
-| `panels` | table: `module/panel` → hotkey | empty | by hand | Hotkeys that open [module panels](modules/panels.md), one per panel: `"pocket-glossary/glossary" = "Ctrl+Alt+G"`. Not through the Wayland portal; bind `glossa-cli action open_panel MODULE/PANEL` there. |
+| `panels` | table: `module/panel` → hotkey | empty | Options → Hotkeys, *Module panels* | Hotkeys that open [module panels](modules/panels.md), one per panel: `"pocket-glossary/glossary" = "Ctrl+Alt+G"`. Not through the Wayland portal; bind `glossa-cli action open_panel MODULE/PANEL` there. |
 
 ```toml
 [hotkeys.bindings]

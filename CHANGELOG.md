@@ -52,8 +52,8 @@ the notes of its GitHub release.
   a hotkey (`[hotkeys.panels]`), the control API (`GET /v1/panels`, `POST
   /v1/panel`, the `open_panel` action) and `glossa-cli module panel`, which
   also runs a panel's actions. A panel keeps the state keys it names
-  between openings, costs nothing until opened, and closes with the other
-  windows when the graphics unload. The module editor's preview draws a
+  between openings and costs nothing until opened; like the other windows,
+  an open panel keeps the graphics loaded. The module editor's preview draws a
   module's panels live, and fixtures test panel actions (`panel = "…"`).
   The new Pocket Glossary example shows it all (docs/modules/panels.md).
 - Richer settings pages for modules and built-in services, with no module

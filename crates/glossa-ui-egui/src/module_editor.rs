@@ -983,6 +983,8 @@ fn preview_panels(app: &mut GlossaApp, ui: &mut egui::Ui, ed: &mut ModuleEditor)
     }
     let choice = ed.preview_panel_choice.min(ed.info.panels.len() - 1);
     if ed.preview_panel.as_ref().is_none_or(|(i, _)| *i != choice) {
+        // The pictures of the panel shown before go with it.
+        crate::module_panel::forget(&app.ctx, PREVIEW_SALT);
         let ctx = app.ctx.clone();
         let panel = app
             .engine

@@ -337,7 +337,7 @@ impl GlossaApp {
         for (action, hotkey) in &self.cfg.hotkeys.bindings {
             if let Err(e) = h.register(*action, hotkey) {
                 tracing::warn!("hotkey {hotkey} for {}: {e}", action.id());
-                self.hotkey_errors.push((Some(*action), e));
+                self.hotkey_errors.push((Some(*action), None, e));
             }
         }
         crate::register_panel_hotkeys(h, &self.cfg, &mut self.hotkey_errors);

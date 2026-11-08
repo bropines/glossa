@@ -99,8 +99,11 @@ pass for one of Glossa's own.
 | the command line | `glossa-cli module panel MODULE/PANEL --open` ([cli.md](../cli.md#module)) |
 | the module editor | its preview draws the module's panels, live |
 
-A panel costs nothing until it is opened. Open panels close with the other
-windows when Glossa unloads its graphics, and keep their `persist` keys.
+A panel costs nothing until it is opened. An open panel is a window like
+the dictionary or the history: while it is on screen Glossa keeps its
+graphics loaded, and they unload (`unload_graphics_after_secs`) only once
+every window, panels included, is closed. A panel closed by the user, or
+when Glossa quits, stops its running action and keeps its `persist` keys.
 
 ## State
 
@@ -185,7 +188,10 @@ An action is one of three kinds:
   `into` as it is written.
 - **A built-in**: `builtin = "copy"` (`args.text` to the clipboard),
   `"open_url"` (`args.url`, `http`/`https` only) or `"speak"` (`args.text`
-  in Glossa's current voice, `args.lang` optional).
+  in Glossa's current voice, `args.lang` optional). `copy` and `open_url`
+  run only for the user's own gesture (a click, Enter in a field, a
+  shortcut); from `on_open` or `on_change` they fail, and `module check`
+  says so.
 
 `args` values are `state.<key>`, `options.<key>`, `item` or `item.<field>`
 (the clicked row), with further `.field` steps into objects; anything else
@@ -210,8 +216,9 @@ each `ui_update` host call merges partial state into the panel at once.
 | Java | `host.uiUpdate(Map.of("result", "…so far"))` |
 | any other | the [`ui_update`](protocol.md#ui_update) host call |
 
-The final reply's `state` still lands last. Outside a panel the call does
-nothing.
+The final reply's `state` still lands last. Updates that come faster than
+the window draws are merged, the latest value of each key winning, rather
+than queued. Outside a panel the call does nothing.
 
 ## Translations
 
@@ -237,7 +244,10 @@ cannot stall the window:
 |---|---|
 | a text value | 256 KB, then cut |
 | a list (and any array) | 1000 entries |
-| an image | 8 MB of base64, and 4096 pixels a side; a larger one is not shown |
+| an image | 8 MB of base64, 4096 pixels a side and 16 megapixels; a larger one is not shown. Pictures are decoded on a worker, once per change |
+| one streamed update | 1 MB as JSON; the largest values are dropped from a bigger one |
+| the whole state | 12 MB as JSON; a value that would take it over keeps its old value |
+| the kept (`persist`) keys | 1 MB on disk; a bigger file is ignored, and the largest keys are not written |
 | state keys | 256 |
 | elements in a panel | 500 |
 | nesting of containers | 16 |

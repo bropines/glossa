@@ -436,7 +436,7 @@ fn build_shell(engine: Engine, wake: Arc<Wake>) -> Shell {
             Some(h)
         }
         Err(e) => {
-            hotkey_errors.push((None, e));
+            hotkey_errors.push((None, None, e));
             None
         }
     };
@@ -508,7 +508,7 @@ pub fn register_hotkeys(shell: &mut Shell) {
     for (action, hotkey) in &cfg.hotkeys.bindings {
         if let Err(e) = h.register(*action, hotkey) {
             tracing::warn!("hotkey {hotkey} for {}: {e}", action.id());
-            shell.hotkey_errors.push((Some(*action), e));
+            shell.hotkey_errors.push((Some(*action), None, e));
         }
     }
     register_panel_hotkeys(h, &cfg, &mut shell.hotkey_errors);
@@ -523,7 +523,7 @@ pub fn register_panel_hotkeys(
     for (panel, hotkey) in &cfg.hotkeys.panels {
         if let Err(e) = h.register_panel(panel, hotkey) {
             tracing::warn!("hotkey {hotkey} for panel {panel}: {e}");
-            errors.push((Some(Action::OpenPanel), e));
+            errors.push((Some(Action::OpenPanel), Some(panel.clone()), e));
         }
     }
 }
@@ -533,15 +533,16 @@ pub fn tray_panels(engine: &glossa_engine::Engine) -> Vec<(String, String)> {
     engine.panels().into_iter().filter(|p| p.open_from.iter().any(|o| o == "tray")).map(|p| (p.id, p.title)).collect()
 }
 
-/// A hotkey that could not be set up, and for which action (none when the
-/// hotkey service itself failed).
-pub type HotkeyFailure = (Option<Action>, glossa_platform::HotkeyError);
+/// A hotkey that could not be set up, for which action (none when the
+/// hotkey service itself failed) and, for `open_panel`, which panel.
+pub type HotkeyFailure = (Option<Action>, Option<String>, glossa_platform::HotkeyError);
 
 /// A hotkey failure in the interface language, after the action's name when
 /// there is one; the options page lists these.
 pub fn hotkey_error_text(
     locale: &glossa_core::Locale,
     action: Option<Action>,
+    panel: Option<&str>,
     e: &glossa_platform::HotkeyError,
 ) -> String {
     use glossa_platform::HotkeyError as E;
@@ -551,9 +552,10 @@ pub fn hotkey_error_text(
         E::Taken { hotkey } => locale.fmt("options.hotkeys.taken", hotkey),
         E::Failed { hotkey, detail } => locale.fmt_args("options.hotkeys.failed", &[hotkey, detail]),
     };
-    match action {
-        Some(a) => format!("{}: {text}", locale.get(&format!("action.{}", a.id()))),
-        None => text,
+    match (action, panel) {
+        (_, Some(p)) => format!("{} {p}: {text}", locale.get("action.open_panel")),
+        (Some(a), None) => format!("{}: {text}", locale.get(&format!("action.{}", a.id()))),
+        (None, None) => text,
     }
 }
 

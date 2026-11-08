@@ -64,6 +64,17 @@ pub const MAX_STATE_KEYS: usize = 256;
 pub const MAX_ELEMENTS: usize = 500;
 /// How deep values nest inside a state value before they are cut.
 const MAX_VALUE_DEPTH: usize = 16;
+/// The most one streamed update may hold, serialized; the largest values
+/// are dropped from one that is bigger.
+pub const MAX_UPDATE_BYTES: usize = 1024 * 1024;
+/// The most a panel's whole state may hold, serialized: room for one
+/// image and the text around it. A value that would take it over is not
+/// taken.
+pub const MAX_STATE_BYTES: usize = 12 * 1024 * 1024;
+/// The most a panel keeps between openings, on disk.
+pub const MAX_PERSIST_BYTES: usize = 1024 * 1024;
+/// The largest picture a panel decodes, in pixels (16 MP: 64 MB of RGBA).
+pub const MAX_IMAGE_PIXELS: u64 = 16_000_000;
 
 /// One `[[ui.panels]]` entry, as written.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
@@ -570,6 +581,54 @@ fn bound_value(v: &mut Value, depth: usize) {
     }
 }
 
+/// How many bytes `v` takes as JSON, without building the text.
+pub fn json_size(v: &Value) -> usize {
+    struct Count(usize);
+    impl std::io::Write for Count {
+        fn write(&mut self, b: &[u8]) -> std::io::Result<usize> {
+            self.0 += b.len();
+            Ok(b.len())
+        }
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+    let mut c = Count(0);
+    match serde_json::to_writer(&mut c, v) {
+        Ok(()) => c.0,
+        Err(_) => usize::MAX,
+    }
+}
+
+/// The size of one entry of a state map as JSON (key, value, punctuation).
+fn entry_size(k: &str, v: &Value) -> usize {
+    k.len() + 4 + json_size(v)
+}
+
+/// Drop the largest values of `values` until all of it, as JSON, takes at
+/// most `cap` bytes. Returns the keys dropped.
+pub fn fit_size(values: &mut OptionValues, cap: usize) -> Vec<String> {
+    let mut sizes: Vec<(usize, String)> = values.iter().map(|(k, v)| (entry_size(k, v), k.clone())).collect();
+    let mut total: usize = sizes.iter().map(|(s, _)| *s).sum::<usize>() + 2;
+    sizes.sort();
+    let mut dropped = Vec::new();
+    while total > cap {
+        let Some((s, k)) = sizes.pop() else { break };
+        values.remove(&k);
+        total -= s;
+        dropped.push(k);
+    }
+    dropped
+}
+
+/// Drop the largest of `incoming` until `state` with them merged in takes
+/// at most `cap` bytes as JSON; what is dropped keeps its old value.
+/// Returns the keys dropped.
+pub fn fit_merge(state: &OptionValues, incoming: &mut OptionValues, cap: usize) -> Vec<String> {
+    let kept: usize = state.iter().filter(|(k, _)| !incoming.contains_key(*k)).map(|(k, v)| entry_size(k, v)).sum();
+    fit_size(incoming, cap.saturating_sub(kept))
+}
+
 /// Cut `s` to at most `max` bytes at a character boundary, marking the cut.
 pub fn clip(s: &mut String, max: usize) {
     if s.len() > max {
@@ -894,6 +953,26 @@ pub fn lint(m: &Manifest) -> Vec<Issue> {
         let on_open = p.on_open.trim();
         if !on_open.is_empty() && !action_ids.contains(on_open) {
             out.push(issue(Level::Error, format!("{what}: on_open {on_open:?} is not an action")));
+        }
+        // Copying and opening a page need the user's own click.
+        let needs_gesture =
+            |id: &str| m.actions.iter().any(|a| a.id == id && matches!(a.builtin.trim(), "copy" | "open_url"));
+        if needs_gesture(on_open) {
+            out.push(issue(
+                Level::Error,
+                format!("{what}: on_open {on_open:?} copies or opens a page, which runs only on a click"),
+            ));
+        }
+        for it in &p.items {
+            if needs_gesture(it.on_change.trim()) {
+                out.push(issue(
+                    Level::Error,
+                    format!(
+                        "{what} item {:?}: on_change {:?} copies or opens a page, which runs only on a click",
+                        it.id, it.on_change
+                    ),
+                ));
+            }
         }
 
         let item_ids: BTreeSet<&str> = p.items.iter().map(|i| i.id.as_str()).collect();
@@ -1257,6 +1336,25 @@ mod tests {
     }
 
     #[test]
+    fn sizes_are_capped_in_total_dropping_the_largest() {
+        let mut v: OptionValues = [
+            ("small".to_owned(), json!("a")),
+            ("big".to_owned(), json!("x".repeat(600))),
+            ("mid".to_owned(), json!("y".repeat(300))),
+        ]
+        .into();
+        assert_eq!(json_size(&json!("ab")), 4);
+        assert_eq!(fit_size(&mut v, 400), ["big"]);
+        assert!(v.contains_key("mid") && v.contains_key("small"));
+        let state: OptionValues = [("held".to_owned(), json!("z".repeat(300))), ("mid".to_owned(), json!(1))].into();
+        let mut incoming = v.clone();
+        assert_eq!(fit_merge(&state, &mut incoming, 400), ["mid"], "the state already takes most of the room");
+        assert!(incoming.contains_key("small"));
+        let mut all = v.clone();
+        assert!(fit_size(&mut all, 10_000).is_empty());
+    }
+
+    #[test]
     fn rows_tables_progress_and_links_read_module_values_as_data() {
         let rows = list_rows(&json!(["plain", { "title": "t", "subtitle": 2, "actions": ["copy", 5] }]));
         assert_eq!(rows[0].title, "plain");
@@ -1311,6 +1409,11 @@ mod tests {
             id = "l"
             type = "link"
             url = "javascript:alert(1)"
+            [[ui.panels.items]]
+            id = "t"
+            type = "text"
+            bind = "state.a"
+            on_change = "cp"
             "#,
         );
         let text = lint(&m).iter().map(|i| i.message.clone()).collect::<Vec<_>>().join("\n");
@@ -1331,6 +1434,7 @@ mod tests {
             "a result needs `bind`",
             "is not an http or https address",
             "item \"y\" is not placed anywhere",
+            "on_change \"cp\" copies or opens a page",
         ] {
             assert!(text.contains(want), "missing {want:?} in:\n{text}");
         }

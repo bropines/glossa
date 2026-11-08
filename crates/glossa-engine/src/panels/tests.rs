@@ -32,6 +32,12 @@ const MANIFEST: &str = r#"
     [[actions]]
     id = "load"
 
+    [[actions]]
+    id = "mark"
+
+    [[actions]]
+    id = "flood"
+
     [[ui.panels]]
     id = "main"
     title = "Glossary"
@@ -57,6 +63,7 @@ const MANIFEST: &str = r#"
     id = "to"
     type = "lang"
     bind = "state.to"
+    on_change = "mark"
 
     [[ui.panels.items]]
     id = "result"
@@ -73,6 +80,14 @@ const MANIFEST: &str = r#"
 const SCRIPT: &str = r#"
     function translate(req) { return req.text.toUpperCase() + " (" + req.to + ")"; }
     function load(ev) { return { state: { words: [{ title: "Haus", subtitle: "house" }], planted: 1 } }; }
+    function mark(ev) { return { state: { link: "marked by " + ev.event.element } }; }
+    function flood(ev, host) {
+        for (var i = 0; i < 5000; i++) host.ui.update({ result: "step " + i });
+        host.ui.update({ result: "big", words: [ "y".repeat(200000), "y".repeat(200000), "y".repeat(200000), "y".repeat(200000), "y".repeat(200000), "y".repeat(200000) ] });
+        var many = [];
+        for (var j = 0; j < 60; j++) many.push("z".repeat(250000));
+        return { state: { words: many, source: "kept" } };
+    }
     function explain(ev, host) {
         host.ui.update({ result: "thinking" });
         host.ui.update({ result: "x".repeat(300000) });
@@ -238,5 +253,97 @@ fn a_closed_panel_drops_its_late_reply() {
     p.poll();
     assert_eq!(p.state()["result"], "", "nothing lands after closing");
     assert!(!p.trigger("explain", "click", None, None), "a closed panel runs nothing");
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+#[test]
+fn copy_and_open_run_only_on_a_gesture() {
+    let (e, dir) = engine("gesture");
+    let id = PanelId::new("gloss", "main");
+    let cancel = CancelToken::new();
+    let mut s: OptionValues = [("link".to_owned(), json!("https://example.com/"))].into();
+    s.insert("source".into(), json!("x"));
+    let row = Some(json!({ "title": "Haus" }));
+    for kind in ["open", "change"] {
+        let r = PanelRequest {
+            state: s.clone(),
+            event: ActionEvent { kind: kind.into(), element: None, item: row.clone() },
+        };
+        let err = e.panel_action(&id, "copy_row", r.clone(), &cancel, &|_| {}).unwrap_err();
+        assert!(err.to_string().contains("runs only when the user"), "{err}");
+        assert!(e.panel_action(&id, "open", r, &cancel, &|_| {}).is_err(), "open_url on {kind}");
+    }
+    for kind in GESTURES {
+        let r = PanelRequest {
+            state: s.clone(),
+            event: ActionEvent { kind: kind.into(), element: None, item: row.clone() },
+        };
+        assert!(e.panel_action(&id, "copy_row", r, &cancel, &|_| {}).is_ok(), "{kind}");
+    }
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+#[test]
+fn every_changed_field_runs_its_own_on_change() {
+    let (e, dir) = engine("debounce");
+    let mut p = e.open_panel(&PanelId::new("gloss", "main"), Arc::new(|| {})).unwrap();
+    settle(&mut p);
+    let (source, to) = (p.page().element("source").unwrap().clone(), p.page().element("to").unwrap().clone());
+    // A, then B within the pause: both run, each once.
+    p.edit(&source, json!("hund"));
+    p.edit(&to, json!("fr"));
+    p.edit(&source, json!("katze"));
+    let until = Instant::now() + Duration::from_secs(10);
+    while p.state()["result"] != "explained katze" || p.state()["link"] != "marked by to" {
+        assert!(Instant::now() < until, "not both ran: {:?}", p.state());
+        p.poll();
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    settle(&mut p);
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+#[test]
+fn streamed_updates_coalesce_and_everything_is_capped_in_total() {
+    let (e, dir) = engine("flood");
+    let id = PanelId::new("gloss", "main");
+    // Each update the handler sends is held to the size of one message.
+    let biggest = std::sync::Mutex::new(0usize);
+    let calls = std::sync::Mutex::new(0usize);
+    let out = e
+        .panel_action(&id, "flood", req(&OptionValues::new(), None), &CancelToken::new(), &|u| {
+            *calls.lock().unwrap() += 1;
+            let size = glossa_modules::panels::json_size(&serde_json::to_value(&u).unwrap());
+            let mut b = biggest.lock().unwrap();
+            *b = (*b).max(size);
+        })
+        .unwrap();
+    assert!(*biggest.lock().unwrap() <= glossa_modules::panels::MAX_UPDATE_BYTES);
+    assert_eq!(*calls.lock().unwrap(), 5001);
+    // A reply over the panel's total loses its largest values.
+    assert!(!out.reply.state.contains_key("words"), "15 MB of words are not taken");
+    assert_eq!(out.reply.state["source"], "kept");
+
+    // In an open panel the 5000 updates coalesce into what was sent last.
+    let mut p = e.open_panel(&id, Arc::new(|| {})).unwrap();
+    settle(&mut p);
+    assert!(p.trigger("flood", "click", None, None));
+    settle(&mut p);
+    assert_eq!(p.state()["result"], "big", "the latest streamed value");
+    assert_eq!(p.state()["source"], "kept");
+    let total = glossa_modules::panels::json_size(&serde_json::to_value(p.state()).unwrap());
+    assert!(total <= glossa_modules::panels::MAX_STATE_BYTES);
+    assert!(p.changed_at("source") > 0 && p.changed_at("link") == 0, "per-key revisions");
+    drop(p);
+
+    // A kept-keys file over the limit is not read.
+    let file = e.panel_state_file(&id);
+    std::fs::create_dir_all(file.parent().unwrap()).unwrap();
+    let huge = json!({ "to": "x".repeat(glossa_modules::panels::MAX_PERSIST_BYTES + 10) });
+    std::fs::write(&file, serde_json::to_vec(&huge).unwrap()).unwrap();
+    let mut again = e.open_panel(&id, Arc::new(|| {})).unwrap();
+    settle(&mut again);
+    assert_eq!(again.state()["to"], "de", "the oversized file is ignored");
+    drop(again);
     std::fs::remove_dir_all(&dir).ok();
 }

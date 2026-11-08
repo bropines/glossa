@@ -87,6 +87,7 @@ pub fn open(app: &mut GlossaApp, id: &PanelId) {
 pub fn close_all(app: &mut GlossaApp) {
     for mut w in app.panel_windows.drain(..) {
         w.panel.close();
+        forget(&app.ctx, &salt_of(&w.panel.id));
     }
 }
 
@@ -122,7 +123,7 @@ fn show_one(app: &mut GlossaApp, ctx: &egui::Context, w: &mut PanelWindow) -> bo
     let custom = crate::chrome::custom(&app.cfg);
     let mut open = true;
     let mut outs = Vec::new();
-    let salt = format!("panel-{}", w.panel.id);
+    let salt = salt_of(&w.panel.id);
     ctx.show_viewport_immediate(w.viewport, builder, |ui, _| {
         if ui.input(|i| i.viewport().close_requested()) {
             open = false;
@@ -138,6 +139,7 @@ fn show_one(app: &mut GlossaApp, ctx: &egui::Context, w: &mut PanelWindow) -> bo
     carry_out(app, outs, w.panel.take_effects());
     if !open {
         w.panel.close();
+        forget(ctx, &salt);
     }
     open
 }
@@ -810,56 +812,117 @@ impl Cx<'_> {
             });
     }
 
-    /// A base64 PNG or JPEG, decoded once per value into a texture kept in
-    /// the context's memory; one too large is not decoded.
+    /// A base64 PNG or JPEG. It is decoded on a worker when its value
+    /// changes (the panel says when; nothing is hashed or decoded per
+    /// frame), and its texture is kept per element: replaced when the value
+    /// changes, freed when the panel closes ([`forget`]).
     fn image(&mut self, ui: &mut egui::Ui, panel: &Panel, el: &Element) {
-        let v = panel.value(&el.bind);
-        let Some(b64) = v.as_str().filter(|s| !s.is_empty()) else { return };
-        let key = egui::Id::unique(("panel-image", self.salt, &el.id, fxhash(b64)));
-        type Slot = Option<egui::TextureHandle>;
-        let cached: Option<Slot> = ui.data(|d| d.get_temp::<Slot>(key));
-        let tex = match cached {
-            Some(t) => t,
-            None => {
-                let t = decode_image(b64).map(|img| {
-                    ui.ctx().load_texture(format!("panel-image-{}", el.id), img, egui::TextureOptions::LINEAR)
-                });
-                ui.data_mut(|d| d.insert_temp::<Slot>(key, t.clone()));
-                t
+        let images = images(ui.ctx(), self.salt);
+        let changed = el.bind.state_key().map(|k| panel.changed_at(k)).unwrap_or(0);
+        let mut slots = images.lock();
+        let fresh = slots.get(&el.id).is_none_or(|s| s.changed != changed);
+        if fresh {
+            let v = panel.value(&el.bind);
+            match v.as_str().filter(|s| !s.is_empty()) {
+                None => {
+                    // Dropping the slot frees its texture.
+                    slots.remove(&el.id);
+                }
+                Some(b64) => {
+                    let pending: Pending = Default::default();
+                    let (slot, b64, ctx) = (pending.clone(), b64.to_owned(), ui.ctx().clone());
+                    std::thread::spawn(move || {
+                        *slot.lock() = Some(decode_image(&b64));
+                        ctx.request_repaint();
+                    });
+                    slots.insert(el.id.clone(), ImageSlot { changed, state: ImageState::Decoding(pending) });
+                }
             }
-        };
-        match tex {
-            Some(t) => {
+        }
+        let Some(slot) = slots.get_mut(&el.id) else { return };
+        if let ImageState::Decoding(pending) = &slot.state {
+            let done = pending.lock().take();
+            if let Some(decoded) = done {
+                slot.state = match decoded {
+                    Some(img) => ImageState::Ready(ui.ctx().load_texture(
+                        format!("panel-image-{}-{}", self.salt, el.id),
+                        img,
+                        egui::TextureOptions::LINEAR,
+                    )),
+                    None => ImageState::Failed,
+                };
+            }
+        }
+        match &slot.state {
+            ImageState::Decoding(_) => {
+                ui.add(egui::Spinner::new().size(16.0));
+            }
+            ImageState::Ready(t) => {
                 let size = t.size_vec2();
                 let max_w = self.width(ui, el, ui.available_width());
                 let max_h = el.height.unwrap_or(400.0);
                 let scale = (max_w / size.x).min(max_h / size.y).min(1.0);
-                ui.add(egui::Image::new(&t).fit_to_exact_size(size * scale));
+                ui.add(egui::Image::new(t).fit_to_exact_size(size * scale));
             }
-            None => {
+            ImageState::Failed => {
                 ui.label(RichText::new(self.t("panel.bad_image")).small().color(self.look.weak_text()));
             }
         }
     }
 }
 
-/// A cheap hash of a (possibly long) string, to key a decoded image.
-fn fxhash(s: &str) -> u64 {
-    use std::hash::{Hash, Hasher};
-    let mut h = std::collections::hash_map::DefaultHasher::new();
-    s.len().hash(&mut h);
-    s.hash(&mut h);
-    h.finish()
+/// A picture on its way back from the decoding worker: `None` while it
+/// works, then `Some(None)` for one that could not be shown.
+type Pending = Arc<parking_lot::Mutex<Option<Option<egui::ColorImage>>>>;
+
+enum ImageState {
+    Decoding(Pending),
+    Ready(egui::TextureHandle),
+    Failed,
+}
+
+/// One `image` element's picture, for the value of its state key at the
+/// panel revision `changed`.
+struct ImageSlot {
+    changed: u64,
+    state: ImageState,
+}
+
+/// One panel's pictures by element id, in the context's memory.
+type Images = Arc<parking_lot::Mutex<std::collections::HashMap<String, ImageSlot>>>;
+
+fn images_id(salt: &str) -> egui::Id {
+    egui::Id::unique(("panel-images", salt))
+}
+
+fn images(ctx: &egui::Context, salt: &str) -> Images {
+    ctx.data_mut(|d| d.get_temp_mut_or_default::<Images>(images_id(salt)).clone())
+}
+
+/// Forget the pictures of the panel drawn with `salt`, freeing their
+/// textures: the panel closed, or the preview shows another.
+pub fn forget(ctx: &egui::Context, salt: &str) {
+    ctx.data_mut(|d| d.remove::<Images>(images_id(salt)));
+}
+
+/// The salt a panel window draws with.
+fn salt_of(id: &PanelId) -> String {
+    format!("panel-{id}")
 }
 
 /// Decode a base64 PNG or JPEG (a `data:` prefix is allowed) within
-/// [`fmt::MAX_IMAGE_SIDE`].
+/// [`fmt::MAX_IMAGE_SIDE`] a side and [`fmt::MAX_IMAGE_PIXELS`] in all.
 fn decode_image(b64: &str) -> Option<egui::ColorImage> {
     let data = b64.split_once("base64,").map(|(_, d)| d).unwrap_or(b64);
     let bytes = base64_decode(data.trim())?;
     let reader = image::ImageReader::new(std::io::Cursor::new(&bytes)).with_guessed_format().ok()?;
     let (w, h) = reader.into_dimensions().ok()?;
-    if w == 0 || h == 0 || w > fmt::MAX_IMAGE_SIDE || h > fmt::MAX_IMAGE_SIDE {
+    if w == 0
+        || h == 0
+        || w > fmt::MAX_IMAGE_SIDE
+        || h > fmt::MAX_IMAGE_SIDE
+        || u64::from(w) * u64::from(h) > fmt::MAX_IMAGE_PIXELS
+    {
         return None;
     }
     let img = image::load_from_memory(&bytes).ok()?.to_rgba8();

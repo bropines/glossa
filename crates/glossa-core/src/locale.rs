@@ -1069,6 +1069,7 @@ pub static STRINGS: &[(&str, &str, Option<&str>)] = &[
     ("action.show_options", "Show options", None),
     ("action.quit", "Exit", None),
     ("action.open_panel", "Open a module panel", None),
+    ("options.hotkeys.panels", "Module panels", None),
     // -- options: advanced ---------------------------------------------------------------
     ("options.advanced", "Advanced", Some("w:17:caption")),
     ("options.advanced.group", "Advanced", Some("w:17:1146")),

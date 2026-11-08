@@ -432,6 +432,7 @@
     "action.show_options": "Показать настройки",
     "action.quit": "Выход",
     "action.open_panel": "Открыть панель модуля",
+    "options.hotkeys.panels": "Панели модулей",
     "options.advanced": "Дополнительно",
     "options.advanced.group": "Дополнительно",
     "options.advanced.browser": "Браузер по умолчанию:",
