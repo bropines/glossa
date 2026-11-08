@@ -83,6 +83,27 @@ modules/my-translator/
 A complete, tested example lives in
 [`modules/native/example-rot13`](../../modules/native/example-rot13).
 
+### Building errors
+
+Make a `ModuleError` with its constructors (`ModuleError::new`,
+`missing_option`, `bad_response`, `.at(location)` for where it happened).
+The protocol adds optional fields over time (`location` is the latest), so
+a struct literal that names every field stops compiling when one is added.
+End a literal with `..Default::default()` instead:
+
+```rust
+// Breaks whenever a field is added:
+// ModuleError { kind: ErrorKind::Http, message: msg, retry_after_secs: None }
+
+// Keeps compiling:
+let e = ModuleError { kind: ErrorKind::Http, message: msg, ..Default::default() };
+// Or simply:
+let e = ModuleError::new(ErrorKind::Http, msg);
+```
+
+The wire is unaffected either way: a module built against an older SDK
+still speaks the same protocol.
+
 ## The manifest
 
 ```toml

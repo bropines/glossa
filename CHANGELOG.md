@@ -52,6 +52,10 @@ the notes of its GitHub release.
 - Module errors may carry an optional `location` (`file`, `line`, `column`).
   JavaScript modules fill it; the module editor and `glossa-cli module test`
   show the place (`main.js:23:14`), while popups show only the message.
+  The protocol is unchanged for running modules, but a Rust native module
+  that builds `ModuleError` with a struct literal naming every field must
+  now end it with `..Default::default()` or use `ModuleError::new`
+  ([native-modules.md](docs/modules/native-modules.md#building-errors)).
 - The interface language switches at once, without a restart: every
   window, the tray menu and the macOS menu bar follow the setting as soon
   as it is applied.
