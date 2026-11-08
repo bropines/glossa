@@ -13,7 +13,7 @@ use glossa_module_test::{find_modules, test_module, Settings, Status};
 /// Modules whose program is not released yet: their `bin` asset still has
 /// the all-zero placeholder hash, which the harness refuses
 /// (each module's README.md, "Releasing the binary").
-const UNRELEASED: &[&str] = &["process/paddle-ocr", "process/local-llm"];
+const UNRELEASED: &[&str] = &["process/local-llm"];
 
 #[test]
 fn every_module_in_the_repository_passes_its_fixtures() {

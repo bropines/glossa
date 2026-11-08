@@ -128,13 +128,15 @@ jobs:
           (cd modules/java/example-upper && ./build.sh)
           # --download: the Python example with dependencies gets the
           # managed Python, uv and its package (about 45 MB) first.
-          # paddle-ocr and local-llm are left out until their programs are
-          # released: the `bin` asset's sha256 in each module.toml is still a
-          # placeholder (each module's README.md, "Releasing the binary").
-          # Their protocol tests run in .github/workflows/paddle-ocr.yml and
-          # local-llm.yml.
+          # paddle-ocr's fixtures read a picture with three recognisers,
+          # which are optional assets: fetch them first (about 30 MB).
+          # local-llm is left out until its program is released: the `bin`
+          # asset's sha256 in its module.toml is still a placeholder (its
+          # README.md, "Releasing the binary"); its protocol tests run in
+          # .github/workflows/local-llm.yml.
+          target/debug/glossa-cli assets download paddle-ocr rec-latin.onnx rec-eslav.onnx rec-ch.onnx
           target/debug/glossa-cli module test --strict --require-runtimes --download \
-            $(find modules -name module.toml -not -path 'modules/process/paddle-ocr/*' -not -path 'modules/process/local-llm/*' -exec dirname {} \; | sort)
+            $(find modules -name module.toml -not -path 'modules/process/local-llm/*' -exec dirname {} \; | sort)
       # Every window drawn to a PNG under Xvfb, with Mesa's llvmpipe as the
       # OpenGL driver: no GPU on the runner, and none needed.
       - name: Screenshot smoke test

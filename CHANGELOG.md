@@ -9,6 +9,8 @@ the notes of its GitHub release.
 
 ### Added
 
+- The PaddleOCR module's program is released (`paddle-ocr-v0.1.0`), so
+  it now installs and downloads its files like any other module.
 - Local LLM, an offline translation module (`modules/process/local-llm`):
   a small language model on llama.cpp, with no account and nothing sent
   anywhere. Tencent's Hy-MT2 1.8B translation model (33 languages, 1.1 GB)
