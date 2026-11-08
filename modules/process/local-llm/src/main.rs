@@ -31,7 +31,7 @@ use std::time::{Duration, Instant};
 use serde_json::{json, Value};
 
 use prompt::Family;
-use server::{Config, Running};
+use server::{Config, NotReady, Running};
 
 /// The models offered on the options page: option value, asset name,
 /// display name, how it is prompted, and the languages it was trained on
@@ -245,13 +245,15 @@ fn choose(settings: &Settings, files: &[(String, PathBuf)]) -> Result<Chosen, Fa
 
 /// The llama-server command: `LOCAL_LLM_SERVER` (your own llama.cpp
 /// build), the test server, or the one in the `llama` asset.
-fn server_program(files: &[(String, PathBuf)]) -> Result<Vec<String>, Fail> {
+/// The second value is the folder whose library links the module may
+/// restore: the downloaded asset's, never a folder the user pointed at.
+fn server_program(files: &[(String, PathBuf)]) -> Result<(Vec<String>, Option<PathBuf>), Fail> {
     if std::env::var("LOCAL_LLM_FAKE_SERVER").is_ok_and(|v| v == "1") {
         let me = std::env::current_exe().map_err(|e| Fail::new("other", e.to_string()))?;
-        return Ok(vec![me.display().to_string(), "--fake-llama-server".into()]);
+        return Ok((vec![me.display().to_string(), "--fake-llama-server".into()], None));
     }
     if let Some(p) = std::env::var_os("LOCAL_LLM_SERVER").filter(|p| !p.is_empty()) {
-        return Ok(vec![PathBuf::from(p).display().to_string()]);
+        return Ok((vec![PathBuf::from(p).display().to_string()], None));
     }
     let dir = files.iter().find(|(n, _)| n == LLAMA_ASSET).map(|(_, p)| p.clone()).ok_or_else(|| {
         Fail::new("other", format!("llama.cpp is not downloaded: `glossa-cli assets download {}`", module_id()))
@@ -259,10 +261,20 @@ fn server_program(files: &[(String, PathBuf)]) -> Result<Vec<String>, Fail> {
     let exe = server::find_server(&dir).ok_or_else(|| {
         Fail::new("other", format!("no llama-server in {}; download the module's files again", dir.display()))
     })?;
-    Ok(vec![exe.display().to_string()])
+    let links = exe.parent().filter(|d| d.starts_with(&dir)).map(Path::to_path_buf);
+    Ok((vec![exe.display().to_string()], links))
 }
 
-/// The running server for these settings, started (or restarted) if needed.
+/// How long one call waits for the model to load. Glossa ends a call after
+/// 30 s by default and kills the module; waiting less, and answering
+/// "still loading" instead, keeps the load going for the next call.
+fn load_budget() -> Duration {
+    let ms = std::env::var("LOCAL_LLM_LOAD_BUDGET_MS").ok().and_then(|v| v.parse().ok()).unwrap_or(20_000);
+    Duration::from_millis(ms)
+}
+
+/// The running server for these settings, started (or restarted) if
+/// needed, with its model loaded.
 fn ensure(server: &mut Option<Running>, config: Config) -> Result<&mut Running, Fail> {
     let reuse = match server.as_mut() {
         Some(s) => s.config == config && s.alive(),
@@ -276,7 +288,20 @@ fn ensure(server: &mut Option<Running>, config: Config) -> Result<&mut Running, 
         eprintln!("local-llm: started llama-server in {} ms", started.elapsed().as_millis());
         *server = Some(s);
     }
-    Ok(server.as_mut().expect("just set"))
+    match server.as_mut().expect("just set").wait_ready(load_budget()) {
+        Ok(()) => Ok(server.as_mut().expect("just set")),
+        Err(NotReady::Loading(so_far)) => Err(Fail::new(
+            "other",
+            format!(
+                "still loading the model ({} s so far, the first time after a download can take a minute); try again in a moment",
+                so_far.as_secs()
+            ),
+        )),
+        Err(NotReady::Failed(e)) => {
+            *server = None;
+            Err(Fail::new("other", e))
+        }
+    }
 }
 
 /// The work a request needs before talking to the model.
@@ -284,8 +309,10 @@ fn prepare(io: &mut Io, params: &Value) -> Result<(Settings, Chosen, Config), Fa
     let settings = Settings::from_options(params.get("options").unwrap_or(&Value::Null));
     let files = asset_files(io)?;
     let chosen = choose(&settings, &files)?;
+    let (program, links_dir) = server_program(&files)?;
     let config = Config {
-        program: server_program(&files)?,
+        program,
+        links_dir,
         model: chosen.path.clone(),
         context: settings.context,
         threads: settings.threads,
@@ -307,7 +334,14 @@ fn complete(server: &mut Option<Running>, config: Config, mut body: Value, famil
         tries += 1;
         let s = ensure(server, config.clone())?;
         let started = Instant::now();
-        match http::request(s.port, "POST", "/v1/chat/completions", Some(&text), Duration::from_secs(600)) {
+        match http::request(
+            s.port,
+            "POST",
+            "/v1/chat/completions",
+            Some(&text),
+            Some(s.key()),
+            Duration::from_secs(600),
+        ) {
             Ok(r) if r.status == 200 => {
                 eprintln!("local-llm: answered in {} ms", started.elapsed().as_millis());
                 return answer_text(&r.body);

@@ -10,6 +10,10 @@
 //! - `FAKE_LLM_REPLY`: the answer's content (default: `[<last message>]`).
 //! - `FAKE_LLM_LOAD_MS`: how long `/health` answers 503 (loading).
 //! - `FAKE_LLM_STATUS`: the status of chat answers (default 200).
+//! - `FAKE_LLM_NO_AUTH=1`: accept any key, like a stranger on the port.
+//!
+//! Like llama-server, it requires `LLAMA_API_KEY` as a bearer token on
+//! everything but `/health`.
 
 use std::io::{BufRead, BufReader, Read, Write};
 use std::net::{Ipv4Addr, TcpListener, TcpStream};
@@ -55,6 +59,7 @@ fn handle(stream: TcpStream, loaded: bool) -> std::io::Result<()> {
     reader.read_line(&mut line)?;
     let path = line.split_whitespace().nth(1).unwrap_or("").to_owned();
     let mut len = 0usize;
+    let mut bearer = String::new();
     loop {
         let mut h = String::new();
         if reader.read_line(&mut h)? == 0 || h.trim().is_empty() {
@@ -63,14 +68,22 @@ fn handle(stream: TcpStream, loaded: bool) -> std::io::Result<()> {
         if let Some((k, v)) = h.split_once(':') {
             if k.trim().eq_ignore_ascii_case("content-length") {
                 len = v.trim().parse().unwrap_or(0);
+            } else if k.trim().eq_ignore_ascii_case("authorization") {
+                bearer = v.trim().strip_prefix("Bearer ").unwrap_or("").to_owned();
             }
         }
     }
     let mut body = vec![0u8; len];
     reader.read_exact(&mut body)?;
+    let key = env("LLAMA_API_KEY").unwrap_or_default();
+    let authorised = env("FAKE_LLM_NO_AUTH").is_some() || (!key.is_empty() && bearer == key);
     let (status, answer) = match path.as_str() {
         "/health" if loaded => (200, json!({"status": "ok"})),
         "/health" => (503, json!({"error": {"code": 503, "message": "Loading model"}})),
+        _ if !authorised => {
+            (401, json!({"error": {"code": 401, "message": "Invalid API Key", "type": "authentication_error"}}))
+        }
+        "/props" => (200, json!({"total_slots": 1})),
         "/v1/chat/completions" => {
             let req: Value = serde_json::from_slice(&body).unwrap_or(Value::Null);
             log(&req);

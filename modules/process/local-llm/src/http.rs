@@ -13,16 +13,25 @@ pub struct Response {
     pub body: String,
 }
 
-/// Send one request to `127.0.0.1:port` and read the whole answer.
-pub fn request(port: u16, method: &str, path: &str, body: Option<&str>, timeout: Duration) -> Result<Response, String> {
+/// Send one request to `127.0.0.1:port` and read the whole answer. `key`
+/// goes in an `Authorization: Bearer` header, llama-server's API key.
+pub fn request(
+    port: u16,
+    method: &str,
+    path: &str,
+    body: Option<&str>,
+    key: Option<&str>,
+    timeout: Duration,
+) -> Result<Response, String> {
     let addr = SocketAddr::from((Ipv4Addr::LOCALHOST, port));
     let mut stream =
         TcpStream::connect_timeout(&addr, Duration::from_secs(2)).map_err(|e| format!("connecting to {addr}: {e}"))?;
     stream.set_read_timeout(Some(timeout)).map_err(|e| e.to_string())?;
     stream.set_write_timeout(Some(Duration::from_secs(10))).map_err(|e| e.to_string())?;
     let body = body.unwrap_or("");
+    let auth = key.map(|k| format!("Authorization: Bearer {k}\r\n")).unwrap_or_default();
     let head = format!(
-        "{method} {path} HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\nContent-Type: application/json\r\nAccept: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+        "{method} {path} HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\n{auth}Content-Type: application/json\r\nAccept: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
         body.len()
     );
     stream

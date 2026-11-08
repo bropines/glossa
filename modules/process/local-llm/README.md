@@ -81,6 +81,17 @@ Texts are cut at 2,000 characters (`max_input_chars`), which keeps one
 answer inside Glossa's call timeout (*Options → Modules*, 30 s) on a
 laptop processor.
 
+**A slow first load.** A module cannot ask for a longer call timeout, and
+Glossa kills a module that overruns it, which would throw away a load in
+progress. So a call waits at most 20 s for the model; if it is still
+loading, the call fails at once with "still loading the model … try again
+in a moment" (Glossa moves on to the next service), and the load carries
+on. The next call picks it up where it is. The first load after a download
+reads 1.1 GB from disk, 8 s on the Mac measured, longer on a slow disk; a
+load that has not finished after 3 minutes is given up. If the model has
+loaded only a few seconds before the call timeout, a long text can still
+overrun it; *Options → Modules → Call timeout* is the remedy.
+
 ## Speed, memory and quality
 
 Measured on an Apple M-series Mac (16 GB) with other builds running,
@@ -134,9 +145,21 @@ computed from the downloads and match the release's own asset digests.
   llama-server. Other methods answer `unsupported`.
 - **llama-server** starts on the first request, on a free port on
   127.0.0.1, with one slot (`--parallel 1`), no prompt cache in memory
-  (`--cache-ram 0`), no web page and thinking off. The module waits for
-  `/health` to say the model is loaded, then sends each request to
-  `/v1/chat/completions`, unstreamed.
+  (`--cache-ram 0`), no web page, no `/slots` endpoint and thinking off.
+  The module waits for `/health` to say the model is loaded, then sends
+  each request to `/v1/chat/completions`, unstreamed.
+- **Its API key.** Each start gets a new random 128-bit key, given to
+  llama-server in its environment (`LLAMA_API_KEY`, never on the command
+  line, where any user's process list shows it) and sent as a bearer token.
+  Other programs on the machine cannot use the server. The port is picked
+  free just before llama-server binds it, so another program could take it
+  in between; before the first request the module checks that a random
+  wrong key gets 401 and its own key gets 200 (on `/props`), which only its
+  own server can do, and otherwise refuses with "port … is answered by
+  another program". What remains: `/health` answers without a key (it
+  says only whether a model is loaded), and a process running as the same
+  user can read llama-server's environment, but such a process can read the
+  model and anything else of yours anyway.
 - **Prompts** (`src/prompt.rs`). Hy-MT2 is asked in the exact wording of
   its model card (the *default*, *terminology* and *style* templates), with
   its recommended sampling. Qwen3 and a custom model get the system prompt
@@ -150,14 +173,21 @@ computed from the downloads and match the release's own asset digests.
   with `--supervise`, whose stdin is a pipe from the module. However the
   module ends (Glossa closes stdin when idle, or kills it after a call
   timeout), the pipe closes and the supervisor kills llama-server, so no
-  model is left in memory behind it.
+  model is left in memory behind it. If the supervisor itself is killed,
+  llama-server dies with it on Windows (a job object that kills on close)
+  and Linux (`PR_SET_PDEATHSIG`). macOS has no such mechanism: killing the
+  supervisor alone (by hand, say) leaves llama-server running until it is
+  stopped by hand. Glossa never does that; it stops or kills only the
+  module, which the pipe covers.
 - **Library links.** Glossa unpacks archives without their symbolic links,
   and the macOS and Linux builds of llama.cpp load their libraries through
   version links (`libllama.0.dylib` → `libllama.0.9.0.dylib`). The module
-  puts those links back beside the files before starting llama-server.
+  puts those links back beside the files before starting llama-server, in
+  the downloaded `llama` folder only.
 - **Your own llama.cpp.** `LOCAL_LLM_SERVER=/path/to/llama-server` in the
   module's environment uses that build instead of the downloaded one (a
-  Vulkan or CUDA build, say).
+  Vulkan or CUDA build, say). Its folder is left as it is, so it must be a
+  working installation, links included.
 
 ## Testing
 

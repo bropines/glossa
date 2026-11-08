@@ -5,7 +5,15 @@
 //! module goes away for any reason (stdin closed by Glossa, a crash, or
 //! Glossa killing it after a call timeout) that pipe closes, and the
 //! supervisor kills llama-server. So no model is left loaded behind a dead
-//! module, on every system, without signals, job objects or `libc`.
+//! module. Should the supervisor itself be killed, llama-server goes with
+//! it on Windows (a job object that kills on close) and Linux
+//! (`PR_SET_PDEATHSIG`); macOS has neither, see the README.
+//!
+//! Every start gets a random API key, handed to llama-server in its
+//! environment (`LLAMA_API_KEY`, so it never shows on a command line) and
+//! sent with every request. Other programs on the machine cannot use the
+//! server, and the module can tell its own server from whatever else might
+//! have taken the port first.
 
 use std::collections::VecDeque;
 use std::io::{BufRead, BufReader, Read};
@@ -23,6 +31,10 @@ use crate::http;
 pub struct Config {
     /// The program, and arguments before ours (the test server's flag).
     pub program: Vec<String>,
+    /// The unpacked llama.cpp asset whose library links need restoring
+    /// (see [`fix_library_links`]); `None` for a llama-server the user
+    /// pointed at, whose folder is not ours to write in.
+    pub links_dir: Option<PathBuf>,
     pub model: PathBuf,
     pub context: u32,
     pub threads: u32,
@@ -30,7 +42,8 @@ pub struct Config {
 }
 
 impl Config {
-    /// llama-server's command line, after the program.
+    /// llama-server's command line, after the program. The API key is not
+    /// here: it goes in the environment.
     pub fn args(&self, port: u16) -> Vec<String> {
         let mut a: Vec<String> = vec![
             "--model".into(),
@@ -48,10 +61,12 @@ impl Config {
             "--n-gpu-layers".into(),
             if self.gpu { "all" } else { "0" }.into(),
             // No prompt cache in RAM (8 GB by default), no web page, no
-            // thinking (Qwen3), and only warnings and errors in the log.
+            // slot inspection endpoint, no thinking (Qwen3), and only
+            // warnings and errors in the log.
             "--cache-ram".into(),
             "0".into(),
             "--no-webui".into(),
+            "--no-slots".into(),
             "--reasoning".into(),
             "off".into(),
             "--log-verbosity".into(),
@@ -65,35 +80,46 @@ impl Config {
     }
 }
 
-/// A running llama-server (through its supervisor).
+/// Why a server is not ready to answer.
+#[derive(Debug)]
+pub enum NotReady {
+    /// Still loading the model; it carries on in the background.
+    Loading(Duration),
+    /// It stopped, took too long, or is not ours. Start again.
+    Failed(String),
+}
+
+/// A llama-server (through its supervisor), loading or ready.
 pub struct Running {
     pub config: Config,
     pub port: u16,
+    key: String,
     supervisor: Child,
     log: Arc<Mutex<VecDeque<String>>>,
+    started: Instant,
+    ready: bool,
 }
 
-/// How long the model may take to load. Glossa's call timeout (30 s by
-/// default) usually ends the call first.
-const LOAD_TIMEOUT: Duration = Duration::from_secs(120);
+/// How long the model may take to load in all, across calls.
+const LOAD_TIMEOUT: Duration = Duration::from_secs(180);
 
 impl Running {
-    /// Start llama-server and wait until it has loaded the model.
+    /// Start llama-server. It loads the model in the background; see
+    /// [`Running::wait_ready`].
     pub fn start(config: Config) -> Result<Running, String> {
         let program = config.program.first().ok_or("no llama-server program")?;
-        // A real llama-server (the test server is this program with a flag).
         #[cfg(unix)]
-        if config.program.len() == 1 {
-            if let Some(dir) = Path::new(program).parent() {
-                fix_library_links(dir);
-            }
+        if let Some(dir) = &config.links_dir {
+            fix_library_links(dir);
         }
         let port = free_port()?;
+        let key = random_hex();
         let me = std::env::current_exe().map_err(|e| format!("finding this program: {e}"))?;
         let mut cmd = Command::new(me);
         cmd.arg("--supervise")
             .args(&config.program)
             .args(config.args(port))
+            .env("LLAMA_API_KEY", &key)
             .stdin(Stdio::piped())
             .stdout(Stdio::null())
             .stderr(Stdio::piped());
@@ -104,37 +130,74 @@ impl Running {
             let log = Arc::clone(&log);
             std::thread::spawn(move || forward_log(err, &log));
         }
-        let mut running = Running { config, port, supervisor, log };
-        running.wait_until_loaded()?;
-        Ok(running)
+        Ok(Running { config, port, key, supervisor, log, started: Instant::now(), ready: false })
     }
 
-    fn wait_until_loaded(&mut self) -> Result<(), String> {
-        let started = Instant::now();
-        loop {
+    /// Wait at most `budget` for the model to be loaded. A load that takes
+    /// longer goes on in the background, so the next call finds it further
+    /// along instead of starting from zero after Glossa's call timeout.
+    pub fn wait_ready(&mut self, budget: Duration) -> Result<(), NotReady> {
+        let call = Instant::now();
+        while !self.ready {
             if let Ok(Some(status)) = self.supervisor.try_wait() {
-                return Err(format!("llama-server stopped while loading the model ({status}){}", self.last_lines()));
+                return Err(NotReady::Failed(format!(
+                    "llama-server stopped while loading the model ({status}){}",
+                    self.last_lines()
+                )));
             }
-            // 503 while the model loads, 200 once it is ready.
-            if let Ok(r) = http::request(self.port, "GET", "/health", None, Duration::from_secs(5)) {
+            // 503 while the model loads, 200 once it is ready. /health
+            // needs no key, so what answers is checked next.
+            if let Ok(r) = http::request(self.port, "GET", "/health", None, None, Duration::from_secs(5)) {
                 if r.status == 200 {
+                    self.check_ours().map_err(NotReady::Failed)?;
                     eprintln!(
                         "local-llm: llama-server ready on port {} in {} ms",
                         self.port,
-                        started.elapsed().as_millis()
+                        self.started.elapsed().as_millis()
                     );
-                    return Ok(());
+                    self.ready = true;
+                    break;
                 }
             }
-            if started.elapsed() > LOAD_TIMEOUT {
-                return Err(format!(
+            if self.started.elapsed() > LOAD_TIMEOUT {
+                return Err(NotReady::Failed(format!(
                     "llama-server did not load the model within {} s{}",
                     LOAD_TIMEOUT.as_secs(),
                     self.last_lines()
-                ));
+                )));
+            }
+            if call.elapsed() >= budget {
+                return Err(NotReady::Loading(self.started.elapsed()));
             }
             std::thread::sleep(Duration::from_millis(50));
         }
+        Ok(())
+    }
+
+    /// The server on our port is the one we started: it refuses a random
+    /// wrong key and accepts ours. Anything else that took the port
+    /// between [`free_port`] and llama-server's own bind (another program,
+    /// or a llama-server without a key) cannot pass both: it does not know
+    /// our key, so it cannot tell it from the wrong one.
+    fn check_ours(&self) -> Result<(), String> {
+        let t = Duration::from_secs(5);
+        let wrong = random_hex();
+        let refused = http::request(self.port, "GET", "/props", None, Some(&wrong), t).map(|r| r.status);
+        let accepted = http::request(self.port, "GET", "/props", None, Some(&self.key), t).map(|r| r.status);
+        match (refused, accepted) {
+            (Ok(401), Ok(200)) => Ok(()),
+            (r, a) => Err(format!(
+                "port {} is answered by another program, not the llama-server this module started (a wrong key got {:?}, ours {:?})",
+                self.port,
+                r.ok(),
+                a.ok()
+            )),
+        }
+    }
+
+    /// The key to send with each request.
+    pub fn key(&self) -> &str {
+        &self.key
     }
 
     /// Whether the server is still there.
@@ -169,6 +232,27 @@ impl Drop for Running {
     }
 }
 
+/// 128 random bits as hex, for an API key. std has no random number API,
+/// but each `RandomState` is keyed from the operating system's random
+/// source; hashing the time and a counter with fresh ones gives bits no
+/// other process can guess.
+pub fn random_hex() -> String {
+    use std::collections::hash_map::RandomState;
+    use std::hash::{BuildHasher, Hasher};
+    use std::sync::atomic::{AtomicU64, Ordering};
+    static COUNTER: AtomicU64 = AtomicU64::new(0);
+    let nanos = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_nanos()).unwrap_or(0);
+    (0..2)
+        .map(|_| {
+            let mut h = RandomState::new().build_hasher();
+            h.write_u128(nanos);
+            h.write_u64(COUNTER.fetch_add(1, Ordering::Relaxed));
+            h.write_u32(std::process::id());
+            format!("{:016x}", h.finish())
+        })
+        .collect()
+}
+
 /// Pass llama-server's log on to Glossa's (stderr lines are logged under
 /// the module's id) and keep the last few for error messages.
 fn forward_log(err: impl Read, log: &Mutex<VecDeque<String>>) {
@@ -188,7 +272,8 @@ fn forward_log(err: impl Read, log: &Mutex<VecDeque<String>>) {
 }
 
 /// A free port on 127.0.0.1. Another program could take it before
-/// llama-server binds it; that start then fails and the next call retries.
+/// llama-server binds it: llama-server then fails to start (reported as
+/// such), or [`Running::check_ours`] finds a stranger on the port.
 fn free_port() -> Result<u16, String> {
     let l = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).map_err(|e| format!("finding a free port: {e}"))?;
     l.local_addr().map(|a| a.port()).map_err(|e| e.to_string())
@@ -215,6 +300,7 @@ pub fn supervise(args: &[String]) -> i32 {
     let mut cmd = Command::new(program);
     cmd.args(rest).stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::inherit());
     no_window(&mut cmd);
+    die_with_parent(&mut cmd);
     let mut child = match cmd.spawn() {
         Ok(c) => c,
         Err(e) => {
@@ -222,6 +308,8 @@ pub fn supervise(args: &[String]) -> i32 {
             return 1;
         }
     };
+    // Held until this process ends, by whatever means.
+    let _job = kill_on_close(&child);
     let (tx, rx) = mpsc::channel::<()>();
     std::thread::spawn(move || {
         let mut buf = [0u8; 256];
@@ -244,6 +332,79 @@ pub fn supervise(args: &[String]) -> i32 {
             }
         }
     }
+}
+
+/// Linux: the kernel sends llama-server SIGKILL when the supervisor dies.
+/// The supervisor spawns it from its main thread, which lives as long as
+/// the process, so the signal follows the process and not a thread.
+#[cfg(target_os = "linux")]
+fn die_with_parent(cmd: &mut Command) {
+    use std::os::unix::process::CommandExt;
+    extern "C" {
+        fn prctl(option: i32, ...) -> i32;
+    }
+    const PR_SET_PDEATHSIG: i32 = 1;
+    const SIGKILL: std::ffi::c_ulong = 9;
+    // SAFETY: prctl is async-signal-safe and changes only the new
+    // process's own attributes, as pre_exec requires.
+    unsafe {
+        cmd.pre_exec(|| {
+            prctl(PR_SET_PDEATHSIG, SIGKILL);
+            Ok(())
+        });
+    }
+}
+
+#[cfg(not(target_os = "linux"))]
+fn die_with_parent(_: &mut Command) {}
+
+/// Windows: a job object that kills its processes when its last handle
+/// closes, which happens when the supervisor ends, however it ends.
+#[cfg(windows)]
+fn kill_on_close(child: &Child) -> Option<Job> {
+    use std::os::windows::io::AsRawHandle;
+    use windows_sys::Win32::System::JobObjects::{
+        AssignProcessToJobObject, CreateJobObjectW, JobObjectExtendedLimitInformation, SetInformationJobObject,
+        JOBOBJECT_EXTENDED_LIMIT_INFORMATION, JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE,
+    };
+    // SAFETY: plain Win32 calls on a handle created here and the child's
+    // process handle, which outlives the call.
+    unsafe {
+        let job = CreateJobObjectW(std::ptr::null(), std::ptr::null());
+        if job.is_null() {
+            return None;
+        }
+        let job = Job(job);
+        let mut info: JOBOBJECT_EXTENDED_LIMIT_INFORMATION = std::mem::zeroed();
+        info.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
+        let ok = SetInformationJobObject(
+            job.0,
+            JobObjectExtendedLimitInformation,
+            (&info as *const JOBOBJECT_EXTENDED_LIMIT_INFORMATION).cast(),
+            std::mem::size_of::<JOBOBJECT_EXTENDED_LIMIT_INFORMATION>() as u32,
+        );
+        if ok == 0 || AssignProcessToJobObject(job.0, child.as_raw_handle()) == 0 {
+            eprintln!("local-llm: no job object for llama-server; it may outlive a killed module");
+            return None;
+        }
+        Some(job)
+    }
+}
+
+#[cfg(windows)]
+struct Job(windows_sys::Win32::Foundation::HANDLE);
+
+#[cfg(windows)]
+impl Drop for Job {
+    fn drop(&mut self) {
+        // SAFETY: the handle came from CreateJobObjectW and is closed once.
+        unsafe { windows_sys::Win32::Foundation::CloseHandle(self.0) };
+    }
+}
+
+#[cfg(not(windows))]
+fn kill_on_close(_: &Child) -> Option<()> {
+    None
 }
 
 /// The llama-server program in the unpacked llama.cpp archive: at its top
@@ -361,11 +522,27 @@ mod tests {
     }
 
     #[test]
+    fn keys_are_long_and_different() {
+        let (a, b) = (random_hex(), random_hex());
+        assert_eq!(a.len(), 32);
+        assert!(a.bytes().all(|c| c.is_ascii_hexdigit()));
+        assert_ne!(a, b);
+    }
+
+    #[test]
     fn arguments_follow_the_settings() {
-        let c = Config { program: vec!["s".into()], model: "m.gguf".into(), context: 2048, threads: 0, gpu: false };
+        let c = Config {
+            program: vec!["s".into()],
+            links_dir: None,
+            model: "m.gguf".into(),
+            context: 2048,
+            threads: 0,
+            gpu: false,
+        };
         let a = c.args(1234).join(" ");
         assert!(a.contains("--port 1234") && a.contains("--ctx-size 2048") && a.contains("--n-gpu-layers 0"), "{a}");
-        assert!(a.contains("--host 127.0.0.1") && !a.contains("--threads"), "{a}");
+        assert!(a.contains("--host 127.0.0.1") && a.contains("--no-slots") && !a.contains("--threads"), "{a}");
+        assert!(!a.contains("api-key"), "the key never goes on the command line: {a}");
         let c = Config { threads: 4, gpu: true, ..c };
         let a = c.args(1).join(" ");
         assert!(a.contains("--threads 4") && a.contains("--n-gpu-layers all"), "{a}");

@@ -9,3 +9,4 @@ downloads) on the first request and stops it when stdin closes.
 Environment:
   LOCAL_LLM_SERVER       a llama-server to use instead of the downloaded one
   LOCAL_LLM_FAKE_SERVER  1: a model-free stand-in, for tests
+  LOCAL_LLM_LOAD_BUDGET_MS  how long a call waits for the model (default 20000)

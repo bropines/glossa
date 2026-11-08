@@ -14,9 +14,15 @@ publish = false
 [workspace]
 
 [dependencies]
-# The only dependency. HTTP to llama-server on 127.0.0.1 is a few lines over
-# std's TcpStream, so no HTTP client (or TLS stack) is compiled in.
+# With windows-sys below, the only dependency. HTTP to llama-server on
+# 127.0.0.1 is a few lines over std's TcpStream, so no HTTP client (or TLS
+# stack) is compiled in.
 serde_json = "1"
+
+# Windows only: a job object, so llama-server dies with its supervisor.
+# Declarations only, nothing to build.
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_Security", "Win32_System_JobObjects", "Win32_System_Threading"] }
 
 [profile.release]
 lto = "thin"

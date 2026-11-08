@@ -254,6 +254,43 @@ fn detect_maps_the_named_language_to_a_code() {
     assert!(req["messages"][0]["content"].as_str().unwrap().ends_with("Привет, мир"));
 }
 
+#[test]
+fn the_server_needs_our_key_and_a_stranger_is_refused() {
+    // The fake server, like llama-server, refuses requests without the key
+    // the module put in its environment, so a translation proves the key
+    // was sent; and it never appears among the arguments.
+    let s = Scratch::new("key");
+    let mut m = Module::start(&s, &[("FAKE_LLM_REPLY", "ok")]);
+    assert_eq!(m.call(&s, 1, "translate", translate("a", "en", "ru", json!({})))["result"]["text"], "ok");
+    m.close();
+    let args = s.starts()[0]["args"].to_string();
+    assert!(!args.contains("api-key") && !args.contains("API_KEY"), "{args}");
+
+    // A server that takes any key is not the one the module started.
+    let s = Scratch::new("stranger");
+    let mut m = Module::start(&s, &[("FAKE_LLM_NO_AUTH", "1")]);
+    let out = m.call(&s, 1, "translate", translate("a", "en", "ru", json!({})));
+    assert_eq!(error_kind(&out), "other", "{out}");
+    assert!(out["error"]["message"].as_str().unwrap().contains("another program"), "{out}");
+    assert!(s.requests().is_empty(), "no text sent to a stranger");
+    m.close();
+}
+
+#[test]
+fn a_slow_load_answers_still_loading_and_carries_on() {
+    let s = Scratch::new("slow");
+    let env = [("FAKE_LLM_LOAD_MS", "1500"), ("LOCAL_LLM_LOAD_BUDGET_MS", "200"), ("FAKE_LLM_REPLY", "done")];
+    let mut m = Module::start(&s, &env);
+    let out = m.call(&s, 1, "translate", translate("a", "en", "ru", json!({})));
+    assert_eq!(error_kind(&out), "other", "{out}");
+    assert!(out["error"]["message"].as_str().unwrap().contains("still loading"), "{out}");
+    std::thread::sleep(std::time::Duration::from_millis(1600));
+    let out = m.call(&s, 2, "translate", translate("a", "en", "ru", json!({})));
+    assert_eq!(out["result"]["text"], "done", "{out}");
+    m.close();
+    assert_eq!(s.starts().len(), 1, "the load went on; no second start");
+}
+
 #[cfg(unix)]
 #[test]
 fn closing_stdin_stops_the_server() {
