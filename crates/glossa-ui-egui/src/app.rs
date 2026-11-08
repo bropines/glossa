@@ -381,12 +381,23 @@ impl GlossaApp {
     }
 
     pub fn copy_text(&mut self, text: &str) {
+        self.copy_text_with(text, true);
+    }
+
+    /// Copy without saying "Copied": the popup's copy button needs no
+    /// message, which only cluttered it. A failure is still reported.
+    pub fn copy_text_quietly(&mut self, text: &str) {
+        self.copy_text_with(text, false);
+    }
+
+    fn copy_text_with(&mut self, text: &str, announce: bool) {
         match self.clipboard.as_mut() {
             Some(c) => match c.set_text(text) {
-                Ok(()) => {
+                Ok(()) if announce => {
                     let msg = self.t("msg.copied");
                     self.notify(msg, false);
                 }
+                Ok(()) => {}
                 Err(e) => self.notify(e.to_string(), true),
             },
             None => self.ctx.copy_text(text.to_owned()),

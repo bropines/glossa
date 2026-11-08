@@ -217,6 +217,9 @@ the notes of its GitHub release.
 
 ### Changed
 
+- The popup's service strip no longer shows AI endpoints added in the
+  options ("Google Gemini" looked like a second Google). They are listed
+  in the header's language menu instead, and picking one translates with it.
 - JavaScript (Glossa modules, classic QTranslate scripts, pot-app plugins)
   now runs on QuickJS instead of boa. Glossa is about 3 MB smaller, a script
   call is several times faster and uses a fraction of the memory, and every
@@ -241,6 +244,9 @@ the notes of its GitHub release.
 
 ### Fixed
 
+- The popup's copy button no longer shows a "Copied" message, which
+  turned up now and then and spoiled the popup's look. A failed copy is
+  still reported.
 - History: when favourites alone filled the limit, a new translation was
   recorded and dropped in the same moment, and starring it from the window
   did nothing. It is now kept, over the limit as favourites may be.

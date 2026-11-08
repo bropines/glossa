@@ -474,6 +474,7 @@ fn body(app: &mut GlossaApp, ui: &mut egui::Ui, st: &mut PopupState) -> (bool, e
             .iter()
             .filter_map(|id| reg.get(id))
             .filter(|p| p.info().capabilities.contains(Capabilities::TRANSLATE))
+            .filter(|p| !is_ai_endpoint(app, &p.info().id))
             .collect()
     };
     let strip_h =
@@ -633,8 +634,10 @@ fn body(app: &mut GlossaApp, ui: &mut egui::Ui, st: &mut PopupState) -> (bool, e
                 }
                 let picked = crate::dropdown::show(ui, menu_id, anchor, 220.0, 460.0, |ui, _| target_menu(app, st, ui))
                     .flatten();
-                if let Some(pair) = picked {
-                    retarget(app, st, pair);
+                match picked {
+                    Some(MenuPick::Pair(pair)) => retarget(app, st, pair),
+                    Some(MenuPick::Service(id)) => switch_service(app, st, id),
+                    None => {}
                 }
             }
 
@@ -672,7 +675,7 @@ fn body(app: &mut GlossaApp, ui: &mut egui::Ui, st: &mut PopupState) -> (bool, e
                 if cfg.icons.copy
                     && icons::sized_button(ui, &look, Icon::Copy, &app.t("popup.copy"), size, has).clicked()
                 {
-                    app.copy_text(&translation);
+                    app.copy_text_quietly(&translation);
                 }
                 if cfg.icons.replace
                     && icons::sized_button(ui, &look, Icon::Replace, &app.t("popup.replace"), size, has).clicked()
@@ -841,12 +844,7 @@ fn body(app: &mut GlossaApp, ui: &mut egui::Ui, st: &mut PopupState) -> (bool, e
                     });
                 }
                 if let Some(id) = switch_to {
-                    st.service = id.clone();
-                    st.busy = true;
-                    st.partial = None;
-                    st.job = translate(app, &st.source, &id, st.pair);
-                    let remembered = id.clone();
-                    let _ = app.engine.update_config(move |c| c.services.popup_active = remembered);
+                    switch_service(app, st, id);
                 }
             }
         })
@@ -868,10 +866,34 @@ fn body(app: &mut GlossaApp, ui: &mut egui::Ui, st: &mut PopupState) -> (bool, e
     (close, vec2(desired_w.ceil(), h.ceil()).max(MIN_SIZE))
 }
 
+/// What the header's menu picked: a direction, or one of the AI
+/// services, which live there rather than in the service strip.
+enum MenuPick {
+    Pair(LangPair),
+    Service(String),
+}
+
+/// AI endpoints the user added are kept out of the popup's service strip:
+/// their names often start like a translator's ("Google Gemini" next to
+/// Google) and they are picked rarely, so the header menu lists them.
+fn is_ai_endpoint(app: &GlossaApp, id: &str) -> bool {
+    app.cfg.services.ai_endpoints.iter().any(|e| e.id == id)
+}
+
+/// Translate the popup's text with another service, and remember it for
+/// later popups.
+fn switch_service(app: &mut GlossaApp, st: &mut PopupState, id: String) {
+    st.busy = true;
+    st.partial = None;
+    st.job = translate(app, &st.source, &id, st.pair);
+    st.service = id.clone();
+    let _ = app.engine.update_config(move |c| c.services.popup_active = id);
+}
+
 /// The header's language menu: the automatic direction, a swap of the
-/// languages just used, recent targets, then every language with a search.
-/// Returns the direction picked.
-fn target_menu(app: &GlossaApp, st: &PopupState, ui: &mut egui::Ui) -> Option<LangPair> {
+/// languages just used, the AI services, recent targets, then every
+/// language with a search.
+fn target_menu(app: &GlossaApp, st: &PopupState, ui: &mut egui::Ui) -> Option<MenuPick> {
     let mut out = None;
     let to = st.pair.to;
     let automatic = st.pair == LangPair::new(LangId::AUTO, LangId::AUTO);
@@ -886,6 +908,24 @@ fn target_menu(app: &GlossaApp, st: &PopupState, ui: &mut egui::Ui) -> Option<La
             );
             if ui.button(label).clicked() {
                 out = Some(LangPair::new(o.pair.to, o.pair.from));
+            }
+        }
+    }
+    let mut service = None;
+    let reg = app.engine.registry();
+    let ai: Vec<_> = app
+        .cfg
+        .services
+        .ai_endpoints
+        .iter()
+        .filter(|e| app.cfg.services.enabled.contains(&e.id))
+        .filter(|e| reg.get(&e.id).is_some_and(|p| p.info().capabilities.contains(Capabilities::TRANSLATE)))
+        .collect();
+    if !ai.is_empty() {
+        ui.separator();
+        for e in ai {
+            if ui.selectable_label(st.service == e.id, &e.name).clicked() {
+                service = Some(e.id.clone());
             }
         }
     }
@@ -931,12 +971,12 @@ fn target_menu(app: &GlossaApp, st: &PopupState, ui: &mut egui::Ui) -> Option<La
             }
         }
     });
-    if out.is_some() {
+    if out.is_some() || service.is_some() {
         search.clear();
         ui.close();
     }
     ui.ctx().data_mut(|d| d.insert_temp(search_id, search));
-    out
+    service.map(MenuPick::Service).or(out.map(MenuPick::Pair))
 }
 
 /// Translate the popup's text again in `pair`. A picked target stays for
