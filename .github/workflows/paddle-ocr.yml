@@ -1,0 +1,140 @@
+name: paddle-ocr
+
+# Builds the PaddleOCR module's program (modules/process/paddle-ocr) for
+# every platform its module.toml lists and packs each with the official
+# ONNX Runtime library: the `bin` asset the module downloads.
+#
+# - A tag `paddle-ocr-v<version>` (matching `version` in the module's
+#   Cargo.toml) attaches the archives and SHA256SUMS to a **draft** release
+#   of that tag. Publish it by hand, then copy each archive's sha256 and size
+#   into module.toml (README.md in the module, "Releasing the binary").
+# - Run by hand (Actions -> paddle-ocr -> Run workflow), or on a pull request
+#   or push that changes the module, it stops at the run's artifacts: the
+#   module's tests and the packed program's smoke test still run.
+#
+# The main release workflow (tags v*) does not build this program, and this
+# one touches nothing else: Glossa itself never compiles ONNX Runtime code.
+
+on:
+  push:
+    tags: ['paddle-ocr-v*']
+    branches: [main]
+    paths: ['modules/process/paddle-ocr/**', '.github/workflows/paddle-ocr.yml']
+  pull_request:
+    paths: ['modules/process/paddle-ocr/**', '.github/workflows/paddle-ocr.yml']
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: paddle-ocr-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  CARGO_TERM_COLOR: always
+  # The ONNX Runtime packed beside the program. Any release at or above the
+  # API version `ort` 2.0.0-rc.13 needs will do; keep it in step with the
+  # module README's licence notes.
+  ORT_VERSION: 1.31.1
+
+jobs:
+  build:
+    name: ${{ matrix.os }}-${{ matrix.arch }}
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { os: macos, arch: aarch64, runner: macos-14, ort: osx-arm64, ext: tar.gz }
+          - { os: linux, arch: x86_64, runner: ubuntu-22.04, ort: linux-x64, ext: tar.gz }
+          - { os: linux, arch: aarch64, runner: ubuntu-22.04-arm, ort: linux-aarch64, ext: tar.gz }
+          - { os: windows, arch: x86_64, runner: windows-2022, ort: win-x64, ext: zip }
+          - { os: windows, arch: aarch64, runner: windows-11-arm, ort: win-arm64, ext: zip }
+    defaults:
+      run:
+        shell: bash
+        working-directory: modules/process/paddle-ocr
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Version
+        id: v
+        run: |
+          version=$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -1)
+          if [[ "$GITHUB_REF" == refs/tags/paddle-ocr-v* && "${GITHUB_REF#refs/tags/paddle-ocr-v}" != "$version" ]]; then
+            echo "tag ${GITHUB_REF#refs/tags/} does not match Cargo.toml version $version" >&2
+            exit 1
+          fi
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+      - name: Test
+        run: cargo test --locked --release
+      - name: Build
+        run: cargo build --locked --release
+      - name: ONNX Runtime
+        run: |
+          base=https://github.com/microsoft/onnxruntime/releases/download/v$ORT_VERSION
+          name=onnxruntime-${{ matrix.ort }}-$ORT_VERSION
+          if [ "${{ matrix.ext }}" = zip ]; then
+            curl -fsSL -o ort.zip "$base/$name.zip"
+            7z x -y ort.zip >/dev/null
+          else
+            curl -fsSL -o ort.tgz "$base/$name.tgz"
+            tar xzf ort.tgz
+          fi
+          echo "ORT_DIR=$PWD/$name" >> "$GITHUB_ENV"
+      - name: Sign (macOS, ad hoc)
+        if: matrix.os == 'macos'
+        # Apple silicon runs only signed code. The linker signs the binary
+        # ad hoc already; signing again after strip keeps it valid.
+        run: codesign --force --sign - target/release/paddle-ocr
+      - name: Package
+        id: pack
+        run: |
+          exe=target/release/paddle-ocr
+          [ "${{ matrix.os }}" = windows ] && exe=$exe.exe
+          out=dist/paddle-ocr-${{ steps.v.outputs.version }}-${{ matrix.os }}-${{ matrix.arch }}.${{ matrix.ext }}
+          ./package.sh "$exe" "$ORT_DIR" "$out"
+          echo "file=$out" >> "$GITHUB_OUTPUT"
+      - name: Smoke test
+        # The packed program loads the packed ONNX Runtime and answers the
+        # protocol. Models are not downloaded here; the tests above and the
+        # module's fixtures cover recognition.
+        run: |
+          mkdir smoke
+          if [ "${{ matrix.ext }}" = zip ]; then (cd smoke && 7z x -y "../${{ steps.pack.outputs.file }}" >/dev/null); exe=smoke/paddle-ocr.exe
+          else tar xzf "${{ steps.pack.outputs.file }}" -C smoke; exe=smoke/paddle-ocr; fi
+          "$exe" --version
+          echo '{"id":1,"method":"translate","params":{}}' | "$exe" | grep -q unsupported
+      - uses: actions/upload-artifact@v4
+        with:
+          name: paddle-ocr-${{ matrix.os }}-${{ matrix.arch }}
+          path: modules/process/paddle-ocr/${{ steps.pack.outputs.file }}
+          if-no-files-found: error
+
+  release:
+    name: draft release
+    needs: build
+    if: startsWith(github.ref, 'refs/tags/paddle-ocr-v')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+      - name: Checksums
+        working-directory: dist
+        run: |
+          sha256sum paddle-ocr-* > SHA256SUMS
+          # The two values each `bin` asset in module.toml needs.
+          for f in paddle-ocr-*; do echo "$f sha256=$(sha256sum "$f" | cut -d' ' -f1) size=$(stat -c %s "$f")"; done | tee SIZES
+      - name: Draft release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          gh release create "$TAG" dist/* --repo "$GITHUB_REPOSITORY" --draft \
+            --title "PaddleOCR module binary ${TAG#paddle-ocr-v}" \
+            --notes "The \`bin\` asset of the PaddleOCR module (modules/process/paddle-ocr): the paddle-ocr program and ONNX Runtime $ORT_VERSION for each platform. Copy each archive's sha256 and size (SIZES) into module.toml."

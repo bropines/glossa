@@ -20,6 +20,7 @@ without reshaping its data.
 - [module.toml](#moduletoml)
 - [Trying a module](#trying-a-module)
 - [Bundled modules](#bundled-modules)
+- [Modules with downloads](#modules-with-downloads)
 - [Scripts from other programs](#scripts-from-other-programs)
 - [Guides](#guides)
 
@@ -636,6 +637,15 @@ scanned, and a module with the same id replaces an earlier one.
 
 To hide one without replacing it, switch it off in *Options → Modules*
 (`[modules] disabled` in `config.toml`).
+
+## Modules with downloads
+
+Larger modules live in `modules/` as source and fetch what they need as
+[assets](#assets) once copied into a modules folder:
+
+| id | name | does | downloads |
+|---|---|---|---|
+| `paddle-ocr` | PaddleOCR (offline) | text recognition on this machine: Chinese, Japanese, Korean, Cyrillic, Latin scripts, with line outlines ([README](../../modules/process/paddle-ocr/README.md)) | a Rust program with ONNX Runtime (9–14 MB), PP-OCRv5 models (6 MB, then 8–17 MB per script) |
 
 ## Scripts from other programs
 

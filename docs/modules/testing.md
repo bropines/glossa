@@ -329,6 +329,7 @@ fixtures. Copy the one for your runtime, change the `id`, and keep the
 | Python (OCR) | [`modules/python/ocr-space`](../../modules/python/ocr-space) | `host.http`, `map_box_back`, error mapping |
 | Java | [`modules/java/example-upper`](../../modules/java/example-upper) | the Java SDK; build `module.jar` with `build.sh` first |
 | process | [`modules/process/example-node`](../../modules/process/example-node) | the protocol by hand, host calls, no SDK |
+| process (OCR, assets) | [`modules/process/paddle-ocr`](../../modules/process/paddle-ocr) | a Rust program and its models downloaded as assets, optional assets, fixtures on a real picture; runs once its files are downloaded |
 | native (Rust) | [`modules/native/example-rot13`](../../modules/native/example-rot13) | `export_module!`; copy the built library beside `module.toml` first |
 | native (C) | [`modules/native/example-c`](../../modules/native/example-c) | the C ABI; compile `shout.c` first |
 | native (OCR) | [`modules/native/example-lines`](../../modules/native/example-lines) | the image API from Rust, a drawn test picture |

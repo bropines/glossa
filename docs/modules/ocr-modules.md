@@ -26,6 +26,7 @@ Examples, each tested against a canned reply:
 | [`modules/js/google-vision-ocr`](../../modules/js/google-vision-ocr) | JavaScript | enlarging small captures, the full layout with outlines and confidence, `transform` |
 | [`modules/python/ocr-space`](../../modules/python/ocr-space) | Python | fitting an upload under a size limit, `map_box_back` |
 | [`modules/native/example-lines`](../../modules/native/example-lines) | Rust | deskew, threshold, reading pixels back, a layout of its own |
+| [`modules/process/paddle-ocr`](../../modules/process/paddle-ocr) | Rust process | an offline engine: models and ONNX Runtime as [assets](README.md#assets), optional recognisers per script, line outlines |
 
 To start from working code, copy one of these examples and read
 [Writing one](#writing-one). The sections before it are the reference.
