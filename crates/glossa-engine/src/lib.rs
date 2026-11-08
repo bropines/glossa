@@ -11,6 +11,7 @@
 //! main window with instant translation on never lets an older, slower answer
 //! overwrite a newer one.
 
+pub mod actions;
 pub mod assets;
 #[cfg(feature = "js")]
 pub mod bundled;
@@ -47,6 +48,7 @@ use glossa_modules::{
 use glossa_net::HttpClient;
 use parking_lot::{Mutex, RwLock};
 
+pub use actions::ActionRequest;
 pub use assets::{AssetJobState, AssetReport};
 pub use catalog::{LocaleCatalog, LocaleEntry, ThemeCatalog, ThemeEntry};
 pub use export::ExportFormat;

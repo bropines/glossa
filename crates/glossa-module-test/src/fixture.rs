@@ -6,7 +6,7 @@
 //!
 //! [[case]]
 //! name = "looks up a word"
-//! op = "dictionary"              # translate | detect | dictionary | speak | ocr
+//! op = "dictionary"              # translate | detect | dictionary | speak | ocr | action
 //! text = "hello"
 //! from = "en"
 //! to = "ru"
@@ -18,6 +18,15 @@
 //! [[case.http]]                  # what the service answers, so the case runs offline
 //! url = "https://api.dictionaryapi.dev/api/v2/entries/en/hello"
 //! body_file = "responses/hello.json"
+//!
+//! [[case]]
+//! name = "loads the models"
+//! op = "action"                  # one of the manifest's [[actions]]
+//! action = "list_models"
+//! options = { api_key = "fake-key" }
+//!
+//! [case.expect]
+//! result = { choices = { model = [{ value = "small" }] } }   # partial match on the reply
 //! ```
 //!
 //! Every table refuses unknown keys: a misspelt expectation must fail the
@@ -75,6 +84,16 @@ pub struct Case {
     /// `ocr`: ask for a translation in the same call.
     #[serde(default)]
     pub translate_to: Option<String>,
+    /// `action`: the `[[actions]]` id to run.
+    #[serde(default)]
+    pub action: Option<String>,
+    /// `action`: the panel state sent with it.
+    #[serde(default)]
+    pub state: OptionValues,
+    /// `action`: the interface language whose `[strings]` `host.t` reads
+    /// (default `en`).
+    #[serde(default)]
+    pub ui_lang: Option<String>,
     /// Option values for this case, over the file's.
     #[serde(default)]
     pub options: OptionValues,
@@ -111,10 +130,12 @@ pub enum Op {
     Speak,
     #[serde(alias = "recognize")]
     Ocr,
+    /// One of the manifest's `[[actions]]`: needs no capability.
+    Action,
 }
 
 impl Op {
-    /// The manifest capability this operation needs.
+    /// The manifest capability this operation needs (none for an action).
     pub fn capability(self) -> &'static str {
         match self {
             Op::Translate => "translate",
@@ -122,6 +143,7 @@ impl Op {
             Op::Dictionary => "dictionary",
             Op::Speak => "listen",
             Op::Ocr => "ocr",
+            Op::Action => "",
         }
     }
 
@@ -132,10 +154,11 @@ impl Op {
             Op::Dictionary => "dictionary",
             Op::Speak => "speak",
             Op::Ocr => "ocr",
+            Op::Action => "action",
         }
     }
 
-    /// Every operation, with the capability that enables it.
+    /// Every capability's operation, with the capability that enables it.
     pub const ALL: [Op; 5] = [Op::Translate, Op::Detect, Op::Dictionary, Op::Speak, Op::Ocr];
 }
 
@@ -163,8 +186,8 @@ fn one() -> u32 {
 #[derive(Debug, Clone, Default, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Expect {
-    /// The whole text, trimmed: the translation, the recognised text, or
-    /// the detected language's code.
+    /// The whole text, trimmed: the translation, the recognised text, the
+    /// detected language's code, or an action's notice.
     pub text: Option<String>,
     /// Substrings the text must contain. For a dictionary article, its
     /// plain-text rendering and HTML.

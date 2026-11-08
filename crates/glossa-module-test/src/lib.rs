@@ -27,6 +27,7 @@ use std::time::{Duration, Instant};
 use glossa_core::ocr::{ImageSource, OcrGranularity};
 use glossa_core::{DictRequest, LangId, LangPair, OcrRequest, SpeakRequest, TranslateRequest};
 use glossa_modules::provider::resolve_options;
+use glossa_modules::wire::{ActionEvent, ActionParams};
 use glossa_modules::{CancelToken, Host, OptionValues, Provider, Registry, RuntimeContext};
 use serde::Serialize;
 
@@ -353,6 +354,29 @@ pub fn test_module(dir: &Path, s: &Settings) -> ModuleReport {
                 )));
             }
         }
+        // Actions: each case names a declared one, and each one the module
+        // runs has a case.
+        let cases = || fixtures.iter().flat_map(|(_, f)| f.cases.iter()).filter(|c| c.op == Op::Action);
+        for c in cases() {
+            match c.action.as_deref() {
+                None => {
+                    report.findings.push(Finding::error(format!("case {:?}: an action case needs `action`", c.name)))
+                }
+                Some(id) if !manifest.actions.iter().any(|a| a.id == id) => report.findings.push(Finding::error(
+                    format!("case {:?}: action {id:?} is not in the manifest's [[actions]]", c.name),
+                )),
+                Some(_) => {}
+            }
+        }
+        for a in &manifest.actions {
+            let handler = a.kind() == glossa_modules::actions::ActionKind::Handler;
+            if handler && !cases().any(|c| c.action.as_deref() == Some(a.id.as_str())) {
+                report.findings.push(Finding::warning(format!(
+                    "action {:?} has no case; add one with op = \"action\", action = {:?}",
+                    a.id, a.id
+                )));
+            }
+        }
     }
 
     if s.check_only || report.count(Severity::Error) > 0 {
@@ -523,6 +547,14 @@ fn run_case(
     let host = Host { http, options: &options, ui_language: LangId::ENGLISH, preferred_domain: "com", cancel: &cancel };
     let started = Instant::now();
     let result = call(provider, &host, request);
+    // An action may only name the module's own fields.
+    if let Ok(Outcome::Action(r)) = &result {
+        for key in r.choices.keys().chain(r.errors.keys()).chain(r.options.keys()) {
+            if !provider.options().iter().any(|o| o.key == *key) {
+                report.problems.push(format!("the reply names {key:?}, which is not one of the module's options"));
+            }
+        }
+    }
     report.ms = started.elapsed().as_millis() as u64;
     report.requests = match (&replay, &live) {
         (Some(r), _) => r.requests(),
@@ -619,6 +651,7 @@ enum Request {
     Dictionary(DictRequest),
     Speak(SpeakRequest),
     Ocr(OcrRequest, Option<(u32, u32)>),
+    Action(ActionParams),
 }
 
 fn lang(code: &str, field: &str) -> Result<LangId, String> {
@@ -626,7 +659,7 @@ fn lang(code: &str, field: &str) -> Result<LangId, String> {
 }
 
 fn build(case: &Case, base: &Path) -> Result<Request, String> {
-    let needs_text = !matches!(case.op, Op::Ocr);
+    let needs_text = !matches!(case.op, Op::Ocr | Op::Action);
     if needs_text && case.text.is_empty() {
         return Err(format!("a {} case needs `text`", case.op.name()));
     }
@@ -668,6 +701,16 @@ fn build(case: &Case, base: &Path) -> Result<Request, String> {
             };
             Request::Ocr(req, size)
         }
+        Op::Action => {
+            let action = case.action.clone().ok_or("an action case needs `action`")?;
+            Request::Action(ActionParams {
+                event: Some(ActionEvent { kind: "click".into(), element: Some(action.clone()), item: None }),
+                action,
+                state: case.state.clone(),
+                ui_lang: case.ui_lang.clone().unwrap_or_else(|| "en".into()),
+                ..Default::default()
+            })
+        }
     })
 }
 
@@ -678,6 +721,7 @@ fn call(p: &dyn Provider, host: &Host, request: Request) -> glossa_core::Result<
         Request::Dictionary(r) => Outcome::Article(p.dictionary(host, &r)?),
         Request::Speak(r) => Outcome::Audio(p.speak(host, &r)?),
         Request::Ocr(r, size) => Outcome::Ocr { result: p.recognize(host, &r)?, image_size: size },
+        Request::Action(params) => Outcome::Action(p.action(host, params)?),
     })
 }
 
@@ -792,6 +836,110 @@ mod tests {
         assert_eq!(r.cases[0].requests, ["GET https://api.test/t"]);
         assert_eq!(r.status, Status::Fail);
         assert_eq!(r.count(Severity::Error), 0, "{}", r.render());
+        let _ = std::fs::remove_dir_all(&d);
+    }
+
+    #[test]
+    fn action_cases_run_with_recorded_http_and_strings() {
+        let d = temp("actions");
+        write(
+            &d,
+            "module.toml",
+            r#"capabilities = ["translate"]
+[module]
+id = "acts"
+name = "Acts"
+version = "1.0.0"
+runtime = "js"
+max_input_chars = 100
+[permissions]
+network = ["api.test"]
+[[options]]
+key = "api_key"
+type = "secret"
+label = "Key"
+[[options]]
+key = "model"
+type = "select"
+label = "Model"
+choices = [{ value = "small" }]
+choices_from = "list_models"
+[[actions]]
+id = "list_models"
+label = "Load"
+[[actions]]
+id = "test"
+label = "Test"
+needs = ["api_key"]
+[[actions]]
+id = "untested"
+label = "Nobody tests me"
+"#,
+        );
+        std::fs::create_dir_all(d.join("locales")).unwrap();
+        write(&d, "locales/ru.toml", "[strings]\nok = \"Готово: {0}\"\n");
+        write(
+            &d,
+            "main.js",
+            r#"function translate(req) { return req.text; }
+               function list_models(ev, host) {
+                 return { choices: { model: host.fetch("https://api.test/models").json() } };
+               }
+               function test(ev, host) { return { notice: host.t("ok", ev.options.api_key), errors: { ghost: "x" } }; }
+               function untested() {}"#,
+        );
+        write(
+            &d,
+            "tests/basic.toml",
+            r#"
+            [[case]]
+            name = "translates"
+            op = "translate"
+            text = "hi"
+            expect = { text = "hi" }
+
+            [[case]]
+            name = "loads models"
+            op = "action"
+            action = "list_models"
+            [case.expect]
+            result = { choices = { model = [{ value = "small" }, { value = "large" }] } }
+            [[case.http]]
+            url = "https://api.test/models"
+            body = '["small", "large"]'
+
+            [[case]]
+            name = "tests in Russian"
+            op = "action"
+            action = "test"
+            ui_lang = "ru"
+            options = { api_key = "fake" }
+            expect = { text = "Готово: fake" }
+
+            [[case]]
+            name = "no such action"
+            op = "action"
+            action = "ghost"
+            "#,
+        );
+        let r = test_module(&d, &Settings { check_only: true, ..Settings::default() });
+        let text = r.render();
+        assert!(text.contains("action \"ghost\" is not in the manifest"), "{text}");
+        assert!(text.contains("action \"untested\" has no case"), "{text}");
+
+        // Without the bad case, the rest runs.
+        let fixture = std::fs::read_to_string(d.join("tests/basic.toml")).unwrap();
+        write(&d, "tests/basic.toml", fixture.split("[[case]]\n            name = \"no such").next().unwrap());
+        let r = test_module(&d, &Settings::default());
+        let statuses: Vec<_> = r.cases.iter().map(|c| (c.name.as_str(), c.status)).collect();
+        assert_eq!(
+            statuses,
+            [("translates", Status::Pass), ("loads models", Status::Pass), ("tests in Russian", Status::Fail)],
+            "{}",
+            r.render()
+        );
+        assert!(r.cases[2].problems[0].contains("names \"ghost\""), "{}", r.render());
+        assert_eq!(r.cases[1].requests, ["GET https://api.test/models"]);
         let _ = std::fs::remove_dir_all(&d);
     }
 

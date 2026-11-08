@@ -124,7 +124,7 @@ $ glossa-cli translate -t ru "Hello"
 | [`speak`](#speak) | Write text to speech to a file. |
 | [`services`](#services) | List providers with a capability. |
 | [`modules`](#modules) | Show which modules loaded, failed or were skipped. |
-| [`module`](#module) | Check a module folder and run its fixtures (`module test`, `module check`). |
+| [`module`](#module) | Check a module folder and run its fixtures (`module test`, `module check`); run an installed module's action (`module action`). |
 | [`history`](#history) | List, search or export the translation history. |
 | [`import-classic`](#import-classic) | Import a classic QTranslate installation. |
 | [`theme`](#theme) | List, show or convert themes. |
@@ -427,6 +427,7 @@ empty. `--json`:
 glossa-cli module test [--live | --record] [--case NAME] [--set-from-env KEY=VAR]… [--set KEY=VALUE]…
                        [--timeout SECS] [--strict] [--require-runtimes] [--ignore-recordings] [--download] DIR…
 glossa-cli module check [--strict] DIR…
+glossa-cli module action ID ACTION [--option KEY=VALUE]… [--set-from-env KEY=VAR]… [--state KEY=VALUE]… [--panel PANEL]
 ```
 
 The module test harness, for module authors. `module test` checks each
@@ -450,6 +451,17 @@ check are described in [modules/testing.md](modules/testing.md).
 | `--strict` | off | Warnings fail a module too, not only errors. |
 | `--require-runtimes` | off | A module that cannot run here (no interpreter, not built, its files not downloaded) fails instead of being skipped. |
 | `--download` | off | Download a module's missing required files ([assets](modules/README.md#assets)), and the managed Python and packages a Python module needs ([Python dependencies](modules/README.md#python-dependencies)), before running it; without it such a module is skipped with the command to run. |
+
+`module action` runs one of an installed module's
+[`[[actions]]`](modules/README.md#actions) as its button on the settings
+page would, with the saved settings and `--option KEY=VALUE` (or `--set`,
+or `--set-from-env KEY=VAR` for a key) over them, and prints the reply: the
+notice, the messages for fields, loaded choices and options it would set.
+`--state` and `--panel` are for module panels. An action whose `needs` are
+not filled in fails before the module is called. The exit code is 1 when
+the reply marks a field or its notice is an error. `--json` prints the
+reply as the module sent it: `{"notice", "notice_level", "choices",
+"errors", "options", "state"}`, each present only when set.
 
 The text report has one line per module (`PASS`, `FAIL` or `SKIP`, its id,
 runtime, folder, load time and size), its findings (`error:`, `warning:`,
