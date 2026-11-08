@@ -24,6 +24,7 @@ pub mod pipeline;
 pub mod presets;
 pub mod python;
 pub mod server;
+pub mod trust;
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -299,6 +300,9 @@ struct Inner {
     /// draw it every frame; emptied whenever something may have changed it
     /// (see [`Engine::emit`]).
     python_cache: Mutex<HashMap<String, python::ModulePython>>,
+    /// Module folders the user created or copied in the module editor in
+    /// this session, canonical: the editor's saves approve these.
+    authored: Mutex<std::collections::HashSet<PathBuf>>,
 }
 
 /// Something that went wrong at start without stopping it
@@ -329,7 +333,13 @@ impl Engine {
     /// cannot be parsed does not stop the start: it is moved aside, the
     /// defaults are used, and [`Engine::startup_warnings`] says so.
     pub fn start(paths: Paths) -> Result<Engine> {
-        let (config, recovered) = Config::load_or_recover(&paths.config_file())?;
+        let (mut config, recovered) = Config::load_or_recover(&paths.config_file())?;
+        if recovered.is_some() {
+            // The approvals went with the broken file. Granting everything
+            // installed (the upgrade migration) would approve what was
+            // waiting or declined, so every hand-installed module asks again.
+            config.modules.trust_initialised = true;
+        }
         let engine = Engine::with_config(paths, config)?;
         if let Some(r) = recovered {
             engine.inner.startup_warnings.lock().push(StartupWarning {
@@ -407,6 +417,7 @@ impl Engine {
             asset_jobs: Mutex::new(HashMap::new()),
             python_jobs: Mutex::new(HashMap::new()),
             python_cache: Mutex::new(HashMap::new()),
+            authored: Mutex::new(Default::default()),
         };
         let engine = Engine { inner: Arc::new(inner) };
         engine.reload_modules();
@@ -620,6 +631,9 @@ impl Engine {
         }
         *self.inner.modules.write() =
             ModuleStatus { loaded: report.loaded, failed: report.failed, skipped: report.skipped };
+        if !cfg.modules.trust_initialised {
+            self.initialise_trust();
+        }
         self.adopt_providers();
         self.emit(Event::ModulesReloaded);
     }
@@ -639,6 +653,7 @@ impl Engine {
             models_dir: paths.models_dir(),
             auto_download_assets: cfg.modules.auto_download_assets,
             disabled: cfg.modules.disabled.clone(),
+            trust: self.trust_policy(cfg),
             preferred_domain: cfg.advanced.preferred_domain.clone(),
             ui_language_code: self.locale().code.clone(),
         }
@@ -659,7 +674,9 @@ impl Engine {
         let s = &mut cfg.services;
         for entry in registry.entries() {
             let info = entry.info();
-            if s.seen.contains(&info.id) {
+            // Adopted once approved: switching on a module that cannot run
+            // yet would only make calls fail over past it.
+            if entry.pending || s.seen.contains(&info.id) {
                 continue;
             }
             s.seen.push(info.id.clone());
@@ -2026,6 +2043,7 @@ mod tests {
         .unwrap();
         std::fs::write(m.join("main.js"), "function translate(req) { return req.text; }").unwrap();
         e.reload_modules();
+        e.approve_module("ready", None).unwrap();
         let s = e.config().services;
         assert!(s.enabled.contains(&"ready".to_string()), "{:?}", s.enabled);
         assert!(Config::load(&e.paths().config_file()).unwrap().services.enabled.contains(&"ready".to_string()));
@@ -2055,6 +2073,7 @@ mod tests {
         .unwrap();
         std::fs::write(m.join("main.js"), "function translate(req) { return 'mine: ' + req.text; }").unwrap();
         e.reload_modules();
+        e.approve_module("yandex-web", None).unwrap();
         let p = e.providers(Capabilities::TRANSLATE).into_iter().find(|p| p.info.id == "yandex-web").unwrap();
         assert_eq!(p.info.name, "My Yandex");
         assert_eq!(p.origin, "JavaScript");

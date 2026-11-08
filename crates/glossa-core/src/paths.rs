@@ -104,6 +104,36 @@ impl Paths {
         self.resource_dirs("modules")
     }
 
+    /// The module folders whose modules count as shipped with Glossa and
+    /// need no approval: narrower than [`Self::module_dirs`], whose
+    /// relative guesses (`<exe>/../share/…`, a development checkout) can
+    /// land in folders anyone can write to (`C:\modules`, `Downloads\…`).
+    /// Only the folder beside the program, the system share folders on
+    /// Linux and the BSDs, the app bundle's resources on macOS, and in
+    /// debug builds a development checkout. Not necessarily existing.
+    pub fn shipped_module_dirs(&self) -> Vec<PathBuf> {
+        // In a Windows release build nothing is pushed after this.
+        #[allow(unused_mut)]
+        let mut out = vec![self.exe_dir.join("modules")];
+        #[cfg(not(any(windows, target_os = "macos")))]
+        {
+            out.push(PathBuf::from("/usr/share/glossa/modules"));
+            out.push(PathBuf::from("/usr/local/share/glossa/modules"));
+        }
+        #[cfg(target_os = "macos")]
+        if self.exe_dir.ends_with("Contents/MacOS") {
+            if let Some(contents) = self.exe_dir.parent() {
+                out.push(contents.join("Resources").join("modules"));
+            }
+        }
+        #[cfg(debug_assertions)]
+        if let Some(repo) = self.exe_dir.ancestors().nth(2) {
+            out.push(repo.join("assets").join("modules"));
+            out.push(repo.join("modules"));
+        }
+        out
+    }
+
     /// Where the user's own modules go when installed from the UI.
     pub fn user_module_dir(&self) -> PathBuf {
         self.data_dir.join("modules")

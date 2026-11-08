@@ -875,6 +875,7 @@ pub fn describe_error(locale: &glossa_core::locale::Locale, e: &glossa_core::Err
         E::Unsupported { .. } => Some("msg.capability_unsupported"),
         E::NoTextRecognised => Some("msg.no_text_in_image"),
         E::AssetsMissing { .. } | E::RuntimeMissing { .. } => Some("msg.assets_missing"),
+        E::NeedsApproval { .. } => Some("msg.needs_approval"),
         _ => None,
     };
     match key {

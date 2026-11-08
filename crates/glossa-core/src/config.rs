@@ -1679,6 +1679,48 @@ pub struct ModulesConfig {
     /// first use without asking. Off: the module's options offer the
     /// download instead.
     pub auto_download_assets: bool,
+    /// What the user approved for each module installed by hand, by module
+    /// id (`[modules.granted.<id>]`). A module whose manifest asks for more
+    /// than its grant waits for approval instead of running; see
+    /// `glossa_modules::trust`. Modules shipped with Glossa need none.
+    #[serde(skip_serializing_if = "BTreeMap::is_empty")]
+    pub granted: BTreeMap<String, ModuleGrant>,
+    /// Set once the modules installed before approvals existed have been
+    /// granted what they declared then, so an update does not switch off
+    /// modules that were already working. Missing in older settings files,
+    /// which is what starts that one-time migration.
+    pub trust_initialised: bool,
+}
+
+/// What the user approved for one module: the permission-relevant parts of
+/// its manifest at the time, and their hash. Written by Glossa; editing it
+/// by hand approves whatever it then says.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct ModuleGrant {
+    /// SHA-256 of the approved set, in hex: equal for an unchanged manifest.
+    pub hash: String,
+    /// The runtime (`js`, `python`, `process`, `native`…).
+    pub runtime: String,
+    /// The program a process module runs, with its arguments and
+    /// environment; empty for sandboxed modules.
+    pub program: Vec<String>,
+    /// Hosts it may reach (`[permissions] network`).
+    pub network: Vec<String>,
+    /// Files it may download: name, size, host and SHA-256 of each.
+    pub assets: Vec<String>,
+    /// Python packages it may install, and the index they come from.
+    pub packages: Vec<String>,
+    /// Its actions (buttons), by id.
+    pub actions: Vec<String>,
+    /// Permission lines contributed by other features (panels, tray
+    /// entries, hotkeys), as `glossa_modules::trust` writes them.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub extra: Vec<String>,
+    /// The module's folder, canonical, when approved: another folder
+    /// claiming the same id waits for its own approval. Empty (a grant
+    /// written by hand) applies to the id in any folder.
+    pub dir: String,
 }
 
 impl Default for ModulesConfig {
@@ -1692,6 +1734,8 @@ impl Default for ModulesConfig {
             call_timeout_ms: 30_000,
             disabled: Vec::new(),
             auto_download_assets: false,
+            granted: BTreeMap::new(),
+            trust_initialised: false,
         }
     }
 }

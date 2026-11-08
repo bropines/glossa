@@ -17,6 +17,8 @@
 //!   and generic processes over one stdio transport, native.
 //! * [`image_ops`] — the image API modules reach through `image.*` host calls
 //!   (the `image` feature).
+//! * [`trust`] — what a module installed by hand may do, and whether the
+//!   user approved it.
 //! * [`log_tap`] — what one module logs, for the module editor.
 //! * [`child`] — running a helper program with a deadline, for providers
 //!   built on one (Tesseract, the system voice).
@@ -35,6 +37,7 @@ pub mod python_env;
 pub mod registry;
 pub mod runtime;
 pub mod settings;
+pub mod trust;
 
 pub use assets::{AssetState, AssetStatus, ModuleAssets};
 pub use glossa_module_sdk::{wire, PROTOCOL_VERSION};
@@ -42,3 +45,4 @@ pub use manifest::{Manifest, Runtime};
 pub use provider::{CancelToken, Host, OptionKind, OptionSpec, OptionValues, Provider};
 pub use registry::{Entry, LoadReport, Origin, Registry, RuntimeContext};
 pub use settings::{FieldError, SettingsPage};
+pub use trust::{TrustPolicy, TrustRequest};

@@ -124,7 +124,7 @@ $ glossa-cli translate -t ru "Hello"
 | [`speak`](#speak) | Write text to speech to a file. |
 | [`services`](#services) | List providers with a capability. |
 | [`modules`](#modules) | Show which modules loaded, failed or were skipped. |
-| [`module`](#module) | Check a module folder and run its fixtures (`module test`, `module check`); run an installed module's action (`module action`). |
+| [`module`](#module) | Check a module folder and run its fixtures (`module test`, `module check`); run an installed module's action (`module action`); approve modules installed by hand (`module pending`, `approve`, `revoke`, `decline`). |
 | [`history`](#history) | List, search or export the translation history. |
 | [`import-classic`](#import-classic) | Import a classic QTranslate installation. |
 | [`theme`](#theme) | List, show or convert themes. |
@@ -428,6 +428,10 @@ glossa-cli module test [--live | --record] [--case NAME] [--set-from-env KEY=VAR
                        [--timeout SECS] [--strict] [--require-runtimes] [--ignore-recordings] [--download] DIR…
 glossa-cli module check [--strict] DIR…
 glossa-cli module action ID ACTION [--option KEY=VALUE]… [--set-from-env KEY=VAR]… [--state KEY=VALUE]… [--panel PANEL]
+glossa-cli module pending
+glossa-cli module approve ID [--local] [--force]
+glossa-cli module revoke ID [--local] [--force]
+glossa-cli module decline ID [--local] [--force]
 ```
 
 The module test harness, for module authors. `module test` checks each
@@ -436,7 +440,11 @@ the program uses, runs the cases in its `tests/*.toml` (or `*.json`) with
 recorded HTTP answers, and checks every answer against the module
 protocol. `module check` does the first step only and runs no code. A
 `DIR` without a `module.toml` is searched for modules below it. Neither
-needs a data folder or reads `config.toml`. The fixture format and every
+needs a data folder or reads `config.toml`, and neither asks for
+[approval](modules/README.md#permissions-and-trust): `module test` loads and
+runs the module with every permission it declares, which is the reason to
+point it only at a folder you mean to run (the module editor's *Test*, by
+contrast, refuses a module that waits for approval). The fixture format and every
 check are described in [modules/testing.md](modules/testing.md).
 
 | option | default | meaning |
@@ -462,6 +470,20 @@ not filled in fails before the module is called. The exit code is 1 when
 the reply marks a field or its notice is an error. `--json` prints the
 reply as the module sent it: `{"notice", "notice_level", "choices",
 "errors", "options", "state"}`, each present only when set.
+
+`module pending` lists the modules you installed by hand that wait for
+your approval ([modules/README.md](modules/README.md#permissions-and-trust)),
+each with what it asks for in plain words: the hosts it reaches, the
+program it runs, the files it downloads with their sizes and hosts, the
+Python packages it installs, its actions. `module approve ID` approves what
+the module asks for now and prints it; `module revoke ID` withdraws an
+approval, so the module waits again; `module decline ID` switches it off.
+These go through the control API of a running Glossa when it answers, and
+otherwise change `config.toml`, refusing while a Glossa that cannot be
+reached holds the data folder (as `preset` does: `--local` skips the
+running Glossa, `--force` changes the file anyway). `--json` prints
+`pending` as a list of `{id, name, dir, pending, first_time, request, new,
+hash}`.
 
 The text report has one line per module (`PASS`, `FAIL` or `SKIP`, its id,
 runtime, folder, load time and size), its findings (`error:`, `warning:`,

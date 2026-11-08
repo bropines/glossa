@@ -190,6 +190,7 @@ Errors have a status code and a body of the form:
 | GET, POST | [`/v1/assets…`](#v1assets) | Files modules declare (models, dictionaries): state, download, check, delete. |
 | GET, POST | [`/v1/presets…`](#presets) | List, apply, save, export and import presets. |
 | POST | [`/v1/modules/<id>/…`](#post-v1modules) | Check, reload or test one module from its folder. |
+| GET, POST | [`/v1/trust…`](#v1trust) | Modules installed by hand: what they ask for, approving, revoking, declining. |
 | any | [pot-app routes](#pot-app-compatibility) | `/selection_translate`, `/input_translate`, `/ocr_recognize`, `/ocr_translate`, `POST /translate`. |
 
 The examples use `$T` for the token and the default address.
@@ -480,6 +481,26 @@ bundled one; copy those first).
 ```console
 $ curl -s -X POST -H "Authorization: Bearer $T" http://127.0.0.1:60828/v1/modules/my-translator/check
 [{"file":"main.js","line":9,"column":35,"severity":"error","message":"SyntaxError: unexpected token in expression: ';'"}]
+```
+
+### /v1/trust
+
+Modules installed by hand wait for approval before they run
+([modules/README.md](modules/README.md#permissions-and-trust)).
+
+| method | path | what it does |
+|---|---|---|
+| GET | `/v1/trust` | Every loaded module that needs approval: `{id, name, dir, pending, first_time, request, new, hash}`. `request` is what it asks for (`runtime`, `reach`: `sandboxed`/`program`/`native`, `program`, `network`, `assets` with `name`, `size`, `hosts`, `sha256`, `optional`, `packages`, `actions`); `new` is the part beyond its current approval. `?pending=1` lists only those waiting. |
+| POST | `/v1/trust/<id>/approve` | Approve what it asks for now and load it. Send `{"hash": …}` from the listing to approve only what was shown: a module changed since answers 400. |
+| POST | `/v1/trust/<id>/revoke` | Withdraw the approval; the module waits again. |
+| POST | `/v1/trust/<id>/decline` | Switch the module off. |
+
+A call to a module that waits answers 412 with "module … is waiting for
+your approval".
+
+```console
+$ curl -s -H "Authorization: Bearer $T" 'http://127.0.0.1:60828/v1/trust?pending=1'
+$ curl -s -X POST -H "Authorization: Bearer $T" -d '{"hash":"7dda…"}' http://127.0.0.1:60828/v1/trust/my-translator/approve
 ```
 
 ## pot-app compatibility

@@ -166,7 +166,10 @@ impl Reply {
             Error::EmptyInput | Error::SameLanguage | Error::Config(_) => 400,
             Error::NoProvider(_) | Error::NoSuchModule(_) => 404,
             Error::NoTextRecognised | Error::LanguageNotDetected => 422,
-            Error::MissingCredential { .. } | Error::AssetsMissing { .. } | Error::RuntimeMissing { .. } => 412,
+            Error::MissingCredential { .. }
+            | Error::AssetsMissing { .. }
+            | Error::RuntimeMissing { .. }
+            | Error::NeedsApproval { .. } => 412,
             Error::RateLimited { .. } => 429,
             Error::Timeout(_) => 504,
             Error::Internal(_) => 500,
@@ -300,6 +303,8 @@ fn allowed_methods(path: &str) -> Option<&'static str> {
         "/v1/python/install" | "/v1/python/cancel" => Some("POST"),
         p if p.starts_with("/v1/python/") => Some(if p.matches('/').count() == 3 { "GET" } else { "POST" }),
         p if p.starts_with("/v1/modules/") => Some("POST"),
+        "/v1/trust" => Some("GET"),
+        p if p.starts_with("/v1/trust/") => Some("POST"),
         _ => None,
     }
 }
@@ -516,6 +521,23 @@ fn modules_route(engine: &Engine, rest: &str) -> Reply {
     }
 }
 
+/// `/v1/trust/<id>/approve|revoke|decline`: approving modules installed by
+/// hand. `approve` takes an optional `{"hash": …}` from `GET /v1/trust`, so
+/// only what was shown is approved.
+fn trust_route(engine: &Engine, rest: &str, body: &Value) -> Reply {
+    let (id, op) = rest.split_once('/').unwrap_or((rest, ""));
+    let done = match op {
+        "approve" => engine.approve_module(id, body.get("hash").and_then(Value::as_str)),
+        "revoke" => engine.revoke_module(id),
+        "decline" => engine.decline_module(id),
+        other => return Reply::error(404, format!("no trust operation {other:?} (approve, revoke, decline)")),
+    };
+    match done {
+        Ok(()) => Reply::json(200, json!({ "id": id, "done": op })),
+        Err(e) => Reply::from_error(&e),
+    }
+}
+
 fn route(engine: &Engine, req: &mut Request) -> Reply {
     if from_a_browser(req) {
         return Reply::error(403, "browser requests are not accepted");
@@ -723,6 +745,15 @@ fn route(engine: &Engine, req: &mut Request) -> Reply {
         "/v1/presets" => Reply::json(200, presets_list(engine)),
         p if p.starts_with("/v1/presets/") => presets_route(engine, req, &p["/v1/presets/".len()..], &url),
         p if p.starts_with("/v1/modules/") => modules_route(engine, &p["/v1/modules/".len()..]),
+        "/v1/trust" => {
+            let all = engine.module_trust();
+            let pending = query_param(&url, "pending").is_some_and(|v| v != "0" && v != "false");
+            Reply::json(200, json!(all.into_iter().filter(|m| !pending || m.pending).collect::<Vec<_>>()))
+        }
+        p if p.starts_with("/v1/trust/") => {
+            let body = tri!(json_body(req));
+            trust_route(engine, &p["/v1/trust/".len()..], &body)
+        }
         _ => Reply::error(404, format!("no route {path}")),
     }
 }
@@ -868,6 +899,9 @@ mod tests {
         assert_eq!(get("/v1/python/nope/install", "GET").0, 405);
         assert_eq!(get("/v1/modules/nope/check", "POST").0, 404);
         assert_eq!(get("/v1/modules/nope/check", "GET").0, 405);
+        assert_eq!(get("/v1/trust", "GET"), (200, "[]".into()));
+        assert_eq!(get("/v1/trust/nope/approve", "POST").0, 404);
+        assert_eq!(get("/v1/trust/nope/approve", "GET").0, 405);
         server.stop();
         std::fs::remove_dir_all(&dir).ok();
     }
@@ -1244,6 +1278,19 @@ mod tests {
         std::fs::write(m.join("main.js"), "function translate(req) { return 'echo: ' + req.text; }").unwrap();
         e.reload_modules();
         let server = start(e.clone()).unwrap();
+        // Dropped in after the start, it waits for approval, given here
+        // through the API with the hash it showed.
+        let (status, body) = call(server.addr, "GET", "/v1/trust?token=secret&pending=1", "");
+        assert_eq!(status, 200, "{body}");
+        let waiting: Value = serde_json::from_str(&body).unwrap();
+        assert_eq!(waiting[0]["id"], "echo");
+        let (status, body) = call(server.addr, "GET", "/v1/translate?token=secret&text=hi&to=ru&service=echo", "");
+        assert!(body.contains("approval"), "{status} {body}");
+        let approve = json!({ "hash": waiting[0]["hash"] }).to_string();
+        let (status, body) = call(server.addr, "POST", "/v1/trust/echo/approve", &approve);
+        assert_eq!(status, 401, "needs the token: {body}");
+        let (status, body) = call(server.addr, "POST", "/v1/trust/echo/approve?token=secret", &approve);
+        assert_eq!(status, 200, "{body}");
 
         let (status, body) =
             call(server.addr, "GET", "/v1/translate?token=secret&text=hi&from=en&to=ru&service=echo&back=1", "");
