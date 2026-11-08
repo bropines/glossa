@@ -22,6 +22,21 @@ the notes of its GitHub release.
   llama.cpp build and the model are downloaded as module files; the
   program is built by a separate workflow (`local-llm-v*` tags) and is not
   released yet.
+- Module approvals. A module you install by hand (a folder, a zip, a
+  `.potext`) no longer runs until you approve what it asks for: the hosts it
+  reaches, whether it runs a program with your rights or a native library
+  inside Glossa, the files it downloads with their sizes and hosts, the
+  Python packages it installs, and its actions. *Options → Modules* lists
+  waiting modules with Approve and Decline, and marks them "needs
+  approval"; calling one says it waits. An update that asks for more waits
+  again and says what is new; one that asks for less keeps running.
+  Modules shipped with Glossa, a classic installation's services and
+  modules you write in the module editor need no approval. Also
+  `glossa-cli module pending|approve|revoke|decline` and `/v1/trust` in the
+  control API. Approvals are kept as `[modules.granted.<id>]` in
+  `config.toml`. When you upgrade, every module already installed is
+  approved for what it declares then, so nothing stops working
+  (docs/modules/README.md, *Permissions and trust*).
 - Richer settings pages for modules and built-in services, with no module
   code: options may show or grey out on a condition (`visible_if`,
   `enabled_if`), check their values as you type with a message under the

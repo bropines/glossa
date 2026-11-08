@@ -187,6 +187,11 @@ pub struct OptionsState {
     /// The modules the editor group lists, read once and again after a
     /// reload, not every frame.
     module_list: Option<Vec<glossa_engine::module_dev::ModuleListing>>,
+    /// The modules that need approval, read once and again after a reload.
+    trust: Option<Vec<glossa_engine::trust::ModuleTrust>>,
+    /// An approval or a decline being saved on a worker (it reloads the
+    /// modules), and what came of it.
+    trust_job: Option<std::sync::mpsc::Receiver<Result<(), String>>>,
     /// The installed font families, for the font picker.
     fonts: FontList,
     /// The Presets tab of the Services page is showing, and its state.
@@ -198,6 +203,7 @@ impl OptionsState {
     /// Modules were loaded again: list them afresh when next drawn.
     pub fn modules_changed(&mut self) {
         self.module_list = None;
+        self.trust = None;
     }
 }
 
@@ -393,6 +399,8 @@ pub fn open(app: &mut GlossaApp) {
             new_module_template: glossa_engine::module_dev::Template::Translator,
             new_module_name: String::new(),
             module_list: None,
+            trust: None,
+            trust_job: None,
             fonts: FontList::default(),
             presets_tab: false,
             presets: Default::default(),
@@ -450,9 +458,14 @@ fn apply(app: &mut GlossaApp, st: &mut OptionsState) -> bool {
         // The window keeps track of geometry and pane contents itself.
         let windows = std::mem::take(&mut c.windows);
         let contents = std::mem::take(&mut c.contents);
+        // Approvals are saved as they are given, not with the draft.
+        let granted = std::mem::take(&mut c.modules.granted);
+        let trust_initialised = c.modules.trust_initialised;
         *c = draft;
         c.windows = windows;
         c.contents = contents;
+        c.modules.granted = granted;
+        c.modules.trust_initialised = trust_initialised;
     });
     let mut attention = false;
     let mut autostart_error = None;
@@ -2437,6 +2450,7 @@ fn modules(app: &mut GlossaApp, ui: &mut egui::Ui, st: &mut OptionsState) {
     let look = app.look.clone();
     let status = app.engine.module_status();
     let mut reload_draft = false;
+    module_approvals(app, ui, st);
     let d = &mut st.draft;
     group(ui, &look, &app.t("options.modules.runtimes"), |ui| {
         ui.checkbox(&mut d.modules.allow_legacy_scripts, app.t("options.modules.legacy_scripts"));
@@ -2588,6 +2602,131 @@ fn modules(app: &mut GlossaApp, ui: &mut egui::Ui, st: &mut OptionsState) {
     }
 }
 
+/// Modules installed by hand that wait for approval: what each asks for in
+/// plain words, with Approve and Decline. Saving either reloads the modules,
+/// so it runs on a worker.
+fn module_approvals(app: &mut GlossaApp, ui: &mut egui::Ui, st: &mut OptionsState) {
+    if let Some(rx) = &st.trust_job {
+        match rx.try_recv() {
+            Ok(Ok(())) => {
+                st.trust_job = None;
+                st.trust = None;
+            }
+            Ok(Err(e)) => {
+                st.trust_job = None;
+                st.message = Some((e, true));
+            }
+            Err(std::sync::mpsc::TryRecvError::Empty) => {}
+            Err(std::sync::mpsc::TryRecvError::Disconnected) => st.trust_job = None,
+        }
+    }
+    let pending: Vec<_> =
+        st.trust.get_or_insert_with(|| app.engine.module_trust()).iter().filter(|m| m.pending).cloned().collect();
+    if pending.is_empty() {
+        return;
+    }
+    let look = app.look.clone();
+    let busy = st.trust_job.is_some();
+    let mut chosen: Option<(String, Option<String>)> = None;
+    group(ui, &look, &app.t("options.modules.trust.title"), |ui| {
+        ui.label(RichText::new(app.t("options.modules.trust.hint")).small().color(look.weak_text()));
+        for m in &pending {
+            ui.add_space(6.0);
+            ui.horizontal_wrapped(|ui| {
+                ui.label(RichText::new(&m.name).strong());
+                let why = if m.first_time { "options.modules.trust.new" } else { "options.modules.trust.widened" };
+                ui.label(RichText::new(app.t(why)).small().color(look.accent()));
+                ui.label(RichText::new(&m.id).small().color(look.weak_text()));
+            });
+            ui.indent(("trust-lines", &m.id), |ui| {
+                ui.spacing_mut().item_spacing.y = 2.0;
+                for (line, is_new) in trust_lines(app, &m.request, &m.new, m.first_time) {
+                    // On an update, what is new is what to look at.
+                    let colour = if is_new { look.text() } else { look.weak_text() };
+                    ui.label(RichText::new(line).color(colour));
+                }
+            });
+            ui.add_space(4.0);
+            ui.indent(("trust-buttons", &m.id), |ui| {
+                ui.add_enabled_ui(!busy, |ui| {
+                    ui.horizontal(|ui| {
+                        if ui.button(app.t("options.modules.trust.approve")).clicked() {
+                            chosen = Some((m.id.clone(), Some(m.hash.clone())));
+                        }
+                        if ui
+                            .button(app.t("options.modules.trust.decline"))
+                            .on_hover_text(app.t("options.modules.trust.decline_tip"))
+                            .clicked()
+                        {
+                            chosen = Some((m.id.clone(), None));
+                        }
+                    })
+                });
+            });
+        }
+    });
+    if let Some((id, hash)) = chosen {
+        if hash.is_none() && !st.draft.modules.disabled.contains(&id) {
+            // So applying the draft later keeps it switched off.
+            st.draft.modules.disabled.push(id.clone());
+        }
+        let engine = app.engine.clone();
+        let ctx = app.ctx.clone();
+        let (tx, rx) = std::sync::mpsc::channel();
+        st.trust_job = Some(rx);
+        std::thread::spawn(move || {
+            let done = match &hash {
+                Some(h) => engine.approve_module(&id, Some(h)),
+                None => engine.decline_module(&id),
+            };
+            let _ = tx.send(done.map_err(|e| e.to_string()));
+            ctx.request_repaint();
+        });
+    }
+}
+
+/// What a module asks for, one line each in the interface language, and
+/// whether the line is new since its last approval.
+fn trust_lines(
+    app: &GlossaApp,
+    r: &glossa_modules::TrustRequest,
+    new: &glossa_modules::TrustRequest,
+    first_time: bool,
+) -> Vec<(String, bool)> {
+    use glossa_modules::trust::Reach;
+    let mut out = Vec::new();
+    let program = r.program.join(" ");
+    out.push(match r.reach {
+        Reach::Sandboxed => (app.t("options.modules.trust.sandboxed"), first_time),
+        Reach::Program => (app.locale.fmt("options.modules.trust.program", &program), !new.program.is_empty()),
+        Reach::Native => (app.locale.fmt("options.modules.trust.native", &program), !new.program.is_empty()),
+    });
+    let hosts = &r.network;
+    out.push(if hosts.is_empty() {
+        (app.t("options.modules.trust.no_network"), first_time)
+    } else if hosts.iter().any(|h| h == "*") {
+        (app.t("options.modules.trust.any_site"), !new.network.is_empty())
+    } else {
+        (app.locale.fmt("options.modules.trust.hosts", &hosts.join(", ")), !new.network.is_empty())
+    });
+    for a in &r.assets {
+        let key = if a.optional { "options.modules.trust.asset_optional" } else { "options.modules.trust.asset" };
+        let line = app.locale.fmt_args(key, &[&a.name, &human_size(a.size), &a.hosts.join(", ")]);
+        out.push((line, new.assets.contains(a)));
+    }
+    let (index, packages): (Vec<&String>, Vec<&String>) = r.packages.iter().partition(|p| p.starts_with("index "));
+    if !packages.is_empty() {
+        let from = index.first().map(|i| &i["index ".len()..]).unwrap_or_default();
+        let list = packages.iter().map(|p| p.as_str()).collect::<Vec<_>>().join(", ");
+        let is_new = new.packages.iter().any(|p| !p.starts_with("index "));
+        out.push((app.locale.fmt_args("options.modules.trust.packages", &[from, &list]), is_new));
+    }
+    if !r.actions.is_empty() {
+        out.push((app.locale.fmt("options.modules.trust.actions", &r.actions.join(", ")), !new.actions.is_empty()));
+    }
+    out
+}
+
 /// Writing modules: a new one from a template, and every module with what
 /// the editor can do with it (edit in place, or copy to the user's folder
 /// and edit the copy, which replaces the original by id).
@@ -2630,13 +2769,19 @@ fn module_editor_group(app: &mut GlossaApp, ui: &mut egui::Ui, st: &mut OptionsS
             for m in st.module_list.get_or_insert_with(|| app.engine.module_sources()).clone() {
                 ui.horizontal(|ui| {
                     ui.label(&m.name);
+                    let waiting = st.trust.as_ref().is_some_and(|t| t.iter().any(|x| x.pending && x.id == m.id));
                     let kind = match (&m.failed, &m.source) {
                         (Some(_), _) => app.t("options.modules.failed_short"),
+                        (None, _) if waiting => app.t("options.modules.needs_approval"),
                         (None, ModuleSource::User(_)) => format!("{}, {}", m.kind, app.t("options.modules.mine")),
                         (None, _) => origin_label(app, &m.kind),
                     };
                     let tip = m.failed.clone().unwrap_or_else(|| m.id.clone());
-                    let colour = if m.failed.is_some() { look.error() } else { look.weak_text() };
+                    let colour = match (&m.failed, waiting) {
+                        (Some(_), _) => look.error(),
+                        (None, true) => look.accent(),
+                        (None, false) => look.weak_text(),
+                    };
                     ui.label(RichText::new(kind).small().color(colour)).on_hover_text(tip);
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| match &m.source {
                         ModuleSource::User(dir) => {

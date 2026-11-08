@@ -19,6 +19,7 @@ without reshaping its data.
 - [Where modules live](#where-modules-live)
 - [module.toml](#moduletoml)
 - [Trying a module](#trying-a-module)
+- [Permissions and trust](#permissions-and-trust)
 - [Bundled modules](#bundled-modules)
 - [Modules with downloads](#modules-with-downloads)
 - [Scripts from other programs](#scripts-from-other-programs)
@@ -688,6 +689,64 @@ and why:
   <source media="(prefers-color-scheme: light)" srcset="../screenshots/options-modules-light.png">
   <img src="../screenshots/options-modules-dark.png" alt="Options, Modules: three modules loaded, none failed" width="700">
 </picture>
+
+## Permissions and trust
+
+A module you install yourself does not run until you approve what it asks
+for. Glossa reads that from `module.toml` alone, before any of the module's
+code runs, and shows it in plain words at the top of *Options → Modules*
+under *Waiting for your approval*:
+
+- the hosts it may reach (`[permissions] network`), or "any website" for `*`;
+- whether it runs sandboxed (JavaScript: no files, no programs), runs a
+  program with your rights and so can read and change your files (Python,
+  Java, `process`, with the command line), or is a native library that runs
+  inside Glossa with full trust;
+- each file it would download (`[[assets]]`), with its size and host;
+- the Python packages it would install, and the index they come from
+  (`requirements`, `requirements.txt` or `pyproject.toml`);
+- its actions (`[[actions]]`).
+
+*Approve* lets it run; *Decline* switches it off (switch it on again to be
+asked again). Until then the module is listed with "needs approval", its
+settings page can be looked at, nothing is downloaded or installed for it,
+and every call fails with "module … is waiting for your approval".
+
+What you approved is kept in `config.toml` as `[modules.granted.<id>]`
+([configuration.md](../configuration.md#modulesgrantedid)), with a hash of
+the approved set. When an update changes `module.toml`:
+
+- asking for **less or the same** (fewer hosts, a download removed) keeps it
+  running;
+- asking for **more** (a new host, a new or changed download, another
+  program or command line, a new package or action) stops it until you
+  approve again; the prompt says what is new.
+
+Classic QTranslate scripts and pot-app plugins in your own folders are
+asked about too, as "can reach any website", since they always had that.
+
+No approval is needed for:
+
+- the modules compiled into Glossa and the folders shipped beside the
+  program (`<folder of glossa.exe>/modules`, `<prefix>/share/glossa/modules`);
+- the services of a classic QTranslate installation you pointed Glossa at;
+- modules you create in the module editor or copy there with *Copy and edit*
+  (you are their author), and every save in the editor: the editor approves
+  what the module declares when it reloads it. A copy of a module that is
+  itself still waiting is not approved by copying.
+
+**Upgrading.** The first time a version with approvals runs, it grants every
+module already installed what it declares at that moment, and records
+`[modules] trust_initialised = true`, so nothing that worked stops working.
+Only modules added or widened afterwards ask.
+
+From the command line, `glossa-cli module pending` lists what waits and
+what each asks for, and `glossa-cli module approve|revoke|decline ID`
+approves, withdraws or declines ([cli.md](../cli.md#module)). The control
+API has the same under [`/v1/trust`](../control-api.md#v1trust).
+
+Approval is about what a module may do, not who wrote it: Glossa does not
+sign or verify modules.
 
 ## Bundled modules
 

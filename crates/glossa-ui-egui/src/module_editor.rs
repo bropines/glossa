@@ -276,7 +276,7 @@ impl ModuleEditor {
     fn reload(&mut self, app: &GlossaApp) {
         let Some(dir) = self.dir.clone() else { return };
         let engine = app.engine.clone();
-        self.spawn(&app.ctx, move || Reply::Reloaded(engine.reload_module(&dir).map_err(|e| e.to_string())));
+        self.spawn(&app.ctx, move || Reply::Reloaded(engine.reload_module_approved(&dir).map_err(|e| e.to_string())));
     }
 
     fn test(&mut self, app: &GlossaApp) {
