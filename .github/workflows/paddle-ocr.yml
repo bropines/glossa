@@ -61,7 +61,7 @@ jobs:
           all=$(p linux x86_64 ubuntu-22.04 linux-x64 tar.gz)
           if [ "$EVENT" != pull_request ]; then
             all="$all,$(p linux aarch64 ubuntu-22.04-arm linux-aarch64 tar.gz)"
-            all="$all,$(p macos aarch64 macos-14 osx-arm64 tar.gz)"
+            all="$all,$(p macos aarch64 macos-latest osx-arm64 tar.gz)"
             all="$all,$(p windows x86_64 windows-2022 win-x64 zip)"
             all="$all,$(p windows aarch64 windows-11-arm win-arm64 zip)"
           fi
