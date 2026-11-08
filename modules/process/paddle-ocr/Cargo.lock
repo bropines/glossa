@@ -1273,7 +1273,6 @@ dependencies = [
  "image",
  "oar-ocr",
  "ort",
- "serde",
  "serde_json",
 ]
 
