@@ -367,6 +367,7 @@ pub fn open(app: &mut GlossaApp) {
     if app.options.is_some() {
         crate::chrome::raise(&app.ctx, crate::chrome::viewport(crate::chrome::OPTIONS));
     } else {
+        reset_action_pages();
         let autostart = glossa_platform::autostart::is_autostart_enabled();
         app.options = Some(OptionsState {
             draft: app.engine.config(),
@@ -418,7 +419,16 @@ pub fn show(app: &mut GlossaApp, ctx: &egui::Context) {
     app.child_backdrop(&title, false);
     if open {
         app.options = Some(st);
+    } else {
+        reset_action_pages();
     }
+}
+
+/// Module actions belong to the draft they ran with: when it is opened
+/// afresh or thrown away, running ones are cancelled and their results
+/// forgotten. The module editor's preview keeps its own.
+fn reset_action_pages() {
+    crate::module_actions::reset_pages(|id| id != crate::module_editor::PREVIEW_SALT);
 }
 
 /// Save the draft and, when it changed, the autostart entry, and say how it
@@ -1147,7 +1157,18 @@ fn service_details(
                 ai_tools(app, ui, &id, &mut st.draft, &st.ai_models, &mut st.ai_task, &st.ai_status);
             }
             let values = st.draft.services.options.entry(id.clone()).or_default();
-            crate::module_settings::show(ui, &look, &app.locale, &p.page, values, st.show_secrets, &id);
+            // Actions run in the engine with the draft as it is on screen.
+            let run = crate::module_actions::engine_runner(app, &id);
+            crate::module_settings::show_with(
+                ui,
+                &look,
+                &app.locale,
+                &p.page,
+                values,
+                st.show_secrets,
+                &id,
+                Some(&run),
+            );
         }
     });
 }

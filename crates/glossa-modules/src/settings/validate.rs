@@ -136,15 +136,19 @@ pub fn check(spec: &OptionSpec, pattern: Option<&Pattern>, value: &Value) -> Opt
         }
         OptionKind::Select => {
             let v = value.as_str().unwrap_or_default();
-            (!spec.choices.is_empty() && !spec.choices.iter().any(|c| c.value == v))
-                .then(|| FieldError::new("field.not_choice", vec![]))
+            // Choices an action loads (`choices_from`) are not in the
+            // manifest: any value may be one of them until a list is
+            // loaded, and then the loaded list is the one that counts.
+            let fixed = !spec.choices.is_empty() && (spec.choices_from.is_empty() || spec.choices_loaded);
+            (fixed && !spec.choices.iter().any(|c| c.value == v)).then(|| FieldError::new("field.not_choice", vec![]))
         }
         OptionKind::Multiselect => {
             let Some(list) = value.as_array() else {
                 return Some(FieldError::new("field.not_choice", vec![]));
             };
             let known = |v: &Value| v.as_str().is_some_and(|s| spec.choices.iter().any(|c| c.value == s));
-            if !spec.choices.is_empty() && !list.iter().all(known) {
+            let fixed = !spec.choices.is_empty() && (spec.choices_from.is_empty() || spec.choices_loaded);
+            if fixed && !list.iter().all(known) {
                 return Some(FieldError::new("field.not_choice", vec![]));
             }
             if let Some(min) = spec.min_length.filter(|m| list.len() < *m) {

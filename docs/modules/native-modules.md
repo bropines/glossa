@@ -104,6 +104,11 @@ let e = ModuleError::new(ErrorKind::Http, msg);
 The wire is unaffected either way: a module built against an older SDK
 still speaks the same protocol.
 
+Buttons the manifest declares in `[[actions]]` arrive at `Module::action`
+(default: unsupported) with a `wire::ActionParams`; `req.handler` names the
+function and `req.t("key", &[args])` reads the module's `[strings]`. Return
+a `wire::ActionReply` ([actions](README.md#actions)).
+
 ## The manifest
 
 ```toml

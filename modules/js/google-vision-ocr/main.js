@@ -145,3 +145,47 @@ function errorMessage(r) {
   } catch (ignored) {}
   return String(r.body || "").substring(0, 200);
 }
+
+// ---- Actions: the buttons [[actions]] in module.toml declares --------------
+
+// "Test the key": an empty batch costs nothing and is answered 200 for a key
+// that may use Vision, 400 or 403 otherwise. `ev.options` are the settings
+// on screen, applied or not.
+function test(ev, host) {
+  var key = ev.options.api_key;
+  var r = host.fetch("https://vision.googleapis.com/v1/images:annotate?key=" + encodeURIComponent(key), {
+    method: "POST",
+    json: { requests: [] },
+    timeout: 15000
+  });
+  if (r.ok) return { notice: host.t("key_ok"), notice_level: "success" };
+  var message = errorMessage(r);
+  if (r.status === 400 || r.status === 401 || r.status === 403) {
+    // Shown under the key field until it is edited.
+    return { errors: { api_key: host.t("key_refused", message) } };
+  }
+  if (r.status === 429) throw new ModuleError("rate_limited", message);
+  throw new ModuleError("http", "HTTP " + r.status + ": " + message);
+}
+
+// "All languages": the declared six are the common ones; this offers every
+// language Vision's text detection takes as a hint (choices_from on
+// custom_hints). The list ships with the module, so it needs no network.
+function all_languages(ev, host) {
+  var langs = [
+    ["af", "Afrikaans"], ["sq", "Albanian"], ["ar", "Arabic"], ["hy", "Armenian"], ["be", "Belarusian"],
+    ["bn", "Bengali"], ["bg", "Bulgarian"], ["ca", "Catalan"], ["zh", "Chinese"], ["hr", "Croatian"],
+    ["cs", "Czech"], ["da", "Danish"], ["nl", "Dutch"], ["en", "English"], ["et", "Estonian"],
+    ["fil", "Filipino"], ["fi", "Finnish"], ["fr", "French"], ["de", "German"], ["el", "Greek"],
+    ["gu", "Gujarati"], ["he", "Hebrew"], ["hi", "Hindi"], ["hu", "Hungarian"], ["is", "Icelandic"],
+    ["id", "Indonesian"], ["it", "Italian"], ["ja", "Japanese"], ["kn", "Kannada"], ["km", "Khmer"],
+    ["ko", "Korean"], ["lo", "Lao"], ["lv", "Latvian"], ["lt", "Lithuanian"], ["mk", "Macedonian"],
+    ["ms", "Malay"], ["ml", "Malayalam"], ["mr", "Marathi"], ["ne", "Nepali"], ["no", "Norwegian"],
+    ["fa", "Persian"], ["pl", "Polish"], ["pt", "Portuguese"], ["pa", "Punjabi"], ["ro", "Romanian"],
+    ["ru", "Russian"], ["sr", "Serbian"], ["sk", "Slovak"], ["sl", "Slovenian"], ["es", "Spanish"],
+    ["sv", "Swedish"], ["ta", "Tamil"], ["te", "Telugu"], ["th", "Thai"], ["tr", "Turkish"],
+    ["uk", "Ukrainian"], ["vi", "Vietnamese"], ["yi", "Yiddish"]
+  ];
+  var choices = langs.map(function (l) { return { value: l[0], label: l[1] }; });
+  return { choices: { custom_hints: choices }, notice: host.t("languages_loaded", choices.length) };
+}

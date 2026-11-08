@@ -20,6 +20,7 @@ public final class SdkTest {
         writesAndRoundTrips();
         rejectsMalformedJson();
         servesRequestsAndHostCalls();
+        runsAnnotatedActions();
         System.out.println("SdkTest: " + checks + " checks passed");
     }
 
@@ -139,6 +140,50 @@ public final class SdkTest {
         eq(err.get("kind"), "other");
         String message = (String) err.get("message");
         eq(message.startsWith("java.lang.IllegalStateException: kaput") && message.contains("at io.github"), true);
+    }
+
+    /** A module with actions, as an author writes one: a public class. */
+    public static final class ActionModule implements GlossaModule {
+        @Action("list_models")
+        public Object listModels(Request ev, Host host) {
+            return Json.obj("choices", Json.obj("model", List.of("small", Json.obj("value", "large", "label", "L"))));
+        }
+
+        @Action("checkKey")
+        public Object check(Request ev, Host host) throws ModuleError {
+            if (!"good".equals(ev.option("api_key", ""))) {
+                return Json.obj("errors", Json.obj("api_key", host.t("bad_key")));
+            }
+            return host.t("plan", "pro {0}$1") + " " + ev.action() + " " + ev.uiLang();
+        }
+
+        @Action("quiet")
+        public Object quiet(Request ev, Host host) {
+            return null;
+        }
+    }
+
+    static void runsAnnotatedActions() throws Exception {
+        String strings = "\"strings\":{\"plan\":\"Тариф: {0}\",\"bad_key\":\"Не тот ключ\"},\"ui_lang\":\"ru\"";
+        String input = String.join("\n",
+                "{\"id\":1,\"method\":\"action\",\"params\":{\"action\":\"list_models\",\"handler\":\"list_models\"}}",
+                "{\"id\":2,\"method\":\"action\",\"params\":{\"action\":\"test\",\"handler\":\"checkKey\","
+                        + "\"options\":{\"api_key\":\"good\"}," + strings + "}}",
+                "{\"id\":3,\"method\":\"action\",\"params\":{\"action\":\"test\",\"handler\":\"checkKey\","
+                        + "\"options\":{\"api_key\":\"bad\"}," + strings + "}}",
+                "{\"id\":4,\"method\":\"action\",\"params\":{\"action\":\"quiet\"}}",
+                "{\"id\":5,\"method\":\"action\",\"params\":{\"action\":\"nope\",\"handler\":\"nope\"}}",
+                "");
+        ByteArrayOutputStream out = new ByteArrayOutputStream();
+        Glossa.serve(new ActionModule(), new ByteArrayInputStream(input.getBytes(StandardCharsets.UTF_8)), out);
+        String[] lines = out.toString(StandardCharsets.UTF_8).split("\n");
+        eq(lines[0], "{\"id\":1,\"result\":{\"choices\":{\"model\":[\"small\",{\"value\":\"large\",\"label\":\"L\"}]}}}");
+        // One pass: the argument's own "{0}" (and a "$1") stay as written.
+        eq(lines[1], "{\"id\":2,\"result\":{\"notice\":\"Тариф: pro {0}$1 test ru\"}}");
+        eq(lines[2], "{\"id\":3,\"result\":{\"errors\":{\"api_key\":\"Не тот ключ\"}}}");
+        eq(lines[3], "{\"id\":4,\"result\":{}}");
+        eq(Json.string(Json.asMap(Json.parse(lines[4])).get("error"), "kind", ""), "unsupported");
+        eq(lines.length, 5);
     }
 
     static void eq(Object actual, Object expected) {

@@ -154,6 +154,19 @@ impl Provider for PythonGate {
         &self.options
     }
 
+    fn settings_page(&self, lang: &str) -> Arc<crate::settings::SettingsPage> {
+        // The runtime underneath knows the layout, translations and actions.
+        self.inner.settings_page(lang)
+    }
+
+    fn action(
+        &self,
+        host: &Host,
+        params: glossa_module_sdk::wire::ActionParams,
+    ) -> Result<glossa_module_sdk::wire::ActionReply> {
+        self.provider(host)?.action(host, params)
+    }
+
     fn translate(&self, host: &Host, req: &TranslateRequest) -> Result<Translation> {
         self.provider(host)?.translate(host, req)
     }
@@ -409,6 +422,96 @@ mod.run()
         assert_eq!(calls[1].1["method"], "POST");
         assert_eq!(calls[1].1["headers"]["X-A"], "1");
         assert_eq!(calls[3].1["ttl_secs"], 60);
+    }
+
+    /// The SDK's `@mod.action`, driven over the module's real stdin and
+    /// stdout with a fake host on the other end.
+    #[test]
+    fn sdk_actions_dispatch_by_handler_and_translate_strings() {
+        if !have_python() {
+            return;
+        }
+        let m = TempModule::new(
+            "actions",
+            "[[actions]]\nid = \"list_models\"\n[[actions]]\nid = \"test\"\nhandler = \"check\"\n[[actions]]\nid = \"quiet\"\n",
+            r#"
+from glossa_module import Module, ModuleError
+mod = Module()
+
+@mod.action("list_models")
+def list_models(ev, host):
+    r = host.http_json("GET", "https://api.test/models", headers={"Key": host.options["api_key"]})
+    return {"choices": {"model": [{"value": m, "label": m.upper()} for m in r]}}
+
+@mod.action("check")
+def check(ev, host):
+    if ev["event"]["type"] != "click" or ev["action"] != "test":
+        raise ModuleError("bad_request", "wrong event")
+    if host.options.get("api_key") != "good":
+        return {"errors": {"api_key": host.t("bad_key")}}
+    return host.t("plan", "pro") + " (" + host.ui_lang + ")"
+
+@mod.action("once")
+def once(ev, host):
+    return host.t("plan", "{0}{1}", "x")
+
+@mod.action("quiet")
+def quiet(ev, host):
+    pass
+
+mod.run()
+"#,
+        );
+        let t = m.transport(Duration::from_secs(20));
+        let host = |method: &str, params: Value| -> Reply {
+            match (method, params["url"].as_str()) {
+                ("http", Some("https://api.test/models")) if params["headers"]["Key"] == "good" => {
+                    Reply::ok(serde_json::json!({"status": 200, "headers": {}, "body": "[\"small\", \"large\"]"}))
+                }
+                _ => Reply::err(ModuleError::other(format!("unexpected host call {method}"))),
+            }
+        };
+        let params = |action: &str, handler: &str, key: &str| {
+            serde_json::json!({
+                "action": action, "handler": handler, "event": {"type": "click", "element": action},
+                "state": {}, "options": {"api_key": key}, "ui_lang": "ru",
+                "strings": {"plan": "Тариф: {0}", "bad_key": "Ключ не подошёл."}
+            })
+        };
+        let out = t.call("action", params("list_models", "list_models", "good"), &host).unwrap();
+        assert_eq!(out["choices"]["model"][1], serde_json::json!({"value": "large", "label": "LARGE"}));
+        let out = t.call("action", params("test", "check", "good"), &host).unwrap();
+        assert_eq!(out, serde_json::json!({"notice": "Тариф: pro (ru)"}), "a string is the notice");
+        let out = t.call("action", params("test", "check", "bad"), &host).unwrap();
+        assert_eq!(out["errors"]["api_key"], "Ключ не подошёл.");
+        assert_eq!(t.call("action", params("quiet", "quiet", ""), &host).unwrap(), serde_json::json!({}));
+        let out = t.call("action", params("once", "once", ""), &host).unwrap();
+        assert_eq!(out["notice"], "Тариф: {0}{1}", "one pass: the argument is not substituted again");
+        let e = t.call("action", params("x", "nothing", ""), &host).unwrap_err();
+        assert_eq!(e.kind, ErrorKind::Unsupported);
+
+        // Through the provider, the manifest names the handler.
+        let provider = load_plain(&m.dir, m.manifest.clone(), &ctx(Duration::from_secs(20)));
+        let http = MockHttp::new();
+        let mut opts = OptionValues::new();
+        opts.insert("api_key".into(), serde_json::json!("bad"));
+        with_test_host(&http, &opts, |h| {
+            let r = provider
+                .action(
+                    h,
+                    glossa_module_sdk::wire::ActionParams {
+                        action: "test".into(),
+                        event: Some(glossa_module_sdk::wire::ActionEvent {
+                            kind: "click".into(),
+                            ..Default::default()
+                        }),
+                        ..Default::default()
+                    },
+                )
+                .unwrap();
+            assert_eq!(r.errors["api_key"], "bad_key", "no strings: the key itself");
+        });
+        provider.suspend();
     }
 
     #[cfg(feature = "image")]

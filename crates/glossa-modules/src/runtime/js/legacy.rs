@@ -212,6 +212,7 @@ impl LegacyMeta {
             assets: Vec::new(),
             assets_dir: None,
             ui: Default::default(),
+            actions: Vec::new(),
             strings: Default::default(),
         }
     }

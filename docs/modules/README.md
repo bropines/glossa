@@ -390,6 +390,88 @@ Glossa builds ignore `[ui]` and list the options in order.
 [`js/google-vision-ocr`](../../modules/js/google-vision-ocr) uses all of
 this with tabs, a row, a slider, a multiselect and conditions.
 
+#### Actions
+
+Buttons that run module code: "Load models", "Test the key". Each
+`[[actions]]` entry names a function in the module (its `handler`, or its
+`id`), which gets the settings on screen and answers with what to show:
+
+```toml
+[[actions]]
+id = "list_models"
+label = "Load models"            # runs list_models(ev, host) in main.js
+
+[[actions]]
+id = "test"
+label = "Test the key"
+help = "Asks the service whether it accepts the key."
+handler = "testKey"              # another function name
+needs = ["api_key"]              # greyed out, naming the field, until it is filled in and passes its checks
+
+[[options]]
+key = "model"
+type = "select"
+choices = [{ value = "small" }]
+choices_from = "list_models"     # the action's reply may replace the choices
+
+[ui.settings]
+layout = ["api_key", "model", "@test"]   # `@id` places an action's button
+```
+
+```js
+function list_models(ev, host) {
+  var r = host.fetch("https://api.example.com/models", { headers: { Authorization: ev.options.api_key } });
+  return { choices: { model: r.json().map(function (m) { return { value: m.id, label: m.name }; }) } };
+}
+
+function testKey(ev, host) {
+  var r = host.fetch("https://api.example.com/me", { headers: { Authorization: ev.options.api_key } });
+  if (r.status === 401) return { errors: { api_key: host.t("bad_key") } };   // under the field
+  return { notice: host.t("connected", r.json().plan), notice_level: "success" };
+}
+```
+
+- A reply may set `options` (into the unsaved settings; the user applies
+  them), `choices` (for `select` and `multiselect` options), `errors` (shown
+  under fields until they are edited) and a `notice` beside the button with
+  a `notice_level` (`info`, `success`, `warning`, `error`). All are
+  optional; returning nothing is fine, and a plain string is the notice.
+- A field in `needs` that is hidden (`visible_if`) or greyed out
+  (`enabled_if`) does not hold the button back: the user could not fill
+  it in, and the condition says the module does without it in that state.
+  The page's own checks skip such fields for the same reason.
+- A `choices_from` action that the layout does not place gets a small
+  button beside its field. Until it has run, the declared `choices` show
+  and any value is accepted, since loaded ones are not in the manifest;
+  once a list is loaded, values are checked against that list. A saved
+  value the list does not offer stays, shown as not in the list.
+- A reply is checked before it is used: an `options` value of the wrong
+  type for its option (text for a number, say) fails the action with an
+  error, keys that are not options are ignored, choice values and labels
+  over 1 KB and notices or field messages over 4 KB are cut.
+- An action belongs to the settings it ran with: closing or reopening
+  Options, or reloading the module, cancels it and drops its answer.
+- Actions run on a worker: the page keeps responding, the button shows a
+  spinner, and one action runs at a time. They use the module's network
+  permissions like any other call.
+- Python: `@mod.action("list_models")` on a function `(ev, host)`; Java:
+  `@Action("list_models")` on a method `(Request, Host)`; native Rust: the
+  `Module::action` method; any other program: the `action` method of the
+  [protocol](protocol.md#action).
+- `host.t(key, ...args)` reads `[strings]` from `locales/<lang>.toml` in the
+  interface language, falling back to `locales/en.toml` key by key; `{0}`,
+  `{1}`… are replaced by the arguments.
+- `glossa-cli module action <id> <action> [--option KEY=VALUE]` runs one from
+  the command line, and fixtures test them with `op = "action"`
+  ([testing.md](testing.md#case-fields)).
+- `call` and `builtin` actions (no code) belong to module panels, which
+  come later; this version parses them and `module check` says they do not
+  run yet.
+
+[`js/google-vision-ocr`](../../modules/js/google-vision-ocr) has a "Test the
+key" button with `needs`, and "All languages" filling a multiselect with
+`choices_from`.
+
 #### Translations
 
 The manifest's text is the English default. `locales/<lang>.toml` in the
@@ -413,6 +495,12 @@ casual = "Разговорный"
 
 [settings.items.connection]      # an item's label (and help)
 label = "Подключение"
+
+[actions.test]                   # an action's button (and help)
+label = "Проверить ключ"
+
+[strings]                        # host.t("bad_key") in code; English in locales/en.toml
+bad_key = "Ключ не подошёл."
 ```
 
 The file is named by the interface language's code (`ru`, `pt-BR`; a

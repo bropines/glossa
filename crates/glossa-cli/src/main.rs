@@ -82,6 +82,10 @@ COMMANDS
                                       a module whose files are not downloaded is skipped, unless
                                       --download fetches them first
     module check [--strict] DIR…      the same checks without loading or running anything
+    module action ID ACTION [--option KEY=VALUE] [--set-from-env KEY=VAR] [--state KEY=VALUE]
+                                      run one of an installed module's [[actions]] (a settings-page
+                                      button) with the saved settings, KEY=VALUE over them, and print
+                                      its reply (notice, choices, errors, options)
     assets     [list | status ID | download ID [NAME…] | verify ID | remove ID]
                                       files modules declare (models, dictionaries): their state,
                                       downloading (resumes, checks SHA-256; NAMEs pick optional
@@ -160,6 +164,9 @@ const VALUED: &[&str] = &[
     "--set",
     "--set-from-env",
     "--timeout",
+    "--option",
+    "--state",
+    "--panel",
 ];
 
 /// Flags that take no value.
@@ -228,6 +235,9 @@ fn command_flags(command: &str) -> Option<&'static [&'static str]> {
             "--require-runtimes",
             "--ignore-recordings",
             "--download",
+            "--option",
+            "--state",
+            "--panel",
         ],
         "detect" | "modules" | "assets" | "python" | "import-classic" | "theme" | "locale" | "config" | "serve"
         | "action" | "doctor" | "" | "help" | "version" => &[],
@@ -420,6 +430,102 @@ fn text(args: &Args) -> Result<String, Fail> {
     Ok(s)
 }
 
+/// `KEY=VALUE` from the command line: a number or a boolean as one, anything
+/// else as text.
+fn key_value(flag: &str, pair: &str) -> Result<(String, serde_json::Value), Fail> {
+    let (k, v) = pair.split_once('=').ok_or_else(|| Fail::Usage(format!("{flag} {pair:?}: use KEY=VALUE")))?;
+    let value = serde_json::from_str::<serde_json::Value>(v)
+        .ok()
+        .filter(|j| j.is_number() || j.is_boolean())
+        .unwrap_or(json!(v));
+    Ok((k.trim().to_owned(), value))
+}
+
+/// `module action ID ACTION`: run one of an installed module's actions, as
+/// its button on the settings page does, and print the reply.
+fn module_action(args: &Args) -> Result<(), Fail> {
+    let (Some(id), Some(action)) = (args.rest.get(1), args.rest.get(2)) else {
+        return Err(Fail::Usage("module action ID ACTION [--option KEY=VALUE]… [--state KEY=VALUE]…".into()));
+    };
+    let mut overrides = glossa_modules::OptionValues::new();
+    let mut state = glossa_modules::OptionValues::new();
+    for (name, value) in &args.flags {
+        let pair = value.as_deref().unwrap_or_default();
+        match name.as_str() {
+            "--option" | "--set" => {
+                let (k, v) = key_value(name, pair)?;
+                overrides.insert(k, v);
+            }
+            // A key from the environment stays out of the shell's history.
+            "--set-from-env" => {
+                let (k, var) = pair
+                    .split_once('=')
+                    .ok_or_else(|| Fail::Usage(format!("--set-from-env {pair:?}: use KEY=VARIABLE")))?;
+                let v = std::env::var(var.trim())
+                    .map_err(|_| Fail::Usage(format!("--set-from-env: the variable {var} is not set")))?;
+                overrides.insert(k.trim().to_owned(), json!(v));
+            }
+            "--state" => {
+                let (k, v) = key_value(name, pair)?;
+                state.insert(k, v);
+            }
+            _ => {}
+        }
+    }
+    let e = engine(args)?;
+    // The saved settings, with what was given on the command line over them.
+    let options = (!overrides.is_empty()).then(|| {
+        let mut o = e.config().services.options.get(id.as_str()).cloned().unwrap_or_default();
+        o.extend(overrides);
+        o
+    });
+    let req = glossa_engine::ActionRequest { options, state, panel: args.flag(&["--panel"]).map(str::to_owned) };
+    let reply = e.module_action(id, action, req)?;
+    if args.json {
+        out!("{}", serde_json::to_string_pretty(&reply).unwrap_or_default());
+        return Ok(());
+    }
+    let mut said = false;
+    if let Some(n) = &reply.notice {
+        match reply.notice_level.as_deref() {
+            Some(level @ ("warning" | "error")) => out!("{level}: {n}"),
+            _ => out!("{n}"),
+        }
+        said = true;
+    }
+    for (key, msg) in &reply.errors {
+        out!("{key}: {msg}");
+        said = true;
+    }
+    for (key, list) in &reply.choices {
+        out!("choices for {key} ({}):", list.len());
+        for c in list {
+            if c.label.is_empty() || c.label == c.value {
+                out!("  {}", c.value);
+            } else {
+                out!("  {}  {}", c.value, c.label);
+            }
+        }
+        said = true;
+    }
+    for (k, v) in &reply.options {
+        out!("option {k} = {v}");
+        said = true;
+    }
+    for (k, v) in &reply.state {
+        out!("state {k} = {v}");
+        said = true;
+    }
+    if !said {
+        out!("done");
+    }
+    if !reply.errors.is_empty() || reply.notice_level.as_deref() == Some("error") {
+        // A refused key is a failure for scripts, though the call worked.
+        std::process::exit(1);
+    }
+    Ok(())
+}
+
 /// `module test` / `module check`: the module test harness
 /// (`glossa-module-test`). Needs no data folder, so it runs the same on a
 /// developer's machine and in CI.
@@ -429,8 +535,9 @@ fn module_command(args: &Args) -> Result<(), Fail> {
     let check_only = match sub {
         "test" => false,
         "check" => true,
-        "" => return Err(Fail::Usage("module test DIR… or module check DIR…".into())),
-        other => return Err(Fail::Usage(format!("unknown module command {other:?}; use test or check"))),
+        "action" => return module_action(args),
+        "" => return Err(Fail::Usage("module test DIR…, module check DIR… or module action ID ACTION".into())),
+        other => return Err(Fail::Usage(format!("unknown module command {other:?}; use test, check or action"))),
     };
     let roots = &args.rest[1..];
     if roots.is_empty() {

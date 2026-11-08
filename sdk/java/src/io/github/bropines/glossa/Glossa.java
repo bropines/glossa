@@ -41,7 +41,7 @@ import java.util.Map;
  */
 public final class Glossa {
     public static final int PROTOCOL_VERSION = 1;
-    public static final String VERSION = "1.0.0";
+    public static final String VERSION = "1.1.0";
 
     private Glossa() {}
 
@@ -102,12 +102,22 @@ public final class Glossa {
             case "dictionary": return module.dictionary(req, host);
             case "speak": return module.speak(req, host);
             case "recognize": return module.recognize(req, host);
+            case "action": return module.action(req, host);
             default: return module.handle(req, host);
         }
     }
 
     /** The shorthands the protocol accepts from SDKs, expanded. */
     private static Object normalise(String method, Object result) {
+        if ("action".equals(method)) {
+            if (result == null) {
+                return Json.obj();
+            }
+            if (result instanceof CharSequence) {
+                return Json.obj("notice", result.toString());
+            }
+            return result;
+        }
         if (result instanceof CharSequence) {
             String s = result.toString();
             switch (method) {

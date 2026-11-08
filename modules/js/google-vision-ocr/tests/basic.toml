@@ -59,3 +59,49 @@ text = "Hello world"
 method = "POST"
 url = "https://vision.googleapis.com/v1/images:annotate"
 body_file = "responses/hello-world.json"
+
+# ---- Actions (the settings page's buttons) ---------------------------------
+
+[[case]]
+name = "test: an accepted key"
+op = "action"
+action = "test"
+[case.expect]
+text = "Vision accepts the key."
+result = { notice_level = "success" }
+[[case.http]]
+method = "POST"
+url = "https://vision.googleapis.com/v1/images:annotate"
+body = "{}"
+
+[[case]]
+name = "test: a refused key is marked on its field, in Russian"
+op = "action"
+action = "test"
+ui_lang = "ru"
+[case.expect]
+result = { errors = { api_key = "Ключ не подошёл: API key not valid. Please pass a valid API key." } }
+[[case.http]]
+method = "POST"
+url = "https://vision.googleapis.com/v1/images:annotate"
+status = 400
+body = '{"error": {"code": 400, "message": "API key not valid. Please pass a valid API key.", "status": "INVALID_ARGUMENT"}}'
+
+[[case]]
+name = "test: an outage is an error, not a bad key"
+op = "action"
+action = "test"
+expect = { error = "module", error_contains = "HTTP 503" }
+[[case.http]]
+method = "POST"
+url = "https://vision.googleapis.com/v1/images:annotate"
+status = 503
+body = '{"error": {"code": 503, "message": "Service unavailable"}}'
+
+[[case]]
+name = "all languages fill the language list"
+op = "action"
+action = "all_languages"
+[case.expect]
+text = "58 languages."
+result = { choices = { custom_hints = [{ value = "af", label = "Afrikaans" }, { value = "sq" }] } }

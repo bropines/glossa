@@ -210,8 +210,8 @@ the fixture instead of passing it by checking nothing.
 | field | for | meaning |
 |---|---|---|
 | `name` | all | Shown in the report; also names the recording. |
-| `op` | all | `translate`, `detect`, `dictionary`, `speak` or `ocr`. The manifest must declare the matching capability. |
-| `text` | all but `ocr` | The input. |
+| `op` | all | `translate`, `detect`, `dictionary`, `speak`, `ocr` or `action`. The manifest must declare the matching capability (an `action` needs none). |
+| `text` | all but `ocr`, `action` | The input. |
 | `from`, `to` | `translate`, `dictionary` | Language codes; `from` defaults to `auto`, `to` to `en`. |
 | `lang` | `speak`, `ocr` | The language; `en` for speech and `auto` for recognition by default. |
 | `slow` | `speak` | The slower second reading. |
@@ -219,6 +219,9 @@ the fixture instead of passing it by checking nothing.
 | `image` | `ocr` | A picture file relative to the fixture (`"pictures/menu.png"`), or one the harness draws: `{ width = 320, height = 80, lines = 2 }` gives dark bars on white, one per line. |
 | `granularity` | `ocr` | `full_text`, `blocks`, `lines` or `words` (default `words`, the most structure to check). |
 | `translate_to` | `ocr` | Ask for a translation in the same call. |
+| `action` | `action` | The id of one of the manifest's `[[actions]]` to run, as its button does. `needs` is not checked here: give the options the action needs. |
+| `state` | `action` | Panel state sent with the action (empty on the settings page). |
+| `ui_lang` | `action` | The interface language whose `[strings]` `host.t` reads; default `en`. |
 | `options` | all | Option values for this case, over the file's. |
 | `http` | all | Recorded answers for this case, tried before the file's. |
 | `live` | all | The case needs the real service (the module does its own networking, so nothing can be recorded): skipped unless `--live` or `--record` is given. |
@@ -229,7 +232,7 @@ All are optional; the [shape checks](#what-is-checked) run regardless.
 
 | field | meaning |
 |---|---|
-| `text` | The whole text, trimmed: the translation, the recognised text, or the detected language's code. |
+| `text` | The whole text, trimmed: the translation, the recognised text, the detected language's code, or an action's `notice`. |
 | `contains` | One substring or a list. For a dictionary article, its plain-text rendering and its HTML. |
 | `detected` | The detected language (translate, detect, ocr). |
 | `headword` | The article's headword. |
@@ -238,6 +241,28 @@ All are optional; the [shape checks](#what-is-checked) run regardless.
 | `error_contains` | The error message must contain this. |
 | `max_ms` | The call must finish within this many milliseconds. Leave room: the first call to a process module includes starting it. |
 | `result` | A partial match on the result as JSON: every key given must be there with an equal value, and arrays match element by element for as many elements as are given. The names are the program's serialised ones (`trait` and `explains` in an article's explanations, `bounds` for an OCR box); when a key is missing, the report lists the ones that are there. |
+
+An action's reply is checked with `text`/`contains` (its notice) and
+`result` (the whole reply: `options`, `choices`, `errors`, `notice`,
+`notice_level`). Every reply is also checked to name only the module's own
+options, and a `notice_level` other than `info`, `success`, `warning` or
+`error` fails the case. Every action with a handler should have a case; the
+harness warns about one that has none.
+
+```toml
+[[case]]
+name = "test: a refused key is marked on its field"
+op = "action"
+action = "test"
+options = { api_key = "fake-key" }
+[case.expect]
+result = { errors = { api_key = "The key was refused: API key not valid." } }
+[[case.http]]
+method = "POST"
+url = "https://vision.googleapis.com/v1/images:annotate"
+status = 400
+body = '{"error": {"message": "API key not valid."}}'
+```
 
 ## Recorded HTTP
 

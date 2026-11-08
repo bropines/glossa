@@ -46,6 +46,20 @@ TEXT_DETECTION = "Сцены (вывески, фото)"
 [options.max_side]
 label = "Длинная сторона, не больше (пикс.)"
 
+[actions.test]
+label = "Проверить ключ"
+help = "Спрашивает Vision, принимает ли он ключ, ничего не распознавая."
+
+[actions.all_languages]
+label = "Все языки"
+help = "Предложить все языки, которые Vision принимает как подсказку."
+
+# Strings main.js reads with host.t; the English ones are in en.toml.
+[strings]
+key_ok = "Vision принимает ключ."
+key_refused = "Ключ не подошёл: {0}"
+languages_loaded = "Языков: {0}."
+
 [settings.items.connection]
 label = "Подключение"
 

@@ -124,7 +124,7 @@ $ glossa-cli translate -t ru "Hello"
 | [`speak`](#speak) | Write text to speech to a file. |
 | [`services`](#services) | List providers with a capability. |
 | [`modules`](#modules) | Show which modules loaded, failed or were skipped. |
-| [`module`](#module) | Check a module folder and run its fixtures (`module test`, `module check`). |
+| [`module`](#module) | Check a module folder and run its fixtures (`module test`, `module check`); run an installed module's action (`module action`). |
 | [`history`](#history) | List, search or export the translation history. |
 | [`import-classic`](#import-classic) | Import a classic QTranslate installation. |
 | [`theme`](#theme) | List, show or convert themes. |
@@ -427,6 +427,7 @@ empty. `--json`:
 glossa-cli module test [--live | --record] [--case NAME] [--set-from-env KEY=VAR]… [--set KEY=VALUE]…
                        [--timeout SECS] [--strict] [--require-runtimes] [--ignore-recordings] [--download] DIR…
 glossa-cli module check [--strict] DIR…
+glossa-cli module action ID ACTION [--option KEY=VALUE]… [--set-from-env KEY=VAR]… [--state KEY=VALUE]… [--panel PANEL]
 ```
 
 The module test harness, for module authors. `module test` checks each
@@ -450,6 +451,17 @@ check are described in [modules/testing.md](modules/testing.md).
 | `--strict` | off | Warnings fail a module too, not only errors. |
 | `--require-runtimes` | off | A module that cannot run here (no interpreter, not built, its files not downloaded) fails instead of being skipped. |
 | `--download` | off | Download a module's missing required files ([assets](modules/README.md#assets)), and the managed Python and packages a Python module needs ([Python dependencies](modules/README.md#python-dependencies)), before running it; without it such a module is skipped with the command to run. |
+
+`module action` runs one of an installed module's
+[`[[actions]]`](modules/README.md#actions) as its button on the settings
+page would, with the saved settings and `--option KEY=VALUE` (or `--set`,
+or `--set-from-env KEY=VAR` for a key) over them, and prints the reply: the
+notice, the messages for fields, loaded choices and options it would set.
+`--state` and `--panel` are for module panels. An action whose `needs` are
+not filled in fails before the module is called. The exit code is 1 when
+the reply marks a field or its notice is an error. `--json` prints the
+reply as the module sent it: `{"notice", "notice_level", "choices",
+"errors", "options", "state"}`, each present only when set.
 
 The text report has one line per module (`PASS`, `FAIL` or `SKIP`, its id,
 runtime, folder, load time and size), its findings (`error:`, `warning:`,
@@ -885,6 +897,7 @@ Desktop portal
 | `GLOSSA_SCREENSHOT_SWITCH` | desktop program | With `--screenshot`: a language (`ru`) to switch the interface to once the window is open, through the settings as Options does, to check that every part follows without a restart. Writes `ui_language` to the settings, so use a throwaway `GLOSSA_HOME`. |
 | `GLOSSA_SCREENSHOT_SERVICE` | desktop program | With `--screenshot options:services`: a provider id (`google-vision-ocr`) whose settings to show, in the first service group it belongs to. |
 | `GLOSSA_SCREENSHOT_TAB` | desktop program | With `GLOSSA_SCREENSHOT_SERVICE`: `<tabs id>=<n>`, the tab (from 0) to show of a `tabs` item on that provider's settings page, as `pages=1`. |
+| `GLOSSA_SCREENSHOT_ACTION` | desktop program | With `GLOSSA_SCREENSHOT_SERVICE`, or with `--screenshot module-editor` (its preview): the id of one of the module's [actions](modules/README.md#actions) to press when the page is first drawn, so the picture shows its result (or its spinner, if it takes longer than the window takes to settle). It runs for real, network included, so use a throwaway `GLOSSA_HOME`. A button greyed out by `needs` is not pressed. |
 | `GLOSSA_FRAME_TRACE` | desktop program | Diagnosing stutter: a file path (or `1` for `frames.csv` in the cache folder) that gets one CSV line per frame of the main window, the popup and Options: when the frame started, the time since that window's previous frame, how long its UI took, the scroll events it consumed (both axes) and the scroll delta the window's scroll areas got. |
 | `GLOSSA_RENDERER` | desktop program | Overrides `[appearance] renderer` for one run, with the same names `config.toml` takes: `open_gl` (or `glow`, `opengl`, `gl`), `gpu` (or `wgpu`), `software` (or `cpu`, `warp`). An unknown value is ignored. |
 | `GLOSSA_PYTHON_SDK` | both programs | A folder holding `glossa_module.py`, searched first when starting Python modules. |

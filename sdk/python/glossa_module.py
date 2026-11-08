@@ -38,7 +38,7 @@ import sys
 import traceback
 
 __all__ = ["Module", "ModuleError", "Host", "Images", "map_box_back", "PROTOCOL_VERSION"]
-__version__ = "1.1.0"
+__version__ = "1.2.0"
 
 PROTOCOL_VERSION = 1
 
@@ -257,8 +257,29 @@ class Host:
     def __init__(self, channel, params):
         self._channel = channel
         self.options = (params or {}).get("options") or {}
+        #: Glossa's interface language (``en``, ``ru``…); set for actions.
+        self.ui_lang = (params or {}).get("ui_lang") or "en"
+        self._strings = (params or {}).get("strings") or {}
         #: The image API; see :class:`Images`.
         self.image = Images(channel)
+
+    def t(self, key, *args):
+        """The module's string ``key`` from ``[strings]`` in locales/<lang>.toml,
+        in Glossa's interface language (English as the fallback), with
+        ``{0}``, ``{1}``… replaced by ``args``. The key itself when there is
+        none. Glossa sends the table with each action, so this costs no
+        round trip.
+        """
+        import re
+
+        text = str(self._strings.get(key, key))
+
+        # One pass, so an argument containing "{1}" is not substituted again.
+        def arg(m):
+            i = int(m.group(1))
+            return str(args[i]) if i < len(args) else m.group(0)
+
+        return re.sub(r"\{(\d+)\}", arg, text)
 
     # -- network ---------------------------------------------------------
 
@@ -372,6 +393,7 @@ class Module:
 
     def __init__(self):
         self._handlers = {}
+        self._actions = {}
         self._channel = _Channel()
 
     def handler(self, method):
@@ -408,6 +430,25 @@ class Module:
         """
         return self.handler("recognize")(fn)
 
+    def action(self, name):
+        """Register ``fn(ev, host)`` for the ``[[actions]]`` entry whose
+        ``handler`` (or, without one, ``id``) is ``name``::
+
+            @mod.action("list_models")
+            def list_models(ev, host):
+                return {"choices": {"model": ["small", "large"]}}
+
+        ``ev`` has action, handler, event, state, options and ui_lang. Return
+        ``{"options"?, "choices"?, "errors"?, "notice"?, "notice_level"?}``,
+        just the notice as a string, or nothing.
+        """
+
+        def register(fn):
+            self._actions[name] = fn
+            return fn
+
+        return register
+
     def run(self):
         """Serve requests until Glossa closes stdin."""
         while True:
@@ -430,6 +471,11 @@ class Module:
         params = frame.get("params") or {}
         try:
             fn = self._handlers.get(method)
+            if method == "action" and fn is None:
+                name = params.get("handler") or params.get("action") or ""
+                fn = self._actions.get(name) or self._actions.get(params.get("action") or "")
+                if fn is None:
+                    raise ModuleError("unsupported", "no @mod.action(%r) in this module" % name)
             if fn is None:
                 raise ModuleError("unsupported", "%s is not supported by this module" % method)
             result = _normalise(method, fn(params, Host(self._channel, params)))
@@ -464,6 +510,11 @@ def _normalise(method, result):
 
         data, mime = result
         return {"audio_base64": base64.b64encode(data).decode("ascii"), "mime": mime}
+    if method == "action":
+        if result is None:
+            return {}
+        if isinstance(result, str):
+            return {"notice": result}
     if method == "detect" and isinstance(result, str):
         return {"lang": result, "confidence": 1.0}
     return result

@@ -89,6 +89,21 @@ source may be `auto`.
 | `@mod.dictionary` | `text`, `from`, `to`, `exact` | `{"headword", "pronunciations", "explanations": [{"trait", "explains"}], "examples"}` |
 | `@mod.speak` | `text`, `lang`, `slow` | `{"audio_base64", "mime"}` or `(bytes, mime)` |
 | `@mod.recognize` | `image_base64`, `image_handle`, `lang`, `translate_to`?, `granularity`, `preserve_line_breaks` | `{"text", "translation"?, "detected_lang"?, "blocks"?, "hocr"?, "alto"?, "transform"?}` or the text ([OCR modules](../../docs/modules/ocr-modules.md)) |
+| `@mod.action("name")` | `action`, `handler`, `event`, `state`, `ui_lang` | `{"options"?, "choices"?, "errors"?, "notice"?, "notice_level"?}`, the notice as a string, or `None` |
+
+`@mod.action("name")` handles the `[[actions]]` entry whose `handler` (or,
+without one, `id`) is `name`: a button on the module's settings page
+([actions](../../docs/modules/README.md#actions)). `req["options"]` are the
+values on screen, applied or not:
+
+```python
+@mod.action("test")
+def test(ev, host):
+    r = host.http("GET", "https://api.example.com/me", headers={"Authorization": ev["options"]["api_key"]})
+    if r["status"] == 401:
+        return {"errors": {"api_key": host.t("bad_key")}}
+    return host.t("connected")
+```
 
 ## The host
 
@@ -100,6 +115,7 @@ source may be `auto`.
 | `host.cache_get(key, default)` / `host.cache_set(key, value, ttl_secs=)` | A small in-memory cache kept by Glossa, so tokens survive the process being stopped for idleness. |
 | `host.asset_path(name)` / `host.assets()` | Where a file from the manifest's `[[assets]]` is (a model, a dictionary), or all of them with `"missing"` for optional ones not downloaded. Also in the environment as `GLOSSA_ASSET_<NAME>` ([assets](../../docs/modules/README.md#assets)). |
 | `host.option(key, default)` | A setting. |
+| `host.t(key, *args)` | In an action: the module's string from `[strings]` in `locales/<lang>.toml`, in the interface language (`host.ui_lang`) with English as the fallback, `{0}`, `{1}`… replaced by `args`. |
 | `host.image.<op>(image, **params)` | The image API: `crop`, `resize`, `rotate`, `grayscale`, `threshold`, `deskew`, `pad`, `split_tiles`… on a handle (`req["image_handle"]`), an info dict or encoded bytes; `host.image.from_bytes(data)`, `host.image.to_bytes(img, "png"\|"jpeg"\|"webp", quality=)`. |
 | `map_box_back(box, img)` | (module-level) A box found in a prepared image, mapped back onto the original through `img["transform"]`. |
 

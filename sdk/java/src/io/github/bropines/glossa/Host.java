@@ -151,6 +151,33 @@ public final class Host {
         return request.option(key, fallback);
     }
 
+    /**
+     * The module's string {@code key} from {@code [strings]} in
+     * {@code locales/<lang>.toml}, in Glossa's interface language (English
+     * as the fallback), with {@code {0}}, {@code {1}}… replaced by
+     * {@code args}. The key itself when there is none. Glossa sends the
+     * table with each action, so this makes no host call.
+     */
+    public String t(String key, Object... args) {
+        Object s = Json.asMap(request.get("strings")).get(key);
+        String text = s instanceof String ? (String) s : key;
+        // One pass, so an argument containing "{1}" is not substituted again.
+        java.util.regex.Matcher m = java.util.regex.Pattern.compile("\\{(\\d+)\\}").matcher(text);
+        StringBuilder out = new StringBuilder();
+        while (m.find()) {
+            int i;
+            try {
+                i = Integer.parseInt(m.group(1));
+            } catch (NumberFormatException e) {
+                i = -1;
+            }
+            String with = i >= 0 && i < args.length ? String.valueOf(args[i]) : m.group();
+            m.appendReplacement(out, java.util.regex.Matcher.quoteReplacement(with));
+        }
+        m.appendTail(out);
+        return out.toString();
+    }
+
     /** The answer to an {@code http} host call. Any status is an answer; deciding that 4xx fails is yours. */
     public static final class HttpResponse {
         private final Map<String, Object> raw;
