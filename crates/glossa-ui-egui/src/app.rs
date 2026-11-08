@@ -821,6 +821,21 @@ impl GlossaApp {
                 }
             }
             Event::Action { action, text } => self.perform(action, text),
+            Event::PresetsChanged { applied } => {
+                if let Some(st) = self.options.as_mut() {
+                    let registry = self.engine.registry();
+                    glossa_core::preset::follow(&mut st.draft, &self.engine.config(), applied.as_deref(), &|id| {
+                        registry.get(id).is_some()
+                    });
+                }
+            }
+            Event::PresetApplied { result } => match result {
+                Ok(r) => {
+                    let text = crate::presets::report_text(self, "preset.applied", &r);
+                    self.notify(text, false);
+                }
+                Err(e) => self.notify(e.to_string(), true),
+            },
             // The waker has already asked for a frame; the options page
             // reads the new state when it draws.
             Event::AssetsChanged { .. } => {}

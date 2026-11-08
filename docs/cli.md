@@ -24,7 +24,7 @@ glossa-cli doctor                             # what works on this machine
 - [Commands](#commands): [`translate`](#translate), [`detect`](#detect),
   [`dict`](#dict), [`ocr`](#ocr), [`speak`](#speak),
   [`services`](#services), [`modules`](#modules), [`module`](#module),
-  [`assets`](#assets), [`python`](#python),
+  [`assets`](#assets), [`python`](#python), [`preset`](#preset),
   [`history`](#history),
   [`import-classic`](#import-classic), [`theme`](#theme),
   [`locale`](#locale), [`config`](#config), [`serve`](#serve),
@@ -518,6 +518,65 @@ The Python that Python modules run with ([modules/README.md](modules/README.md#p
 `--json` prints the report [`/v1/python`](control-api.md#v1python) returns,
 with `system_python` added.
 
+### preset
+
+```
+glossa-cli preset [list]
+glossa-cli preset apply NAME
+glossa-cli preset next
+glossa-cli preset save NAME [--languages]
+glossa-cli preset export NAME [-o FILE]
+glossa-cli preset import FILE
+glossa-cli preset rename NAME NEW
+glossa-cli preset duplicate NAME [NEW]
+glossa-cli preset delete NAME
+```
+
+Presets: named sets of services, their order, the active one, the
+dictionaries, the voice, the OCR engine and module settings, and with
+`--languages` the language pair ([configuration.md](configuration.md#presets)).
+A preset never holds an API key or token.
+
+- `list` (the default) shows the presets, built-in ones first; `*` marks the
+  one applied last, and services a preset names that are not installed here
+  are listed under it.
+- `apply` switches to a preset (names ignore case). Services it names that
+  are not installed are skipped and listed. `next` applies the one after the
+  current one, as the `next_preset` action does.
+- `save` stores the current setup under `NAME`, replacing a preset of yours
+  with that name. Built-in names are taken.
+- `export` prints the preset as a `.toml` file, or writes it to `FILE`, with
+  secrets left out. `import` adds one; a name already taken gets a number
+  (`Work (2)`), credentials someone put into the file are dropped, and
+  services that are not installed are listed (installing them is up to you).
+- `rename`, `duplicate` (built-in presets too; without `NEW` the copy is
+  called `NAME (2)`) and `delete` work on your own presets.
+
+When a Glossa is running with the [control API](control-api.md) on, every
+subcommand goes through it ([`/v1/presets`](control-api.md#presets)), so the
+running program sees the change at once and does not write its own
+settings over it. Otherwise, or with `--local`, the command changes
+`config.toml` directly. A Glossa that holds the data folder but cannot be
+reached (its control API is off, or `--local` was given) would write its
+settings over such a change, so the command refuses to make it and says
+so; `--force` makes it anyway, with a warning. `list` and `export` only
+read and always work.
+
+`import` keeps only the settings the installed modules declare, never a
+key and never an address (URL, endpoint, host), and lists what it left out
+([configuration.md](configuration.md#presets)).
+
+```console
+$ glossa-cli preset save Work
+saved preset "Work"
+$ glossa-cli preset apply private
+applied preset "Private"
+$ glossa-cli preset export Work -o work.toml
+```
+
+`--json` prints the report (`name`, `missing`, `dropped_secrets`, `dropped_options`) or the
+list as the control API returns them.
+
 ### history
 
 ```
@@ -753,6 +812,7 @@ reading the selection by the actions marked "text"; the others ignore it.
 | `translate_screen_in_place` | The same over the whole monitor under the pointer, with no region to select. | |
 | `swap_languages` | Swap the main window's direction. | |
 | `next_service` | Switch to the next enabled translation service. | |
+| `next_preset` | Apply the next [preset](#preset): built-in ones first, then yours. | |
 | `show_options` | Open the options. | |
 | `quit` | Exit Glossa. | |
 

@@ -59,6 +59,13 @@ pub fn perform(app: &mut GlossaApp, action: Action, text: Option<String>) {
                 app.set_active_service(&enabled[i]);
             }
         }
+        Action::NextPreset => match app.engine.next_preset_name() {
+            Some(name) => app.engine.apply_preset_async(name),
+            None => {
+                let m = app.t("preset.none");
+                app.notify(m, true);
+            }
+        },
         Action::ToggleMouseMode => {
             if !crate::mouse::MouseHub::supported() {
                 let m = app.t("mouse.unavailable");

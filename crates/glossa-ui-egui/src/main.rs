@@ -28,6 +28,7 @@ mod ocr;
 mod ocr_result;
 mod options;
 mod popup;
+mod presets;
 mod preview;
 mod rich;
 mod screenshot;

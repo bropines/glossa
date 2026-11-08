@@ -45,6 +45,11 @@ pub struct Config {
     /// A classic installation whose services, themes and interface languages
     /// are used in place, without copying them.
     pub classic: ClassicInstall,
+    /// Named sets of services the user switches between (see
+    /// [`crate::preset`]). Built-in presets are not listed here. Not
+    /// written while empty, so a file without presets has no trace of them.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub presets: Vec<crate::preset::Preset>,
 }
 
 /// Where a classic installation lives and which of its parts to use.
@@ -471,6 +476,9 @@ pub struct Services {
     /// key, model, prompt…) live in `options` under its id like any
     /// provider's.
     pub ai_endpoints: Vec<AiEndpoint>,
+    /// The preset applied last, shown beside the service strip. Empty when
+    /// none was.
+    pub preset: String,
 }
 
 /// One user-defined OpenAI-compatible endpoint.
@@ -527,6 +535,7 @@ impl Default for Services {
             options: BTreeMap::new(),
             seen: Vec::new(),
             ai_endpoints: Vec::new(),
+            preset: String::new(),
         }
     }
 }
@@ -2371,6 +2380,23 @@ copy_joined_lines = true",
         c.dictionary.offline.push(PathBuf::from("dict.ifo"));
         c.modules.dirs.push(PathBuf::from("modules"));
         c.languages.disabled.push(LangId::RUSSIAN);
+        c.services.preset = "Work".into();
+        let one = vec!["google".to_owned()];
+        c.presets.push(crate::preset::Preset {
+            name: "Work".into(),
+            order: one.clone(),
+            enabled: one.clone(),
+            active: "google".into(),
+            dictionary_order: one.clone(),
+            dictionary_enabled: one,
+            dictionary_active: "google".into(),
+            tts: "google".into(),
+            ocr: "lens".into(),
+            pair: Some(LangPair::new(LangId::ENGLISH, LangId::RUSSIAN)),
+            options: [("google".to_owned(), [("domain".to_owned(), serde_json::json!("com"))].into_iter().collect())]
+                .into_iter()
+                .collect(),
+        });
         let root: toml::Table = toml::from_str(&c.to_toml()).expect("config serialises to a table");
 
         fn documented(sections: &BTreeMap<String, String>, section: &str, key: &str) -> bool {
@@ -2399,7 +2425,7 @@ copy_joined_lines = true",
                 match child.as_str() {
                     // Maps keyed by user data: the keys are actions, module
                     // ids and option names, not settings.
-                    "hotkeys.bindings" | "services.options" => {}
+                    "hotkeys.bindings" | "services.options" | "presets.options" => {}
                     // Keyed by window name; each value is a geometry.
                     "windows" => {
                         for geometry in nested.iter().flat_map(|t| t.values()).filter_map(toml::Value::as_table) {

@@ -19,6 +19,7 @@ pub mod dbus;
 pub mod export;
 pub mod ocr;
 pub mod pipeline;
+pub mod presets;
 pub mod python;
 pub mod server;
 
@@ -51,6 +52,7 @@ pub use export::ExportFormat;
 pub use glossa_modules::assets::{AssetState, AssetStatus, Progress as AssetProgress};
 pub use ocr::{TranslatedBlock, TranslatedLine};
 pub use pipeline::{Pipeline, Progress, TranslateOptions, TranslateReport, TranslationOutcome};
+pub use presets::{PresetEntry, PresetReport};
 pub use python::{python_dirs, ModulePython, PythonReport, PYTHON_JOB};
 
 /// The presets an AI endpoint can start from, for front ends.
@@ -130,6 +132,19 @@ pub enum Event {
     Action {
         action: Action,
         text: Option<String>,
+    },
+    /// A preset applied on a worker ([`Engine::apply_preset_async`]):
+    /// what was skipped, or why it failed. [`Event::ConfigChanged`] comes
+    /// first when it worked.
+    PresetApplied {
+        result: std::result::Result<PresetReport, Arc<Error>>,
+    },
+    /// Presets or the current one changed, from any front end: saved,
+    /// renamed, copied, deleted, imported, or `applied` (that preset). A
+    /// window with unsaved settings follows it with
+    /// [`glossa_core::preset::follow`] instead of writing the old ones back.
+    PresetsChanged {
+        applied: Option<Arc<glossa_core::Preset>>,
     },
 }
 

@@ -149,6 +149,68 @@ to = 17
 | `expand_items` | bool | `false` | Options → Basics | Show each entry's translation in the history list, not only the source. |
 | `max_entries` | integer | `5000` | file only | Beyond this, the oldest entries that are not favourites are dropped. 10–1 000 000. |
 
+### `[[presets]]`
+
+Named sets of services to switch between in one click: *Options → Services
+→ Presets*, the main window menu, the `next_preset` action (a hotkey, the
+tray menu or a tray click), [`glossa-cli preset`](cli.md#preset) and the
+[control API](control-api.md#presets). One table per preset you saved or
+imported. The built-in presets (*Everyday*, *Private*, *Word study*, which
+use only services that need no key) are not written here; they cannot be
+changed, only duplicated.
+
+A preset never holds an API key, token or password. Saving and exporting
+leave out every option a service declares as secret or of a type this
+version does not know (it may be a newer kind of secret), anything kept in the
+system keychain, and any option whose name looks like a credential
+(`api_key`, `token`, `password`, `authorization`, `cookie`, `session`…).
+Applying a preset uses the keys already set in
+[`[services.options]`](#services).
+
+An imported preset is held to more, because applying it uses those keys:
+it keeps only options the installed module declares, and never an address
+(an option of the URL kind, one named like a URL, endpoint, host or server,
+or a value that looks like one). Otherwise a shared file could point a
+service you have a key for at someone else's server. What was left out is
+listed when you import it.
+
+A list left empty leaves that part of the settings alone: a preset without
+`dictionary_enabled` does not touch the dictionaries. Services the preset
+names that are not installed are skipped when it is applied, and listed.
+
+| key | type | default | what it does |
+|---|---|---|---|
+| `name` | string | required | Shown in lists and menus. Unique, ignoring case. |
+| `order` | array of ids | `[]` | Translation services in tab order. Services it does not name keep their place after these. |
+| `enabled` | array of ids | `[]` | The translation services switched on. |
+| `active` | id | `""` | The selected service; empty or not enabled: the first enabled one. |
+| `dictionary_order` | array of ids | `[]` | Dictionary services in order. |
+| `dictionary_enabled` | array of ids | `[]` | The dictionaries in use. |
+| `dictionary_active` | id | `""` | The selected dictionary. |
+| `tts` | id | `""` | The speech service. |
+| `ocr` | id | `""` | The OCR engine ([`[ocr] provider`](#ocr)). |
+| `pair` | language pair | absent | The main window's direction (its two keys `from` and `to`, as in [`[general]`](#general)), when the preset was saved with it. |
+| `options` | table: service id → table | `{}` | Service settings, as in [`[services.options]`](#services), merged over the current values. Never secrets. |
+
+```toml
+[[presets]]
+name = "Work"
+order = ["deepl", "google"]
+enabled = ["deepl", "google"]
+active = "deepl"
+
+[presets.options.deepl]
+formality = "more"
+```
+
+An exported preset is the same table on its own, with a format line first:
+
+```toml
+glossa_preset = 1
+name = "Work"
+enabled = ["deepl", "google"]
+```
+
 ### `[hotkeys]`
 
 | key | type | default | set in | what it does |
@@ -222,6 +284,7 @@ setup, otherwise only listed.
 | `options` | table: service id → table | `{}` | Options → Services, the selected service's settings | Each service's settings, by option key, as its manifest declares them (keys, models, URLs, prompts…). See below. |
 | `seen` | array of ids | `[]` | kept by the program | Every service offered once, so one you switched off stays off. |
 | `ai_endpoints` | array of tables | `[]` | Options → Services → Translation → AI endpoints | Your OpenAI-compatible endpoints; see [`[[services.ai_endpoints]]`](#servicesai_endpoints). |
+| `preset` | string | `""` | Options → Services → Presets, the main window menu, the `next_preset` action | The name of the preset applied last, marked as current in lists. Empty when none was. Changing services by hand afterwards does not clear it. |
 
 Service settings are kept as the service declares them:
 

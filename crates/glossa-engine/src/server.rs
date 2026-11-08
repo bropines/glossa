@@ -295,6 +295,8 @@ fn allowed_methods(path: &str) -> Option<&'static str> {
         "/v1/assets" => Some("GET"),
         p if p.starts_with("/v1/assets/") => Some(if p.matches('/').count() == 3 { "GET" } else { "POST" }),
         "/v1/python" => Some("GET"),
+        "/v1/presets" | "/v1/presets/export" => Some("GET"),
+        p if p.starts_with("/v1/presets/") => Some("POST"),
         "/v1/python/install" | "/v1/python/cancel" => Some("POST"),
         p if p.starts_with("/v1/python/") => Some(if p.matches('/').count() == 3 { "GET" } else { "POST" }),
         _ => None,
@@ -699,7 +701,73 @@ fn route(engine: &Engine, req: &mut Request) -> Reply {
         p if p.starts_with("/v1/assets/") => assets_route(engine, &p["/v1/assets/".len()..], &url),
         "/v1/python" => Reply::json(200, json!(engine.python_status())),
         p if p.starts_with("/v1/python/") => python_route(engine, &p["/v1/python/".len()..]),
+        "/v1/presets" => Reply::json(200, presets_list(engine)),
+        p if p.starts_with("/v1/presets/") => presets_route(engine, req, &p["/v1/presets/".len()..], &url),
         _ => Reply::error(404, format!("no route {path}")),
+    }
+}
+
+/// `GET /v1/presets`: every preset and the current one's name.
+pub fn presets_list(engine: &Engine) -> Value {
+    let presets = engine.presets();
+    let current = presets.iter().find(|p| p.current).map(|p| p.name.clone());
+    json!({ "current": current, "presets": presets })
+}
+
+/// `/v1/presets/…`: export (GET), and apply, next, save, import, rename,
+/// duplicate, delete (POST). Names come in the JSON body or the query.
+fn presets_route(engine: &Engine, req: &mut Request, op: &str, url: &str) -> Reply {
+    if op == "import" {
+        let body = tri!(read_body(req));
+        return match engine.import_preset_text(&String::from_utf8_lossy(&body)) {
+            Ok(report) => Reply::json(200, json!(report)),
+            Err(e) => Reply::from_error(&e),
+        };
+    }
+    let body = tri!(json_body(req));
+    if op == "next" {
+        return match engine.next_preset() {
+            Ok(report) => Reply::json(200, json!(report)),
+            Err(e) => Reply::from_error(&e),
+        };
+    }
+    let Some(name) = field(&body, url, "name").filter(|n| !n.trim().is_empty()) else {
+        return Reply::error(400, "name is required");
+    };
+    if op != "save" && engine.preset(&name).is_none() {
+        return Reply::error(404, format!("no preset called {name:?}"));
+    }
+    let new_name = field(&body, url, "new_name");
+    let result = match op {
+        "export" => {
+            return match engine.export_preset_text(&name) {
+                Ok(text) => Reply::bytes(200, text.into_bytes(), "application/toml; charset=utf-8"),
+                Err(e) => Reply::from_error(&e),
+            }
+        }
+        "apply" => engine.apply_preset(&name).map(|r| json!(r)),
+        "save" => {
+            let with_pair = tri!(bool_param(&body, url, "languages")).unwrap_or(false);
+            engine.save_preset(&name, with_pair).map(|r| json!(r))
+        }
+        "rename" => match new_name {
+            Some(n) => engine.rename_preset(&name, &n).map(|()| json!({ "name": n.trim() })),
+            None => return Reply::error(400, "new_name is required"),
+        },
+        "duplicate" => engine.duplicate_preset(&name, new_name.as_deref()).map(|n| json!({ "name": n })),
+        "delete" => engine.delete_preset(&name).map(|()| json!({ "deleted": name })),
+        other => {
+            return Reply::error(
+                404,
+                format!(
+                    "no presets operation {other:?} (apply, next, save, import, export, rename, duplicate, delete)"
+                ),
+            )
+        }
+    };
+    match result {
+        Ok(v) => Reply::json(200, v),
+        Err(e) => Reply::from_error(&e),
     }
 }
 
@@ -778,6 +846,40 @@ mod tests {
         assert_eq!(get("/v1/python/nope", "GET").0, 404);
         assert_eq!(get("/v1/python/nope/install", "POST").0, 404);
         assert_eq!(get("/v1/python/nope/install", "GET").0, 405);
+        server.stop();
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn presets_need_the_token_and_can_be_saved_applied_and_exported() {
+        let (e, dir) = engine();
+        let server = start(e.clone()).unwrap();
+        let call = |method: &str, path: &str, auth: bool, body: &str| {
+            let auth = if auth { "Authorization: Bearer secret\r\n" } else { "" };
+            request(
+                server.addr,
+                &format!(
+                    "{method} {path} HTTP/1.1\r\nHost: 127.0.0.1\r\n{auth}Content-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                    body.len()
+                ),
+            )
+        };
+        assert_eq!(call("GET", "/v1/presets", false, "").0, 401);
+        assert_eq!(call("POST", "/v1/presets/apply", false, r#"{"name":"Private"}"#).0, 401);
+        let (status, body) = call("GET", "/v1/presets", true, "");
+        assert_eq!(status, 200);
+        assert!(body.contains("\"Everyday\""), "{body}");
+        assert_eq!(call("POST", "/v1/presets/apply", true, r#"{"name":"Private"}"#).0, 200);
+        assert_eq!(e.config().services.preset, "Private");
+        assert_eq!(call("POST", "/v1/presets/apply", true, r#"{"name":"Nope"}"#).0, 404);
+        assert_eq!(call("POST", "/v1/presets/save", true, r#"{"name":"Mine","languages":true}"#).0, 200);
+        let (status, text) = call("GET", "/v1/presets/export?name=Mine", true, "");
+        assert_eq!(status, 200);
+        assert!(text.contains("glossa_preset = 1") && text.contains("name = \"Mine\""), "{text}");
+        assert_eq!(call("GET", "/v1/presets/apply", true, "").0, 405);
+        let (status, body) = call("POST", "/v1/presets/import", true, &text);
+        assert_eq!(status, 200);
+        assert!(body.contains("Mine (2)"), "{body}");
         server.stop();
         std::fs::remove_dir_all(&dir).ok();
     }

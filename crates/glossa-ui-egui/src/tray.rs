@@ -222,6 +222,7 @@ fn build_menu(locale: &Locale) -> (Menu, CheckMenuItem, CheckMenuItem) {
         &item("dictionary", "tray.dictionary"),
         &item("history", "tray.history"),
         &item("keyboard", "tray.keyboard"),
+        &action(Action::NextPreset, "tray.next_preset"),
         &PredefinedMenuItem::separator(),
         &mouse,
         &hotkeys,
