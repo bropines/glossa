@@ -296,6 +296,8 @@ fn allowed_methods(path: &str) -> Option<&'static str> {
         "/v1/detect" | "/v1/ocr" | "/v1/speak" | "/translate" => Some("POST"),
         p if p.starts_with("/v1/action/") => Some("GET, POST"),
         "/v1/assets" => Some("GET"),
+        "/v1/panels" => Some("GET"),
+        "/v1/panel" => Some("POST"),
         p if p.starts_with("/v1/assets/") => Some(if p.matches('/').count() == 3 { "GET" } else { "POST" }),
         "/v1/python" => Some("GET"),
         "/v1/presets" | "/v1/presets/export" => Some("GET"),
@@ -738,6 +740,24 @@ fn route(engine: &Engine, req: &mut Request) -> Reply {
             Ok(b) => pot_action(engine, Action::ShowPopup, Some(String::from_utf8_lossy(&b).into_owned())),
             Err(r) => r,
         },
+        "/v1/panels" => Reply::json(200, json!(engine.panels())),
+        "/v1/panel" => {
+            // `?id=module/panel`, or `{"id": "module/panel"}` in the body.
+            let id = query_param(&url, "id").or_else(|| {
+                read_body(req)
+                    .ok()
+                    .and_then(|b| serde_json::from_slice::<serde_json::Value>(&b).ok())
+                    .and_then(|v| v.get("id").and_then(|i| i.as_str()).map(str::to_owned))
+            });
+            let Some(id) = id else { return Reply::error(400, "name the panel: ?id=MODULE/PANEL") };
+            match crate::PanelId::parse(&id).and_then(|p| engine.panel_page(&p).map(|_| p)) {
+                Ok(p) => {
+                    engine.request_action(Action::OpenPanel, Some(p.to_string()));
+                    Reply::json(202, json!({ "accepted": "open_panel", "panel": p.to_string() }))
+                }
+                Err(e) => Reply::error(404, e.to_string()),
+            }
+        }
         "/v1/assets" => Reply::json(200, json!(engine.modules_with_assets())),
         p if p.starts_with("/v1/assets/") => assets_route(engine, &p["/v1/assets/".len()..], &url),
         "/v1/python" => Reply::json(200, json!(engine.python_status())),
@@ -890,6 +910,11 @@ mod tests {
         };
         assert_eq!(get("/v1/assets", "GET"), (200, "[]".into()));
         assert_eq!(get("/v1/assets/nope", "GET").0, 404);
+        assert_eq!(get("/v1/panels", "GET"), (200, "[]".into()));
+        assert_eq!(get("/v1/panel?id=nope/main", "POST").0, 404);
+        assert_eq!(get("/v1/panel?id=nonsense", "POST").0, 404);
+        assert_eq!(get("/v1/panel", "POST").0, 400);
+        assert_eq!(get("/v1/panel", "GET").0, 405);
         assert_eq!(get("/v1/assets/nope/download", "POST").0, 404);
         assert_eq!(get("/v1/assets/nope/download", "GET").0, 405);
         assert_eq!(get("/v1/assets/nope/teleport", "POST").0, 404);
