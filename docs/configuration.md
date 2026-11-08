@@ -581,7 +581,7 @@ Set in *Options → Modules*, except `disabled`. See
 | `call_timeout_ms` | integer | `30000` | Time limit for one call into a module, 1000–600 000 ms. |
 | `disabled` | array of ids | `[]` | Module ids not to load. File only. |
 | `auto_download_assets` | bool | `false` | Download the files a module declares (models, dictionaries), and the managed Python and packages a Python module needs, on its first use without asking. Off, a module missing them fails with a message and its settings offer the download. See [modules/README.md](modules/README.md#assets). |
-| `trust_initialised` | bool | `false` | Written by the program once it has granted the modules installed before approvals existed what they declared then (see below). A settings file without it starts that one-time migration. File only. |
+| `trust_initialised` | bool | `false` | Written by the program once it has granted the modules installed before approvals existed what they declared then (see below). A settings file without it starts that one-time migration, except a broken one set aside for the defaults: then every hand-installed module asks again. File only. |
 
 #### `[modules.granted.<id>]`
 
@@ -603,6 +603,8 @@ approval.
 | `assets` | array of strings | Each file it may download: name, size, hosts and SHA-256. |
 | `packages` | array of strings | Python requirement lines, and `index <url>`. |
 | `actions` | array of strings | Its action ids. |
+| `extra` | array of strings | Permission lines other features contribute (panels, tray entries, hotkeys); left out when empty. |
+| `dir` | string | The module's folder, canonical. Another folder claiming the id waits for its own approval. Empty applies to the id in any folder. |
 
 ```toml
 [modules.granted.my-translator]

@@ -440,7 +440,11 @@ the program uses, runs the cases in its `tests/*.toml` (or `*.json`) with
 recorded HTTP answers, and checks every answer against the module
 protocol. `module check` does the first step only and runs no code. A
 `DIR` without a `module.toml` is searched for modules below it. Neither
-needs a data folder or reads `config.toml`. The fixture format and every
+needs a data folder or reads `config.toml`, and neither asks for
+[approval](modules/README.md#permissions-and-trust): `module test` loads and
+runs the module with every permission it declares, which is the reason to
+point it only at a folder you mean to run (the module editor's *Test*, by
+contrast, refuses a module that waits for approval). The fixture format and every
 check are described in [modules/testing.md](modules/testing.md).
 
 | option | default | meaning |

@@ -2724,6 +2724,9 @@ fn trust_lines(
     if !r.actions.is_empty() {
         out.push((app.locale.fmt("options.modules.trust.actions", &r.actions.join(", ")), !new.actions.is_empty()));
     }
+    for e in &r.extra {
+        out.push((app.locale.fmt("options.modules.trust.extra", e), new.extra.contains(e)));
+    }
     out
 }
 
@@ -2783,18 +2786,22 @@ fn module_editor_group(app: &mut GlossaApp, ui: &mut egui::Ui, st: &mut OptionsS
                         (None, false) => look.weak_text(),
                     };
                     ui.label(RichText::new(kind).small().color(colour)).on_hover_text(tip);
-                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| match &m.source {
-                        ModuleSource::User(dir) => {
-                            if ui.small_button(app.t("options.modules.edit")).clicked() {
-                                target = Some(Target::Dir(dir.clone()));
-                            }
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        // A waiting module is approved above first: the
+                        // editor's saves approve what they write.
+                        let key = match &m.source {
+                            ModuleSource::User(_) => "options.modules.edit",
+                            ModuleSource::Installed(_) | ModuleSource::Bundled => "options.modules.copy_edit",
+                            ModuleSource::Builtin => return,
+                        };
+                        let button = ui.add_enabled(!waiting, egui::Button::new(app.t(key)).small());
+                        let button = button.on_disabled_hover_text(app.t("options.modules.trust.edit_first"));
+                        if button.clicked() {
+                            target = Some(match &m.source {
+                                ModuleSource::User(dir) => Target::Dir(dir.clone()),
+                                _ => Target::Copy(m.id.clone()),
+                            });
                         }
-                        ModuleSource::Installed(_) | ModuleSource::Bundled => {
-                            if ui.small_button(app.t("options.modules.copy_edit")).clicked() {
-                                target = Some(Target::Copy(m.id.clone()));
-                            }
-                        }
-                        ModuleSource::Builtin => {}
                     });
                 });
             }

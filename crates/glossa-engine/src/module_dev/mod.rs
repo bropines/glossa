@@ -494,7 +494,7 @@ impl Engine {
         let dir = user_dir.join(&id);
         write_template(template, &dir, &id, name)?;
         // Its author is the user, here and now.
-        self.approve_dir(&dir);
+        self.approve_authored(&dir);
         // Loading it is a convenience: a template that cannot load here
         // (no JavaScript in this build) is still there to edit.
         if let Err(e) = self.reload_module(&dir) {
@@ -540,7 +540,7 @@ impl Engine {
         // Copied on purpose to be edited: approved, unless the original
         // itself waits for approval (copying must not launder that).
         if !self.registry().entry(id).is_some_and(|e| e.pending) {
-            self.approve_dir(&target);
+            self.approve_authored(&target);
         }
         self.reload_module(&target)?;
         Ok(target)
@@ -639,6 +639,27 @@ impl Engine {
     /// recorded answers) the way `glossa-cli module test` does, with this
     /// program's interpreters, call budget and downloaded module files.
     pub fn test_module(&self, dir: &Path) -> ModuleReport {
+        // The harness loads the module with every permission, starts its
+        // program, installs its packages and downloads its files: not for a
+        // module the user has not approved. (`glossa-cli module test` is
+        // the developer's own explicit choice and stays allowed.)
+        if self.waits_for_approval(dir) {
+            let id = Manifest::load(&dir.join("module.toml")).map(|m| m.module.id).unwrap_or_default();
+            return ModuleReport {
+                dir: dir.to_owned(),
+                id: id.clone(),
+                runtime: String::new(),
+                status: glossa_module_test::Status::Fail,
+                skipped: None,
+                size_bytes: 0,
+                load_ms: None,
+                findings: vec![glossa_module_test::Finding {
+                    severity: glossa_module_test::Severity::Error,
+                    message: Error::NeedsApproval { module: id }.to_string(),
+                }],
+                cases: Vec::new(),
+            };
+        }
         let cfg = self.config();
         let settings = glossa_module_test::Settings {
             timeout: std::time::Duration::from_millis(cfg.modules.call_timeout_ms),

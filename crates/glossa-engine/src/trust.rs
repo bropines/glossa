@@ -11,7 +11,7 @@ use std::sync::Arc;
 
 use glossa_core::config::{Config, ModuleGrant};
 use glossa_core::{Error, Result};
-use glossa_modules::trust::{TrustPolicy, TrustRequest};
+use glossa_modules::trust::{canonical, TrustPolicy, TrustRequest};
 use glossa_modules::{Manifest, Origin};
 use serde::Serialize;
 
@@ -43,21 +43,23 @@ pub struct ModuleTrust {
 impl Engine {
     /// How the registry decides which modules may run under `cfg`.
     pub(crate) fn trust_policy(&self, cfg: &Config) -> TrustPolicy {
-        let user = self.inner.paths.user_module_dir();
-        let mut trusted_dirs: Vec<PathBuf> = self
-            .inner
-            .paths
-            .module_dirs()
+        let paths = &self.inner.paths;
+        let user = canonical(&paths.user_module_dir());
+        let extra: Vec<PathBuf> = cfg.modules.dirs.iter().map(|d| canonical(d)).collect();
+        // Only folders an installer writes to count as shipped; the user's
+        // own folders never do, even where the two coincide.
+        let trusted_dirs = paths
+            .shipped_module_dirs()
             .into_iter()
-            .filter(|d| *d != user && !cfg.modules.dirs.contains(d))
+            .filter(|d| d.is_dir())
+            .map(|d| canonical(&d))
+            .filter(|d| *d != user && !extra.contains(d))
             .collect();
-        if let Some(classic) = cfg.classic.services_dir() {
-            trusted_dirs.push(classic);
-        }
+        let trusted_script_dirs = cfg.classic.services_dir().into_iter().collect();
         // Before the migration has run, everything loads as it did, so the
         // migration can record what each module declares.
         let granted = cfg.modules.trust_initialised.then(|| Arc::new(cfg.modules.granted.clone()));
-        TrustPolicy { granted, trusted_dirs }
+        TrustPolicy { granted, trusted_dirs, trusted_script_dirs }
     }
 
     /// The first time this version runs with a settings file: grant every
@@ -72,8 +74,8 @@ impl Engine {
                 return;
             }
             for e in registry.entries() {
-                if let (Some(request), false) = (&e.trust, e.pending) {
-                    cfg.modules.granted.entry(e.info().id.clone()).or_insert_with(|| request.to_grant());
+                if let (Some(request), false, Origin::Module { dir, .. }) = (&e.trust, e.pending, &e.origin) {
+                    cfg.modules.granted.entry(e.info().id.clone()).or_insert_with(|| request.to_grant(dir));
                 }
             }
             cfg.modules.trust_initialised = true;
@@ -85,12 +87,15 @@ impl Engine {
         }
     }
 
-    /// Every module loaded that needs approval, approved or not.
+    /// Every module loaded that needs approval, approved or not, with those
+    /// held back because a trusted provider has their id.
     pub fn module_trust(&self) -> Vec<ModuleTrust> {
         let cfg = self.inner.config.read().modules.granted.clone();
-        self.registry()
+        let registry = self.registry();
+        registry
             .entries()
             .iter()
+            .chain(registry.held())
             .filter_map(|e| {
                 let request = e.trust.as_deref()?.clone();
                 let grant = cfg.get(&e.info().id);
@@ -121,7 +126,7 @@ impl Engine {
     /// shown), so a manifest changed in the meantime is not approved
     /// unseen.
     pub fn approve_module(&self, id: &str, hash: Option<&str>) -> Result<()> {
-        let request = self.request_of(id)?;
+        let (request, dir) = self.request_of(id)?;
         if let Some(h) = hash.filter(|h| !h.trim().is_empty()) {
             if h.trim() != request.hash() {
                 return Err(Error::Config(format!(
@@ -130,7 +135,7 @@ impl Engine {
             }
         }
         self.update_config(|c| {
-            c.modules.granted.insert(id.to_owned(), request.to_grant());
+            c.modules.granted.insert(id.to_owned(), request.to_grant(&dir));
         })
     }
 
@@ -157,14 +162,38 @@ impl Engine {
         })
     }
 
-    fn request_of(&self, id: &str) -> Result<TrustRequest> {
+    /// What module `id` asks for and its folder. A module waiting for
+    /// approval comes before an approved one with the same id: that is the
+    /// one being asked about.
+    fn request_of(&self, id: &str) -> Result<(TrustRequest, PathBuf)> {
         let registry = self.registry();
-        let entry = registry.entry(id).ok_or_else(|| Error::NoSuchModule(id.to_owned()))?;
-        entry
-            .trust
-            .as_deref()
-            .cloned()
+        let mut found = registry.held().iter().chain(registry.entries()).filter(|e| e.info().id == id).peekable();
+        if found.peek().is_none() {
+            return Err(Error::NoSuchModule(id.to_owned()));
+        }
+        found
+            .find_map(|e| match (&e.trust, &e.origin) {
+                (Some(r), Origin::Module { dir, .. }) => Some(((**r).clone(), dir.clone())),
+                _ => None,
+            })
             .ok_or_else(|| Error::Config(format!("{id} comes with Glossa and needs no approval")))
+    }
+
+    /// Whether the module in `dir` would wait for approval if loaded now
+    /// (it is waiting, or its manifest asks for more than it was granted).
+    pub fn waits_for_approval(&self, dir: &Path) -> bool {
+        if self.waits_for_approval_listed(dir) {
+            return true;
+        }
+        let policy = self.trust_policy(&self.config());
+        if policy.is_trusted(dir) {
+            return false;
+        }
+        match Manifest::load(&dir.join("module.toml")) {
+            Ok(m) => !policy.allows(&m.module.id, dir, &TrustRequest::for_manifest(&m, dir)),
+            // A script without a manifest: approved only if listed so.
+            Err(_) => dir.join("Service.js").is_file() || dir.join("info.json").is_file(),
+        }
     }
 
     /// Approve what the module in `dir` declares without reloading
@@ -177,7 +206,7 @@ impl Engine {
             return;
         }
         let Ok(manifest) = Manifest::load(&dir.join("module.toml")) else { return };
-        let grant: ModuleGrant = TrustRequest::for_manifest(&manifest, dir).to_grant();
+        let grant: ModuleGrant = TrustRequest::for_manifest(&manifest, dir).to_grant(dir);
         if cfg.modules.granted.get(&manifest.module.id) == Some(&grant) {
             return;
         }
@@ -191,11 +220,40 @@ impl Engine {
         }
     }
 
-    /// [`Engine::reload_module`] for the module editor: the author's save
-    /// approves what the module now declares.
-    pub fn reload_module_approved(&self, dir: &Path) -> Result<crate::module_dev::ReloadOutcome> {
+    /// Remember that the user created or copied the module in `dir` in the
+    /// editor, and approve it: its saves approve it from now on.
+    pub(crate) fn approve_authored(&self, dir: &Path) {
+        self.inner.authored.lock().insert(canonical(dir));
         self.approve_dir(dir);
+    }
+
+    /// [`Engine::reload_module`] for the module editor. A save approves
+    /// what the module now declares when the user is its author here (it
+    /// was created or copied in the editor in this session) or had already
+    /// approved it; a module waiting for approval stays waiting, so opening
+    /// someone else's module in the editor and saving it approves nothing.
+    pub fn reload_module_approved(&self, dir: &Path) -> Result<crate::module_dev::ReloadOutcome> {
+        let authored = self.inner.authored.lock().contains(&canonical(dir));
+        let approved = !self.waits_for_approval_listed(dir)
+            && self.registry().entries().iter().any(|e| {
+                e.trust.is_some()
+                    && !e.pending
+                    && matches!(&e.origin, Origin::Module { dir: d, .. } if canonical(d) == canonical(dir))
+            });
+        if authored || approved {
+            self.approve_dir(dir);
+        }
         self.reload_module(dir)
+    }
+
+    /// Whether the module loaded from `dir` is listed as waiting.
+    fn waits_for_approval_listed(&self, dir: &Path) -> bool {
+        let registry = self.registry();
+        registry
+            .entries()
+            .iter()
+            .chain(registry.held())
+            .any(|e| e.pending && matches!(&e.origin, Origin::Module { dir: d, .. } if canonical(d) == canonical(dir)))
     }
 }
 
@@ -323,6 +381,66 @@ mod tests {
         let id = dir.file_name().unwrap().to_string_lossy().into_owned();
         assert!(e.pending_modules().is_empty(), "{:?}", e.pending_modules());
         assert!(e.config().modules.granted.contains_key(&id));
+
+        // The author's saves approve what the module now declares.
+        let toml = std::fs::read_to_string(dir.join("module.toml")).unwrap();
+        let wider = toml.replace("[permissions]\nnetwork = [", "[permissions]\nnetwork = [\"more.test\", ");
+        assert_ne!(toml, wider, "the template declares hosts");
+        std::fs::write(dir.join("module.toml"), wider).unwrap();
+        e.reload_module_approved(&dir).unwrap();
+        assert!(e.pending_modules().is_empty());
+        assert!(e.config().modules.granted[&id].network.contains(&"more.test".to_owned()));
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn opening_a_waiting_module_in_the_editor_approves_nothing() {
+        let (root, paths) = home("editor-waiting");
+        let user = paths.user_module_dir();
+        module(&user, "foreign", "\"api.test\"");
+        let e = Engine::with_config(paths, initialised()).unwrap();
+        let dir = user.join("foreign");
+        assert!(e.waits_for_approval(&dir));
+        e.reload_module_approved(&dir).unwrap();
+        assert_eq!(e.pending_modules().len(), 1, "a save does not approve someone else's module");
+        assert!(e.config().modules.granted.is_empty());
+
+        // Nor do the editor's tests run it.
+        let report = e.test_module(&dir);
+        assert_eq!(report.status, glossa_module_test::Status::Fail);
+        assert!(report.findings[0].message.contains("waiting for your approval"), "{:?}", report.findings);
+
+        // Once approved, its saves keep it approved as it changes.
+        e.approve_module("foreign", None).unwrap();
+        module(&user, "foreign", "\"api.test\", \"more.test\"");
+        e.reload_module_approved(&dir).unwrap();
+        assert!(e.pending_modules().is_empty());
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn only_fixed_folders_count_as_shipped() {
+        let (root, paths) = home("shipped");
+        // `<exe>/../share/glossa/modules` is a module folder, but anyone may
+        // be able to write there (`C:\share\…`, `Downloads\share\…`).
+        module(&root.join("share").join("glossa").join("modules"), "near", "\"api.test\"");
+        module(&root.join("exe").join("modules"), "beside", "\"api.test\"");
+        let e = Engine::with_config(paths, initialised()).unwrap();
+        let waiting: Vec<_> = e.pending_modules().into_iter().map(|m| m.id).collect();
+        assert_eq!(waiting, ["near"]);
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn a_recovered_settings_file_does_not_approve_everything() {
+        let (root, paths) = home("recovered");
+        module(&paths.user_module_dir(), "declined", "\"api.test\"");
+        std::fs::create_dir_all(paths.config_file().parent().unwrap()).unwrap();
+        std::fs::write(paths.config_file(), "this is [not toml").unwrap();
+        let e = Engine::start(paths.clone()).unwrap();
+        assert!(!e.startup_warnings().is_empty(), "the file was set aside");
+        assert_eq!(e.pending_modules().len(), 1, "waits instead of being granted by the migration");
+        assert!(e.config().modules.granted.is_empty());
         std::fs::remove_dir_all(&root).ok();
     }
 }

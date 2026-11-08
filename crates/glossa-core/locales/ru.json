@@ -651,6 +651,8 @@
     "options.modules.trust.packages": "Устанавливает пакеты Python с %s: %s",
     "options.modules.trust.actions": "Есть действия (кнопки): %s",
     "options.modules.trust.approve": "Одобрить",
+    "options.modules.trust.edit_first": "Сначала одобрите этот модуль вверху этой страницы.",
+    "options.modules.trust.extra": "Также: %s",
     "options.modules.trust.decline": "Отклонить",
     "options.modules.trust.decline_tip": "Выключить модуль. Если включить его снова, Glossa спросит ещё раз.",
     "editor.title": "Редактор модулей",

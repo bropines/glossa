@@ -134,6 +134,10 @@ impl LoadReport {
 #[derive(Default)]
 pub struct Registry {
     entries: Vec<Entry>,
+    /// Modules waiting for approval whose id an approved or trusted
+    /// provider already has: held back so they cannot take its place (a
+    /// download claiming a bundled module's id), but kept for approving.
+    held: Vec<Entry>,
 }
 
 impl Registry {
@@ -171,7 +175,13 @@ impl Registry {
     pub fn insert(&mut self, mut entry: Entry) {
         entry.provider = crate::provider::Guarded::wrap(entry.provider);
         let id = entry.info().id.clone();
+        self.held.retain(|h| !(h.info().id == id && same_origin(h, &entry)));
         if let Some(existing) = self.entries.iter_mut().find(|e| e.info().id == id) {
+            if entry.pending && !existing.pending && !same_origin(existing, &entry) {
+                tracing::info!(%id, "a module waiting for approval does not replace the provider with its id");
+                self.held.push(entry);
+                return;
+            }
             tracing::debug!(%id, "module overrides an earlier provider with the same id");
             existing.provider.suspend();
             *existing = entry;
@@ -182,6 +192,13 @@ impl Registry {
 
     pub fn entries(&self) -> &[Entry] {
         &self.entries
+    }
+
+    /// Modules waiting for approval held back because another provider has
+    /// their id; see [`Registry::insert`]. Not callable, listed only for
+    /// approving.
+    pub fn held(&self) -> &[Entry] {
+        &self.held
     }
 
     pub fn get(&self, id: &str) -> Option<Arc<dyn Provider>> {
@@ -203,7 +220,7 @@ impl Registry {
     /// another id (the module's id was edited) is dropped. Displaced
     /// providers are suspended, so a process module's old process stops.
     pub fn with_replaced(&self, entry: Entry) -> Registry {
-        let mut next = Registry { entries: self.entries.clone() };
+        let mut next = Registry { entries: self.entries.clone(), held: self.held.clone() };
         if let Origin::Module { dir, .. } = &entry.origin {
             let id = entry.info().id.clone();
             next.entries.retain(|e| {
@@ -246,8 +263,7 @@ impl Registry {
         let mut items: Vec<PathBuf> = read.flatten().map(|e| e.path()).collect();
         items.sort();
         for path in items {
-            let gate = !ctx.trust.is_trusted(&path);
-            match self.load_one(&path, ctx, gate) {
+            match self.load_one(&path, ctx, &path) {
                 Ok(Some(entry)) => {
                     let id = entry.info().id.clone();
                     if ctx.disabled.contains(&id) {
@@ -275,7 +291,7 @@ impl Registry {
     /// same loading code as the program. The provider comes back behind the
     /// usual panic barrier.
     pub fn load_module(path: &Path, ctx: &RuntimeContext) -> Result<Entry, String> {
-        match Registry::new().load_one(path, ctx, !ctx.trust.is_trusted(path)) {
+        match Registry::new().load_one(path, ctx, path) {
             Ok(Some(mut entry)) => {
                 entry.provider = crate::provider::Guarded::wrap(entry.provider);
                 Ok(entry)
@@ -287,13 +303,14 @@ impl Registry {
         }
     }
 
-    /// `gate`: the module needs the user's approval to run (it is not in a
-    /// trusted folder); see [`crate::trust`].
-    fn load_one(&self, path: &Path, ctx: &RuntimeContext, gate: bool) -> Result<Option<Entry>, Skip> {
+    /// `at`: where the module sits in its modules folder (the archive for a
+    /// `.potext`, whose unpacked copy `path` then is), which decides
+    /// whether it needs the user's approval; see [`crate::trust`].
+    fn load_one(&self, path: &Path, ctx: &RuntimeContext, at: &Path) -> Result<Option<Entry>, Skip> {
         if path.is_file() {
             if path.extension().is_some_and(|e| e.eq_ignore_ascii_case("potext")) {
                 let unpacked = runtime::pot::unpack(path, &ctx.cache_dir).map_err(Skip::Failed)?;
-                return self.load_one(&unpacked, ctx, gate);
+                return self.load_one(&unpacked, ctx, at);
             }
             return Ok(None);
         }
@@ -307,9 +324,10 @@ impl Registry {
             let version = manifest.module.version.clone();
             let runtime = manifest.module.runtime;
             let origin = Origin::Module { dir: path.to_owned(), runtime, version };
+            let gate = !ctx.trust.is_trusted(at);
             let trust = gate.then(|| Arc::new(TrustRequest::for_manifest(&manifest, path)));
             if let Some(request) = &trust {
-                if !ctx.trust.allows(&manifest.module.id, request) {
+                if !ctx.trust.allows(&manifest.module.id, path, request) {
                     // Decided from the manifest alone: no runtime starts, no
                     // environment is made, nothing is downloaded.
                     tracing::info!(module = %manifest.module.id, "module waits for the user's approval");
@@ -350,16 +368,29 @@ impl Registry {
             }
             let provider = runtime_js_qtranslate(path, ctx)?;
             let origin = Origin::Module { dir: path.to_owned(), runtime: Runtime::Qtranslate, version: String::new() };
+            // A classic installation's own scripts are trusted, not
+            // whatever else sits in its folder.
+            let gate = !ctx.trust.is_trusted_script(at);
             return Ok(Some(script_entry(provider, origin, Runtime::Qtranslate, ctx, gate)));
         }
 
         if path.join("info.json").is_file() && path.join("main.js").is_file() {
             let provider = runtime_js_pot(path, ctx)?;
             let origin = Origin::Module { dir: path.to_owned(), runtime: Runtime::Pot, version: String::new() };
+            let gate = !ctx.trust.is_trusted(at);
             return Ok(Some(script_entry(provider, origin, Runtime::Pot, ctx, gate)));
         }
 
         Ok(None)
+    }
+}
+
+/// Whether two entries are the same module: compiled in, or loaded from the
+/// same folder.
+fn same_origin(a: &Entry, b: &Entry) -> bool {
+    match (&a.origin, &b.origin) {
+        (Origin::Module { dir: x, .. }, Origin::Module { dir: y, .. }) => x == y,
+        (x, y) => x == y,
     }
 }
 
@@ -374,7 +405,11 @@ fn script_entry(
     gate: bool,
 ) -> Entry {
     let trust = gate.then(|| Arc::new(TrustRequest::unrestricted_script(runtime)));
-    let pending = trust.as_ref().is_some_and(|r| !ctx.trust.allows(&provider.info().id, r));
+    let dir = match &origin {
+        Origin::Module { dir, .. } => dir.as_path(),
+        _ => Path::new(""),
+    };
+    let pending = trust.as_ref().is_some_and(|r| !ctx.trust.allows(&provider.info().id, dir, r));
     let provider: Arc<dyn Provider> = if pending { Arc::new(PendingApproval::wrapping(provider)) } else { provider };
     Entry { provider, origin, assets: None, python: None, trust, pending }
 }
@@ -636,6 +671,7 @@ size = 11
         let policy = |granted: BTreeMap<String, glossa_core::config::ModuleGrant>| TrustPolicy {
             granted: Some(Arc::new(granted)),
             trusted_dirs: vec![shipped.clone()],
+            trusted_script_dirs: Vec::new(),
         };
         let ctx = RuntimeContext { trust: policy(BTreeMap::new()), ..Default::default() };
         let mut r = Registry::new();
@@ -658,7 +694,7 @@ size = 11
 
         // Approved, it runs.
         let ctx = RuntimeContext {
-            trust: policy(BTreeMap::from([("mine".to_owned(), request.to_grant())])),
+            trust: policy(BTreeMap::from([("mine".to_owned(), request.to_grant(&user.join("mine")))])),
             ..Default::default()
         };
         let mut r = Registry::new();
@@ -668,6 +704,40 @@ size = 11
         let p = mine.provider.clone();
         let out = crate::provider::with_test_host(&http, &Default::default(), |h| p.translate(h, &req)).unwrap();
         assert_eq!(out.text, "ok");
+
+        // Another folder claiming the approved id waits: grants belong to
+        // a folder. A waiting module never takes the place of a trusted
+        // provider with its id; it is held back for approving.
+        let other = root.join("other");
+        for (folder, id) in [("mine-copy", "mine"), ("clash", "shipped-one")] {
+            let m = other.join(folder);
+            std::fs::create_dir_all(&m).unwrap();
+            std::fs::write(
+                m.join("module.toml"),
+                format!(
+                    "capabilities = [\"translate\"]\n[module]\nid = \"{id}\"\nname = \"Impostor\"\nruntime = \"js\"\n"
+                ),
+            )
+            .unwrap();
+            std::fs::write(m.join("main.js"), "function translate(req) { return 'impostor'; }").unwrap();
+        }
+        let mut r = Registry::new();
+        r.load_dirs(&[shipped.clone(), user.clone(), other.clone()], &ctx);
+        assert_eq!(r.entry("shipped-one").unwrap().info().name, "N", "the shipped module stays");
+        assert_eq!(r.entry("mine").unwrap().info().name, "N", "the approved folder stays");
+        let held: Vec<_> = r.held().iter().map(|e| e.info().id.clone()).collect();
+        assert_eq!(held, ["shipped-one", "mine"]);
+        assert!(r.held().iter().all(|e| e.pending));
+
+        // A classic installation's folder trusts its Service.js scripts
+        // only: a module.toml module there is asked about.
+        let ctx = RuntimeContext {
+            trust: TrustPolicy { trusted_script_dirs: vec![other.clone()], ..policy(BTreeMap::new()) },
+            ..Default::default()
+        };
+        let mut r = Registry::new();
+        r.load_dir(&other, &ctx);
+        assert!(r.entry("mine").unwrap().pending);
         std::fs::remove_dir_all(&root).ok();
     }
 }

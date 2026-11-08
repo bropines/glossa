@@ -677,6 +677,9 @@ fn describe_request(r: &serde_json::Value) -> Vec<String> {
     if !actions.is_empty() {
         out.push(format!("has actions: {}", actions.join(", ")));
     }
+    for e in list("extra") {
+        out.push(format!("also: {e}"));
+    }
     out
 }
 

@@ -725,20 +725,50 @@ the approved set. When an update changes `module.toml`:
 Classic QTranslate scripts and pot-app plugins in your own folders are
 asked about too, as "can reach any website", since they always had that.
 
+An approval belongs to the module's id **and its folder**: another folder
+whose `module.toml` claims an approved id waits for its own approval. A
+module that waits never takes the place of a provider with the same id
+that runs (a bundled service, or an approved module in another folder):
+that one keeps working, and the newcomer is listed for approval only.
+
 No approval is needed for:
 
-- the modules compiled into Glossa and the folders shipped beside the
-  program (`<folder of glossa.exe>/modules`, `<prefix>/share/glossa/modules`);
-- the services of a classic QTranslate installation you pointed Glossa at;
-- modules you create in the module editor or copy there with *Copy and edit*
-  (you are their author), and every save in the editor: the editor approves
-  what the module declares when it reloads it. A copy of a module that is
-  itself still waiting is not approved by copying.
+- the modules compiled into Glossa;
+- the folders an installer writes: `<folder of glossa.exe>/modules`,
+  `/usr/share/glossa/modules` and `/usr/local/share/glossa/modules` on
+  Linux, the app bundle's `Contents/Resources/modules` on macOS (and, in
+  debug builds only, a development checkout's `modules/`). Other folders
+  Glossa loads modules from, such as `<prefix>/share/glossa/modules` worked
+  out from where the program sits, are asked about like your own;
+- the `Service.js` scripts of a classic QTranslate installation you pointed
+  Glossa at. A `module.toml` module in that folder is asked about;
+- modules you create in the module editor, or copy there with *Copy and
+  edit*, in this session: you are their author, and the editor's saves keep
+  them approved as you change them. Saves also keep an approved module
+  approved. A module that waits must be approved before *Edit* or *Copy and
+  edit* is offered, its saves approve nothing, and the editor refuses to run
+  its tests. A copy of a module that is itself still waiting is not
+  approved by copying.
+
+`glossa-cli module test DIR` loads a module with every permission and runs
+it, approved or not: running it on a folder is the developer's explicit
+choice.
+
+**What is checked.** Trust covers what `module.toml` (and a Python module's
+`requirements.txt` or `pyproject.toml`) declares, nothing more. The scripts,
+programs and libraries themselves are not hashed: an update that changes
+`main.js` or the executable but asks for nothing new keeps running. The
+declared limits still hold for JavaScript (no files, only the approved
+hosts); a program or library can do anything you can, which is why the
+prompt says so.
 
 **Upgrading.** The first time a version with approvals runs, it grants every
 module already installed what it declares at that moment, and records
 `[modules] trust_initialised = true`, so nothing that worked stops working.
-Only modules added or widened afterwards ask.
+Only modules added or widened afterwards ask. When a broken `config.toml`
+is set aside and the defaults are used, this migration does not run: the
+approvals went with the old file, and every hand-installed module asks
+again, so nothing that was waiting or declined is approved by accident.
 
 From the command line, `glossa-cli module pending` lists what waits and
 what each asks for, and `glossa-cli module approve|revoke|decline ID`

@@ -300,6 +300,9 @@ struct Inner {
     /// draw it every frame; emptied whenever something may have changed it
     /// (see [`Engine::emit`]).
     python_cache: Mutex<HashMap<String, python::ModulePython>>,
+    /// Module folders the user created or copied in the module editor in
+    /// this session, canonical: the editor's saves approve these.
+    authored: Mutex<std::collections::HashSet<PathBuf>>,
 }
 
 /// Something that went wrong at start without stopping it
@@ -330,7 +333,13 @@ impl Engine {
     /// cannot be parsed does not stop the start: it is moved aside, the
     /// defaults are used, and [`Engine::startup_warnings`] says so.
     pub fn start(paths: Paths) -> Result<Engine> {
-        let (config, recovered) = Config::load_or_recover(&paths.config_file())?;
+        let (mut config, recovered) = Config::load_or_recover(&paths.config_file())?;
+        if recovered.is_some() {
+            // The approvals went with the broken file. Granting everything
+            // installed (the upgrade migration) would approve what was
+            // waiting or declined, so every hand-installed module asks again.
+            config.modules.trust_initialised = true;
+        }
         let engine = Engine::with_config(paths, config)?;
         if let Some(r) = recovered {
             engine.inner.startup_warnings.lock().push(StartupWarning {
@@ -408,6 +417,7 @@ impl Engine {
             asset_jobs: Mutex::new(HashMap::new()),
             python_jobs: Mutex::new(HashMap::new()),
             python_cache: Mutex::new(HashMap::new()),
+            authored: Mutex::new(Default::default()),
         };
         let engine = Engine { inner: Arc::new(inner) };
         engine.reload_modules();

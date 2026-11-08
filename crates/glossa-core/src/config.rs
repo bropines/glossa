@@ -1713,6 +1713,14 @@ pub struct ModuleGrant {
     pub packages: Vec<String>,
     /// Its actions (buttons), by id.
     pub actions: Vec<String>,
+    /// Permission lines contributed by other features (panels, tray
+    /// entries, hotkeys), as `glossa_modules::trust` writes them.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub extra: Vec<String>,
+    /// The module's folder, canonical, when approved: another folder
+    /// claiming the same id waits for its own approval. Empty (a grant
+    /// written by hand) applies to the id in any folder.
+    pub dir: String,
 }
 
 impl Default for ModulesConfig {

@@ -79,6 +79,22 @@ pub struct TrustRequest {
     pub packages: Vec<String>,
     /// Action ids.
     pub actions: Vec<String>,
+    /// Permission lines other features contribute (`"panel main"`, `"tray
+    /// Open Acme"`, `"hotkey …"`): the extension point for what later
+    /// manifest sections add, without changing the hash of modules that do
+    /// not use them. See [`extra_lines`].
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub extra: Vec<String>,
+}
+
+/// The permission lines a manifest contributes beyond the fixed kinds
+/// above: each feature that gives a module a new way to reach the user or
+/// the system (panels, tray and menu entries, hotkeys) adds its lines here
+/// as `"<kind> <what>"`. They are hashed only when present, so modules
+/// without them keep their hash, and a new line asks again like a new host.
+pub fn extra_lines(manifest: &Manifest) -> Vec<String> {
+    let _ = manifest;
+    Vec::new()
 }
 
 impl TrustRequest {
@@ -130,6 +146,7 @@ impl TrustRequest {
             .filter(|a| a.applies_to(std::env::consts::OS, std::env::consts::ARCH))
             .map(|a| {
                 let mut hosts: Vec<String> = a.url.list().iter().filter_map(|u| url_host(u)).collect();
+                hosts.sort();
                 hosts.dedup();
                 AssetRequest {
                     name: a.name.clone(),
@@ -155,6 +172,7 @@ impl TrustRequest {
             assets,
             packages,
             actions: manifest.actions.iter().map(|a| a.id.clone()).collect(),
+            extra: extra_lines(manifest),
         }
         .normalised()
     }
@@ -170,6 +188,7 @@ impl TrustRequest {
             assets: Vec::new(),
             packages: Vec::new(),
             actions: Vec::new(),
+            extra: Vec::new(),
         }
     }
 
@@ -186,6 +205,8 @@ impl TrustRequest {
         self.packages.dedup();
         self.actions.sort();
         self.actions.dedup();
+        self.extra.sort();
+        self.extra.dedup();
         self
     }
 
@@ -210,11 +231,15 @@ impl TrustRequest {
         for a in &self.actions {
             text.push_str(&format!("action {a}\n"));
         }
+        for e in &self.extra {
+            text.push_str(&format!("extra {e}\n"));
+        }
         hex(&Sha256::digest(text.as_bytes()))
     }
 
-    /// The grant that approves exactly this request.
-    pub fn to_grant(&self) -> ModuleGrant {
+    /// The grant that approves exactly this request for the module in
+    /// `dir` (see [`canonical`]).
+    pub fn to_grant(&self, dir: &Path) -> ModuleGrant {
         ModuleGrant {
             hash: self.hash(),
             runtime: runtime_name(self.runtime).into(),
@@ -223,6 +248,8 @@ impl TrustRequest {
             assets: self.assets.iter().map(AssetRequest::key).collect(),
             packages: self.packages.clone(),
             actions: self.actions.clone(),
+            extra: self.extra.clone(),
+            dir: canonical(dir).to_string_lossy().into_owned(),
         }
     }
 
@@ -239,6 +266,7 @@ impl TrustRequest {
             && self.assets.iter().all(|a| grant.assets.contains(&a.key()))
             && self.packages.iter().all(|p| grant.packages.contains(p))
             && self.actions.iter().all(|a| grant.actions.contains(a))
+            && self.extra.iter().all(|e| grant.extra.contains(e))
     }
 
     /// What this asks for beyond `grant`, for the prompt to point out on an
@@ -254,6 +282,7 @@ impl TrustRequest {
             assets: self.assets.iter().filter(|a| !g.assets.contains(&a.key())).cloned().collect(),
             packages: self.packages.iter().filter(|p| !g.packages.contains(p)).cloned().collect(),
             actions: self.actions.iter().filter(|a| !g.actions.contains(a)).cloned().collect(),
+            extra: self.extra.iter().filter(|e| !g.extra.contains(e)).cloned().collect(),
         }
     }
 }
@@ -284,6 +313,12 @@ pub fn runtime_name(r: Runtime) -> &'static str {
         Runtime::Qtranslate => "qtranslate",
         Runtime::Pot => "pot",
     }
+}
+
+/// `path` with links and `..` resolved, so the same folder compares equal
+/// however it was reached; as given when it does not exist.
+pub fn canonical(path: &Path) -> PathBuf {
+    std::fs::canonicalize(path).unwrap_or_else(|_| path.to_owned())
 }
 
 fn hex(bytes: &[u8]) -> String {
@@ -317,24 +352,43 @@ pub struct TrustPolicy {
     /// grants modules installed before approvals existed.
     pub granted: Option<Arc<BTreeMap<String, ModuleGrant>>>,
     /// Module folders whose modules need no approval: the ones shipped with
-    /// Glossa and a classic installation's services.
+    /// Glossa. Compared canonically.
     pub trusted_dirs: Vec<PathBuf>,
+    /// Folders whose classic `Service.js` scripts need no approval (a
+    /// classic installation the user pointed Glossa at). A module with a
+    /// `module.toml` found there is asked about as anywhere else.
+    pub trusted_script_dirs: Vec<PathBuf>,
 }
 
 impl TrustPolicy {
     /// Whether the module at `path` (a folder or archive inside a modules
-    /// folder) comes from a trusted folder.
+    /// folder) comes from a folder shipped with Glossa.
     pub fn is_trusted(&self, path: &Path) -> bool {
-        path.parent().is_some_and(|p| self.trusted_dirs.iter().any(|d| d == p))
+        in_any(path, &self.trusted_dirs)
     }
 
-    /// Whether module `id` asking for `request` may run.
-    pub fn allows(&self, id: &str, request: &TrustRequest) -> bool {
+    /// Whether the classic script at `path` needs no approval.
+    pub fn is_trusted_script(&self, path: &Path) -> bool {
+        self.is_trusted(path) || in_any(path, &self.trusted_script_dirs)
+    }
+
+    /// Whether module `id` in `dir` asking for `request` may run: its grant
+    /// covers the request and was given to this folder.
+    pub fn allows(&self, id: &str, dir: &Path, request: &TrustRequest) -> bool {
         match &self.granted {
             None => true,
-            Some(g) => g.get(id).is_some_and(|grant| request.within(grant)),
+            Some(g) => g.get(id).is_some_and(|grant| {
+                let same_folder = grant.dir.is_empty() || Path::new(&grant.dir) == canonical(dir);
+                same_folder && request.within(grant)
+            }),
         }
     }
+}
+
+fn in_any(path: &Path, dirs: &[PathBuf]) -> bool {
+    let Some(parent) = path.parent() else { return false };
+    let parent = canonical(parent);
+    dirs.iter().any(|d| canonical(d) == parent)
 }
 
 /// Where a pending module's settings page comes from.
@@ -453,7 +507,8 @@ mod tests {
 
     #[test]
     fn widening_asks_again_and_narrowing_does_not() {
-        let granted = request("[permissions]\nnetwork = [\"api.example.com\", \"*.cdn.example\"]").to_grant();
+        let granted =
+            request("[permissions]\nnetwork = [\"api.example.com\", \"*.cdn.example\"]").to_grant(Path::new("/m"));
         assert!(request("[permissions]\nnetwork = [\"api.example.com\"]").within(&granted), "fewer hosts");
         assert!(request("[permissions]\nnetwork = [\"a.cdn.example\"]").within(&granted), "inside a wildcard");
         assert!(request("").within(&granted), "no network at all");
@@ -461,11 +516,11 @@ mod tests {
         assert!(!request("[permissions]\nnetwork = [\"*\"]").within(&granted), "any website");
         assert!(!request("[permissions]\nnetwork = [\"*.example.com\"]").within(&granted), "a wider wildcard");
 
-        let with_actions = request("[[actions]]\nid = \"test\"\n").to_grant();
+        let with_actions = request("[[actions]]\nid = \"test\"\n").to_grant(Path::new("/m"));
         assert!(!request("[[actions]]\nid = \"test\"\n[[actions]]\nid = \"wipe\"\n").within(&with_actions));
         assert!(request("").within(&with_actions));
 
-        let plain = request("").to_grant();
+        let plain = request("").to_grant(Path::new("/m"));
         let as_python = TrustRequest::for_manifest(
             &Manifest::parse("capabilities = [\"translate\"]\n[module]\nid = \"m\"\nname = \"M\"\nruntime = \"python\"\nrequirements = [\"requests\"]")
                 .unwrap(),
@@ -483,7 +538,7 @@ mod tests {
         };
         let a = "b94d27b9934d3e08a52e52d7da7dabfac484efe37a5380ee9088f7ace2efcde9";
         let b = "a94d27b9934d3e08a52e52d7da7dabfac484efe37a5380ee9088f7ace2efcde9";
-        let granted = request(&asset(a, "dl.test")).to_grant();
+        let granted = request(&asset(a, "dl.test")).to_grant(Path::new("/m"));
         assert!(request(&asset(a, "dl.test")).within(&granted));
         assert!(!request(&asset(b, "dl.test")).within(&granted), "another file");
         let r = request(&asset(b, "dl.test"));
@@ -491,6 +546,29 @@ mod tests {
         assert_eq!(extra.assets.len(), 1);
         assert!(extra.network.is_empty(), "the host was approved before");
         assert_eq!(r.assets[0].hosts, ["dl.test"]);
+
+        // Mirrors are sorted, so reordering them changes nothing.
+        let mirrors = |urls: &str| {
+            request(&format!(
+                "[permissions]\nnetwork = [\"a.test\", \"b.test\"]\n[[assets]]\nname = \"m\"\nurl = [{urls}]\nsha256 = \"{a}\"\nsize = 1\n"
+            ))
+        };
+        let one = mirrors("\"https://b.test/m\", \"https://a.test/m\", \"https://b.test/n\"");
+        let two = mirrors("\"https://a.test/m\", \"https://b.test/m\"");
+        assert_eq!(one.assets[0].hosts, ["a.test", "b.test"]);
+        assert_eq!(one.hash(), two.hash());
+    }
+
+    #[test]
+    fn extra_permission_lines_count_only_when_present() {
+        let plain = request("[permissions]\nnetwork = [\"api.example.com\"]");
+        let mut with_panel = plain.clone();
+        with_panel.extra = vec!["panel main".into()];
+        assert_eq!(plain.hash(), request("[permissions]\nnetwork = [\"api.example.com\"]").hash());
+        assert_ne!(plain.hash(), with_panel.hash());
+        assert!(!with_panel.within(&plain.to_grant(Path::new("/m"))), "a new line asks again");
+        assert!(plain.within(&with_panel.to_grant(Path::new("/m"))), "dropping one does not");
+        assert_eq!(with_panel.beyond(Some(&plain.to_grant(Path::new("/m")))).extra, ["panel main"]);
     }
 
     #[test]
@@ -500,14 +578,18 @@ mod tests {
         let policy = TrustPolicy {
             granted: Some(Arc::new(granted.clone())),
             trusted_dirs: vec![PathBuf::from("/opt/glossa/modules")],
+            trusted_script_dirs: vec![PathBuf::from("/classic/Services")],
         };
-        assert!(!policy.allows("m", &r));
+        assert!(!policy.allows("m", Path::new("/m"), &r));
         assert!(policy.is_trusted(Path::new("/opt/glossa/modules/m")));
         assert!(!policy.is_trusted(Path::new("/home/u/modules/m")));
-        granted.insert("m".to_owned(), r.to_grant());
+        granted.insert("m".to_owned(), r.to_grant(Path::new("/m")));
         let policy = TrustPolicy { granted: Some(Arc::new(granted)), ..policy };
-        assert!(policy.allows("m", &r));
-        assert!(!policy.allows("other", &r), "grants are per module id");
-        assert!(TrustPolicy::default().allows("m", &r), "no policy approves everything");
+        assert!(policy.allows("m", Path::new("/m"), &r));
+        assert!(!policy.allows("other", Path::new("/m"), &r), "grants are per module id");
+        assert!(!policy.allows("m", Path::new("/elsewhere/m"), &r), "and per folder");
+        assert!(policy.is_trusted_script(Path::new("/classic/Services/Bing")));
+        assert!(!policy.is_trusted(Path::new("/classic/Services/acme")), "manifest modules there are asked about");
+        assert!(TrustPolicy::default().allows("m", Path::new("/m"), &r), "no policy approves everything");
     }
 }
