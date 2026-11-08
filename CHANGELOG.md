@@ -161,6 +161,10 @@ the notes of its GitHub release.
   work (waiting for the network does not count). Over a limit, the call
   fails with a message saying which. Large scripts (over 16 KB) are compiled
   once and kept as bytecode.
+- A module whose `[[assets]]` entry has an all-zero `sha256` (a placeholder
+  left for a file not published yet) no longer loads, and `glossa-cli
+  module check` and `module test` report it as an error, so a forgotten
+  placeholder cannot ship.
 
 ### Changed
 

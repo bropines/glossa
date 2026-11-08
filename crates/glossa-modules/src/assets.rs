@@ -145,6 +145,14 @@ impl AssetSpec {
         if self.sha256.len() != 64 || !self.sha256.chars().all(|c| c.is_ascii_hexdigit()) {
             return Err(format!("asset {n}: sha256 must be 64 hex digits"));
         }
+        // Nothing hashes to all zeros: it is a placeholder left for a file
+        // that did not exist yet. Refusing it here stops a manifest from
+        // shipping with one (`module check` and `module test` report it).
+        if self.sha256.bytes().all(|b| b == b'0') {
+            return Err(format!(
+                "asset {n}: sha256 is all zeros, a placeholder; put the SHA-256 of the file at its url here"
+            ));
+        }
         if self.size == 0 {
             return Err(format!("asset {n}: size must be the file's size in bytes"));
         }
@@ -1438,6 +1446,8 @@ mod tests {
             ))
         };
         assert!(parse(&one("\"https://x/\"", "abc", 11, "")).unwrap_err().contains("64 hex"));
+        let placeholder = parse(&one("\"https://x/\"", &"0".repeat(64), 11, "")).unwrap_err();
+        assert!(placeholder.contains("placeholder"), "{placeholder}");
         assert!(parse(&one("\"ftp://x/\"", HELLO_SHA, 11, "")).unwrap_err().contains("http"));
         assert!(parse(&one("\"https://x/\"", HELLO_SHA, 0, "")).unwrap_err().contains("size"));
         assert!(parse(&one("\"https://x/\"", HELLO_SHA, 11, "os = [\"amiga\"]")).unwrap_err().contains("amiga"));

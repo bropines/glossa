@@ -472,7 +472,9 @@ optional = true                      # fetched only when the user picks it
   deleted if it does not match. Afterwards, knowing a file is ready costs a
   file-system check, never a re-hash; *Check files* (or `glossa-cli assets
   verify`) hashes them again. An unpacked archive is checked by its files
-  and their sizes, since the archive itself is not kept.
+  and their sizes, since the archive itself is not kept. A `sha256` of all
+  zeros is taken for a placeholder: the manifest is refused, so fill in the
+  real hash before publishing the module.
 - **Where.** `<local data>/Glossa/models/<module id>/` (`data/models/` in a
   portable copy). `glossa-cli assets status <id>` prints the folder.
 - **Network.** Every asset URL's host must be in `[permissions] network`
