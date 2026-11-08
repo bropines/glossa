@@ -445,18 +445,18 @@ program at once, and a preset never carries a key or token.
 | method | path | does |
 |---|---|---|
 | GET | `/v1/presets` | `{"current": "Private", "presets": [...]}`: each with `name`, `builtin`, `current`, `enabled`, `active`, `dictionary_enabled`, `pair`, and `missing` (services it names that are not installed). |
-| POST | `/v1/presets/apply` | Apply `name`. Answers `{"name", "missing", "dropped_secrets"}`; `missing` lists what was skipped. |
+| POST | `/v1/presets/apply` | Apply `name`. Answers `{"name", "missing", "dropped_secrets", "dropped_options"}`; `missing` lists what was skipped. |
 | POST | `/v1/presets/next` | Apply the preset after the current one. |
 | POST | `/v1/presets/save` | Save the current setup as `name`; `"languages": true` records the language pair too. `dropped_secrets` lists the keys left out. |
 | GET | `/v1/presets/export?name=…` | The preset as a `.toml` file (`application/toml`), secrets excluded. |
-| POST | `/v1/presets/import` | The body is an exported file. Answers the name it was stored under, the services that are not installed, and any credentials dropped from it. |
+| POST | `/v1/presets/import` | The body is an exported file (at most 256 KB). Answers the name it was stored under, the services that are not installed, the credentials dropped from it (`dropped_secrets`), and the options left out (`dropped_options`): addresses, which an import never sets, and settings no installed module declares. |
 | POST | `/v1/presets/rename` | Rename `name` to `new_name`. |
 | POST | `/v1/presets/duplicate` | Copy `name` (a built-in one too) as `new_name`, or `NAME (2)`. |
 | POST | `/v1/presets/delete` | Delete `name`. Built-in presets cannot be deleted (400). |
 
 ```console
 $ curl -s -X POST -H "Authorization: Bearer $T" -d '{"name":"Private"}' http://127.0.0.1:60828/v1/presets/apply
-{"name":"Private","missing":[],"dropped_secrets":[]}
+{"name":"Private","missing":[],"dropped_secrets":[],"dropped_options":[]}
 ```
 
 An unknown preset is a 404; a bad name or a built-in one where only your

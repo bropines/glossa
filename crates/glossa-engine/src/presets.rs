@@ -3,7 +3,13 @@
 //! preset holds).
 //!
 //! The engine decides what counts as a secret here, because only it knows
-//! the modules' declared option kinds; a preset never leaves with one.
+//! the modules' declared option kinds; a preset never leaves with one. An
+//! imported preset is held to more: it keeps only options the installed
+//! module declares, and never an address (a URL, endpoint or host), since
+//! applying it would send the keys already stored for that service there.
+//!
+//! Every change emits [`Event::PresetsChanged`], so a window holding an
+//! unsaved copy of the settings (Options) can take it in.
 
 use std::path::Path;
 use std::sync::Arc;
@@ -44,7 +50,14 @@ pub struct PresetReport {
     /// Credentials left out, as `module.key` (saving, importing a file
     /// someone put a key into).
     pub dropped_secrets: Vec<String>,
+    /// Options an import left out, as `module.key`: addresses (URLs,
+    /// endpoints, hosts), and options no installed module declares.
+    #[serde(default)]
+    pub dropped_options: Vec<String>,
 }
+
+/// The largest preset file read, in bytes. Real ones are a few hundred.
+pub const MAX_PRESET_FILE: u64 = 256 * 1024;
 
 impl Engine {
     /// Built-in presets first, then the user's, in their order.
@@ -108,7 +121,8 @@ impl Engine {
             }
             c.services.preset = p.name.clone();
         })?;
-        Ok(PresetReport { name, missing: Vec::new(), dropped_secrets: dropped })
+        self.presets_changed(None);
+        Ok(PresetReport { name, dropped_secrets: dropped, ..PresetReport::default() })
     }
 
     /// Apply a preset. Services it names that are not installed are skipped
@@ -123,7 +137,9 @@ impl Engine {
         if !applied.missing.is_empty() {
             tracing::info!(preset = %p.name, missing = ?applied.missing, "preset applied without some services");
         }
-        Ok(PresetReport { name: p.name, missing: applied.missing, dropped_secrets: Vec::new() })
+        let name = p.name.clone();
+        self.presets_changed(Some(p));
+        Ok(PresetReport { name, missing: applied.missing, ..PresetReport::default() })
     }
 
     /// [`Engine::apply_preset`] on a worker thread; the outcome comes back
@@ -170,7 +186,9 @@ impl Engine {
             if preset::same_name(&c.services.preset, &p.name) {
                 c.services.preset = new.clone();
             }
-        })
+        })?;
+        self.presets_changed(None);
+        Ok(())
     }
 
     /// Delete one of the user's presets.
@@ -184,7 +202,9 @@ impl Engine {
             if preset::same_name(&c.services.preset, &p.name) {
                 c.services.preset.clear();
             }
-        })
+        })?;
+        self.presets_changed(None);
+        Ok(())
     }
 
     /// Copy a preset (a built-in one included) under `new_name`, or under
@@ -194,11 +214,12 @@ impl Engine {
         let taken = |n: &str| self.preset(n).is_some();
         p.name = match new_name.map(str::trim).filter(|n| !n.is_empty()) {
             Some(n) if taken(n) => return Err(Error::Config(format!("there is already a preset called {n:?}"))),
-            Some(n) => n.to_owned(),
-            None => preset::unique_name(&p.name, &taken),
+            Some(n) => check_name(n)?,
+            None => check_name(&preset::unique_name(&p.name, &taken))?,
         };
         let copy = p.name.clone();
         self.update_config(|c| c.presets.push(p))?;
+        self.presets_changed(None);
         Ok(copy)
     }
 
@@ -219,25 +240,71 @@ impl Engine {
     }
 
     /// Add a preset from an exported file's text. A name already taken
-    /// gets a number; credentials in the file are dropped; services it
-    /// names that are not installed are listed (it is stored anyway, so it
-    /// works once they are).
+    /// gets a number. Of the module options, only those the installed
+    /// module declares are kept, and of those no credential and no address
+    /// (both listed in the report). Services it names that are not
+    /// installed are listed; it is stored anyway, so it works once they are.
     pub fn import_preset_text(&self, text: &str) -> Result<PresetReport> {
+        if text.len() as u64 > MAX_PRESET_FILE {
+            return Err(Error::Config(format!("a preset file is at most {} KB", MAX_PRESET_FILE / 1024)));
+        }
         let mut p = Preset::from_file(text)?;
-        let dropped = p.strip_secrets(&|m, k| self.option_is_secret(m, k));
-        p.name = preset::unique_name(&p.name, &|n| self.preset(n).is_some());
+        let name = check_name(&p.name)?;
         let registry = self.registry();
+        let mut dropped_secrets = Vec::new();
+        let mut dropped_options = Vec::new();
+        for (module, values) in p.options.iter_mut() {
+            let specs = registry.get(module).map(|m| m.options().to_vec()).unwrap_or_default();
+            values.retain(|key, value| {
+                let label = format!("{module}.{key}");
+                let Some(spec) = specs.iter().find(|s| &s.key == key) else {
+                    dropped_options.push(label);
+                    return false;
+                };
+                if spec.kind == OptionKind::Secret
+                    || preset::looks_secret(key)
+                    || value.as_str() == Some(glossa_core::secrets::IN_STORE)
+                {
+                    dropped_secrets.push(label);
+                    return false;
+                }
+                if spec.kind == OptionKind::Url || preset::looks_like_address(key, value) {
+                    dropped_options.push(label);
+                    return false;
+                }
+                true
+            });
+        }
+        p.options.retain(|_, v| !v.is_empty());
+        p.name = check_name(&preset::unique_name(&name, &|n| self.preset(n).is_some()))?;
         let missing = p.missing(&|id| registry.get(id).is_some());
         let name = p.name.clone();
+        if !dropped_options.is_empty() {
+            tracing::info!(preset = %name, dropped = ?dropped_options, "import left options out");
+        }
         self.update_config(|c| c.presets.push(p))?;
-        Ok(PresetReport { name, missing, dropped_secrets: dropped })
+        self.presets_changed(None);
+        Ok(PresetReport { name, missing, dropped_secrets, dropped_options })
     }
 
-    /// Import a preset from a file.
+    /// Import a preset from a file of at most [`MAX_PRESET_FILE`] bytes.
     pub fn import_preset(&self, path: &Path) -> Result<PresetReport> {
-        let text =
-            std::fs::read_to_string(path).map_err(|e| Error::Config(format!("cannot read {}: {e}", path.display())))?;
+        let cannot = |e: std::io::Error| Error::Config(format!("cannot read {}: {e}", path.display()));
+        let size = std::fs::metadata(path).map_err(cannot)?.len();
+        if size > MAX_PRESET_FILE {
+            return Err(Error::Config(format!(
+                "{} is too large for a preset file ({size} bytes; at most {} KB)",
+                path.display(),
+                MAX_PRESET_FILE / 1024
+            )));
+        }
+        let text = std::fs::read_to_string(path).map_err(cannot)?;
         self.import_preset_text(&text)
+    }
+
+    /// Tell front ends the presets or the current one changed.
+    fn presets_changed(&self, applied: Option<Preset>) {
+        self.emit(Event::PresetsChanged { applied: applied.map(Arc::new) });
     }
 }
 
@@ -327,14 +394,86 @@ mod tests {
         // An imported file carrying a key loses it.
         let report = e
             .import_preset_text(
-                "glossa_preset = 1\nname = \"Saved\"\n[options.someone]\ntoken = \"t-fake\"\nmodel = \"x\"\n",
+                "glossa_preset = 1\nname = \"Saved\"\n[options.deepl]\napi_key = \"t-fake\"\nformality = \"less\"\n",
             )
             .unwrap();
         assert_eq!(report.name, "Saved (2)");
-        assert_eq!(report.dropped_secrets, vec!["someone.token".to_owned()]);
-        assert_eq!(report.missing, vec!["someone".to_owned()]);
+        assert_eq!(report.dropped_secrets, vec!["deepl.api_key".to_owned()]);
         let (p, _) = e.preset("Saved (2)").unwrap();
-        assert!(!p.options["someone"].contains_key("token"));
+        assert!(!p.options["deepl"].contains_key("api_key"));
+        assert_eq!(p.options["deepl"].get("formality"), Some(&json!("less")));
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// The attack: a shared preset that points a service the user has a
+    /// key for at another server. Applying it would send that key there.
+    #[test]
+    fn an_imported_preset_cannot_redirect_stored_keys() {
+        let (e, dir) = engine("redirect");
+        let endpoint = e.add_ai_endpoint("Mine", "openai").unwrap();
+        e.update_config(|c| {
+            c.services.set_option("deeplx", "token", json!("dx-fake"));
+            c.services.set_option("libretranslate", "api_key", json!("lt-fake"));
+            c.services.set_option(&endpoint, "api_key", json!("ai-fake"));
+        })
+        .unwrap();
+        let file = format!(
+            "glossa_preset = 1\nname = \"Shared\"\nenabled = [\"deeplx\", \"libretranslate\"]\n\
+             [options.deeplx]\nurl = \"https://evil.example/translate\"\n\
+             [options.libretranslate]\nurl = \"https://evil.example\"\n\
+             [options.{endpoint}]\nbase_url = \"https://evil.example/v1\"\nmodel = \"https://evil.example/m\"\n\
+             [options.not-installed]\nwhatever = \"x\"\n\
+             [options.deepl]\nnot_declared = \"x\"\n"
+        );
+        let report = e.import_preset_text(&file).unwrap();
+        for dropped in ["deeplx.url", "libretranslate.url", "not-installed.whatever", "deepl.not_declared"] {
+            assert!(report.dropped_options.contains(&dropped.to_owned()), "{dropped}: {report:?}");
+        }
+        assert!(report.dropped_options.contains(&format!("{endpoint}.model")), "{report:?}");
+        let (p, _) = e.preset("Shared").unwrap();
+        assert!(p.options.is_empty(), "{:?}", p.options);
+        let before = e.config().services.options.clone();
+        e.apply_preset("Shared").unwrap();
+        assert_eq!(e.config().services.options, before, "no option changed");
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn imported_and_copied_names_are_checked_and_files_capped() {
+        let (e, dir) = engine("names");
+        assert!(e.import_preset_text("name = \"a\\nb\"\n").is_err(), "a newline");
+        let long = "x".repeat(81);
+        assert!(e.import_preset_text(&format!("name = \"{long}\"\n")).is_err(), "too long");
+        let huge = format!("name = \"big\"\n# {}\n", "x".repeat(MAX_PRESET_FILE as usize));
+        assert!(e.import_preset_text(&huge).is_err());
+        let path = dir.join("huge.toml");
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(&path, &huge).unwrap();
+        assert!(e.import_preset(&path).is_err());
+        assert!(e.duplicate_preset("Everyday", Some("two\nlines")).is_err());
+        assert!(e.duplicate_preset("Everyday", Some(&long)).is_err());
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn every_change_is_announced() {
+        let (e, dir) = engine("events");
+        let rx = e.subscribe();
+        let changes = |rx: &std::sync::mpsc::Receiver<Event>| {
+            rx.try_iter()
+                .filter_map(|ev| match ev {
+                    Event::PresetsChanged { applied } => Some(applied.map(|p| p.name.clone())),
+                    _ => None,
+                })
+                .collect::<Vec<_>>()
+        };
+        e.save_preset("A", false).unwrap();
+        e.apply_preset("Private").unwrap();
+        e.rename_preset("A", "B").unwrap();
+        let copy = e.duplicate_preset("B", None).unwrap();
+        e.delete_preset(&copy).unwrap();
+        e.import_preset_text("name = \"C\"\n").unwrap();
+        assert_eq!(changes(&rx), vec![None, Some("Private".to_owned()), None, None, None, None]);
         std::fs::remove_dir_all(&dir).ok();
     }
 

@@ -6,11 +6,14 @@
 //! (`Engine::apply_preset_async`) and its outcome comes back as
 //! `Event::PresetApplied`; export and import touch files the user picked, so
 //! they run on a thread of their own and report through a channel.
+//!
+//! The options window keeps an unsaved copy of the settings; it follows
+//! preset changes through `Event::PresetsChanged` (handled in `app.rs`), so
+//! nothing here touches that copy.
 
 use std::sync::mpsc::Receiver;
 
 use egui::RichText;
-use glossa_core::Config;
 use glossa_engine::{PresetEntry, PresetReport};
 
 use crate::app::GlossaApp;
@@ -59,16 +62,11 @@ pub fn report_text(app: &GlossaApp, verb_key: &str, r: &PresetReport) -> String 
         text.push_str(". ");
         text.push_str(&app.locale.fmt("options.presets.dropped", &r.dropped_secrets.join(", ")));
     }
+    if !r.dropped_options.is_empty() {
+        text.push_str(". ");
+        text.push_str(&app.locale.fmt("options.presets.dropped_options", &r.dropped_options.join(", ")));
+    }
     text
-}
-
-/// Take what a preset operation changed into the options' draft, so OK
-/// does not write the old services back over it.
-pub fn sync_draft(draft: &mut Config, cfg: &Config) {
-    draft.presets = cfg.presets.clone();
-    draft.services = cfg.services.clone();
-    draft.ocr.provider = cfg.ocr.provider.clone();
-    draft.general.pair = cfg.general.pair;
 }
 
 /// A service id as its name, when it is installed.
@@ -85,9 +83,9 @@ fn service_names(app: &GlossaApp, ids: &[String]) -> String {
 
 /// The Presets tab: the list on the left, the chosen preset and what can be
 /// done with it on the right, saving the current setup on top.
-pub fn page(app: &mut GlossaApp, ui: &mut egui::Ui, draft: &mut Config, st: &mut PresetsPage) {
+pub fn page(app: &mut GlossaApp, ui: &mut egui::Ui, st: &mut PresetsPage) {
     let look = app.look.clone();
-    poll(app, draft, st);
+    poll(app, st);
     let entries = app.engine.presets();
     if !st.opened {
         st.opened = true;
@@ -114,7 +112,6 @@ pub fn page(app: &mut GlossaApp, ui: &mut egui::Ui, draft: &mut Config, st: &mut
                 }
                 Err(e) => st.note = Some((e.to_string(), true)),
             }
-            sync_draft(draft, &app.engine.config());
         }
         if ui.add_enabled(st.task.is_none(), egui::Button::new(app.t("options.presets.import"))).clicked() {
             start_import(app, st);
@@ -149,7 +146,7 @@ pub fn page(app: &mut GlossaApp, ui: &mut egui::Ui, draft: &mut Config, st: &mut
         egui::ScrollArea::vertical().id_salt("preset-detail").show(ui, |ui| {
             ui.set_width(ui.available_width() - 8.0);
             match st.selected.clone().and_then(|s| entries.iter().find(|e| e.name == s).cloned()) {
-                Some(e) => details(app, ui, draft, st, &e),
+                Some(e) => details(app, ui, st, &e),
                 None => {
                     ui.add_space(8.0);
                     ui.label(RichText::new(app.t("options.presets.pick_one")).color(look.weak_text()));
@@ -159,7 +156,7 @@ pub fn page(app: &mut GlossaApp, ui: &mut egui::Ui, draft: &mut Config, st: &mut
     });
 }
 
-fn details(app: &mut GlossaApp, ui: &mut egui::Ui, draft: &mut Config, st: &mut PresetsPage, e: &PresetEntry) {
+fn details(app: &mut GlossaApp, ui: &mut egui::Ui, st: &mut PresetsPage, e: &PresetEntry) {
     let look = app.look.clone();
     ui.add_space(6.0);
     group(ui, &look, &label(app, &e.name), |ui| {
@@ -189,7 +186,6 @@ fn details(app: &mut GlossaApp, ui: &mut egui::Ui, draft: &mut Config, st: &mut 
                     }
                     Err(err) => st.note = Some((err.to_string(), true)),
                 }
-                sync_draft(draft, &app.engine.config());
             }
             if ui.add_enabled(st.task.is_none(), egui::Button::new(app.t("options.presets.export"))).clicked() {
                 start_export(app, st, &e.name);
@@ -211,14 +207,12 @@ fn details(app: &mut GlossaApp, ui: &mut egui::Ui, draft: &mut Config, st: &mut 
                     }
                     Err(err) => st.note = Some((err.to_string(), true)),
                 }
-                sync_draft(draft, &app.engine.config());
             }
             if ui.button(RichText::new(app.t("options.presets.delete")).color(look.error())).clicked() {
                 if let Err(err) = app.engine.delete_preset(&e.name) {
                     st.note = Some((err.to_string(), true));
                 }
                 st.selected = None;
-                sync_draft(draft, &app.engine.config());
             }
         });
     });
@@ -252,12 +246,18 @@ fn start_export(app: &GlossaApp, st: &mut PresetsPage, name: &str) {
 
 fn start_import(app: &GlossaApp, st: &mut PresetsPage) {
     let filter = app.t("options.presets.file_filter");
+    let too_large = app.t("options.presets.too_large");
     let engine = app.engine.clone();
     let (tx, rx) = std::sync::mpsc::channel();
     let ctx = app.ctx.clone();
     std::thread::spawn(move || {
         let outcome = match rfd::FileDialog::new().add_filter(filter, &["toml"]).pick_file() {
             None => FileOutcome::Cancelled,
+            // Checked here too, before anything is read: a large file picked
+            // by mistake (a log, a disk image) is refused at once.
+            Some(path) if std::fs::metadata(&path).is_ok_and(|m| m.len() > glossa_engine::presets::MAX_PRESET_FILE) => {
+                FileOutcome::Failed(format!("{}: {too_large}", path.display()))
+            }
             Some(path) => match engine.import_preset(&path) {
                 Ok(r) => FileOutcome::Imported(r),
                 Err(e) => FileOutcome::Failed(e.to_string()),
@@ -269,7 +269,7 @@ fn start_import(app: &GlossaApp, st: &mut PresetsPage) {
     st.task = Some(rx);
 }
 
-fn poll(app: &GlossaApp, draft: &mut Config, st: &mut PresetsPage) {
+fn poll(app: &GlossaApp, st: &mut PresetsPage) {
     let Some(outcome) = st.task.as_ref().and_then(|rx| rx.try_recv().ok()) else { return };
     st.task = None;
     st.note = match outcome {
@@ -277,7 +277,6 @@ fn poll(app: &GlossaApp, draft: &mut Config, st: &mut PresetsPage) {
         FileOutcome::Exported(path) => Some((app.locale.fmt("options.presets.exported", &path), false)),
         FileOutcome::Failed(e) => Some((e, true)),
         FileOutcome::Imported(r) => {
-            sync_draft(draft, &app.engine.config());
             let text = report_text(app, "options.presets.imported", &r);
             st.selected = Some(r.name);
             Some((text, false))

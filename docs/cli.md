@@ -556,7 +556,15 @@ When a Glossa is running with the [control API](control-api.md) on, every
 subcommand goes through it ([`/v1/presets`](control-api.md#presets)), so the
 running program sees the change at once and does not write its own
 settings over it. Otherwise, or with `--local`, the command changes
-`config.toml` directly.
+`config.toml` directly. A Glossa that holds the data folder but cannot be
+reached (its control API is off, or `--local` was given) would write its
+settings over such a change, so the command refuses to make it and says
+so; `--force` makes it anyway, with a warning. `list` and `export` only
+read and always work.
+
+`import` keeps only the settings the installed modules declare, never a
+key and never an address (URL, endpoint, host), and lists what it left out
+([configuration.md](configuration.md#presets)).
 
 ```console
 $ glossa-cli preset save Work
@@ -566,7 +574,7 @@ applied preset "Private"
 $ glossa-cli preset export Work -o work.toml
 ```
 
-`--json` prints the report (`name`, `missing`, `dropped_secrets`) or the
+`--json` prints the report (`name`, `missing`, `dropped_secrets`, `dropped_options`) or the
 list as the control API returns them.
 
 ### history

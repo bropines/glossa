@@ -1055,6 +1055,12 @@ pub static STRINGS: &[(&str, &str, Option<&str>)] = &[
     ("options.presets.exported", "Exported to %s", None),
     ("options.presets.dropped", "keys and tokens left out: %s", None),
     ("options.presets.file_filter", "Glossa preset", None),
+    (
+        "options.presets.dropped_options",
+        "left out (addresses and settings no installed module has): %s",
+        None,
+    ),
+    ("options.presets.too_large", "too large for a preset file", None),
     ("action.show_options", "Show options", None),
     ("action.quit", "Exit", None),
     // -- options: advanced ---------------------------------------------------------------

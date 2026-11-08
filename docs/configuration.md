@@ -161,9 +161,17 @@ changed, only duplicated.
 
 A preset never holds an API key, token or password. Saving and exporting
 leave out every option a service declares as secret, anything kept in the
-system keychain, and, for a module that is not installed, any option whose
-name looks like a credential (`api_key`, `token`, `password`…). Applying a
-preset uses the keys already set in [`[services.options]`](#services).
+system keychain, and any option whose name looks like a credential
+(`api_key`, `token`, `password`, `authorization`, `cookie`, `session`…).
+Applying a preset uses the keys already set in
+[`[services.options]`](#services).
+
+An imported preset is held to more, because applying it uses those keys:
+it keeps only options the installed module declares, and never an address
+(an option of the URL kind, one named like a URL, endpoint, host or server,
+or a value that looks like one). Otherwise a shared file could point a
+service you have a key for at someone else's server. What was left out is
+listed when you import it.
 
 A list left empty leaves that part of the settings alone: a preset without
 `dictionary_enabled` does not touch the dictionaries. Services the preset

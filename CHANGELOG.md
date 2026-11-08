@@ -33,7 +33,10 @@ the notes of its GitHub release.
   `next_preset` action to a hotkey or a tray click; the tray menu has
   *Next preset*. Three built-in presets (*Everyday*, *Private*, *Word
   study*) use only services that need no key. Also `glossa-cli preset`
-  and the control API's `/v1/presets`.
+  and the control API's `/v1/presets`. An imported preset keeps only the
+  settings installed modules declare and never sets an address (URL,
+  endpoint, host), so a shared file cannot send your stored keys to
+  another server.
 - The interface language switches at once, without a restart: every
   window, the tray menu and the macOS menu bar follow the setting as soon
   as it is applied.

@@ -422,6 +422,8 @@
     "options.presets.exported": "Экспортировано в %s",
     "options.presets.dropped": "ключи и токены не сохранены: %s",
     "options.presets.file_filter": "Пресет Glossa",
+    "options.presets.dropped_options": "не взяты (адреса и настройки, которых нет у установленных модулей): %s",
+    "options.presets.too_large": "слишком большой для файла пресета",
     "action.show_options": "Показать настройки",
     "action.quit": "Выход",
     "options.advanced": "Дополнительно",

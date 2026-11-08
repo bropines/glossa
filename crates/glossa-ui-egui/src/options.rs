@@ -941,7 +941,7 @@ fn services(app: &mut GlossaApp, ui: &mut egui::Ui, st: &mut OptionsState) {
     });
     ui.separator();
     if st.presets_tab {
-        crate::presets::page(app, ui, &mut st.draft, &mut st.presets);
+        crate::presets::page(app, ui, &mut st.presets);
         return;
     }
     poll_ai_task(app, st);

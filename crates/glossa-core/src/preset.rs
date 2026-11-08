@@ -72,13 +72,76 @@ pub struct Applied {
     pub missing: Vec<String>,
 }
 
-/// Whether an option key looks like it holds a credential. Used for
-/// modules whose manifest is not at hand (an imported preset naming a
-/// module that is not installed), where the declared kind is unknown.
+/// Whether an option key looks like it holds a credential. Used on top of
+/// what modules declare, and alone for modules whose manifest is not at
+/// hand. Errs towards "yes": an option left out of a preset by mistake
+/// costs a setting, one let through costs a key.
 pub fn looks_secret(key: &str) -> bool {
-    let k = key.to_ascii_lowercase();
-    let exact = ["key", "auth", "cookie"].iter().any(|w| k == *w || k.ends_with(&format!("_{w}")));
-    exact || ["apikey", "api_key", "token", "secret", "password", "passwd", "credential"].iter().any(|w| k.contains(w))
+    let k = normalise_key(key);
+    const PARTS: [&str; 17] = [
+        "apikey",
+        "api_key",
+        "x_api_key",
+        "private_key",
+        "privatekey",
+        "token",
+        "secret",
+        "password",
+        "passwd",
+        "credential",
+        "authorization",
+        "auth",
+        "bearer",
+        "cookie",
+        "session",
+        "passphrase",
+        "signature",
+    ];
+    // Short words that would match inside harmless names (`side`,
+    // `keyboard`) count only as whole words.
+    const WORDS: [&str; 4] = ["key", "keys", "sid", "pin"];
+    PARTS.iter().any(|p| k.contains(p)) || k.split('_').any(|w| WORDS.contains(&w))
+}
+
+/// Whether an option names a place requests go: a URL, an endpoint, a host.
+/// An imported preset never sets one, because applying it would send the
+/// keys already stored for that service to wherever the file says.
+pub fn looks_like_address(key: &str, value: &Value) -> bool {
+    let k = normalise_key(key);
+    const PARTS: [&str; 9] = ["url", "uri", "endpoint", "host", "server", "proxy", "address", "domain", "base"];
+    let named = PARTS.iter().any(|p| k.contains(p)) || k.split('_').any(|w| w == "ip" || w == "port");
+    let valued = value.as_str().is_some_and(|v| {
+        let v = v.trim().to_ascii_lowercase();
+        v.contains("://") || v.starts_with("//") || v.starts_with("localhost") || v.starts_with("www.")
+    });
+    named || valued
+}
+
+/// `apiKey`, `X-Api-Key` and `api key` as `api_key`, `x_api_key`, `api_key`.
+fn normalise_key(key: &str) -> String {
+    let mut out = String::with_capacity(key.len() + 4);
+    let mut prev_lower = false;
+    for c in key.chars() {
+        if c.is_ascii_uppercase() && prev_lower {
+            out.push('_');
+        }
+        prev_lower = c.is_ascii_lowercase() || c.is_ascii_digit();
+        out.push(if c.is_ascii_alphanumeric() { c.to_ascii_lowercase() } else { '_' });
+    }
+    out
+}
+
+/// Bring an options window's unsaved draft in step with a preset change
+/// made elsewhere (the command line, the control API, the menu) without
+/// losing what was typed there: the preset list and the current name come
+/// from `saved`, and an applied preset is applied to the draft itself, so
+/// only what the preset sets changes and typed keys and endpoints stay.
+pub fn follow(draft: &mut Config, saved: &Config, applied: Option<&Preset>, available: &dyn Fn(&str) -> bool) {
+    draft.presets = saved.presets.clone();
+    if let Some(p) = applied {
+        p.apply_to(draft, available);
+    }
+    draft.services.preset = saved.services.preset.clone();
 }
 
 impl Preset {
@@ -405,12 +468,84 @@ mod tests {
 
     #[test]
     fn secret_looking_keys() {
-        for k in ["api_key", "apiKey", "token", "auth_token", "password", "client_secret", "key"] {
+        for k in [
+            "api_key",
+            "apiKey",
+            "token",
+            "auth_token",
+            "password",
+            "client_secret",
+            "key",
+            "Authorization",
+            "bearer",
+            "X-Api-Key",
+            "private-key",
+            "cookies",
+            "session_id",
+            "sid",
+            "passwd",
+            "credentials",
+            "user_key",
+        ] {
             assert!(looks_secret(k), "{k}");
         }
-        for k in ["model", "formality", "url", "keyboard_layout", "temperature"] {
+        for k in ["model", "formality", "url", "keyboard_layout", "temperature", "side", "prompt"] {
             assert!(!looks_secret(k), "{k}");
         }
+    }
+
+    #[test]
+    fn addresses_are_recognised_by_name_or_value() {
+        for (k, v) in [
+            ("url", json!("")),
+            ("base_url", json!("x")),
+            ("apiBase", json!("x")),
+            ("endpoint", json!("x")),
+            ("host", json!("x")),
+            ("server_ip", json!("x")),
+            ("model", json!("https://evil.example/v1")),
+            ("model", json!("localhost:8080")),
+        ] {
+            assert!(looks_like_address(k, &v), "{k} = {v}");
+        }
+        assert!(!looks_like_address("model", &json!("gpt-4o-mini")));
+        assert!(!looks_like_address("formality", &json!("more")));
+    }
+
+    #[test]
+    fn a_draft_follows_a_preset_change_and_keeps_what_was_typed() {
+        let saved = cfg();
+        let mut draft = saved.clone();
+        // Typed in the options, not applied yet.
+        draft.services.set_option("deepl", "api_key", json!("typed-fake"));
+        draft.services.set_option("libretranslate", "url", json!("http://typed.example"));
+        let p = Preset {
+            name: "X".into(),
+            enabled: vec!["bing".into()],
+            active: "bing".into(),
+            options: [("deepl".to_owned(), [("formality".to_owned(), json!("less"))].into_iter().collect())]
+                .into_iter()
+                .collect(),
+            ..Preset::default()
+        };
+        let mut after = saved.clone();
+        p.apply_to(&mut after, &|_| true);
+        after.presets.push(p.clone());
+        follow(&mut draft, &after, Some(&p), &|_| true);
+        assert_eq!(draft.services.enabled, vec!["bing".to_owned()]);
+        assert_eq!(draft.services.active, "bing");
+        assert_eq!(draft.services.option("deepl", "formality"), Some(&json!("less")));
+        assert_eq!(draft.services.option("deepl", "api_key"), Some(&json!("typed-fake")));
+        assert_eq!(draft.services.option("libretranslate", "url"), Some(&json!("http://typed.example")));
+        assert_eq!(draft.presets, after.presets);
+        assert_eq!(draft.services.preset, "X");
+
+        // A rename or a save elsewhere touches only the list and the name.
+        let mut draft2 = saved.clone();
+        draft2.services.enabled = vec!["typed".into()];
+        follow(&mut draft2, &after, None, &|_| true);
+        assert_eq!(draft2.services.enabled, vec!["typed".to_owned()]);
+        assert_eq!(draft2.presets, after.presets);
     }
 
     #[test]

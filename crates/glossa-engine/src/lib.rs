@@ -139,6 +139,13 @@ pub enum Event {
     PresetApplied {
         result: std::result::Result<PresetReport, Arc<Error>>,
     },
+    /// Presets or the current one changed, from any front end: saved,
+    /// renamed, copied, deleted, imported, or `applied` (that preset). A
+    /// window with unsaved settings follows it with
+    /// [`glossa_core::preset::follow`] instead of writing the old ones back.
+    PresetsChanged {
+        applied: Option<Arc<glossa_core::Preset>>,
+    },
 }
 
 /// OCR, plus a translation when one was asked for.

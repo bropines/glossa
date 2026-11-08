@@ -88,10 +88,12 @@ COMMANDS
                                       files, none fetches the required ones), re-checking,
                                       deleting; also `module assets …`
     preset     [list | apply NAME | next | save NAME [--languages] | export NAME [-o FILE]
-               | import FILE | rename NAME NEW | duplicate NAME [NEW] | delete NAME] [--local]
+               | import FILE | rename NAME NEW | duplicate NAME [NEW] | delete NAME] [--local] [--force]
                                       named sets of services, their order and options (never keys);
                                       changes go to a running Glossa through the control API when
-                                      one answers, else to the settings file (--local: always the file)
+                                      one answers, else to the settings file (--local: always the file);
+                                      a running Glossa that does not answer is not written behind
+                                      unless --force
     python     [status | install [MODULE] | remove [MODULE]]
                                       the Python modules run with: which one each module uses,
                                       downloading the managed Python and uv (with MODULE: also
@@ -184,6 +186,7 @@ const SWITCHES: &[&str] = &[
     "--ignore-recordings",
     "--languages",
     "--local",
+    "--force",
 ];
 
 /// Flags every command takes.
@@ -211,7 +214,7 @@ fn command_flags(command: &str) -> Option<&'static [&'static str]> {
             "--translate-with",
         ],
         "speak" => &["-o", "--out", "-l", "--lang", "--slow"],
-        "preset" | "presets" => &["-o", "--out", "--languages", "--local"],
+        "preset" | "presets" => &["-o", "--out", "--languages", "--local", "--force"],
         "services" => &["-c", "--capability"],
         "history" => &["--search", "--favorites", "--export"],
         "module" => &[
@@ -1230,6 +1233,31 @@ fn running_glossa(args: &Args) -> Option<(String, String)> {
     (resp.is_success() && resp.text().contains("\"glossa\"")).then_some((addr, cfg.server.token))
 }
 
+/// A Glossa holding this data folder that could not be reached through
+/// its control API keeps its settings in memory and writes them back on its
+/// next save, undoing a change made to the file now. Refuse, unless
+/// `--force`; with it, warn.
+fn refuse_behind_a_running_glossa(args: &Args, local: bool) -> Result<(), Fail> {
+    let paths = paths(args);
+    if !glossa_platform::instance::is_running(&paths) {
+        return Ok(());
+    }
+    let why = if local { "--local was given" } else { "its control API is off or does not answer" };
+    let problem = format!(
+        "Glossa is running with this data folder ({}), and {why}: it would write its own settings over a change \
+         made to config.toml now",
+        paths.config_file().display()
+    );
+    if args.has(&["--force"]) {
+        eprintln!("glossa-cli: warning: {problem}; changing the file anyway (--force)");
+        return Ok(());
+    }
+    Err(Fail::Op(format!(
+        "{problem}. Turn the control API on ([server] enabled = true, Options > Control API) so the change goes \
+         through it, quit Glossa first, or pass --force to change the file anyway"
+    )))
+}
+
 /// One call to `/v1/presets…` on a running Glossa; the body of its answer.
 fn preset_api(addr: &str, token: &str, post: bool, path: &str, body: Vec<u8>) -> Result<String, Fail> {
     let url = format!("http://{addr}/v1/presets{path}");
@@ -1264,7 +1292,11 @@ fn preset(args: &Args, words: &[String]) -> Result<(), Fail> {
     };
     // The running program keeps its settings in memory and would write over
     // a change made to the file behind its back, so changes go through it.
-    let remote = if args.has(&["--local"]) { None } else { running_glossa(args) };
+    let local = args.has(&["--local"]);
+    let remote = if local { None } else { running_glossa(args) };
+    if remote.is_none() && !matches!(op, "list" | "export") {
+        refuse_behind_a_running_glossa(args, local)?;
+    }
     let report = |r: &glossa_engine::PresetReport, verb: &str| {
         if args.json {
             out!("{}", serde_json::to_string_pretty(r).unwrap_or_default());
@@ -1276,6 +1308,9 @@ fn preset(args: &Args, words: &[String]) -> Result<(), Fail> {
         }
         if !r.dropped_secrets.is_empty() {
             out!("left out (a preset never keeps keys or tokens): {}", r.dropped_secrets.join(", "));
+        }
+        if !r.dropped_options.is_empty() {
+            out!("left out (addresses, and settings no installed module declares): {}", r.dropped_options.join(", "));
         }
     };
     let named = |name: &str, new_name: Option<&str>| {
@@ -1489,6 +1524,36 @@ mod tests {
         ] {
             assert!(check(argv).is_ok(), "{argv:?}: {:?}", check(argv).err());
         }
+    }
+
+    /// With a Glossa holding the data folder and no control API to reach,
+    /// a change to the file would be written over: refused without
+    /// `--force`, with or without `--local`. Reading is still allowed.
+    #[test]
+    fn presets_are_not_changed_behind_a_running_glossa() {
+        let home = std::env::temp_dir().join(format!("glossa-cli-presets-{}", std::process::id()));
+        std::fs::remove_dir_all(&home).ok();
+        std::fs::create_dir_all(&home).unwrap();
+        let h = home.to_string_lossy().into_owned();
+        let args = |rest: &[&str]| {
+            let mut v = vec!["--home", h.as_str(), "--json", "preset"];
+            v.extend_from_slice(rest);
+            p(&v)
+        };
+        let run = |rest: &[&str]| {
+            let a = args(rest);
+            preset(&a, &a.rest)
+        };
+        let guard = glossa_platform::instance::acquire(&paths(&args(&[])));
+        assert!(matches!(guard, glossa_platform::instance::Instance::Primary(_)));
+        let refused = run(&["save", "A"]);
+        assert!(matches!(&refused, Err(Fail::Op(m)) if m.contains("--force")), "refused without --force");
+        assert!(matches!(run(&["--local", "apply", "Private"]), Err(Fail::Op(_))), "--local too");
+        assert!(run(&["list"]).is_ok(), "reading is fine");
+        assert!(run(&["--force", "save", "A"]).is_ok());
+        drop(guard);
+        assert!(run(&["--local", "apply", "A"]).is_ok(), "nobody running");
+        std::fs::remove_dir_all(&home).ok();
     }
 
     #[test]
