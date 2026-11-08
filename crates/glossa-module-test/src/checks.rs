@@ -19,8 +19,13 @@ pub enum Outcome {
     Detection(Detection),
     Article(Article),
     Audio(Audio),
-    Ocr { result: OcrResult, image_size: Option<(u32, u32)> },
-    Action(ActionReply),
+    Ocr {
+        result: OcrResult,
+        image_size: Option<(u32, u32)>,
+    },
+    /// An action's reply, with the `ui_update`s it sent on the way (panel
+    /// cases).
+    Action(ActionReply, Vec<glossa_modules::OptionValues>),
 }
 
 impl Outcome {
@@ -39,7 +44,7 @@ impl Outcome {
             }
             Outcome::Audio(a) => a.mime.clone(),
             Outcome::Ocr { result, .. } => result.best_text().to_owned(),
-            Outcome::Action(r) => r.notice.clone().unwrap_or_default(),
+            Outcome::Action(r, _) => r.notice.clone().unwrap_or_default(),
         }
     }
 
@@ -61,8 +66,14 @@ impl Outcome {
             Outcome::Ocr { result, .. } => {
                 format!("{:?}, {} nodes", one_line(result.best_text()), result.nodes().count())
             }
-            Outcome::Action(r) => {
+            Outcome::Action(r, updates) => {
                 let mut parts = Vec::new();
+                if !updates.is_empty() {
+                    parts.push(format!("{} updates", updates.len()));
+                }
+                if !r.state.is_empty() {
+                    parts.push(format!("state {}", r.state.keys().cloned().collect::<Vec<_>>().join(", ")));
+                }
                 if let Some(n) = &r.notice {
                     parts.push(format!("{:?}", one_line(n)));
                 }
@@ -92,7 +103,12 @@ impl Outcome {
             Outcome::Article(a) => serde_json::to_value(a),
             Outcome::Audio(a) => Ok(serde_json::json!({ "mime": a.mime, "bytes": a.bytes.len() })),
             Outcome::Ocr { result, .. } => serde_json::to_value(result),
-            Outcome::Action(r) => serde_json::to_value(r),
+            Outcome::Action(r, updates) => serde_json::to_value(r).map(|mut v| {
+                if !updates.is_empty() {
+                    v["updates"] = serde_json::json!(updates);
+                }
+                v
+            }),
         };
         v.unwrap_or(Value::Null)
     }
@@ -134,7 +150,7 @@ pub fn shape(outcome: &Outcome) -> Vec<String> {
         }
         Outcome::Audio(a) => audio_shape(a, &mut out),
         Outcome::Ocr { result, image_size } => ocr_shape(result, *image_size, &mut out),
-        Outcome::Action(r) => {
+        Outcome::Action(r, _) => {
             if let Some(level) = r.notice_level.as_deref() {
                 if !["info", "success", "warning", "error"].contains(&level) {
                     out.push(format!("notice_level {level:?} is not info, success, warning or error"));

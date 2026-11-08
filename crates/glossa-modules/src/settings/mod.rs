@@ -50,8 +50,7 @@ use crate::provider::{resolve_options, OptionKind, OptionSpec, OptionValues};
 /// The newest `[ui] format` this build understands.
 pub const UI_FORMAT: u32 = 1;
 
-/// `[ui]` in `module.toml`. Phase 1 knows the settings layout; panels come
-/// later and are ignored until then.
+/// `[ui]` in `module.toml`: the settings layout and the module's panels.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct UiSection {
     /// The version of everything under `[ui]`. A newer one is drawn as far
@@ -60,6 +59,9 @@ pub struct UiSection {
     pub format: u32,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub settings: Option<SettingsLayout>,
+    /// `[[ui.panels]]`: windows of the module's own; see [`crate::panels`].
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub panels: Vec<crate::panels::PanelSpec>,
 }
 
 fn ui_format() -> u32 {
@@ -68,7 +70,7 @@ fn ui_format() -> u32 {
 
 impl Default for UiSection {
     fn default() -> Self {
-        Self { format: UI_FORMAT, settings: None }
+        Self { format: UI_FORMAT, settings: None, panels: Vec::new() }
     }
 }
 
@@ -160,16 +162,16 @@ pub struct Conds {
 }
 
 impl Conds {
-    fn parse(visible: &str, enabled: &str) -> Self {
+    pub fn parse(visible: &str, enabled: &str) -> Self {
         let p = |s: &str| (!s.trim().is_empty()).then(|| Condition::parse(s).ok()).flatten();
         Conds { visible: p(visible), enabled: p(enabled) }
     }
 
-    fn visible(&self, cx: &condition::Context) -> bool {
+    pub fn visible(&self, cx: &condition::Context) -> bool {
         self.visible.as_ref().is_none_or(|c| c.eval(cx))
     }
 
-    fn enabled(&self, cx: &condition::Context) -> bool {
+    pub fn enabled(&self, cx: &condition::Context) -> bool {
         self.enabled.as_ref().is_none_or(|c| c.eval(cx))
     }
 }
@@ -899,6 +901,7 @@ pub fn lint(m: &Manifest, strings: &ModuleStrings, load_problems: &[String]) -> 
     }
 
     out.extend(crate::actions::lint(m));
+    out.extend(crate::panels::lint(m));
 
     // Locale files.
     for p in load_problems {
@@ -920,9 +923,9 @@ fn unknown_string_key(m: &Manifest, keys: &BTreeSet<&str>, items: &BTreeSet<&str
     let parts: Vec<&str> = key.split('.').collect();
     match parts.as_slice() {
         ["module", "name" | "description"] => None,
-        // Strings for code are free-form; panels belong to a later phase,
-        // and writing them early is fine.
-        ["strings", ..] | ["panels", ..] => None,
+        // Strings for code are free-form.
+        ["strings", ..] => None,
+        ["panels", ..] => crate::panels::unknown_string_key(m, &parts[1..]),
         ["actions", id, rest @ ..] => {
             if !m.actions.iter().any(|a| a.id == *id) {
                 return Some(format!("names action {id:?}, which does not exist"));
@@ -950,7 +953,9 @@ fn unknown_string_key(m: &Manifest, keys: &BTreeSet<&str>, items: &BTreeSet<&str
             let invented = m.options.iter().any(|o| o.group == *id);
             (!items.contains(id) && !invented).then(|| format!("names item {id:?}, which does not exist"))
         }
-        _ => Some("is not a key Glossa reads (module.*, options.*, settings.items.*, strings.*)".into()),
+        _ => Some(
+            "is not a key Glossa reads (module.*, options.*, actions.*, settings.items.*, panels.*, strings.*)".into(),
+        ),
     }
 }
 

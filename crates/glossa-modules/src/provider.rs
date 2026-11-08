@@ -116,6 +116,12 @@ pub trait Provider: Send + Sync {
         Arc::new(crate::settings::SettingsPage::plain(self.options()))
     }
 
+    /// The module's manifest, for a provider loaded from one: its panels,
+    /// actions and strings. `None` for built-in providers.
+    fn manifest(&self) -> Option<&crate::manifest::Manifest> {
+        None
+    }
+
     fn translate(&self, host: &Host, req: &TranslateRequest) -> Result<Translation> {
         let _ = (host, req);
         Err(self.unsupported("translation"))
@@ -167,6 +173,20 @@ pub trait Provider: Send + Sync {
     ) -> Result<glossa_module_sdk::wire::ActionReply> {
         let _ = (host, params);
         Err(self.unsupported("module actions"))
+    }
+
+    /// [`Provider::action`], with `updates` called for each `ui_update`
+    /// host call the handler makes while it runs (partial state for a
+    /// panel, as an LLM writes). Providers that cannot stream run the plain
+    /// action.
+    fn action_with_updates(
+        &self,
+        host: &Host,
+        params: glossa_module_sdk::wire::ActionParams,
+        updates: &(dyn Fn(OptionValues) + Sync),
+    ) -> Result<glossa_module_sdk::wire::ActionReply> {
+        let _ = updates;
+        self.action(host, params)
     }
 
     /// The same query on the service's website, for "open in browser".
@@ -245,6 +265,10 @@ impl Provider for Guarded {
         self.inner.settings_page(lang)
     }
 
+    fn manifest(&self) -> Option<&crate::manifest::Manifest> {
+        self.inner.manifest()
+    }
+
     fn translate(&self, host: &Host, req: &TranslateRequest) -> Result<Translation> {
         self.call("translation", || self.inner.translate(host, req))
     }
@@ -279,6 +303,15 @@ impl Provider for Guarded {
         params: glossa_module_sdk::wire::ActionParams,
     ) -> Result<glossa_module_sdk::wire::ActionReply> {
         self.call("action", || self.inner.action(host, params))
+    }
+
+    fn action_with_updates(
+        &self,
+        host: &Host,
+        params: glossa_module_sdk::wire::ActionParams,
+        updates: &(dyn Fn(OptionValues) + Sync),
+    ) -> Result<glossa_module_sdk::wire::ActionReply> {
+        self.call("action", || self.inner.action_with_updates(host, params, updates))
     }
 
     fn web_link(&self, text: &str, pair: LangPair) -> Option<String> {

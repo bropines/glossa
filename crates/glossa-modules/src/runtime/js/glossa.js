@@ -96,6 +96,15 @@ var host = {
     return Object.prototype.hasOwnProperty.call(files, name) ? files[name] : null;
   },
 
+  /**
+   * The panel an action runs in. `host.ui.update({ result: "…so far" })`
+   * sends partial state, merged into the panel at once, while the handler
+   * is still working. Outside a panel it does nothing.
+   */
+  ui: {
+    update: function (state) { __call("ui_update", state || {}); }
+  },
+
   /** The module's settings, also passed as req.options. */
   options: {},
 

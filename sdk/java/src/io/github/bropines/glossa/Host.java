@@ -111,6 +111,15 @@ public final class Host {
     }
 
     /**
+     * Send partial state to the panel this action runs in while the handler
+     * still works (an answer as it is written); merged into the panel at
+     * once. Outside a panel it does nothing.
+     */
+    public void uiUpdate(Map<String, Object> state) throws ModuleError {
+        call("ui_update", state);
+    }
+
+    /**
      * Where the files from the manifest's {@code [[assets]]} are:
      * {@code {"dir": "...", "files": {"name": "/abs/path"}}}. Glossa starts
      * the module only once they are all downloaded and verified; the same

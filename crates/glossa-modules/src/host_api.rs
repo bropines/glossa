@@ -101,6 +101,10 @@ pub struct HostApi<'a> {
     /// The module's `[strings]` in the interface language, for the `t` host
     /// call during an action.
     pub strings: Option<&'a std::collections::BTreeMap<String, String>>,
+    /// Where `ui_update` host calls go during a panel's action: partial
+    /// state, applied to the panel at once. `None` outside one, where the
+    /// call is accepted and dropped.
+    pub ui_update: Option<&'a (dyn Fn(crate::provider::OptionValues) + Sync)>,
 }
 
 impl<'a> HostApi<'a> {
@@ -112,6 +116,7 @@ impl<'a> HostApi<'a> {
             images: Mutex::new(crate::image_ops::ImageStore::new()),
             assets: None,
             strings: None,
+            ui_update: None,
         }
     }
 
@@ -124,6 +129,12 @@ impl<'a> HostApi<'a> {
     /// Answer the `t` host call from `strings`.
     pub fn with_strings(mut self, strings: Option<&'a std::collections::BTreeMap<String, String>>) -> Self {
         self.strings = strings;
+        self
+    }
+
+    /// Send `ui_update` host calls to `sink`.
+    pub fn with_ui_update(mut self, sink: Option<&'a (dyn Fn(crate::provider::OptionValues) + Sync)>) -> Self {
+        self.ui_update = sink;
         self
     }
 
@@ -208,6 +219,23 @@ impl<'a> HostApi<'a> {
                 let args: Vec<&str> = args.iter().map(String::as_str).collect();
                 let template = self.strings.and_then(|s| s.get(key)).map(String::as_str).unwrap_or(key);
                 Ok(wire::format_string(template, &args).into())
+            }
+            // `{"result": "…so far"}`: partial state for the panel the
+            // running action belongs to. The engine bounds it like a reply.
+            "ui_update" => {
+                let state: crate::provider::OptionValues = match params {
+                    serde_json::Value::Object(o) => o.into_iter().collect(),
+                    serde_json::Value::Null => Default::default(),
+                    _ => {
+                        return Err(ModuleError::new(ErrorKind::BadRequest, "ui_update takes an object of state keys"))
+                    }
+                };
+                if let Some(sink) = self.ui_update {
+                    if !state.is_empty() {
+                        sink(state);
+                    }
+                }
+                Ok(serde_json::Value::Null)
             }
             op if op.starts_with("image.") => self.image_op(&op["image.".len()..], params),
             other => Err(ModuleError::new(ErrorKind::Unsupported, format!("unknown host call {other:?}"))),

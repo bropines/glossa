@@ -112,6 +112,7 @@ def test(ev, host):
 | `host.http(method, url, headers=, body=, json_body=, body_bytes=, timeout=, binary=)` | An HTTP request made by Glossa: the user's proxy applies and only `permissions.network` hosts are allowed. Returns `{"status", "headers", "body"}` (`"body_bytes"` with `binary=True`). |
 | `host.http_json(method, url, ...)` | The same, requiring 2xx, returning parsed JSON. |
 | `host.log(level, message)` | Glossa's log (`trace` … `error`). |
+| `host.ui_update(state)` | During an action from a [panel](../../docs/modules/panels.md#streaming): partial state, shown in the panel at once while the handler works. Does nothing elsewhere. |
 | `host.cache_get(key, default)` / `host.cache_set(key, value, ttl_secs=)` | A small in-memory cache kept by Glossa, so tokens survive the process being stopped for idleness. |
 | `host.asset_path(name)` / `host.assets()` | Where a file from the manifest's `[[assets]]` is (a model, a dictionary), or all of them with `"missing"` for optional ones not downloaded. Also in the environment as `GLOSSA_ASSET_<NAME>` ([assets](../../docs/modules/README.md#assets)). |
 | `host.option(key, default)` | A setting. |

@@ -159,12 +159,25 @@ impl Provider for PythonGate {
         self.inner.settings_page(lang)
     }
 
+    fn manifest(&self) -> Option<&crate::manifest::Manifest> {
+        self.inner.manifest()
+    }
+
     fn action(
         &self,
         host: &Host,
         params: glossa_module_sdk::wire::ActionParams,
     ) -> Result<glossa_module_sdk::wire::ActionReply> {
         self.provider(host)?.action(host, params)
+    }
+
+    fn action_with_updates(
+        &self,
+        host: &Host,
+        params: glossa_module_sdk::wire::ActionParams,
+        updates: &(dyn Fn(crate::provider::OptionValues) + Sync),
+    ) -> Result<glossa_module_sdk::wire::ActionReply> {
+        self.provider(host)?.action_with_updates(host, params, updates)
     }
 
     fn translate(&self, host: &Host, req: &TranslateRequest) -> Result<Translation> {

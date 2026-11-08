@@ -27,6 +27,17 @@
 //!
 //! [case.expect]
 //! result = { choices = { model = [{ value = "small" }] } }   # partial match on the reply
+//!
+//! [[case]]
+//! name = "explains a word in the panel"
+//! op = "action"
+//! action = "explain"
+//! panel = "glossary"             # run as the panel runs it: ev.panel, streamed updates
+//! state = { word = "Haus" }
+//! item = { title = "Haus" }      # a clicked list row, as ev.event.item
+//!
+//! [case.expect]
+//! result = { state = { meaning = "house" }, updates = [{ meaning = "hou" }] }
 //! ```
 //!
 //! Every table refuses unknown keys: a misspelt expectation must fail the
@@ -90,6 +101,13 @@ pub struct Case {
     /// `action`: the panel state sent with it.
     #[serde(default)]
     pub state: OptionValues,
+    /// `action`: the panel it runs in. The handler sees it as `ev.panel`,
+    /// and its `ui_update` calls are kept as the result's `updates`.
+    #[serde(default)]
+    pub panel: Option<String>,
+    /// `action`: the clicked row of a `list`, as `ev.event.item`.
+    #[serde(default)]
+    pub item: Option<serde_json::Value>,
     /// `action`: the interface language whose `[strings]` `host.t` reads
     /// (default `en`).
     #[serde(default)]

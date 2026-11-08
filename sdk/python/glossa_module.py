@@ -347,6 +347,14 @@ class Host:
         """Write to Glossa's log: trace, debug, info, warn or error."""
         self._channel.host_call("log", {"level": level, "message": str(message)})
 
+    def ui_update(self, state):
+        """Send partial state to the panel this action runs in, while the
+        handler is still working (an answer as it is written). ``state`` is
+        a dict of state keys, merged into the panel at once. Outside a panel
+        it does nothing.
+        """
+        self._channel.host_call("ui_update", dict(state))
+
     def cache_get(self, key, default=None):
         """A value this module stored with :meth:`cache_set`, or ``default``.
 

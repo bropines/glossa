@@ -25,8 +25,8 @@
 //! `action` method ([`glossa_module_sdk::wire::ActionParams`]); its reply
 //! ([`ActionReply`]) may set options in the draft, replace a select's
 //! choices, put messages under fields and show a notice. `call` and
-//! `builtin` actions run without module code and arrive with panels; this
-//! build parses and lints them but does not run them.
+//! `builtin` actions run without module code, in panels; `glossa-engine`
+//! runs them, and [`crate::panels::lint`] checks what they say.
 //!
 //! What the reply does to the values being edited is decided here
 //! ([`apply_options`], [`choices_from_reply`]), so every front end treats it
@@ -58,7 +58,7 @@ pub struct ActionSpec {
     /// Option keys that must be filled in and pass their checks first.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub needs: Vec<String>,
-    /// Panels (phase 3): run this module's own capability instead of a handler.
+    /// Panels: run this module's own capability instead of a handler.
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub call: String,
     /// Panels: the request fields of a `call`, as bound values.
@@ -297,15 +297,6 @@ pub fn lint(m: &Manifest) -> Vec<Issue> {
                 Level::Error,
                 format!("{what}: handler {handler:?} is not a JavaScript function name; set `handler`"),
             ));
-        }
-        match a.kind() {
-            ActionKind::Handler => {}
-            ActionKind::Call | ActionKind::Builtin => out.push(issue(
-                Level::Warning,
-                format!(
-                    "{what}: `call` and `builtin` actions run in module panels, which this Glossa does not have yet"
-                ),
-            )),
         }
         if !a.call.is_empty() && !a.builtin.is_empty() {
             out.push(issue(Level::Error, format!("{what}: `call` and `builtin` do not go together")));
@@ -550,7 +541,6 @@ mod tests {
             "handler \"do-it\" is not a JavaScript function name",
             "needs \"missing\", which is not an option",
             "action \"a\" is declared twice",
-            "run in module panels",
             "option \"n\": `choices_from` applies to select",
             "choices_from \"ghost\" is not an action",
             "choices_from \"copy\" must be an action with a handler",
