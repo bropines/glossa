@@ -134,6 +134,11 @@ jobs:
           # asset's sha256 in its module.toml is still a placeholder (its
           # README.md, "Releasing the binary"); its protocol tests run in
           # .github/workflows/local-llm.yml.
+          # `assets download` looks the module up among the installed ones,
+          # so link it into a data folder both commands share.
+          export GLOSSA_HOME="$RUNNER_TEMP/glossa-home"
+          mkdir -p "$GLOSSA_HOME/modules"
+          ln -s "$PWD/modules/process/paddle-ocr" "$GLOSSA_HOME/modules/paddle-ocr"
           target/debug/glossa-cli assets download paddle-ocr rec-latin.onnx rec-eslav.onnx rec-ch.onnx
           target/debug/glossa-cli module test --strict --require-runtimes --download \
             $(find modules -name module.toml -not -path 'modules/process/local-llm/*' -exec dirname {} \; | sort)
