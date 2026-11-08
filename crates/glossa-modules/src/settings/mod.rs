@@ -43,6 +43,7 @@ pub use condition::Condition;
 pub use strings::ModuleStrings;
 pub use validate::FieldError;
 
+use crate::actions::ActionView;
 use crate::manifest::Manifest;
 use crate::provider::{resolve_options, OptionKind, OptionSpec, OptionValues};
 
@@ -190,8 +191,8 @@ pub struct Container {
 pub enum Node {
     /// `SettingsPage::options[i]`.
     Option(usize),
-    /// An action's button (`@id`). Phase 1 knows no actions and draws
-    /// nothing for it.
+    /// An action's button (`@id`), naming one of [`SettingsPage::actions`];
+    /// nothing is drawn for an id the module does not declare.
     Action(String),
     Group(Container),
     Row(Container),
@@ -253,6 +254,8 @@ pub struct SettingsPage {
     /// The provider's options, translated; [`Node::Option`] indexes this.
     pub options: Vec<OptionSpec>,
     pub nodes: Vec<Node>,
+    /// The module's `[[actions]]`, translated; [`Node::Action`] names one.
+    pub actions: Vec<ActionView>,
     conds: Vec<Conds>,
     patterns: Vec<Option<validate::Pattern>>,
 }
@@ -277,7 +280,47 @@ impl SettingsPage {
         let mut page = Self::build(&m.options, m.ui.settings.as_ref(), &m.strings, lang);
         page.name = m.strings.get(lang, "module.name").map(str::to_owned);
         page.description = m.strings.get(lang, "module.description").map(str::to_owned);
+        page.actions = crate::actions::views(m, lang);
         page
+    }
+
+    /// The action `id` declares, if the module has one by that id.
+    pub fn action(&self, id: &str) -> Option<&ActionView> {
+        self.actions.iter().find(|a| a.id == id)
+    }
+
+    /// The options `action` needs that are empty or fail their checks for
+    /// `user`'s values, as indices into [`SettingsPage::options`]. Empty:
+    /// the action may run.
+    pub fn action_blockers(&self, action: &ActionView, user: Option<&OptionValues>) -> Vec<usize> {
+        let values = self.values(user);
+        action
+            .needs
+            .iter()
+            .filter_map(|key| self.options.iter().position(|o| o.key == *key))
+            .filter(|&i| {
+                let v = values.get(&self.options[i].key).unwrap_or(&serde_json::Value::Null);
+                validate::is_empty(v) || self.check(i, &values).is_some()
+            })
+            .collect()
+    }
+
+    /// The actions the layout places as buttons (`@id`), at any depth.
+    pub fn placed_actions(&self) -> BTreeSet<&str> {
+        fn walk<'a>(nodes: &'a [Node], out: &mut BTreeSet<&'a str>) {
+            for n in nodes {
+                match n {
+                    Node::Action(a) => {
+                        out.insert(a.as_str());
+                    }
+                    Node::Group(c) | Node::Row(c) | Node::Tabs(c) => walk(&c.children, out),
+                    _ => {}
+                }
+            }
+        }
+        let mut out = BTreeSet::new();
+        walk(&self.nodes, &mut out);
+        out
     }
 
     /// Build a page. `lang` is Glossa's interface language code (`en`,
@@ -347,7 +390,7 @@ impl SettingsPage {
                 }
             }
         }
-        SettingsPage { name: None, description: None, options, nodes, conds, patterns }
+        SettingsPage { name: None, description: None, options, nodes, actions: Vec::new(), conds, patterns }
     }
 
     /// The values conditions and checks see: the defaults with `user`'s
@@ -532,7 +575,7 @@ pub struct Issue {
     pub message: String,
 }
 
-fn issue(level: Level, message: String) -> Issue {
+pub(crate) fn issue(level: Level, message: String) -> Issue {
     Issue { level, message }
 }
 
@@ -730,10 +773,15 @@ pub fn lint(m: &Manifest, strings: &ModuleStrings, load_problems: &[String]) -> 
         for id in list {
             let id = id.trim();
             if let Some(action) = id.strip_prefix('@') {
-                out.push(issue(
-                    Level::Note,
-                    format!("{what}: `@{action}` names an action; this Glossa does not run module actions yet, so no button is drawn"),
-                ));
+                if !m.actions.iter().any(|a| a.id == action) {
+                    out.push(issue(
+                        Level::Error,
+                        format!(
+                            "{what}: `@{action}` names an action that [[actions]] does not declare; no button is drawn"
+                        ),
+                    ));
+                }
+                *referenced.entry(id).or_default() += 1;
                 continue;
             }
             if !keys.contains(id) && !item_ids.contains(id) {
@@ -820,6 +868,8 @@ pub fn lint(m: &Manifest, strings: &ModuleStrings, load_problems: &[String]) -> 
         }
     }
 
+    out.extend(crate::actions::lint(m));
+
     // Locale files.
     for p in load_problems {
         out.push(issue(Level::Error, p.clone()));
@@ -840,9 +890,15 @@ fn unknown_string_key(m: &Manifest, keys: &BTreeSet<&str>, items: &BTreeSet<&str
     let parts: Vec<&str> = key.split('.').collect();
     match parts.as_slice() {
         ["module", "name" | "description"] => None,
-        // Strings for code, actions and panels belong to later phases;
-        // writing them early is fine.
-        ["strings", ..] | ["actions", ..] | ["panels", ..] => None,
+        // Strings for code are free-form; panels belong to a later phase,
+        // and writing them early is fine.
+        ["strings", ..] | ["panels", ..] => None,
+        ["actions", id, rest @ ..] => {
+            if !m.actions.iter().any(|a| a.id == *id) {
+                return Some(format!("names action {id:?}, which does not exist"));
+            }
+            (!matches!(rest, ["label" | "help"])).then(|| "is not label or help".into())
+        }
         ["options", k, rest @ ..] => {
             if !keys.contains(k) {
                 return Some(format!("names option {k:?}, which does not exist"));
@@ -851,7 +907,8 @@ fn unknown_string_key(m: &Manifest, keys: &BTreeSet<&str>, items: &BTreeSet<&str
                 ["label" | "help" | "placeholder" | "pattern_message"] => None,
                 ["choices", v] => {
                     let o = m.options.iter().find(|o| o.key == *k)?;
-                    (!o.choices.iter().any(|c| c.value == *v))
+                    // Loaded choices are not in the manifest; any value may come.
+                    (o.choices_from.is_empty() && !o.choices.iter().any(|c| c.value == *v))
                         .then(|| format!("names choice {v:?}, which option {k:?} lacks"))
                 }
                 _ => Some("is not label, help, placeholder, pattern_message or choices.<value>".into()),
@@ -1168,5 +1225,59 @@ mod tests {
         let page = SettingsPage::for_manifest(&m, "ru");
         assert_eq!(shape(&page), "api_key n");
         assert_eq!(page.errors(None).keys().collect::<Vec<_>>(), ["api_key"]);
+    }
+
+    #[test]
+    fn actions_are_placed_and_gated_by_what_they_need() {
+        let m = manifest(
+            r#"
+            [[options]]
+            key = "api_key"
+            type = "secret"
+            pattern = '^ak-[a-z]{4}$'
+            [[options]]
+            key = "url"
+            type = "url"
+            [[options]]
+            key = "model"
+            type = "select"
+            default = "small"
+            choices = [{ value = "small" }]
+            choices_from = "list_models"
+            [[actions]]
+            id = "list_models"
+            label = "Load models"
+            [[actions]]
+            id = "test"
+            label = "Test"
+            needs = ["api_key", "url"]
+            [ui.settings]
+            layout = ["api_key", "url", "model", "@test", "@ghost"]
+            "#,
+        );
+        let page = SettingsPage::for_manifest(&m, "en");
+        assert_eq!(shape(&page), "api_key url model @test @ghost");
+        assert_eq!(page.placed_actions().into_iter().collect::<Vec<_>>(), ["ghost", "test"]);
+        assert!(page.action("ghost").is_none(), "an undeclared id draws nothing");
+        let test = page.action("test").unwrap();
+        let keys = |user: &OptionValues| {
+            page.action_blockers(test, Some(user)).iter().map(|i| page.options[*i].key.clone()).collect::<Vec<_>>()
+        };
+        // Empty and invalid fields block; valid ones do not, required or not.
+        assert_eq!(keys(&OptionValues::new()), ["api_key", "url"]);
+        let mut user: OptionValues = [("api_key".to_owned(), json!("nope"))].into();
+        assert_eq!(keys(&user), ["api_key", "url"]);
+        user.insert("api_key".into(), json!("ak-abcd"));
+        user.insert("url".into(), json!("https://x.test"));
+        assert!(keys(&user).is_empty());
+        assert!(page.action_blockers(page.action("list_models").unwrap(), None).is_empty());
+        // A loaded model is not "not one of the choices".
+        user.insert("model".into(), json!("acme-xl"));
+        assert!(page.errors(Some(&user)).is_empty(), "{:?}", page.errors(Some(&user)));
+        let issues = lint(&m, &ModuleStrings::default(), &[]);
+        assert!(issues
+            .iter()
+            .any(|i| i.message.contains("`@ghost` names an action that [[actions]] does not declare")));
+        assert!(!issues.iter().any(|i| i.message.contains("@test")), "{issues:?}");
     }
 }

@@ -52,7 +52,22 @@ the rest answer "unsupported".
 | `dictionary(req, host)` | `dictionary` | `text()`, `from()`, `to()`, `bool("exact", false)` | an article: `{headword, pronunciations, explanations, examples, …}` |
 | `speak(req, host)` | `listen` | `text()`, `lang()`, `bool("slow", false)` | `{audio_base64, mime}`; a `byte[]` is written as base64 |
 | `recognize(req, host)` | `ocr` | `image()` (bytes), `lang()`, `translateTo()` | `{text, translation?, detected_lang?}` or a `String` |
+| `action(req, host)` | | `action()`, `state()`, `uiLang()`, `options()` | runs the method annotated `@Action` with the entry's handler; `{options?, choices?, errors?, notice?, notice_level?}`, the notice as a `String`, or `null` |
 | `handle(req, host)` | | `req.method()` | for methods newer than this SDK |
+
+**`@Action("name")`** on a public method `(Request, Host)` handles the
+`[[actions]]` entry whose `handler` (or, without one, `id`) is `name`: a
+button on the module's settings page
+([actions](../../docs/modules/README.md#actions)). `req.options()` are the
+values on screen, applied or not:
+
+```java
+@Action("list_models")
+public Object listModels(Request ev, Host host) throws ModuleError {
+    return Json.obj("choices", Json.obj("model", List.of("small", "large")),
+                    "notice", host.t("loaded", 2));
+}
+```
 
 Results are anything `Json.write` takes: `Json.obj("text", t)` maps, any
 `Map` or `List`, or records, which become objects with their component names:
@@ -65,7 +80,7 @@ return new Translation(out, "en");
 The field names and shapes are the [protocol's](../../docs/modules/protocol.md).
 
 **`Request`**: `text()`, `from()`, `to()`, `lang()`, `image()`,
-`translateTo()`, `options()`, `option(key, fallback)`, `requireOption(key)`
+`translateTo()`, `action()`, `state()`, `uiLang()`, `options()`, `option(key, fallback)`, `requireOption(key)`
 (throws `missing_credential` naming the setting, so Glossa tells the user
 what to fill in), `string(key, fallback)`, `bool(key, fallback)`, and `raw()`
 for everything.
@@ -81,6 +96,7 @@ throws `ModuleError` with Glossa's error kind when it fails.
 | `log(level, msg)`, `debug`, `info`, `warn` | Glossa's log, tagged with the module id. |
 | `cacheGet(key)`, `cacheSet(key, value, ttlSecs)` | a small store in Glossa's memory that outlives this process (which stops when idle). |
 | `assetPath(name)`, `assets()` | where a file from the manifest's `[[assets]]` is (a model, a dictionary), or all of them with `missing` for optional ones not downloaded; also `GLOSSA_ASSET_<NAME>` in the environment ([assets](../../docs/modules/README.md#assets)). |
+| `t(key, args…)` | in an action: the module's string from `[strings]` in `locales/<lang>.toml`, in the interface language with English as the fallback, `{0}`, `{1}`… replaced. |
 | `call(method, params)` | **any host call by name**, returning the parsed result. Host calls added to Glossa after this SDK work through it before they get a typed method. |
 
 **`ModuleError(kind, message)`**: a failure Glossa can explain. Kinds:

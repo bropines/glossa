@@ -1222,6 +1222,14 @@ impl Provider for AssetGate {
         self.provider(host)?.recognize(host, req)
     }
 
+    fn action(
+        &self,
+        host: &Host,
+        params: glossa_module_sdk::wire::ActionParams,
+    ) -> Result<glossa_module_sdk::wire::ActionReply> {
+        self.provider(host)?.action(host, params)
+    }
+
     fn suspend(&self) {
         if let Some(p) = self.inner.lock().as_ref() {
             p.suspend();

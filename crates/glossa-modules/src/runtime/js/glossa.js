@@ -9,8 +9,15 @@
 //   recognize(req, host)   req: { image_base64, image_handle?, lang, translate_to?,
 //                                 granularity?, preserve_line_breaks, options }
 //
+// and, for each `[[actions]]` entry, a function named by its `handler` (the
+// action's id by default):
+//
+//   list_models(ev, host)  ev: { action, handler, event, state, options, ui_lang }
+//                          -> { options?, choices?, errors?, notice?, notice_level? }
+//
 // Each may be `async`. Return what the Glossa Module Protocol specifies for
-// the method (a plain string is accepted for translate). Throw
+// the method (a plain string is accepted for translate, and as the notice of
+// an action; nothing at all is a fine answer to an action). Throw
 // `new ModuleError(kind, message)` for a typed failure.
 //
 // `host` is synchronous on purpose: `host.fetch(url)` returns the response
@@ -91,6 +98,20 @@ var host = {
 
   /** The module's settings, also passed as req.options. */
   options: {},
+
+  /** The module's [strings] in the interface language (set for actions). */
+  strings: {},
+
+  /**
+   * The module's string `key` from `[strings]` in locales/<lang>.toml, in
+   * Glossa's interface language with English as the fallback, `{0}`, `{1}`…
+   * replaced by the further arguments. The key itself when there is none.
+   */
+  t: function (key) {
+    var s = Object.prototype.hasOwnProperty.call(host.strings, key) ? String(host.strings[key]) : String(key);
+    for (var i = 1; i < arguments.length; i++) s = s.split("{" + (i - 1) + "}").join(String(arguments[i]));
+    return s;
+  },
 
   /**
    * The image API (see docs/modules/ocr-modules.md). Each operation takes

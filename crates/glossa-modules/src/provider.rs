@@ -156,6 +156,19 @@ pub trait Provider: Send + Sync {
         Err(self.unsupported("text recognition"))
     }
 
+    /// Run one of the module's `[[actions]]` (a button on its settings
+    /// page). `params.options` are ignored: the action sees `host.options`,
+    /// which the caller sets to the draft being edited. Only modules that
+    /// declare actions implement it.
+    fn action(
+        &self,
+        host: &Host,
+        params: glossa_module_sdk::wire::ActionParams,
+    ) -> Result<glossa_module_sdk::wire::ActionReply> {
+        let _ = (host, params);
+        Err(self.unsupported("module actions"))
+    }
+
     /// The same query on the service's website, for "open in browser".
     fn web_link(&self, text: &str, pair: LangPair) -> Option<String> {
         let _ = (text, pair);
@@ -260,6 +273,14 @@ impl Provider for Guarded {
         self.call("text recognition", || self.inner.recognize(host, req))
     }
 
+    fn action(
+        &self,
+        host: &Host,
+        params: glossa_module_sdk::wire::ActionParams,
+    ) -> Result<glossa_module_sdk::wire::ActionReply> {
+        self.call("action", || self.inner.action(host, params))
+    }
+
     fn web_link(&self, text: &str, pair: LangPair) -> Option<String> {
         std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| self.inner.web_link(text, pair))).ok().flatten()
     }
@@ -301,6 +322,11 @@ pub struct OptionSpec {
     /// For `select` and `multiselect`: the allowed values and their labels.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub choices: Vec<Choice>,
+    /// For `select` and `multiselect`: an [action](crate::actions) whose
+    /// reply may replace `choices` ("Load models"). The declared choices
+    /// show until it has run.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub choices_from: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub min: Option<f64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]

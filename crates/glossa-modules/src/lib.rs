@@ -3,6 +3,7 @@
 //! * [`provider`] — the [`Provider`] trait every translation, dictionary,
 //!   speech and OCR source implements, built-in or loaded.
 //! * [`manifest`] — `module.toml`.
+//! * [`actions`] — `[[actions]]`: buttons a module's settings page can run.
 //! * [`assets`] — files a module declares (models, dictionaries), downloaded
 //!   and verified on demand.
 //! * [`python_env`] — the Python a Python module runs with: a system one, or
@@ -20,6 +21,7 @@
 //! * [`child`] — running a helper program with a deadline, for providers
 //!   built on one (Tesseract, the system voice).
 
+pub mod actions;
 pub mod assets;
 pub mod child;
 pub mod host_api;
@@ -35,7 +37,7 @@ pub mod runtime;
 pub mod settings;
 
 pub use assets::{AssetState, AssetStatus, ModuleAssets};
-pub use glossa_module_sdk::PROTOCOL_VERSION;
+pub use glossa_module_sdk::{wire, PROTOCOL_VERSION};
 pub use manifest::{Manifest, Runtime};
 pub use provider::{CancelToken, Host, OptionKind, OptionSpec, OptionValues, Provider};
 pub use registry::{Entry, LoadReport, Origin, Registry, RuntimeContext};

@@ -85,6 +85,18 @@ impl<T: Transport> ProtocolProvider<T> {
         method: &str,
         params: impl FnOnce(&HostApi) -> P,
     ) -> Result<R> {
+        self.invoke_full(host, method, None, params)
+    }
+
+    /// [`Self::invoke_with`], with the module's strings for the `t` host
+    /// call (actions).
+    fn invoke_full<P: serde::Serialize, R: serde::de::DeserializeOwned>(
+        &self,
+        host: &Host,
+        method: &str,
+        strings: Option<&std::collections::BTreeMap<String, String>>,
+        params: impl FnOnce(&HostApi) -> P,
+    ) -> Result<R> {
         host.check_cancelled()?;
         let api = HostApi::new(
             ScopedHttp {
@@ -94,7 +106,8 @@ impl<T: Transport> ProtocolProvider<T> {
             },
             &self.cache,
         )
-        .with_assets(self.assets.as_ref());
+        .with_assets(self.assets.as_ref())
+        .with_strings(strings);
         let params = serde_json::to_value(params(&api)).map_err(|e| Error::module(&self.info.id, e))?;
         let started = Instant::now();
         let value = self.transport.call(method, params, &|m, p| api.handle(m, p)).map_err(|e| match e.kind {
@@ -224,6 +237,32 @@ impl<T: Transport> Provider for ProtocolProvider<T> {
             out.image_size = size;
         }
         Ok(out)
+    }
+
+    fn action(&self, host: &Host, mut params: wire::ActionParams) -> Result<wire::ActionReply> {
+        let Some(spec) = self.manifest.actions.iter().find(|a| a.id == params.action) else {
+            // Only what the manifest declares reaches the module: a module
+            // without `[[actions]]` never sees the method at all.
+            return Err(Error::module(&self.info.id, format!("module.toml declares no action {:?}", params.action)));
+        };
+        if spec.kind() != crate::actions::ActionKind::Handler {
+            return Err(Error::Unsupported {
+                provider: self.info.name.clone(),
+                capability: "call and built-in actions (they arrive with module panels)",
+            });
+        }
+        params.handler = spec.handler_name().to_owned();
+        params.options = host.options.clone();
+        if params.strings.is_empty() {
+            params.strings = crate::actions::code_strings(&self.manifest.strings, &params.ui_lang);
+        }
+        let strings = params.strings.clone();
+        let reply: serde_json::Value = self.invoke_full(host, "action", Some(&strings), |_| params)?;
+        if reply.is_null() {
+            // A handler with nothing to say ("done").
+            return Ok(wire::ActionReply::default());
+        }
+        serde_json::from_value(reply).map_err(|e| Error::bad_response(&self.info.name, format!("action reply: {e}")))
     }
 
     fn suspend(&self) {

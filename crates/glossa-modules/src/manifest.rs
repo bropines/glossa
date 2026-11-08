@@ -37,9 +37,14 @@
 //! choices = [{ value = "small" }, { value = "large" }]
 //! enabled_if = "options.api_key"
 //! group = "advanced"
+//! choices_from = "list_models"   # an action may replace the choices
+//!
+//! [[actions]]                    # buttons; see `actions`
+//! id = "list_models"
+//! label = "Load models"
 //!
 //! [ui.settings]                  # optional layout; see `settings`
-//! layout = ["api_key", "advanced"]
+//! layout = ["api_key", "advanced", "@list_models"]
 //!
 //! [[assets]]                     # files fetched on first use; see `assets`
 //! name = "model"
@@ -62,6 +67,7 @@ use std::path::{Path, PathBuf};
 use glossa_core::{Capabilities, LangId, ProviderInfo};
 use serde::{Deserialize, Serialize};
 
+use crate::actions::ActionSpec;
 use crate::assets::AssetSpec;
 use crate::provider::OptionSpec;
 use crate::settings::{ModuleStrings, SettingsPage, UiSection};
@@ -89,6 +95,11 @@ pub struct Manifest {
     /// Older builds ignore the table and load the module as a plain service.
     #[serde(default, skip_serializing_if = "UiSection::is_default")]
     pub ui: UiSection,
+    /// `[[actions]]`: buttons the settings page can show, run by the module
+    /// through the protocol's `action` method; see [`crate::actions`].
+    /// Older builds ignore them.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub actions: Vec<ActionSpec>,
     /// Files the module needs that are downloaded on demand (models,
     /// dictionaries, helper programs); see [`crate::assets`].
     #[serde(default, skip_serializing_if = "Vec::is_empty")]

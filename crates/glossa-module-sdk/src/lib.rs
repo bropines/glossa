@@ -72,8 +72,16 @@ pub trait Module: Send {
         Err(ModuleError::unsupported("recognize"))
     }
 
+    /// A button the manifest declares in `[[actions]]` was pressed.
+    /// `req.handler` (or `req.action`) says which; `req.t(..)` reads the
+    /// module's `[strings]` in the interface language.
+    fn action(&mut self, host: &Host, req: ActionParams) -> Result<ActionReply, ModuleError> {
+        let _ = host;
+        Err(ModuleError::unsupported(&format!("action {:?}", req.action)))
+    }
+
     /// Route one call. The generated glue calls this; a module overrides it
-    /// only to support methods beyond the standard five.
+    /// only to support methods beyond the standard ones.
     fn dispatch(
         &mut self,
         host: &Host,
@@ -92,6 +100,7 @@ pub trait Module: Send {
             "dictionary" => emit(self.dictionary(host, parse(params)?)?),
             "speak" => emit(self.speak(host, parse(params)?)?),
             "recognize" => emit(self.recognize(host, parse(params)?)?),
+            "action" => emit(self.action(host, parse(params)?)?),
             other => Err(ModuleError::unsupported(other)),
         }
     }

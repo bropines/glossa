@@ -53,11 +53,27 @@ impl Transport for GlossaTransport {
             let options = params.get("options").cloned().unwrap_or_else(|| serde_json::json!({}));
             engine::set_global_json(ctx, "__options", &options).map_err(ModuleError::other)?;
             engine::eval(ctx, "host.options = __options;", "options").map_err(ModuleError::other)?;
+            // An action carries the module's strings for host.t.
+            if let Some(strings) = params.get("strings").filter(|s| s.is_object()) {
+                engine::set_global_json(ctx, "__strings", strings).map_err(ModuleError::other)?;
+                engine::eval(ctx, "host.strings = __strings;", "strings").map_err(ModuleError::other)?;
+            }
             self.script.script.eval(ctx).map_err(engine::script_error)?;
 
+            // An action runs the function its manifest entry names, not one
+            // called "action".
+            let name = match method {
+                "action" => {
+                    params.get("handler").or_else(|| params.get("action")).and_then(|v| v.as_str()).unwrap_or_default()
+                }
+                m => m,
+            };
             let entry =
-                engine::call_global(ctx, "__glossaEntry", &[engine::str(ctx, method)]).map_err(ModuleError::other)?;
+                engine::call_global(ctx, "__glossaEntry", &[engine::str(ctx, name)]).map_err(ModuleError::other)?;
             if !entry.is_function() {
+                if method == "action" {
+                    return Err(ModuleError::unsupported(&format!("action handler {name:?} (no such function)")));
+                }
                 return Err(ModuleError::unsupported(method));
             }
             let req = engine::from_json(ctx, &params).map_err(ModuleError::other)?;
@@ -69,6 +85,10 @@ impl Transport for GlossaTransport {
         .map_err(ModuleError::other)??;
         match (method, value) {
             ("translate", serde_json::Value::String(s)) => Ok(serde_json::json!({ "text": s })),
+            // An action with nothing to report, and the shorthand of
+            // returning just the notice.
+            ("action", serde_json::Value::Null) => Ok(serde_json::json!({})),
+            ("action", serde_json::Value::String(s)) => Ok(serde_json::json!({ "notice": s })),
             (_, serde_json::Value::Null) => {
                 Err(ModuleError::new(ErrorKind::BadResponse, format!("{method} returned nothing")))
             }
@@ -454,6 +474,100 @@ mod tests {
                 .unwrap();
             assert_eq!(t.text, "false||false|a|b|c|__proto__,constructor,tostring");
         });
+    }
+
+    #[test]
+    fn actions_run_their_handler_with_strings_and_permissions() {
+        let mut manifest = Manifest::parse(
+            r#"
+            capabilities = ["translate"]
+            [module]
+            id = "js-actions"
+            name = "JS Actions"
+            runtime = "js"
+            [permissions]
+            network = ["api.test"]
+            [[options]]
+            key = "api_key"
+            type = "secret"
+            [[options]]
+            key = "model"
+            type = "select"
+            choices_from = "list_models"
+            [[actions]]
+            id = "list_models"
+            [[actions]]
+            id = "test"
+            handler = "checkKey"
+            [[actions]]
+            id = "quiet"
+            [[actions]]
+            id = "escape"
+            [[actions]]
+            id = "copy"
+            builtin = "copy"
+            "#,
+        )
+        .unwrap();
+        manifest.strings.insert("en", [("strings.plan".to_owned(), "Plan: {0}".to_owned())].into());
+        manifest.strings.insert("ru", [("strings.plan".to_owned(), "Тариф: {0}".to_owned())].into());
+        let source = r#"
+            function list_models(ev, host) {
+                var r = host.fetch("https://api.test/models", { headers: { Authorization: ev.options.api_key } });
+                return { choices: { model: r.json().map(function (m) { return { value: m, label: m.toUpperCase() }; }) } };
+            }
+            async function checkKey(ev, host) {
+                if (ev.handler !== "checkKey" || ev.event.type !== "click") throw new Error("bad event");
+                if (host.options.api_key !== "good") return { errors: { api_key: "refused" } };
+                return { notice: host.t("plan", "pro") + " " + host.t("nope"), notice_level: "success" };
+            }
+            function quiet() {}
+            function escape(ev, host) { return host.fetch("https://elsewhere.test/").text(); }
+        "#;
+        let p = ProtocolProvider::new(
+            manifest,
+            GlossaTransport { script: Arc::new(GlossaScript::new("main.js".into(), source)) },
+            ModuleCache::new(),
+        );
+        let http = MockHttp::new().on(Method::Get, "https://api.test/models", 200, r#"["small","large"]"#);
+        let call = |opts: &OptionValues, action: &str, lang: &str| {
+            with_test_host(&http, opts, |host| {
+                p.action(
+                    host,
+                    glossa_module_sdk::wire::ActionParams {
+                        action: action.into(),
+                        event: Some(glossa_module_sdk::wire::ActionEvent {
+                            kind: "click".into(),
+                            element: Some(action.into()),
+                            item: None,
+                        }),
+                        ui_lang: lang.into(),
+                        ..Default::default()
+                    },
+                )
+            })
+        };
+        let mut opts = OptionValues::new();
+        opts.insert("api_key".into(), serde_json::json!("good"));
+
+        let r = call(&opts, "list_models", "en").unwrap();
+        assert_eq!(r.choices["model"].iter().map(|c| c.label.as_str()).collect::<Vec<_>>(), ["SMALL", "LARGE"]);
+        assert!(http.requests()[0].headers.iter().any(|(k, v)| k == "Authorization" && v == "good"));
+
+        let r = call(&opts, "test", "ru").unwrap();
+        assert_eq!(r.notice.as_deref(), Some("Тариф: pro nope"), "host.t in Russian; a missing key is itself");
+        assert_eq!(r.notice_level.as_deref(), Some("success"));
+        assert_eq!(call(&opts, "test", "de").unwrap().notice.as_deref(), Some("Plan: pro nope"), "English fallback");
+        let mut bad = opts.clone();
+        bad.insert("api_key".into(), serde_json::json!("bad"));
+        assert_eq!(call(&bad, "test", "en").unwrap().errors["api_key"], "refused");
+
+        assert_eq!(call(&opts, "quiet", "en").unwrap(), Default::default(), "returning nothing is fine");
+        let e = call(&opts, "escape", "en").unwrap_err();
+        assert!(e.to_string().contains("permissions"), "actions keep the module's permissions: {e}");
+        let e = call(&opts, "undeclared", "en").unwrap_err();
+        assert!(e.to_string().contains("declares no action"), "{e}");
+        assert!(matches!(call(&opts, "copy", "en"), Err(glossa_core::Error::Unsupported { .. })));
     }
 
     #[test]

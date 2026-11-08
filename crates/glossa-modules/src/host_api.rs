@@ -1,6 +1,6 @@
 //! The host side of the module protocol: what a module may ask of us.
 //!
-//! Modules of every runtime call back with `http`, `log`, `cache_get`,
+//! Modules of every runtime call back with `http`, `log`, `cache_get`, `t`,
 //! `cache_set`, `assets` and the `image.*` operations. [`HostApi`] answers those for
 //! one module during one call, applying its network permissions — a module
 //! asking for a host outside its allowlist gets an error, not a request —
@@ -98,6 +98,9 @@ pub struct HostApi<'a> {
     pub images: Mutex<crate::image_ops::ImageStore>,
     /// The module's assets, for the `assets` host call.
     pub assets: Option<&'a crate::assets::ModuleAssets>,
+    /// The module's `[strings]` in the interface language, for the `t` host
+    /// call during an action.
+    pub strings: Option<&'a std::collections::BTreeMap<String, String>>,
 }
 
 impl<'a> HostApi<'a> {
@@ -108,12 +111,19 @@ impl<'a> HostApi<'a> {
             #[cfg(feature = "image")]
             images: Mutex::new(crate::image_ops::ImageStore::new()),
             assets: None,
+            strings: None,
         }
     }
 
     /// Answer the `assets` host call from `assets`.
     pub fn with_assets(mut self, assets: Option<&'a crate::assets::ModuleAssets>) -> Self {
         self.assets = assets;
+        self
+    }
+
+    /// Answer the `t` host call from `strings`.
+    pub fn with_strings(mut self, strings: Option<&'a std::collections::BTreeMap<String, String>>) -> Self {
+        self.strings = strings;
         self
     }
 
@@ -185,6 +195,19 @@ impl<'a> HostApi<'a> {
             "assets" => {
                 let info = self.assets.map(|a| a.host_info()).unwrap_or_default();
                 Ok(serde_json::to_value(info).expect("assets info serialises"))
+            }
+            // `{"key": "bad_key", "args": ["x"]}`: a module string, for
+            // runtimes whose SDK does not read the table sent with the call.
+            "t" => {
+                let key = params.get("key").and_then(|v| v.as_str()).unwrap_or("");
+                let args: Vec<String> = params
+                    .get("args")
+                    .and_then(|v| v.as_array())
+                    .map(|a| a.iter().map(|v| v.as_str().map(str::to_owned).unwrap_or_else(|| v.to_string())).collect())
+                    .unwrap_or_default();
+                let args: Vec<&str> = args.iter().map(String::as_str).collect();
+                let template = self.strings.and_then(|s| s.get(key)).map(String::as_str).unwrap_or(key);
+                Ok(wire::format_string(template, &args).into())
             }
             op if op.starts_with("image.") => self.image_op(&op["image.".len()..], params),
             other => Err(ModuleError::new(ErrorKind::Unsupported, format!("unknown host call {other:?}"))),

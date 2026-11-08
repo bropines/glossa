@@ -81,6 +81,21 @@ public final class Request {
         return v;
     }
 
+    /** {@code action}: the id of the {@code [[actions]]} entry that was pressed. */
+    public String action() {
+        return string("action", "");
+    }
+
+    /** {@code action}: the panel's state; empty on the settings page. */
+    public Map<String, Object> state() {
+        return Json.asMap(params.get("state"));
+    }
+
+    /** {@code action}: Glossa's interface language ({@code en}, {@code ru}…). */
+    public String uiLang() {
+        return string("ui_lang", "en");
+    }
+
     public String string(String key, String fallback) {
         Object v = params.get(key);
         return v instanceof String ? (String) v : fallback;

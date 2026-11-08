@@ -151,6 +151,22 @@ public final class Host {
         return request.option(key, fallback);
     }
 
+    /**
+     * The module's string {@code key} from {@code [strings]} in
+     * {@code locales/<lang>.toml}, in Glossa's interface language (English
+     * as the fallback), with {@code {0}}, {@code {1}}… replaced by
+     * {@code args}. The key itself when there is none. Glossa sends the
+     * table with each action, so this makes no host call.
+     */
+    public String t(String key, Object... args) {
+        Object s = Json.asMap(request.get("strings")).get(key);
+        String text = s instanceof String ? (String) s : key;
+        for (int i = 0; i < args.length; i++) {
+            text = text.replace("{" + i + "}", String.valueOf(args[i]));
+        }
+        return text;
+    }
+
     /** The answer to an {@code http} host call. Any status is an answer; deciding that 4xx fails is yours. */
     public static final class HttpResponse {
         private final Map<String, Object> raw;

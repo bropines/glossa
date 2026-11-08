@@ -18,11 +18,12 @@ bumps `api`.
 
 - [Conventions](#conventions)
 - [Methods](#methods): [`translate`](#translate), [`detect`](#detect),
-  [`dictionary`](#dictionary), [`speak`](#speak), [`recognize`](#recognize)
+  [`dictionary`](#dictionary), [`speak`](#speak), [`recognize`](#recognize),
+  [`action`](#action)
 - [Errors](#errors)
 - [Host calls](#host-calls): [`http`](#http), [`log`](#log),
   [`cache_get` / `cache_set`](#cache_get--cache_set), [`assets`](#assets),
-  [`image`](#image)
+  [`image`](#image), [`t`](#t)
 - [Versioning](#versioning)
 
 ## Conventions
@@ -143,6 +144,45 @@ translation); `hocr` or `alto` may carry it instead as a standard document;
 (Glossa maps them back). Coordinates are pixels of the input image. The
 fields, the formats and the coordinate rules are in
 [ocr-modules.md](ocr-modules.md).
+
+### `action`
+
+A button the module declares in `[[actions]]` was pressed (see
+[README.md](README.md#actions)). Glossa sends this method only for actions
+the manifest declares, so a module without `[[actions]]` never sees it.
+
+```json
+{ "action": "test", "handler": "testKey",
+  "event": { "type": "click", "element": "test" },
+  "state": {}, "options": { "api_key": "AIza…", "model": "small" },
+  "ui_lang": "ru", "strings": { "key_ok": "Ключ принят.", "key_refused": "Ключ не подошёл: {0}" } }
+```
+
+`action` is the entry's `id`; `handler` is the function to run (the entry's
+`handler`, or its id). `options` are the values on the settings page,
+applied or not, so "Test" checks what the user typed. `state` and `panel`
+belong to module panels and are empty or absent on the settings page.
+`ui_lang` is Glossa's interface language, and `strings` the module's
+`[strings]` in it (from `locales/<lang>.toml`, falling back to
+`locales/en.toml` key by key), so an SDK's `t()` needs no round trip.
+
+```json
+{ "options": { "model": "large" },
+  "choices": { "model": [{ "value": "large", "label": "Large" }, "small"] },
+  "errors":  { "api_key": "The key was refused." },
+  "notice":  "Connected.",
+  "notice_level": "success" }
+```
+
+Every field is optional, and `{}` (or `null`) is "done". `options` is merged
+into the settings being edited (the user still applies them); only the
+module's own option keys are taken. `choices` replaces the choices of
+`select` and `multiselect` options, by key; a choice is `{value, label?}` or
+a plain string. `errors` are shown under the named fields until they are
+edited. `notice` is shown beside the button; `notice_level` is `info` (the
+default), `success`, `warning` or `error`. A thrown error is shown beside the
+button as the error's message. Actions run with the module's network
+permissions, like every other call.
 
 ## Errors
 
@@ -290,8 +330,20 @@ operation takes `handle` (or `data_base64`) and returns a new image whose
 `transform` maps its pixels back to the original. The operations, their
 parameters and the limits are in [ocr-modules.md](ocr-modules.md#the-image-api).
 
+### `t`
+
+During an [`action`](#action): one of the module's `[strings]` in the
+interface language, `{0}`, `{1}`… replaced by `args`; the key itself when
+there is none. For modules without an SDK; the SDKs read the `strings` table
+sent with the call instead.
+
+```json
+"t"  { "key": "key_refused", "args": ["HTTP 400"] }   → "Ключ не подошёл: HTTP 400"
+```
+
 ## Versioning
 
 The engine refuses a module whose `api` is not the version it speaks, and
 `glossa-cli modules` says so. Additions that old modules can ignore do not
-change the version.
+change the version: the `action` method and the `t` host call came with
+`api = 1`, and only modules that declare `[[actions]]` receive the method.

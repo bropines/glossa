@@ -40,6 +40,51 @@ public interface GlossaModule {
         throw ModuleError.unsupported("recognize");
     }
 
+    /**
+     * An {@code [[actions]]} button was pressed. The default runs the public
+     * method annotated {@link Action} whose value is the request's
+     * {@code handler} (or {@code action}); override it to route actions
+     * yourself.
+     */
+    default Object action(Request req, Host host) throws Exception {
+        String handler = req.string("handler", "");
+        String id = req.action();
+        java.lang.reflect.Method found = null;
+        for (java.lang.reflect.Method m : getClass().getMethods()) {
+            Action a = m.getAnnotation(Action.class);
+            if (a == null) {
+                continue;
+            }
+            if (a.value().equals(handler)) {
+                found = m;
+                break;
+            }
+            if (found == null && a.value().equals(id)) {
+                found = m;
+            }
+        }
+        if (found == null) {
+            throw ModuleError.unsupported("action " + (handler.isEmpty() ? id : handler));
+        }
+        try {
+            // A module class need not be public (an anonymous class, a
+            // package-private Main): reach its public methods regardless.
+            found.setAccessible(true);
+        } catch (RuntimeException ignored) {
+            // A named Java module that does not open the package; invoke
+            // still works when the class is public.
+        }
+        try {
+            return found.invoke(this, req, host);
+        } catch (java.lang.reflect.InvocationTargetException e) {
+            Throwable cause = e.getCause();
+            if (cause instanceof Exception) {
+                throw (Exception) cause;
+            }
+            throw e;
+        }
+    }
+
     /** Any method this interface does not name yet. */
     default Object handle(Request req, Host host) throws Exception {
         throw ModuleError.unsupported(req.method());

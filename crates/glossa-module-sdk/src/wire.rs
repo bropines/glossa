@@ -438,6 +438,127 @@ impl ImageInfo {
     }
 }
 
+// -- actions --------------------------------------------------------------------
+
+/// The `action` method: a button on a module's settings page (and, later,
+/// in its panels) was pressed. Glossa sends it only to modules whose
+/// manifest declares `[[actions]]`, so a module that declares none never
+/// sees it.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct ActionParams {
+    /// The action's `id` from `[[actions]]`.
+    pub action: String,
+    /// The function to run: the action's `handler`, or its id.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub handler: String,
+    /// The panel the action was triggered from; absent on the settings page.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub panel: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub event: Option<ActionEvent>,
+    /// The panel's state; empty on the settings page.
+    #[serde(default)]
+    pub state: Options,
+    /// The module's settings. On the settings page these are the values the
+    /// user typed, applied or not, so "Test" checks what is on screen.
+    #[serde(default)]
+    pub options: Options,
+    /// Glossa's interface language (`en`, `ru`, …).
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub ui_lang: String,
+    /// The module's `[strings]` in `ui_lang`, falling back to English, for
+    /// `host.t` without a round trip (see [`ActionParams::t`]).
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub strings: BTreeMap<String, String>,
+}
+
+impl ActionParams {
+    /// The module's string `key` with `{0}`, `{1}`… replaced by `args`; the
+    /// key itself when the module has no such string.
+    pub fn t(&self, key: &str, args: &[&str]) -> String {
+        format_string(self.strings.get(key).map(String::as_str).unwrap_or(key), args)
+    }
+}
+
+/// `{0}`, `{1}`… in `template` replaced by `args`. Placeholders without an
+/// argument stay as written.
+pub fn format_string(template: &str, args: &[&str]) -> String {
+    let mut out = template.to_owned();
+    for (i, a) in args.iter().enumerate() {
+        out = out.replace(&format!("{{{i}}}"), a);
+    }
+    out
+}
+
+/// What set an action off.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct ActionEvent {
+    /// `click` (a button); panels add `submit`, `change`, `open`, `shortcut`.
+    #[serde(rename = "type", default)]
+    pub kind: String,
+    /// The element that was used: the action's own id for a button.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub element: Option<String>,
+    /// A clicked row of a `list` element (panels).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub item: Option<serde_json::Value>,
+}
+
+/// An action's answer. Every field is optional; `{}` means "done, nothing
+/// to show".
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct ActionReply {
+    /// Merged into the panel's state (shallow).
+    #[serde(default, skip_serializing_if = "Options::is_empty")]
+    pub state: Options,
+    /// Merged into the settings the user is editing (shallow). Honoured only
+    /// on the settings page, where it lands in the unsaved draft.
+    #[serde(default, skip_serializing_if = "Options::is_empty")]
+    pub options: Options,
+    /// New choices for `select` options, by option key: what `choices_from`
+    /// loads. Each is `{"value", "label"?}` or a plain string.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub choices: BTreeMap<String, Vec<ActionChoice>>,
+    /// Messages to show under fields, by option key, until the field changes.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub errors: BTreeMap<String, String>,
+    /// A line shown beside the action's button.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub notice: Option<String>,
+    /// `info` (the default), `success`, `warning` or `error`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub notice_level: Option<String>,
+}
+
+/// One choice an action offers for a `select`.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(from = "ChoiceRepr")]
+pub struct ActionChoice {
+    pub value: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub label: String,
+}
+
+#[derive(Deserialize)]
+#[serde(untagged)]
+enum ChoiceRepr {
+    Value(String),
+    Full {
+        value: String,
+        #[serde(default)]
+        label: String,
+    },
+}
+
+impl From<ChoiceRepr> for ActionChoice {
+    fn from(r: ChoiceRepr) -> Self {
+        match r {
+            ChoiceRepr::Value(value) => ActionChoice { value, label: String::new() },
+            ChoiceRepr::Full { value, label } => ActionChoice { value, label },
+        }
+    }
+}
+
 // -- host calls ----------------------------------------------------------------
 
 /// What the `assets` host call returns: where the files a module declares
@@ -773,6 +894,40 @@ mod tests {
         assert!((turned.rotation().to_degrees() + 90.0).abs() < 1e-9);
         assert!(Transform::default().is_identity());
         assert_eq!(serde_json::to_value(crop).unwrap(), serde_json::json!([1.0, 0.0, 50.0, 0.0, 1.0, 10.0]));
+    }
+
+    #[test]
+    fn actions_round_trip_and_tolerate_shorthands() {
+        let p = ActionParams {
+            action: "test".into(),
+            handler: "testKey".into(),
+            event: Some(ActionEvent { kind: "click".into(), element: Some("test".into()), item: None }),
+            options: [("api_key".to_owned(), serde_json::json!("k"))].into(),
+            ui_lang: "ru".into(),
+            strings: [("hi".to_owned(), "Привет, {0}!".to_owned())].into(),
+            ..Default::default()
+        };
+        let v = serde_json::to_value(&p).unwrap();
+        assert_eq!(v["event"], serde_json::json!({"type": "click", "element": "test"}));
+        assert!(v.get("panel").is_none(), "absent on the settings page");
+        assert_eq!(serde_json::from_value::<ActionParams>(v).unwrap(), p);
+        assert_eq!(p.t("hi", &["мир"]), "Привет, мир!");
+        assert_eq!(p.t("missing", &[]), "missing");
+        let min: ActionParams = serde_json::from_str(r#"{"action":"x"}"#).unwrap();
+        assert!(min.options.is_empty() && min.handler.is_empty());
+
+        let r: ActionReply = serde_json::from_str(
+            r#"{"choices":{"model":["a",{"value":"b","label":"B"}]},"errors":{"api_key":"bad"},"notice":"ok"}"#,
+        )
+        .unwrap();
+        assert_eq!(r.choices["model"][0], ActionChoice { value: "a".into(), label: String::new() });
+        assert_eq!(r.choices["model"][1].label, "B");
+        assert_eq!(r.errors["api_key"], "bad");
+        let back = serde_json::to_value(&r).unwrap();
+        assert_eq!(back["choices"]["model"][0], serde_json::json!({"value": "a"}));
+        assert!(back.get("state").is_none(), "empty fields are left out");
+        assert_eq!(serde_json::from_value::<ActionReply>(back).unwrap(), r);
+        assert_eq!(serde_json::from_str::<ActionReply>("{}").unwrap(), ActionReply::default());
     }
 
     #[test]
