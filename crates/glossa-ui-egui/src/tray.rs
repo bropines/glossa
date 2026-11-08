@@ -41,6 +41,8 @@ pub enum TrayEvent {
     Click(ClickKind, Option<FocusMark>),
     ToggleMouseMode,
     Action(Action),
+    /// Open a module panel (`module/panel`) from the Modules submenu.
+    Panel(String),
     ToggleHotkeys,
     About,
     /// Open the page where the project can be supported.
@@ -144,13 +146,15 @@ pub struct Tray {
     looks: mpsc::Sender<LinuxUpdate>,
     /// The interface language the menu was built in.
     locale: Arc<Locale>,
+    /// The panels in the Modules submenu, as built.
+    panels: Vec<(String, String)>,
 }
 
 /// What the GTK thread is asked to change.
 #[cfg(target_os = "linux")]
 enum LinuxUpdate {
     Icon(tray_icon::Icon),
-    Menu(Arc<Locale>),
+    Menu(Arc<Locale>, Vec<(String, String)>),
 }
 
 /// The accent of the current theme, as the icon's base colour, and whether
@@ -181,7 +185,9 @@ fn tray_icon_image(accent: [f32; 3], mouse_mode: bool) -> Option<tray_icon::Icon
     tray_icon::Icon::from_rgba(data.rgba, data.width, data.height).ok()
 }
 
-fn build_menu(locale: &Locale) -> (Menu, CheckMenuItem, CheckMenuItem) {
+/// The tray menu. `panels` (`module/panel`, title) fill a Modules submenu,
+/// which appears only when some module offers a panel there.
+fn build_menu(locale: &Locale, panels: &[(String, String)]) -> (Menu, CheckMenuItem, CheckMenuItem) {
     let menu = Menu::new();
     let item = |id: &str, key: &str| MenuItem::with_id(id, locale.get(key), true, None);
     let hotkeys = CheckMenuItem::with_id("hotkeys", locale.get("tray.hotkeys"), true, true, None);
@@ -218,6 +224,16 @@ fn build_menu(locale: &Locale) -> (Menu, CheckMenuItem, CheckMenuItem) {
     }
     let _ = menu.append_items(&[&item("show", "tray.show"), &PredefinedMenuItem::separator()]);
     let _ = menu.append_items(&ocr_items.iter().map(|b| b.as_ref()).collect::<Vec<_>>());
+    if !panels.is_empty() {
+        // Module text is shown as written: a menu item draws no markup.
+        let entries: Vec<MenuItem> =
+            panels.iter().map(|(id, title)| MenuItem::with_id(format!("panel:{id}"), title, true, None)).collect();
+        let refs: Vec<&dyn tray_icon::menu::IsMenuItem> =
+            entries.iter().map(|e| e as &dyn tray_icon::menu::IsMenuItem).collect();
+        if let Ok(sub) = Submenu::with_items(locale.get("tray.modules"), true, &refs) {
+            let _ = menu.append(&sub);
+        }
+    }
     let _ = menu.append_items(&[
         &item("dictionary", "tray.dictionary"),
         &item("history", "tray.history"),
@@ -251,7 +267,10 @@ fn install_handlers(wake: WakeFn, clicks: Arc<ClickSettings>) -> Receiver<TrayEv
             "about" => Some(TrayEvent::About),
             "support" => Some(TrayEvent::Support),
             "exit" => Some(TrayEvent::Action(Action::Quit)),
-            other => other.strip_prefix("action:").and_then(Action::from_id).map(TrayEvent::Action),
+            other => match other.strip_prefix("panel:") {
+                Some(panel) => Some(TrayEvent::Panel(panel.to_owned())),
+                None => other.strip_prefix("action:").and_then(Action::from_id).map(TrayEvent::Action),
+            },
         };
         if let Some(ev) = ev {
             let _ = tx.send(ev);
@@ -331,7 +350,7 @@ impl Tray {
     pub fn new(wake: WakeFn, locale: &Arc<Locale>, clicks_cfg: &TrayConfig) -> Result<Tray, String> {
         let clicks = Arc::new(ClickSettings::default());
         let events = install_handlers(wake, clicks.clone());
-        let (menu, hotkeys_item, mouse_item) = build_menu(locale);
+        let (menu, hotkeys_item, mouse_item) = build_menu(locale, &[]);
         let mut b = TrayIconBuilder::new()
             .with_tooltip("Glossa")
             .with_menu(Box::new(menu))
@@ -350,7 +369,7 @@ impl Tray {
             }
         }
         let icon = b.build().map_err(|e| e.to_string())?;
-        let tray = Tray { events, clicks, icon, hotkeys_item, mouse_item, locale: locale.clone() };
+        let tray = Tray { events, clicks, icon, hotkeys_item, mouse_item, locale: locale.clone(), panels: Vec::new() };
         tray.set_clicks(clicks_cfg);
         Ok(tray)
     }
@@ -372,7 +391,7 @@ impl Tray {
                     let _ = ready_tx.send(Err(e.to_string()));
                     return;
                 }
-                let (menu, _hotkeys, _mouse) = build_menu(&locale);
+                let (menu, _hotkeys, _mouse) = build_menu(&locale, &[]);
                 let mut b = TrayIconBuilder::new().with_tooltip("Glossa").with_menu(Box::new(menu));
                 if let Some(i) = tray_icon_image([0.16, 0.55, 0.89], false) {
                     b = b.with_icon(i);
@@ -390,8 +409,8 @@ impl Tray {
                                     LinuxUpdate::Icon(i) => {
                                         let _ = held.set_icon(Some(i));
                                     }
-                                    LinuxUpdate::Menu(locale) => {
-                                        let (menu, _hotkeys, _mouse) = build_menu(&locale);
+                                    LinuxUpdate::Menu(locale, panels) => {
+                                        let (menu, _hotkeys, _mouse) = build_menu(&locale, &panels);
                                         held.set_menu(Some(Box::new(menu)));
                                     }
                                 }
@@ -408,7 +427,7 @@ impl Tray {
             })
             .map_err(|e| e.to_string())?;
         ready_rx.recv_timeout(std::time::Duration::from_secs(3)).map_err(|e| e.to_string())??;
-        Ok(Tray { events, clicks, looks, locale: built_for })
+        Ok(Tray { events, clicks, looks, locale: built_for, panels: Vec::new() })
     }
 
     /// Follow the click settings: whether the icon opens its menu on a
@@ -459,9 +478,26 @@ impl Tray {
             return;
         }
         self.locale = locale.clone();
+        self.rebuild();
+    }
+
+    /// Offer `panels` in the Modules submenu; nothing happens when they are
+    /// the ones already there.
+    pub fn set_panels(&mut self, panels: Vec<(String, String)>) {
+        if panels == self.panels {
+            return;
+        }
+        self.panels = panels;
+        self.rebuild();
+    }
+
+    /// Build the menu again in the current language with the current
+    /// panels, keeping the check marks.
+    fn rebuild(&mut self) {
+        let locale = &self.locale;
         #[cfg(not(target_os = "linux"))]
         {
-            let (menu, hotkeys_item, mouse_item) = build_menu(locale);
+            let (menu, hotkeys_item, mouse_item) = build_menu(locale, &self.panels);
             hotkeys_item.set_checked(self.hotkeys_item.is_checked());
             mouse_item.set_checked(self.mouse_item.is_checked());
             self.icon.set_menu(Some(Box::new(menu)));
@@ -469,7 +505,7 @@ impl Tray {
             self.mouse_item = mouse_item;
         }
         #[cfg(target_os = "linux")]
-        let _ = self.looks.send(LinuxUpdate::Menu(locale.clone()));
+        let _ = self.looks.send(LinuxUpdate::Menu(locale.clone(), self.panels.clone()));
     }
 
     pub fn set_hotkeys_checked(&self, on: bool) {
@@ -501,6 +537,7 @@ pub fn handle(app: &mut GlossaApp, e: TrayEvent) {
         }
         TrayEvent::ToggleMouseMode => app.perform(Action::ToggleMouseMode, None),
         TrayEvent::Action(a) => app.perform(a, None),
+        TrayEvent::Panel(id) => app.perform(Action::OpenPanel, Some(id)),
         TrayEvent::ToggleHotkeys => {
             let on = !app.cfg.hotkeys.enabled;
             let _ = app.engine.update_config(move |c| c.hotkeys.enabled = on);

@@ -129,6 +129,11 @@ pub struct GlossaApp {
     pub history: Option<crate::history::HistoryState>,
     /// The module editor, while open.
     pub module_editor: Option<crate::module_editor::ModuleEditor>,
+    /// Open module panels, each a window of its own.
+    pub panel_windows: Vec<crate::module_panel::PanelWindow>,
+    /// The panels the loaded modules declare, for the menus; read when
+    /// first asked for after modules or the language change.
+    panel_list: Option<Vec<glossa_engine::PanelInfo>>,
     pub about_open: bool,
     pub keyboard_open: bool,
 
@@ -251,6 +256,8 @@ impl GlossaApp {
             dictionary: None,
             history: None,
             module_editor: None,
+            panel_windows: Vec::new(),
+            panel_list: None,
             about_open: false,
             keyboard_open: false,
             tasks_tx,
@@ -302,6 +309,8 @@ impl GlossaApp {
         if let Some(t) = self.tray.as_mut() {
             t.set_locale(&locale);
         }
+        // Panel titles come in the interface language too.
+        self.panels_changed();
         // Child windows are found by their titles, which have just changed:
         // forget the old ones so frames, corners and backdrops are applied
         // to the windows under their new names.
@@ -330,6 +339,23 @@ impl GlossaApp {
                 tracing::warn!("hotkey {hotkey} for {}: {e}", action.id());
                 self.hotkey_errors.push((Some(*action), e));
             }
+        }
+        crate::register_panel_hotkeys(h, &self.cfg, &mut self.hotkey_errors);
+    }
+
+    /// The panels the loaded modules declare.
+    pub fn panel_list(&mut self) -> &[glossa_engine::PanelInfo] {
+        if self.panel_list.is_none() {
+            self.panel_list = Some(self.engine.panels());
+        }
+        self.panel_list.as_deref().unwrap_or_default()
+    }
+
+    /// Forget the panel list and give the tray the new one.
+    fn panels_changed(&mut self) {
+        self.panel_list = None;
+        if let Some(t) = self.tray.as_mut() {
+            t.set_panels(crate::tray_panels(&self.engine));
         }
     }
 
@@ -826,6 +852,7 @@ impl GlossaApp {
                 // of the module as it is.
                 crate::module_actions::reset_pages(|_| true);
                 self.refresh_from_config();
+                self.panels_changed();
             }
             Event::HistoryChanged => {
                 if let Some(h) = self.history.as_mut() {
@@ -1050,12 +1077,12 @@ impl eframe::App for GlossaApp {
         }
         let mut fired = Vec::new();
         if let Some(h) = self.hotkeys.as_mut() {
-            while let Some(a) = h.poll() {
+            while let Some(a) = h.poll_with_text() {
                 fired.push(a);
             }
         }
-        for a in fired {
-            self.perform(a, None);
+        for (a, text) in fired {
+            self.perform(a, text);
         }
         crate::app_menu::poll(self);
         let tray_events = self.tray.as_ref().map(|t| t.poll()).unwrap_or_default();
@@ -1121,6 +1148,7 @@ impl eframe::App for GlossaApp {
             || self.dictionary.is_some()
             || self.history.is_some()
             || self.module_editor.is_some()
+            || !self.panel_windows.is_empty()
             || self.about_open
             || self.keyboard_open
             || self.welcome.is_some();
@@ -1142,6 +1170,7 @@ impl eframe::App for GlossaApp {
             || self.dictionary.is_some()
             || self.history.is_some()
             || self.module_editor.is_some()
+            || !self.panel_windows.is_empty()
             || self.about_open
             || self.keyboard_open
             || self.welcome.is_some();
@@ -1204,6 +1233,8 @@ impl eframe::App for GlossaApp {
         crate::history::show(self, &ctx);
         phase("module editor");
         crate::module_editor::show(self, &ctx);
+        phase("module panels");
+        crate::module_panel::show(self, &ctx);
         phase("about, keyboard");
         crate::about::show_about(self, &ctx);
         crate::welcome::show(self, &ctx);
@@ -1215,6 +1246,8 @@ impl eframe::App for GlossaApp {
 
     fn on_exit(&mut self, _gl: Option<&eframe::glow::Context>) {
         self.save_state();
+        // Panels close with the other windows and keep their `persist` keys.
+        crate::module_panel::close_all(self);
         *self.wake.ctx.lock() = None;
         let shell = crate::Shell {
             engine: self.engine.clone(),

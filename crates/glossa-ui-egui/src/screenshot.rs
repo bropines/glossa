@@ -69,6 +69,7 @@ pub fn targets() -> Vec<String> {
     .to_vec();
     all.extend(crate::options::page_names().into_iter().map(|p| format!("options:{p}")));
     all.extend(SPECIAL_OPTIONS.map(|v| format!("options:{v}")));
+    all.push("panel:MODULE/PANEL".into());
     all
 }
 
@@ -182,6 +183,16 @@ fn open(app: &mut GlossaApp, what: &str) -> bool {
                 }
             }
         }
+        // A module's panel; `GLOSSA_SCREENSHOT_ACTION` runs one of its
+        // actions once it is open, to show what it draws.
+        w if w.starts_with("panel:") => {
+            let Ok(id) = glossa_engine::PanelId::parse(&w["panel:".len()..]) else { return false };
+            crate::module_panel::open(app, &id);
+            let Some(win) = app.panel_windows.iter_mut().find(|p| p.panel.id == id) else { return false };
+            if let Ok(action) = std::env::var("GLOSSA_SCREENSHOT_ACTION") {
+                win.press(&action);
+            }
+        }
         "about" => app.about_open = true,
         "welcome" => crate::welcome::open(app),
         "keyboard" => app.keyboard_open = true,
@@ -210,6 +221,9 @@ fn viewport(what: &str) -> Option<ViewportId> {
         "about" => viewport(ABOUT),
         "welcome" => viewport(WELCOME),
         "ocr-result" => viewport(crate::ocr_result::VIEWPORT),
+        w if w.starts_with("panel:") => {
+            crate::module_panel::viewport_of(&glossa_engine::PanelId::parse(&w["panel:".len()..]).ok()?)
+        }
         _ => return None,
     })
 }
