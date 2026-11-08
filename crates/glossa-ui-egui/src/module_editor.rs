@@ -24,6 +24,10 @@ use crate::code_editor::{self, EditorState, Lang, Mark};
 /// The viewport's name.
 pub const VIEWPORT: &str = "glossa-module-editor";
 
+/// Files larger than this open read-only: every keystroke in a `TextEdit`
+/// costs time in proportion to the text.
+const EDIT_LIMIT: usize = 512 << 10;
+
 /// What to open the editor on.
 pub enum Target {
     /// A module folder that can be edited where it is.
@@ -41,6 +45,8 @@ struct Buffer {
     /// The text as last read or saved, to tell whether it changed.
     saved: String,
     lang: Lang,
+    /// Too large to edit comfortably: shown, searchable, not editable.
+    read_only: bool,
     editor: EditorState,
 }
 
@@ -66,7 +72,10 @@ enum Reply {
     Files(Vec<ModuleFile>),
     Opened(String, Result<String, String>),
     /// Files saved (or the error), then the check that followed.
-    Saved(Result<(), String>),
+    Saved {
+        written: Vec<(String, String)>,
+        error: Option<String>,
+    },
     Checked {
         problems: Vec<Problem>,
         info: Option<Info>,
@@ -113,6 +122,15 @@ pub struct ModuleEditor {
     after_check: After,
     /// Closing was asked for with unsaved files.
     confirm_close: bool,
+    /// Close the window (or quit Glossa, when quitting) once the files are
+    /// saved: "Save all" in the confirmation.
+    close_after_save: bool,
+    /// Glossa is quitting: the confirmation is for quitting, not closing.
+    quitting: bool,
+    /// The user chose to throw the changes away.
+    discarded: bool,
+    /// Close the window at the next frame.
+    close_now: bool,
     /// Open this file when the folder's files arrive, and jump here.
     pending_open: Vec<String>,
     /// The file to bring forward when it has been read.
@@ -153,6 +171,10 @@ pub fn open(app: &mut GlossaApp, target: Target) {
         status: None,
         after_check: After::Nothing,
         confirm_close: false,
+        close_after_save: false,
+        quitting: false,
+        discarded: false,
+        close_now: false,
         pending_open: vec!["module.toml".into()],
         focus_on: None,
         first_check: true,
@@ -230,13 +252,18 @@ impl ModuleEditor {
             }
             return;
         }
-        for b in self.tabs.iter_mut().filter(|b| b.dirty()) {
-            b.saved = b.text.clone();
-        }
         self.after_check = then;
         self.spawn(&app.ctx, move || {
-            let r = dirty.iter().try_for_each(|(p, t)| module_dev::save_module_file(&dir, p, t));
-            Reply::Saved(r.map_err(|e| e.to_string()))
+            // Each file as it was handed over, once it is on disk; the
+            // buffers count as saved only from what really was written.
+            let mut written = Vec::new();
+            for (p, t) in dirty {
+                if let Err(e) = module_dev::save_module_file(&dir, &p, &t) {
+                    return Reply::Saved { written, error: Some(format!("{p}: {e}")) };
+                }
+                written.push((p, t));
+            }
+            Reply::Saved { written, error: None }
         });
     }
 
@@ -289,6 +316,7 @@ impl ModuleEditor {
                         let lang = Lang::for_path(&path);
                         let front = self.focus_on.as_deref() == Some(path.as_str()) || self.tabs.is_empty();
                         self.tabs.push(Buffer {
+                            read_only: text.len() > EDIT_LIMIT,
                             saved: text.clone(),
                             text,
                             lang,
@@ -302,8 +330,28 @@ impl ModuleEditor {
                     self.apply_pending_jump();
                 }
                 Reply::Opened(_, Err(e)) => self.status = Some((e, true)),
-                Reply::Saved(Ok(())) => {
+                Reply::Saved { written, error } => {
+                    mark_saved(&mut self.tabs, &written);
+                    if let Some(e) = error {
+                        // Nothing is closed or quit over files that are not
+                        // on disk.
+                        self.status = Some((e, true));
+                        self.after_check = After::Nothing;
+                        if std::mem::take(&mut self.close_after_save) {
+                            // Ask again, with the error in view.
+                            self.confirm_close = true;
+                        }
+                        continue;
+                    }
                     self.status = Some((app.t("editor.saved"), false));
+                    if std::mem::take(&mut self.close_after_save) && !self.dirty() {
+                        if self.quitting {
+                            app.quit();
+                        } else {
+                            self.close_now = true;
+                        }
+                        continue;
+                    }
                     self.list_files(&app.ctx);
                     if self.after_check == After::Test {
                         self.after_check = After::Nothing;
@@ -313,7 +361,6 @@ impl ModuleEditor {
                         self.check(app, then);
                     }
                 }
-                Reply::Saved(Err(e)) => self.status = Some((e, true)),
                 Reply::Checked { problems, info } => {
                     let errors = problems.iter().any(|p| p.severity == Severity::Error);
                     let first = problems.iter().find(|p| p.severity == Severity::Error && p.line > 0).cloned();
@@ -438,6 +485,28 @@ impl ModuleEditor {
     fn dirty(&self) -> bool {
         self.tabs.iter().any(Buffer::dirty)
     }
+
+    /// Glossa is about to quit. With unsaved files (not thrown away), show
+    /// the confirmation in the editor and return true: the quit waits for
+    /// the answer.
+    pub fn hold_quit(&mut self) -> bool {
+        if !self.dirty() || self.discarded {
+            return false;
+        }
+        self.quitting = true;
+        self.confirm_close = true;
+        true
+    }
+}
+
+/// After a save: each buffer counts as saved up to the text that was written
+/// for it. One edited since (or not written at all) stays unsaved.
+fn mark_saved(tabs: &mut [Buffer], written: &[(String, String)]) {
+    for (path, text) in written {
+        if let Some(b) = tabs.iter_mut().find(|b| &b.path == path) {
+            b.saved = text.clone();
+        }
+    }
 }
 
 /// The id, name, version and options from `module.toml`'s text, if it
@@ -461,12 +530,15 @@ pub fn show(app: &mut GlossaApp, ctx: &egui::Context) {
     let custom = crate::chrome::custom(&app.cfg);
     ctx.show_viewport_immediate(crate::chrome::viewport(VIEWPORT), builder, |ui, _| {
         if ui.input(|i| i.viewport().close_requested()) {
-            if ed.dirty() {
+            if ed.dirty() && !ed.discarded {
                 ui.ctx().send_viewport_cmd(egui::ViewportCommand::CancelClose);
                 ed.confirm_close = true;
             } else {
                 open = false;
             }
+        }
+        if ed.close_now {
+            open = false;
         }
         crate::chrome::frame(ui, &app.look, custom, &crate::chrome::Caption::new(&title));
         body(app, ui, &mut ed, &mut open);
@@ -493,14 +565,24 @@ fn body(app: &mut GlossaApp, ui: &mut egui::Ui, ed: &mut ModuleEditor, open: &mu
             ui.horizontal(|ui| {
                 ui.label(RichText::new(app.t("editor.unsaved")).strong());
                 if ui.button(app.t("editor.save_all")).clicked() {
-                    ed.save(app, After::Reload);
+                    // Closes (or quits) once every file is on disk.
+                    ed.close_after_save = true;
+                    ed.save(app, After::Nothing);
                     ed.confirm_close = false;
                 }
                 if ui.button(app.t("editor.discard")).clicked() {
-                    *open = false;
+                    ed.discarded = true;
+                    if ed.quitting {
+                        app.quit();
+                    } else {
+                        *open = false;
+                    }
                 }
                 if ui.button(app.t("editor.keep_editing")).clicked() {
                     ed.confirm_close = false;
+                    if std::mem::take(&mut ed.quitting) {
+                        app.cancel_quit();
+                    }
                 }
             });
             ui.add_space(6.0);
@@ -677,12 +759,13 @@ fn editor(app: &mut GlossaApp, ui: &mut egui::Ui, ed: &mut ModuleEditor, look: &
     } else {
         String::new()
     };
-    let status = format!("{place}    {}", crate::widgets::shortcut_text(&app.t("editor.keys_hint")));
+    let read_only = if b.read_only { format!("{}    ", app.t("editor.read_only")) } else { String::new() };
+    let status = format!("{read_only}{place}    {}", crate::widgets::shortcut_text(&app.t("editor.keys_hint")));
     egui::Panel::bottom("editor-status").show(ui, |ui| {
         ui.label(RichText::new(status).small().color(look.weak_text()));
     });
     let path = b.path.clone();
-    code_editor::show(ui, look, &labels, &mut b.editor, &path, b.lang, &mut b.text, &marks);
+    code_editor::show(ui, look, &labels, &mut b.editor, &path, b.lang, &mut b.text, b.read_only, &marks);
 }
 
 fn drawer(app: &mut GlossaApp, ui: &mut egui::Ui, ed: &mut ModuleEditor, narrow: bool) {
@@ -839,4 +922,33 @@ fn preview(app: &mut GlossaApp, ui: &mut egui::Ui, ed: &mut ModuleEditor) {
         ui.add_space(12.0);
         ui.label(RichText::new(app.t("editor.preview_panels")).small().color(look.weak_text()));
     });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn buffer(path: &str, saved: &str, text: &str) -> Buffer {
+        Buffer {
+            path: path.into(),
+            text: text.into(),
+            saved: saved.into(),
+            lang: Lang::Plain,
+            read_only: false,
+            editor: EditorState::default(),
+        }
+    }
+
+    #[test]
+    fn only_what_was_written_counts_as_saved() {
+        let mut tabs = vec![buffer("a.js", "old", "new"), buffer("b.js", "old", "new"), buffer("c.js", "x", "y")];
+        // a.js was written; b.js was written, then edited again before the
+        // answer came; c.js failed and was never written.
+        tabs[1].text = "newer".into();
+        mark_saved(&mut tabs, &[("a.js".into(), "new".into()), ("b.js".into(), "new".into())]);
+        assert!(!tabs[0].dirty());
+        assert!(tabs[1].dirty(), "edited after the write");
+        assert_eq!(tabs[1].saved, "new");
+        assert!(tabs[2].dirty(), "a failed write leaves the buffer unsaved");
+    }
 }

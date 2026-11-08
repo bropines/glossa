@@ -680,6 +680,7 @@
     "editor.save_all": "Сохранить всё",
     "editor.discard": "Закрыть без сохранения",
     "editor.keep_editing": "Продолжить",
+    "editor.read_only": "Только чтение: файл больше 512 КБ",
     "options.server.enable": "Включить локальный API управления (после перезапуска)",
     "options.server.listen_on": "Адрес:",
     "options.server.token": "Токен:",

@@ -1412,6 +1412,7 @@ pub static STRINGS: &[(&str, &str, Option<&str>)] = &[
     ("editor.save_all", "Save all", None),
     ("editor.discard", "Discard and close", None),
     ("editor.keep_editing", "Keep editing", None),
+    ("editor.read_only", "Read only: the file is larger than 512 KB", None),
     // -- options: control API ------------------------------------------------------------------
     ("options.server.enable", "Enable the local control API (restart to apply)", None),
     ("options.server.listen_on", "Listen on:", None),

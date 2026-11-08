@@ -578,7 +578,10 @@ impl Reply {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+/// A typed failure. Build one with [`ModuleError::new`] (and [`ModuleError::at`]);
+/// a struct literal should end in `..Default::default()`, since optional
+/// fields are added to the protocol over time.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct ModuleError {
     pub kind: ErrorKind,
     pub message: String,
@@ -593,8 +596,10 @@ pub struct ModuleError {
 }
 
 /// A place in a module's source: a file relative to the module's folder, a
-/// 1-based line and a 1-based column (0 when unknown).
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+/// 1-based line and a 1-based column (0 when unknown). Every field may be left
+/// out: a partial location still parses.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
 pub struct ErrorLocation {
     pub file: String,
     pub line: u32,
@@ -641,7 +646,7 @@ impl std::error::Error for ModuleError {}
 
 /// Error kinds, chosen to map onto the host's own error type so the UI can say
 /// something specific.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ErrorKind {
     /// The request was malformed.
@@ -664,6 +669,7 @@ pub enum ErrorKind {
     RateLimited,
     /// Nothing was found (dictionary miss, no text in image).
     NotFound,
+    #[default]
     Other,
 }
 
@@ -698,6 +704,14 @@ mod tests {
             serde_json::from_str(r#"{"kind": "other", "message": "x", "location": {"file": "m.py", "line": 9}}"#)
                 .unwrap();
         assert_eq!(back.location, Some(ErrorLocation { file: "m.py".into(), line: 9, column: 0 }));
+        // A partial location parses too.
+        let partial: ModuleError =
+            serde_json::from_str(r#"{"kind": "other", "message": "x", "location": {"line": 4}}"#).unwrap();
+        assert_eq!(partial.location, Some(ErrorLocation { line: 4, ..Default::default() }));
+        // Literals that name what they set and default the rest keep
+        // compiling as optional fields are added.
+        let literal = ModuleError { kind: ErrorKind::Http, message: "x".into(), ..Default::default() };
+        assert_eq!(literal.location, None);
     }
 
     #[test]

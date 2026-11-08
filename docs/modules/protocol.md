@@ -179,17 +179,21 @@ An error may also say where in the module's own code it was raised, for
 the author's benefit (the [module editor](editor.md) underlines the line):
 
 ```json
-{ "kind": "other", "message": "TypeError: cannot read property 'x' of undefined (at main.js:23:14)",
+{ "kind": "other", "message": "TypeError: cannot read property 'x' of undefined",
   "location": { "file": "main.js", "line": 23, "column": 14 } }
 ```
 
-`location` is optional and additive: `file` is relative to the module's
-folder, `line` and `column` are 1-based (`column` may be left out or 0).
-Glossa's JavaScript runtime fills it from the exception's stack, skipping
-its own preludes, and also appends ` (at file:line:col)` to the message of
-an `other` error so the place shows wherever the message is shown. Other
-runtimes may fill it from a traceback; a host that does not know the field
-ignores it.
+`location` is optional and additive, and so is each of its fields: `file`
+is relative to the module's folder, `line` and `column` are 1-based (0 or
+left out when unknown). Glossa's JavaScript runtime fills it from the
+exception's stack, skipping its own preludes. The place stays out of
+`message`, which is what users see; the module editor and `glossa-cli module
+test` show it beside the error. Other runtimes may fill it from a
+traceback; a host that does not know the field ignores it.
+
+In Rust, build a `ModuleError` with `ModuleError::new(kind, message)` (and
+`.at(location)`), or end a struct literal with `..Default::default()`, so
+optional fields added later do not break it.
 
 ## Host calls
 

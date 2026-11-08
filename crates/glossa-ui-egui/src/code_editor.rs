@@ -677,11 +677,18 @@ pub struct Mark {
     pub error: bool,
 }
 
+/// A laid-out text, kept while neither it nor what colours it changes.
+struct Laid {
+    text: String,
+    key: u64,
+    galley: Arc<egui::Galley>,
+}
+
 /// What the editor needs from one frame to the next for one buffer.
 #[derive(Default)]
 pub struct EditorState {
-    /// The last layout job and the hash of what it was built from.
-    job: Option<(u64, Arc<LayoutJob>)>,
+    /// The last layout: the text, what else it was built from, the galley.
+    job: Option<Laid>,
     find: Option<Find>,
     goto: Option<String>,
     /// Move the cursor here (1-based line and column) at the next frame.
@@ -690,6 +697,8 @@ pub struct EditorState {
     select: Option<Range<usize>>,
     /// The cursor's line and column, for the status line.
     pub cursor: (u32, u32),
+    /// The character index and text length `cursor` was worked out for.
+    cursor_at: Option<(usize, usize)>,
 }
 
 struct Find {
@@ -697,6 +706,8 @@ struct Find {
     focus: bool,
     /// The match last selected, as a character index.
     at: usize,
+    /// How many matches there are, and for which query and text length.
+    counted: Option<((String, usize), usize)>,
 }
 
 /// What happened in a frame.
@@ -713,7 +724,7 @@ impl EditorState {
     }
 
     pub fn open_find(&mut self) {
-        let f = self.find.get_or_insert(Find { query: String::new(), focus: true, at: 0 });
+        let f = self.find.get_or_insert(Find { query: String::new(), focus: true, at: 0, counted: None });
         f.focus = true;
         self.goto = None;
     }
@@ -744,6 +755,7 @@ pub fn show(
     id_salt: &str,
     lang: Lang,
     text: &mut String,
+    read_only: bool,
     marks: &[Mark],
 ) -> Output {
     let mut out = Output::default();
@@ -759,16 +771,26 @@ pub fn show(
     if st.goto.is_some() {
         goto_bar(ui, labels, st);
     }
-    if keys(ui, edit_id, lang, text) {
+    if !read_only && keys(ui, edit_id, lang, text) {
         out.changed = true;
     }
     apply_jump(ui.ctx(), st, edit_id, text);
 
-    let line_count = text.split('\n').count().max(1);
+    // The line count from the last layout, not from scanning the text again.
+    let line_count = match &st.job {
+        Some(l) => l.galley.rows.len(),
+        None => text.bytes().filter(|b| *b == b'\n').count() + 1,
+    };
     let digits = line_count.to_string().len().max(2);
     let char_w = ui.fonts_mut(|f| f.glyph_width(&font, '0'));
     let gutter_w = char_w * digits as f32 + 20.0;
     let query = st.find.as_ref().map(|f| f.query.clone()).filter(|q| !q.is_empty());
+    // Everything the layout depends on besides the text, hashed (all small).
+    let key = {
+        let mut h = std::collections::hash_map::DefaultHasher::new();
+        (lang, marks, &query, syntax, font.size.to_bits(), ui.ctx().pixels_per_point().to_bits()).hash(&mut h);
+        h.finish()
+    };
 
     let frame = egui::Frame::NONE.fill(syntax.back).corner_radius(4.0);
     frame.show(ui, |ui| {
@@ -777,39 +799,57 @@ pub fn show(
                 ui.spacing_mut().item_spacing.x = 0.0;
                 let (gutter, _) =
                     ui.allocate_exact_size(egui::vec2(gutter_w, ui.available_height()), egui::Sense::hover());
-                let mut job_cache = st.job.take();
+                let mut cache = st.job.take();
+                // The galley is kept and handed back while nothing changed.
+                // The text is compared, not hashed or tracked by a revision:
+                // `TextEdit` lays out the text it has just edited within the
+                // same call, before any counter could be bumped, and a
+                // comparison is a memcmp, far cheaper than hashing.
                 let mut layouter = |ui: &Ui, buf: &dyn egui::TextBuffer, _wrap: f32| {
                     let source = buf.as_str();
-                    let mut h = std::collections::hash_map::DefaultHasher::new();
-                    (source, lang, marks, &query, syntax, font.size.to_bits()).hash(&mut h);
-                    let key = h.finish();
-                    let job = match &job_cache {
-                        Some((k, j)) if *k == key => j.clone(),
-                        _ => {
-                            let j = Arc::new(layout_job(source, lang, marks, query.as_deref(), &syntax, &font));
-                            job_cache = Some((key, j.clone()));
-                            j
-                        }
-                    };
-                    ui.fonts_mut(|f| f.layout_job((*job).clone()))
+                    if let Some(l) = cache.as_ref().filter(|l| l.key == key && l.text == source) {
+                        return l.galley.clone();
+                    }
+                    let job = layout_job(source, lang, marks, query.as_deref(), &syntax, &font);
+                    let galley = ui.fonts_mut(|f| f.layout_job(job));
+                    cache = Some(Laid { text: source.to_owned(), key, galley: galley.clone() });
+                    galley
                 };
-                let edit = egui::TextEdit::multiline(text)
-                    .id(edit_id)
-                    .font(font.clone())
-                    .code_editor()
-                    .lock_focus(true)
-                    .frame(egui::Frame::NONE)
-                    .desired_width(f32::INFINITY)
-                    .desired_rows(line_count.max(20))
-                    .layouter(&mut layouter);
-                let shown = edit.show(ui);
-                st.job = job_cache;
+                let shown = if read_only {
+                    // A `&str` buffer: selectable and searchable, not editable.
+                    let mut view: &str = text.as_str();
+                    egui::TextEdit::multiline(&mut view)
+                        .id(edit_id)
+                        .font(font.clone())
+                        .code_editor()
+                        .frame(egui::Frame::NONE)
+                        .desired_width(f32::INFINITY)
+                        .desired_rows(line_count.max(20))
+                        .layouter(&mut layouter)
+                        .show(ui)
+                } else {
+                    egui::TextEdit::multiline(text)
+                        .id(edit_id)
+                        .font(font.clone())
+                        .code_editor()
+                        .lock_focus(true)
+                        .frame(egui::Frame::NONE)
+                        .desired_width(f32::INFINITY)
+                        .desired_rows(line_count.max(20))
+                        .layouter(&mut layouter)
+                        .show(ui)
+                };
+                st.job = cache;
                 if shown.response.response.changed() {
                     out.changed = true;
                 }
                 if let Some(range) = shown.cursor_range {
                     let at = range.primary.index.0;
-                    st.cursor = char_line_col(text, at);
+                    // Worked out again only when the cursor or the text moved.
+                    if st.cursor_at != Some((at, text.len())) {
+                        st.cursor_at = Some((at, text.len()));
+                        st.cursor = char_line_col(text, at);
+                    }
                 }
                 paint_gutter(ui, &syntax, &font, gutter, &shown, marks);
                 // The place a jump asked for: scroll there now that the
@@ -863,7 +903,13 @@ fn find_bar(ui: &mut Ui, look: &Look, labels: &Labels, st: &mut EditorState, edi
         if ui.button(&labels.next).clicked() {
             step = Some(true);
         }
-        let count = if f.query.is_empty() { 0 } else { find_all(text, &f.query).len() };
+        // Counted again only when the query or the text changes, not every frame.
+        let stamp = (f.query.clone(), text.len());
+        if f.counted.as_ref().map(|(s, _)| s) != Some(&stamp) {
+            let n = if f.query.is_empty() { 0 } else { find_all(text, &f.query).len() };
+            f.counted = Some((stamp, n));
+        }
+        let count = f.counted.as_ref().map_or(0, |(_, n)| *n);
         if !f.query.is_empty() {
             let note =
                 if count == 0 { labels.no_matches.clone() } else { labels.matches.replace("%s", &count.to_string()) };
@@ -1007,8 +1053,7 @@ fn keys(ui: &mut Ui, edit_id: egui::Id, lang: Lang, text: &mut String) -> bool {
     } else if ui.input_mut(|i| i.consume_key(Modifiers::NONE, Key::Tab)) {
         Some(if text_spans_lines(text, &sel) { indent_lines(text, sel, true) } else { insert(text, sel, INDENT) })
     } else if ui.input_mut(|i| i.consume_key(Modifiers::NONE, Key::Enter)) {
-        let line_start = line_start_of(text, sel.start);
-        let current: String = text.chars().skip(line_start).take(sel.start - line_start).collect();
+        let current = line_before(text, sel.start);
         let mut indent: String = current.chars().take_while(|c| *c == ' ' || *c == '\t').collect();
         let opens = current.trim_end().ends_with(['{', '[', '('])
             || (lang == Lang::Python && current.trim_end().ends_with(':'));
@@ -1038,15 +1083,12 @@ fn text_spans_lines(text: &str, sel: &Range<usize>) -> bool {
     sel.start != sel.end && text.chars().skip(sel.start).take(sel.end - sel.start).any(|c| c == '\n')
 }
 
-/// The character index where the line holding `at` starts.
-fn line_start_of(text: &str, at: usize) -> usize {
-    let mut start = 0;
-    for (i, c) in text.chars().enumerate().take(at) {
-        if c == '\n' {
-            start = i + 1;
-        }
-    }
-    start
+/// The part of the line before character index `at`: one pass to find the
+/// byte, then a backwards search for the line's start.
+fn line_before(text: &str, at: usize) -> &str {
+    let end = byte_of(text, at);
+    let start = text[..end].rfind('\n').map_or(0, |i| i + 1);
+    &text[start..end]
 }
 
 fn byte_of(text: &str, ch: usize) -> usize {
@@ -1245,10 +1287,13 @@ fn paint_gutter(
     let clip = ui.clip_rect();
     let small = FontId::monospace(font.size * 0.9);
     let pointer = ui.ctx().pointer_hover_pos();
-    for (n, row) in shown.galley.rows.iter().enumerate() {
+    // Rows are in order: start at the first one in view.
+    let rows = &shown.galley.rows;
+    let first = rows.partition_point(|row| row.rect().bottom() + origin.y < clip.top());
+    for (n, row) in rows.iter().enumerate().skip(first) {
         let r = row.rect().translate(origin.to_vec2());
-        if r.bottom() < clip.top() || r.top() > clip.bottom() {
-            continue;
+        if r.top() > clip.bottom() {
+            break;
         }
         let line = n as u32 + 1;
         let marked: Vec<&Mark> = marks.iter().filter(|m| m.line == line).collect();

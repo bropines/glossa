@@ -184,11 +184,21 @@ pub struct OptionsState {
     /// The module editor's "New module" row: the template and the name.
     new_module_template: glossa_engine::module_dev::Template,
     new_module_name: String,
+    /// The modules the editor group lists, read once and again after a
+    /// reload, not every frame.
+    module_list: Option<Vec<glossa_engine::module_dev::ModuleListing>>,
     /// The installed font families, for the font picker.
     fonts: FontList,
     /// The Presets tab of the Services page is showing, and its state.
     presets_tab: bool,
     pub presets: crate::presets::PresetsPage,
+}
+
+impl OptionsState {
+    /// Modules were loaded again: list them afresh when next drawn.
+    pub fn modules_changed(&mut self) {
+        self.module_list = None;
+    }
 }
 
 /// The installed font families, listed on a worker the first time the font
@@ -381,6 +391,7 @@ pub fn open(app: &mut GlossaApp) {
             assets_note: None,
             new_module_template: glossa_engine::module_dev::Template::Translator,
             new_module_name: String::new(),
+            module_list: None,
             fonts: FontList::default(),
             presets_tab: false,
             presets: Default::default(),
@@ -2595,7 +2606,7 @@ fn module_editor_group(app: &mut GlossaApp, ui: &mut egui::Ui, st: &mut OptionsS
         });
         ui.add_space(4.0);
         egui::ScrollArea::vertical().id_salt("module-editor-list").max_height(220.0).show(ui, |ui| {
-            for m in app.engine.module_sources() {
+            for m in st.module_list.get_or_insert_with(|| app.engine.module_sources()).clone() {
                 ui.horizontal(|ui| {
                     ui.label(&m.name);
                     let kind = match (&m.failed, &m.source) {

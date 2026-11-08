@@ -52,6 +52,9 @@ fn the_edit_check_reload_test_loop() {
     assert!(e.reload_module(&dir).is_err());
     assert!(e.registry().get("loop").is_some());
     assert!(e.module_status().failed.iter().any(|(d, _)| d.ends_with("loop")));
+    let rows: Vec<_> = e.module_sources().into_iter().filter(|m| m.source.dir() == Some(dir.as_path())).collect();
+    assert_eq!(rows.len(), 1, "one row for the folder: {rows:?}");
+    assert!(rows[0].failed.is_some() && rows[0].id == "loop");
 
     // A mistake that only shows when it runs: the failing case names the line.
     let runtime = good.replacen("var data = r.json();", "var data = r.json();\n  data = undefinedThing.x;", 1);
@@ -84,6 +87,21 @@ fn the_edit_check_reload_test_loop() {
     e.reload_module(&dir).unwrap();
     assert!(e.registry().get("loop").is_none());
     assert!(e.registry().get("loop-renamed").is_some());
+    std::fs::remove_dir_all(&root).ok();
+}
+
+#[test]
+fn a_native_module_already_loaded_is_not_loaded_twice() {
+    let (e, root) = engine("native");
+    let dir = e.new_module(Template::Translator, "Lib").unwrap();
+    let text = read_module_file(&dir, "module.toml").unwrap();
+    // The folder now says it is a native library (that does not even
+    // exist): the answer comes from the manifest, before any loading.
+    let native =
+        text.replace("runtime = \"js\"", "runtime = \"native\"").replace("entry = \"main.js\"", "entry = \"nope\"");
+    save_module_file(&dir, "module.toml", &native).unwrap();
+    assert_eq!(e.reload_module(&dir).unwrap(), ReloadOutcome::NeedsRestart { id: "lib".into() });
+    assert!(e.module_status().failed.is_empty(), "nothing was tried");
     std::fs::remove_dir_all(&root).ok();
 }
 

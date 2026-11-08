@@ -588,9 +588,9 @@ pub fn split_location(message: &str) -> (&str, Option<glossa_module_sdk::wire::E
 
 /// Turn a module error thrown by a script (via the prelude's `ModuleError`)
 /// into the protocol's error type; anything else becomes a generic error.
-/// Where the script threw goes into the error's `location`; a typed error's
-/// message loses it (a `missing_credential` message is an option key), a
-/// generic one keeps it, so the place shows wherever the message is shown.
+/// Where the script threw goes into the error's `location` and out of its
+/// message: the place is for the module's author (the editor, the test
+/// harness), while the message is what a user sees in a popup.
 pub fn script_error(message: String) -> ModuleError {
     let (bare, location) = split_location(&message);
     // The prelude encodes typed errors as "glossa:<kind>:<message>".
@@ -602,7 +602,7 @@ pub fn script_error(message: String) -> ModuleError {
             }
         }
     }
-    ModuleError::other(message).at(location)
+    ModuleError::other(bare).at(location)
 }
 
 // -- natives ---------------------------------------------------------------
@@ -897,6 +897,7 @@ mod tests {
         assert_eq!((loc.file.as_str(), loc.line), ("main.js", 2), "{err}");
         assert!(loc.column > 0, "{err}");
         assert!(e.message.contains("optons"), "{e:?}");
+        assert!(!e.message.contains("(at "), "the place stays out of what users see: {e:?}");
 
         // A typed error keeps its message clean and still says where.
         let err = with_context(|ctx| {

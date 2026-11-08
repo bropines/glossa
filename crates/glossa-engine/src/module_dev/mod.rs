@@ -262,6 +262,20 @@ pub fn save_module_file(dir: &Path, rel: &str, text: &str) -> Result<()> {
     written.map_err(Error::from)
 }
 
+/// Write `template`'s files into `dir` for a module `id` named `name`,
+/// without loading it (see [`Engine::new_module`] for the usual way).
+pub fn write_template(template: Template, dir: &Path, id: &str, name: &str) -> Result<()> {
+    let display = if name.trim().is_empty() { id.to_owned() } else { name.trim().to_owned() };
+    // The name goes into a TOML string and JavaScript comments.
+    let toml_name = display.replace('\\', "\\\\").replace('"', "\\\"");
+    for (rel, body) in template.files() {
+        let body =
+            body.replace("{{id}}", id).replace("{{name}}", if rel.ends_with(".toml") { &toml_name } else { &display });
+        save_module_file(dir, rel, &body)?;
+    }
+    Ok(())
+}
+
 /// A folder name for a new module: its name lowercased, with `-` for
 /// anything that is not a letter or digit.
 pub fn module_id_for(name: &str) -> String {
@@ -441,6 +455,12 @@ impl Engine {
             })
             .collect();
         for (path, why) in &self.module_status().failed {
+            // A folder whose reload failed still has its old provider
+            // running: one row, saying why the new code did not load.
+            if let Some(m) = out.iter_mut().find(|m| m.source.dir() == Some(path.as_path())) {
+                m.failed = Some(why.clone());
+                continue;
+            }
             if path.starts_with(&user_dir) && path.is_dir() {
                 let id = path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
                 out.push(ModuleListing {
@@ -472,15 +492,7 @@ impl Engine {
             .find(|id| !taken(id))
             .ok_or_else(|| Error::Config(format!("no free folder name for {base:?}")))?;
         let dir = user_dir.join(&id);
-        let display = if name.trim().is_empty() { id.clone() } else { name.trim().to_owned() };
-        // The name goes into a TOML string and JavaScript comments.
-        let toml_name = display.replace('\\', "\\\\").replace('"', "\\\"");
-        for (rel, body) in template.files() {
-            let body = body
-                .replace("{{id}}", &id)
-                .replace("{{name}}", if rel.ends_with(".toml") { &toml_name } else { &display });
-            save_module_file(&dir, rel, &body)?;
-        }
+        write_template(template, &dir, &id, name)?;
         // Loading it is a convenience: a template that cannot load here
         // (no JavaScript in this build) is still there to edit.
         if let Err(e) = self.reload_module(&dir) {
@@ -568,10 +580,20 @@ impl Engine {
         let ctx = self.runtime_context(&cfg);
         let dir = std::path::absolute(dir).unwrap_or_else(|_| dir.to_owned());
         let folder = dir.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+        // A native library stays loaded for the life of the process, so one
+        // already loaded from this folder is not loaded again: decided from
+        // the manifest alone, before anything is loaded.
+        if let Ok(m) = Manifest::load(&dir.join("module.toml")) {
+            if m.module.runtime == Runtime::Native && self.registry().entry_from_dir(&dir).is_some() {
+                return Ok(ReloadOutcome::NeedsRestart { id: m.module.id });
+            }
+        }
         let entry = match Registry::load_module(&dir, &ctx) {
             Ok(entry) => entry,
             Err(why) => {
                 self.set_module_status(&dir, None, Some(why.clone()));
+                // The status changed (the folder is listed as failed now).
+                self.emit(Event::ModulesReloaded);
                 return Err(Error::Module { module: folder, detail: why });
             }
         };
@@ -579,14 +601,8 @@ impl Engine {
         if cfg.modules.disabled.contains(&id) {
             return Ok(ReloadOutcome::Disabled { id });
         }
-        let native = matches!(entry.origin, Origin::Module { runtime: Runtime::Native, .. });
         {
             let mut registry = self.inner.registry.write();
-            if native && registry.entry_from_dir(&dir).is_some() {
-                // The library stays loaded for the life of the process; a
-                // second copy of it beside the first is worse than waiting.
-                return Ok(ReloadOutcome::NeedsRestart { id });
-            }
             let next = registry.with_replaced(entry);
             *registry = std::sync::Arc::new(next);
         }

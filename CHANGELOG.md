@@ -50,8 +50,8 @@ the notes of its GitHub release.
 - The control API can check, reload and test one module:
   `POST /v1/modules/<id>/check`, `…/reload`, `…/test`.
 - Module errors may carry an optional `location` (`file`, `line`, `column`).
-  JavaScript modules fill it, and an error thrown while a script runs now
-  names the place in the message, as `(at main.js:23:14)`.
+  JavaScript modules fill it; the module editor and `glossa-cli module test`
+  show the place (`main.js:23:14`), while popups show only the message.
 - The interface language switches at once, without a restart: every
   window, the tray menu and the macOS menu bar follow the setting as soon
   as it is applied.

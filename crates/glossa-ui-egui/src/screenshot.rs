@@ -142,16 +142,24 @@ fn open(app: &mut GlossaApp, what: &str) -> bool {
         "dictionary" => crate::dictionary::open(app, Some("serendipity".into())),
         "history" => crate::history::open(app),
         "module-editor" | "module-editor:test" => {
-            // `GLOSSA_SCREENSHOT_MODULE`: a module folder to open; else a
-            // new module from the translator template.
-            let target = match std::env::var_os("GLOSSA_SCREENSHOT_MODULE") {
-                Some(dir) => crate::module_editor::Target::Dir(dir.into()),
-                None => crate::module_editor::Target::New(
-                    glossa_engine::module_dev::Template::Translator,
-                    "Screenshot module".into(),
-                ),
+            // `GLOSSA_SCREENSHOT_MODULE`: a module folder to open; else the
+            // translator template, written to a scratch folder rather than
+            // the user's modules.
+            let dir = match std::env::var_os("GLOSSA_SCREENSHOT_MODULE") {
+                Some(dir) => std::path::PathBuf::from(dir),
+                None => {
+                    let dir = std::env::temp_dir().join(format!("glossa-screenshot-module-{}", std::process::id()));
+                    let _ = std::fs::remove_dir_all(&dir);
+                    let t = glossa_engine::module_dev::Template::Translator;
+                    if let Err(e) =
+                        glossa_engine::module_dev::write_template(t, &dir, "screenshot-module", "Screenshot module")
+                    {
+                        eprintln!("glossa: --screenshot: cannot write the sample module: {e}");
+                    }
+                    dir
+                }
             };
-            crate::module_editor::open(app, target);
+            crate::module_editor::open(app, crate::module_editor::Target::Dir(dir));
             if what.ends_with(":test") {
                 if let Some(ed) = app.module_editor.as_mut() {
                     ed.test_when_ready();

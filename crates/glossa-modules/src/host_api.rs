@@ -274,7 +274,14 @@ pub fn from_module_error(module: &str, name: &str, e: ModuleError) -> Error {
         ErrorKind::TargetLanguage => {
             Error::TargetLanguageUnsupported { provider: name.to_owned(), lang: glossa_core::LangId::UNKNOWN }
         }
-        _ => Error::Module { module: module.to_owned(), detail: e.message },
+        _ => match e.location {
+            Some(l) if !l.file.is_empty() => Error::ModuleAt {
+                module: module.to_owned(),
+                detail: e.message,
+                place: glossa_core::error::SourcePlace { file: l.file, line: l.line, column: l.column },
+            },
+            _ => Error::Module { module: module.to_owned(), detail: e.message },
+        },
     }
 }
 
