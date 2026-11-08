@@ -22,6 +22,7 @@ mod inplace;
 mod keyboard;
 mod langs;
 mod main_window;
+mod module_actions;
 mod module_editor;
 mod module_settings;
 mod mouse;

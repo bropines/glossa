@@ -855,34 +855,41 @@ impl GlossaApp {
     /// A human message for an engine error, in the interface language where
     /// the classic program had one.
     pub fn describe(&self, e: &glossa_core::Error) -> String {
-        use glossa_core::Error as E;
-        let key = match e {
-            E::EmptyInput => Some("msg.nothing_to_translate"),
-            E::LanguageNotDetected => Some("msg.cannot_detect"),
-            E::SourceLanguageUnsupported { .. } => Some("msg.source_unsupported"),
-            E::TargetLanguageUnsupported { .. } => Some("msg.target_unsupported"),
-            E::Timeout(_) => Some("msg.timeout"),
-            E::Network(_) => Some("msg.no_connection"),
-            E::Unsupported { .. } => Some("msg.capability_unsupported"),
-            E::NoTextRecognised => Some("msg.no_text_in_image"),
-            E::AssetsMissing { .. } | E::RuntimeMissing { .. } => Some("msg.assets_missing"),
-            _ => None,
-        };
-        match key {
-            // The localised headline, with the specifics after it.
-            Some(k) => {
-                let head = self.t(k);
-                match e {
-                    E::Network(_) | E::Unsupported { .. } | E::AssetsMissing { .. } | E::RuntimeMissing { .. } => {
-                        format!("{head}\n{e}")
-                    }
-                    _ => head,
-                }
-            }
-            None => e.to_string(),
-        }
+        describe_error(&self.locale, e)
     }
+}
 
+/// [`GlossaApp::describe`], for a worker thread holding only the locale.
+pub fn describe_error(locale: &glossa_core::locale::Locale, e: &glossa_core::Error) -> String {
+    use glossa_core::Error as E;
+    let key = match e {
+        E::EmptyInput => Some("msg.nothing_to_translate"),
+        E::LanguageNotDetected => Some("msg.cannot_detect"),
+        E::SourceLanguageUnsupported { .. } => Some("msg.source_unsupported"),
+        E::TargetLanguageUnsupported { .. } => Some("msg.target_unsupported"),
+        E::Timeout(_) => Some("msg.timeout"),
+        E::Network(_) => Some("msg.no_connection"),
+        E::Unsupported { .. } => Some("msg.capability_unsupported"),
+        E::NoTextRecognised => Some("msg.no_text_in_image"),
+        E::AssetsMissing { .. } | E::RuntimeMissing { .. } => Some("msg.assets_missing"),
+        _ => None,
+    };
+    match key {
+        // The localised headline, with the specifics after it.
+        Some(k) => {
+            let head = locale.get(k).to_owned();
+            match e {
+                E::Network(_) | E::Unsupported { .. } | E::AssetsMissing { .. } | E::RuntimeMissing { .. } => {
+                    format!("{head}\n{e}")
+                }
+                _ => head,
+            }
+        }
+        None => e.to_string(),
+    }
+}
+
+impl GlossaApp {
     /// Run an action from a hotkey, the tray, the control API or a menu.
     pub fn perform(&mut self, action: Action, text: Option<String>) {
         crate::actions::perform(self, action, text);

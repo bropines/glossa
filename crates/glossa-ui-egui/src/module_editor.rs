@@ -81,7 +81,7 @@ enum Reply {
     },
     Checked {
         problems: Vec<Problem>,
-        info: Option<Info>,
+        info: Option<Box<Info>>,
     },
     Reloaded(Result<ReloadOutcome, String>),
     Tested(Box<ModuleReport>),
@@ -238,7 +238,7 @@ impl ModuleEditor {
         let lang = app.locale.code.clone();
         self.spawn(&app.ctx, move || {
             let problems = engine.check_module(&dir);
-            let info = manifest_info(&dir, &lang);
+            let info = manifest_info(&dir, &lang).map(Box::new);
             Reply::Checked { problems, info }
         });
     }
@@ -375,7 +375,7 @@ impl ModuleEditor {
                         }
                     }
                     if let Some(info) = info {
-                        self.adopt_info(app, info);
+                        self.adopt_info(app, *info);
                     }
                     if errors && self.drawer != Drawer::Tests {
                         self.drawer = Drawer::Problems;
@@ -927,7 +927,19 @@ fn preview(app: &mut GlossaApp, ui: &mut egui::Ui, ed: &mut ModuleEditor) {
             }
             // The renderer the Services page uses, on the page as last
             // checked, in the interface language.
-            crate::module_settings::show(ui, &look, &app.locale, page, &mut ed.preview_values, false, PREVIEW_SALT);
+            // Its actions run in the loaded module (as last reloaded) with
+            // the values typed here.
+            let run = crate::module_actions::engine_runner(app, &ed.info.id);
+            crate::module_settings::show_with(
+                ui,
+                &look,
+                &app.locale,
+                page,
+                &mut ed.preview_values,
+                false,
+                PREVIEW_SALT,
+                Some(&run),
+            );
         }
         ui.add_space(12.0);
         ui.label(RichText::new(app.t("editor.preview_panels")).small().color(look.weak_text()));

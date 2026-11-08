@@ -1147,7 +1147,18 @@ fn service_details(
                 ai_tools(app, ui, &id, &mut st.draft, &st.ai_models, &mut st.ai_task, &st.ai_status);
             }
             let values = st.draft.services.options.entry(id.clone()).or_default();
-            crate::module_settings::show(ui, &look, &app.locale, &p.page, values, st.show_secrets, &id);
+            // Actions run in the engine with the draft as it is on screen.
+            let run = crate::module_actions::engine_runner(app, &id);
+            crate::module_settings::show_with(
+                ui,
+                &look,
+                &app.locale,
+                &p.page,
+                values,
+                st.show_secrets,
+                &id,
+                Some(&run),
+            );
         }
     });
 }

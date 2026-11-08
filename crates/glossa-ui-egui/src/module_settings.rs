@@ -1,6 +1,7 @@
 //! Draws a provider's settings page ([`glossa_modules::SettingsPage`]): the
 //! fields, the `[ui.settings]` groups, rows and tabs, the conditions and the
-//! messages under fields that fail their checks.
+//! messages under fields that fail their checks, and the buttons of the
+//! module's `[[actions]]` with their notices.
 //!
 //! Everything that decides something (what is shown, enabled or wrong, in
 //! which language) is decided by the page in `glossa-modules`; this only
@@ -8,12 +9,15 @@
 //! one entry point, used by the Services page and meant for the module
 //! editor's preview as well.
 
+use std::collections::BTreeSet;
+
 use egui::RichText;
 use glossa_core::locale::Locale;
 use glossa_core::LangId;
 use glossa_modules::settings::{Container, FieldState, LabelStyle, Node};
 use glossa_modules::{OptionKind, OptionSpec, OptionValues, SettingsPage};
 
+use crate::module_actions::{self, Level, Runner};
 use crate::style::Look;
 
 /// Width of a field's control in a full-width row.
@@ -24,6 +28,9 @@ const COMPACT_WIDTH: f32 = 140.0;
 /// Draw `page`, editing `values` (the Options draft, or any scratch map).
 /// `id_salt` keeps two pages on one screen apart (the provider id will do);
 /// `show_secrets` unmasks `secret` fields. Returns whether a value changed.
+/// Action buttons are drawn but cannot be pressed; see [`show_with`]. Kept
+/// for previews (the module editor), which have no module to run.
+#[allow(dead_code)]
 pub fn show(
     ui: &mut egui::Ui,
     look: &Look,
@@ -33,10 +40,44 @@ pub fn show(
     show_secrets: bool,
     id_salt: &str,
 ) -> bool {
+    show_with(ui, look, locale, page, values, show_secrets, id_salt, None)
+}
+
+/// [`show`], with `runner` starting the module's actions when their
+/// buttons are pressed (`None`: a preview, where they cannot be).
+#[allow(clippy::too_many_arguments)]
+pub fn show_with(
+    ui: &mut egui::Ui,
+    look: &Look,
+    locale: &Locale,
+    page: &SettingsPage,
+    values: &mut OptionValues,
+    show_secrets: bool,
+    id_salt: &str,
+    runner: Option<Runner>,
+) -> bool {
+    let runs = module_actions::for_page(ui.ctx(), id_salt);
+    // A reply that came back since the last frame lands in the draft first,
+    // so this frame draws it.
+    let mut changed = runs.lock().poll(&page.options, values, locale.get("module_action.done"));
     let states = page.states(Some(values));
-    let mut cx = Cx { look, locale, page, states: &states, values, show_secrets, salt: id_salt, changed: false };
+    let placed = page.placed_actions().into_iter().map(str::to_owned).collect();
+    let mut cx = Cx {
+        look,
+        locale,
+        page,
+        states: &states,
+        values,
+        show_secrets,
+        salt: id_salt,
+        changed: false,
+        runs,
+        runner,
+        placed,
+    };
     cx.nodes(ui, &page.nodes, false);
-    cx.changed
+    changed |= cx.changed;
+    changed
 }
 
 /// Choose tab `index` of the `tabs` item `tabs` on the page drawn with
@@ -65,6 +106,11 @@ struct Cx<'a> {
     show_secrets: bool,
     salt: &'a str,
     changed: bool,
+    runs: module_actions::Shared,
+    runner: Option<Runner<'a>>,
+    /// Actions the layout places with `@id`; a `choices_from` action that is
+    /// not among them gets a small button beside its field instead.
+    placed: BTreeSet<String>,
 }
 
 impl Cx<'_> {
@@ -98,9 +144,22 @@ impl Cx<'_> {
                 if let Some(e) = error {
                     ui.label(RichText::new(e.describe(self.locale)).small().color(self.look.error()));
                 }
+                // What the module said about the field ("the key was refused").
+                let said = self.runs.lock().field_error(&page.options, self.values, &spec.key);
+                if let Some(msg) = said {
+                    ui.label(RichText::new(msg).small().color(self.look.error()));
+                }
+                // An inline "load" button's failure shows under its field.
+                if !spec.choices_from.is_empty() && !self.placed.contains(&spec.choices_from) {
+                    let notice = self.runs.lock().notice(&spec.choices_from).cloned();
+                    if let Some(n) = notice.filter(|n| matches!(n.level, Level::Error | Level::Warning)) {
+                        ui.label(RichText::new(n.text).small().color(self.look.error()));
+                    }
+                }
             }
-            // Phase 2 draws an action's button here.
-            Node::Action(_) => {}
+            Node::Action(id) => {
+                ui.horizontal_wrapped(|ui| self.action_button(ui, id, false));
+            }
             Node::Group(c) => {
                 let Some(enabled) = self.container(c) else { return };
                 ui.add_enabled_ui(enabled, |ui| {
@@ -147,6 +206,59 @@ impl Cx<'_> {
             }
             Node::Unknown { .. } => {
                 ui.label(RichText::new(self.t("field.needs_newer")).small().color(self.look.weak_text()));
+            }
+        }
+    }
+
+    /// An action's button, with a spinner while it runs and its notice
+    /// after. `small` for the inline button beside a `choices_from` field,
+    /// which leaves its notice to the field.
+    fn action_button(&mut self, ui: &mut egui::Ui, id: &str, small: bool) {
+        let page = self.page;
+        let Some(action) = page.action(id) else { return };
+        let blockers = page.action_blockers(action, Some(self.values));
+        let running = self.runs.lock().running().map(str::to_owned);
+        let enabled = self.runner.is_some() && blockers.is_empty() && running.is_none();
+        let button = if small {
+            egui::Button::new(RichText::new(&action.label).small())
+        } else {
+            egui::Button::new(&action.label)
+        };
+        let mut resp = ui.add_enabled(enabled, button);
+        if !blockers.is_empty() {
+            let names: Vec<String> = blockers
+                .iter()
+                .map(|i| {
+                    let o = &page.options[*i];
+                    if o.label.is_empty() {
+                        o.key.clone()
+                    } else {
+                        o.label.clone()
+                    }
+                })
+                .collect();
+            resp = resp.on_disabled_hover_text(self.locale.fmt("module_action.needs", &names.join(", ")));
+        } else if !action.help.is_empty() {
+            resp = resp.on_hover_text(&action.help).on_disabled_hover_text(&action.help);
+        }
+        let pressed = enabled && self.runs.lock().take_press(id);
+        if resp.clicked() || pressed {
+            if let Some(run) = self.runner {
+                let rx = run(id, self.values.clone());
+                self.runs.lock().start(id, rx);
+            }
+        }
+        if running.as_deref() == Some(id) {
+            ui.add(egui::Spinner::new().size(14.0));
+        } else if !small {
+            let notice = self.runs.lock().notice(id).cloned();
+            if let Some(n) = notice {
+                let color = match n.level {
+                    Level::Error | Level::Warning => self.look.error(),
+                    Level::Success => self.look.text(),
+                    Level::Info => self.look.weak_text(),
+                };
+                ui.add(egui::Label::new(RichText::new(n.text).small().color(color)).wrap());
             }
         }
     }
@@ -219,12 +331,41 @@ impl Cx<'_> {
         });
     }
 
+    /// The choices to offer: those an action loaded, else the declared
+    /// ones. A loaded value the manifest also declares keeps the declared
+    /// label, which the module's locale file may translate.
+    fn choices_for(&self, spec: &OptionSpec) -> Vec<glossa_modules::provider::Choice> {
+        let Some(loaded) = self.runs.lock().choices(&spec.key).map(<[_]>::to_vec) else {
+            return spec.choices.clone();
+        };
+        loaded
+            .into_iter()
+            .map(|mut c| {
+                if let Some(d) = spec.choices.iter().find(|d| d.value == c.value && !d.label.is_empty()) {
+                    c.label = d.label.clone();
+                }
+                c
+            })
+            .collect()
+    }
+
     fn set(&mut self, key: &str, v: serde_json::Value) {
         self.values.insert(key.to_owned(), v);
         self.changed = true;
     }
 
     fn control(&mut self, ui: &mut egui::Ui, spec: &OptionSpec, width: f32) {
+        // A select whose choices an action loads, when the layout does not
+        // place that action, gets its button here. The controls are laid
+        // out right to left, so it stands right of the list, and the list
+        // takes what width is left.
+        let inline = matches!(spec.kind, OptionKind::Select | OptionKind::Multiselect)
+            && !spec.choices_from.is_empty()
+            && !self.placed.contains(&spec.choices_from);
+        if inline {
+            let from = spec.choices_from.clone();
+            self.action_button(ui, &from, true);
+        }
         // A narrow pane gets narrower controls rather than a row that runs
         // off its left edge.
         let width = width.min(ui.available_width()).max(60.0);
@@ -261,9 +402,10 @@ impl Cx<'_> {
                 }
             }
             OptionKind::Select => {
+                let choices = self.choices_for(spec);
+                let choices = choices.as_slice();
                 let cur = current.as_str().unwrap_or("").to_owned();
-                let shown = spec
-                    .choices
+                let shown = choices
                     .iter()
                     .find(|c| c.value == cur)
                     .map(|c| if c.label.is_empty() { c.value.clone() } else { c.label.clone() })
@@ -273,7 +415,7 @@ impl Cx<'_> {
                     .width(width.min(280.0))
                     .selected_text(shown)
                     .show_ui(ui, |ui| {
-                        for c in &spec.choices {
+                        for c in choices {
                             let name = if c.label.is_empty() { c.value.clone() } else { c.label.clone() };
                             if ui.selectable_label(c.value == cur, name).clicked() {
                                 picked = Some(c.value.clone());
@@ -377,12 +519,14 @@ impl Cx<'_> {
     /// Checkboxes in a dropdown that stays open while they are ticked.
     fn multiselect(&mut self, ui: &mut egui::Ui, spec: &OptionSpec, current: &serde_json::Value, width: f32) {
         use crate::dropdown;
+        let choices = self.choices_for(spec);
+        let choices = choices.as_slice();
         let picked: Vec<String> = current
             .as_array()
             .map(|a| a.iter().filter_map(|v| v.as_str().map(str::to_owned)).collect())
             .unwrap_or_default();
         let name = |v: &str| {
-            spec.choices
+            choices
                 .iter()
                 .find(|c| c.value == v)
                 .map(|c| if c.label.is_empty() { c.value.clone() } else { c.label.clone() })
@@ -400,7 +544,7 @@ impl Cx<'_> {
         }
         let mut next = picked.clone();
         dropdown::show(ui, id, button.rect, button.rect.width(), 400.0, |ui, _| {
-            for c in &spec.choices {
+            for c in choices {
                 let mut on = next.contains(&c.value);
                 let label = if c.label.is_empty() { c.value.clone() } else { c.label.clone() };
                 if ui.checkbox(&mut on, label).changed() {
@@ -415,7 +559,7 @@ impl Cx<'_> {
         if next != picked {
             // Keep the declared order, whatever order they were ticked in.
             let ordered: Vec<serde_json::Value> =
-                spec.choices.iter().filter(|c| next.contains(&c.value)).map(|c| c.value.clone().into()).collect();
+                choices.iter().filter(|c| next.contains(&c.value)).map(|c| c.value.clone().into()).collect();
             self.set(&spec.key, ordered.into());
         }
     }
