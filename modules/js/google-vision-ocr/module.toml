@@ -7,12 +7,16 @@
 # (`visible_if`, `enabled_if`), checks (`pattern`, `min_length`), a slider,
 # a multiselect, a tabbed `[ui.settings]` layout, and a Russian translation
 # in locales/ru.toml. See docs/modules/README.md#settings-pages.
+#
+# And two actions (buttons on the settings page, run by main.js): "Test the
+# key", which needs a valid-looking key first, and "All languages", which
+# fills the language list (`choices_from`). See docs/modules/README.md#actions.
 capabilities = ["ocr"]
 
 [module]
 id = "google-vision-ocr"
 name = "Google Cloud Vision OCR"
-version = "1.1.0"
+version = "1.2.0"
 runtime = "js"
 entry = "main.js"
 description = "Document text recognition with the Cloud Vision API: layout down to words, with confidence."
@@ -51,6 +55,8 @@ type = "multiselect"
 label = "Languages"
 visible_if = "options.hints == 'custom'"
 min_length = 1
+# "All languages" (all_languages in main.js) replaces the six below.
+choices_from = "all_languages"
 choices = [
   { value = "en", label = "English" },
   { value = "ru", label = "Russian" },
@@ -97,6 +103,18 @@ min = 1000
 max = 4000
 step = 100
 
+# Buttons. The handler is the function of the same name in main.js.
+[[actions]]
+id = "test"
+label = "Test the key"
+help = "Asks Vision whether it accepts the key, without recognising anything."
+needs = ["api_key"]
+
+[[actions]]
+id = "all_languages"
+label = "All languages"
+help = "Offer every language Vision takes as a hint."
+
 # The page: three tabs. Without this table the options would be listed in
 # the order above.
 [ui]
@@ -114,7 +132,7 @@ children = ["connection", "recognition", "advanced"]
 id = "connection"
 type = "group"
 label = "Connection"
-children = ["key_note", "api_key"]
+children = ["key_note", "api_key", "@test"]
 
 [[ui.settings.items]]
 id = "key_note"

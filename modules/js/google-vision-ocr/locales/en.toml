@@ -1,0 +1,8 @@
+# The English strings main.js reads with host.t("key"). Every other English
+# text is in module.toml; a translation in another locales/<lang>.toml falls
+# back to these key by key.
+
+[strings]
+key_ok = "Vision accepts the key."
+key_refused = "The key was refused: {0}"
+languages_loaded = "{0} languages."

@@ -22,6 +22,20 @@ the notes of its GitHub release.
   module check` reports mistakes in all of the above. The Google Cloud
   Vision example module shows every part (docs/modules/README.md,
   *Settings pages*).
+- Module actions: buttons on a module's settings page that run its code,
+  such as "Load models" or "Test the key". A module declares them in
+  `[[actions]]`; a button waits, greyed out and naming the field, until the
+  settings it `needs` are filled in, runs on a worker with the values on
+  screen, shows a spinner while it runs, and shows its answer beside it or
+  under the fields it names. A select's choices can come from an action
+  (`choices_from`). Modules translate their messages with `host.t` and
+  `[strings]` in their locale files. Every runtime supports them: a
+  handler function in JavaScript, `@mod.action` in Python, `@Action` in
+  Java, `Module::action` in Rust, and the protocol's new optional `action`
+  method for any other program. They also work in the module editor's
+  preview, from `glossa-cli module action`, and in test fixtures
+  (`op = "action"`). The Google Cloud Vision example gains "Test the key"
+  and "All languages" (docs/modules/README.md, *Actions*).
 - Presets: named sets of services to switch between in one click. A preset
   holds which services are on and in what order, the active one, the
   dictionaries, the voice, the OCR engine, module settings and, if you
