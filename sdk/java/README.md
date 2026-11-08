@@ -94,6 +94,7 @@ throws `ModuleError` with Glossa's error kind when it fails.
 | `postJson(url, value, headers)` | POST a JSON body. |
 | `http(map)` | the `http` host call with every protocol field (`body_base64`, `timeout_ms`, `binary`). |
 | `log(level, msg)`, `debug`, `info`, `warn` | Glossa's log, tagged with the module id. |
+| `uiUpdate(state)` | during an action from a [panel](../../docs/modules/panels.md#streaming): partial state, shown at once while the handler works; nothing elsewhere. |
 | `cacheGet(key)`, `cacheSet(key, value, ttlSecs)` | a small store in Glossa's memory that outlives this process (which stops when idle). |
 | `assetPath(name)`, `assets()` | where a file from the manifest's `[[assets]]` is (a model, a dictionary), or all of them with `missing` for optional ones not downloaded; also `GLOSSA_ASSET_<NAME>` in the environment ([assets](../../docs/modules/README.md#assets)). |
 | `t(key, args…)` | in an action: the module's string from `[strings]` in `locales/<lang>.toml`, in the interface language with English as the fallback, `{0}`, `{1}`… replaced. |

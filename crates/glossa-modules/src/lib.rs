@@ -31,6 +31,7 @@ pub mod host_api;
 pub mod image_ops;
 pub mod log_tap;
 pub mod manifest;
+pub mod panels;
 pub mod protocol;
 pub mod provider;
 pub mod python_env;

@@ -57,7 +57,7 @@ pub enum Condition {
 #[derive(Clone, Copy)]
 pub struct Context<'a> {
     pub options: &'a crate::provider::OptionValues,
-    pub state: Option<&'a serde_json::Map<String, Value>>,
+    pub state: Option<&'a crate::provider::OptionValues>,
 }
 
 impl Condition {
@@ -430,7 +430,7 @@ mod tests {
 
     fn eval(src: &str, options: Value) -> bool {
         let options: crate::provider::OptionValues = serde_json::from_value(options).unwrap();
-        let state = serde_json::Map::from_iter([("result".to_owned(), json!("done"))]);
+        let state = crate::provider::OptionValues::from_iter([("result".to_owned(), json!("done"))]);
         Condition::parse(src).unwrap().eval(&Context { options: &options, state: Some(&state) })
     }
 

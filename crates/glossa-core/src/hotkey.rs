@@ -68,6 +68,10 @@ pub enum Action {
     NextPreset,
     ShowOptions,
     Quit,
+    /// Open a module's panel, named `module/panel` by the text that comes
+    /// with the action. Not in [`Action::ALL`]: it needs that name, so it is
+    /// bound per panel in `[hotkeys.panels]` rather than on the hotkey page.
+    OpenPanel,
 }
 
 impl Action {
@@ -193,6 +197,7 @@ impl Action {
             Action::NextPreset => "Switch to the next preset",
             Action::ShowOptions => "Show options",
             Action::Quit => "Exit",
+            Action::OpenPanel => "Open a module panel",
         }
     }
 
@@ -227,10 +232,14 @@ impl Action {
             Action::NextPreset => "next_preset",
             Action::ShowOptions => "show_options",
             Action::Quit => "quit",
+            Action::OpenPanel => "open_panel",
         }
     }
 
     pub fn from_id(id: &str) -> Option<Action> {
+        if id == Action::OpenPanel.id() {
+            return Some(Action::OpenPanel);
+        }
         Action::ALL.into_iter().find(|a| a.id() == id)
     }
 }
@@ -586,5 +595,8 @@ mod tests {
             // The id matches what serde writes.
             assert_eq!(serde_json::to_string(&a).unwrap(), format!("\"{}\"", a.id()));
         }
+        assert_eq!(Action::from_id("open_panel"), Some(Action::OpenPanel), "reachable by id, not listed");
+        assert!(!Action::ALL.contains(&Action::OpenPanel));
+        assert_eq!(serde_json::to_string(&Action::OpenPanel).unwrap(), "\"open_panel\"");
     }
 }

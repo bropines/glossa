@@ -341,6 +341,19 @@ fn main_menu(app: &mut GlossaApp, ui: &mut egui::Ui) {
         app.open_keyboard();
         ui.close();
     }
+    // Module panels offered in this menu (`open_from = ["main_menu"]`).
+    let panels: Vec<(String, String)> = app
+        .panel_list()
+        .iter()
+        .filter(|p| p.open_from.iter().any(|o| o == "main_menu"))
+        .map(|p| (p.id.clone(), p.title.clone()))
+        .collect();
+    for (id, title) in panels {
+        if ui.button(title).clicked() {
+            app.perform(Action::OpenPanel, Some(id));
+            ui.close();
+        }
+    }
     if ui.button(app.t("menu.options")).clicked() {
         app.perform(Action::ShowOptions, None);
         ui.close();

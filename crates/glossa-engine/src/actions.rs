@@ -29,9 +29,11 @@ impl Engine {
     /// Run `action` of module `module` and return its reply. Fails with
     /// [`Error::MissingCredential`] naming the first field in `needs` that is
     /// empty or invalid, before the module is called; with
-    /// [`Error::Unsupported`] for `call` and `builtin` actions, which belong
-    /// to panels. The reply is returned as the module sent it, after the
-    /// network permissions of the module applied to everything it fetched.
+    /// [`Error::Unsupported`] for `call` and `builtin` actions without a
+    /// panel. With `req.panel` the action runs as that panel runs it
+    /// ([`Engine::panel_action`]), and only the reply is returned. A
+    /// handler's reply is returned as the module sent it, after the network
+    /// permissions of the module applied to everything it fetched.
     pub fn module_action(&self, module: &str, action: &str, req: ActionRequest) -> Result<ActionReply> {
         self.module_action_with(module, action, req, &CancelToken::new())
     }
@@ -45,6 +47,13 @@ impl Engine {
         req: ActionRequest,
         cancel: &CancelToken,
     ) -> Result<ActionReply> {
+        if let Some(panel) = &req.panel {
+            // From a panel: every kind of action runs, as the panel runs it.
+            let id = crate::PanelId::new(module, panel.clone());
+            let event = ActionEvent { kind: "click".into(), element: Some(action.to_owned()), item: None };
+            let preq = crate::PanelRequest { state: req.state.clone(), event };
+            return self.panel_action(&id, action, preq, cancel, &|_| {}).map(|o| o.reply);
+        }
         let provider = self.registry().get(module).ok_or_else(|| Error::NoSuchModule(module.to_owned()))?;
         let lang = self.locale().code.clone();
         let page = provider.settings_page(&lang);
@@ -59,7 +68,7 @@ impl Engine {
         if view.kind != ActionKind::Handler {
             return Err(Error::Unsupported {
                 provider: provider.info().name.clone(),
-                capability: "call and built-in actions (they arrive with module panels)",
+                capability: "call and built-in actions outside a panel (name the panel)",
             });
         }
         let started = std::time::Instant::now();

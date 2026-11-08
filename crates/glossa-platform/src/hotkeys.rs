@@ -56,14 +56,17 @@ impl From<HotkeyError> for glossa_core::Error {
 /// The registered hotkeys and the actions they trigger.
 pub struct HotkeyService {
     backend: Backend,
-    queue: VecDeque<Action>,
+    /// Triggered actions, with the text that goes with them (a panel's
+    /// `module/panel` name for [`Action::OpenPanel`]).
+    queue: VecDeque<(Action, Option<String>)>,
 }
 
 enum Backend {
     Global {
         manager: GlobalHotKeyManager,
-        /// global-hotkey id → (the registered chord, its action).
-        registered: HashMap<u32, (HotKey, Action)>,
+        /// global-hotkey id → (the registered chord, its action, the text
+        /// that goes with it).
+        registered: Registered,
         /// Set by [`HotkeyService::set_waker`]: events then arrive here
         /// instead of through the crate's global receiver.
         events: Option<std::sync::mpsc::Receiver<GlobalHotKeyEvent>>,
@@ -134,22 +137,7 @@ impl HotkeyService {
     /// a refusal there is logged rather than returned.
     pub fn register(&mut self, action: Action, hotkey: &Hotkey) -> Result<(), HotkeyError> {
         match &mut self.backend {
-            Backend::Global { manager, registered, .. } => {
-                let hk = to_global(hotkey)?;
-                if let Some((_, other)) = registered.get(&hk.id()) {
-                    if *other == action {
-                        return Ok(());
-                    }
-                    return Err(HotkeyError::Taken { hotkey: hotkey.to_string() });
-                }
-                unregister_global(manager, registered, action);
-                manager.register(hk).map_err(|e| match e {
-                    global_hotkey::Error::AlreadyRegistered(_) => HotkeyError::Taken { hotkey: hotkey.to_string() },
-                    other => HotkeyError::Failed { hotkey: hotkey.to_string(), detail: other.to_string() },
-                })?;
-                registered.insert(hk.id(), (hk, action));
-                Ok(())
-            }
+            Backend::Global { manager, registered, .. } => register_global(manager, registered, action, None, hotkey),
             #[cfg(all(unix, not(target_os = "macos")))]
             Backend::Portal(p) => {
                 let trigger = portal_trigger(hotkey)?;
@@ -158,10 +146,31 @@ impl HotkeyService {
         }
     }
 
+    /// Bind `hotkey` to opening the module panel `panel` (`module/panel`):
+    /// it triggers [`Action::OpenPanel`] with the name as its text. Several
+    /// panels may each have one. Not through the desktop portal, whose
+    /// shortcuts are named by action.
+    pub fn register_panel(&mut self, panel: &str, hotkey: &Hotkey) -> Result<(), HotkeyError> {
+        match &mut self.backend {
+            Backend::Global { manager, registered, .. } => {
+                register_global(manager, registered, Action::OpenPanel, Some(panel.to_owned()), hotkey)
+            }
+            #[cfg(all(unix, not(target_os = "macos")))]
+            Backend::Portal(_) => {
+                let _ = (panel, hotkey);
+                Err(HotkeyError::Unsupported {
+                    reason: "panel hotkeys are not offered through the desktop portal; bind a shortcut that runs \
+                             `glossa-cli action open_panel MODULE/PANEL` instead"
+                        .into(),
+                })
+            }
+        }
+    }
+
     /// Remove the hotkey bound to `action`, if any.
     pub fn unregister(&mut self, action: Action) {
         match &mut self.backend {
-            Backend::Global { manager, registered, .. } => unregister_global(manager, registered, action),
+            Backend::Global { manager, registered, .. } => unregister_global(manager, registered, action, None),
             #[cfg(all(unix, not(target_os = "macos")))]
             Backend::Portal(p) => p.remove(action),
         }
@@ -171,7 +180,7 @@ impl HotkeyService {
     pub fn unregister_all(&mut self) {
         match &mut self.backend {
             Backend::Global { manager, registered, .. } => {
-                let keys: Vec<HotKey> = registered.drain().map(|(_, (hk, _))| hk).collect();
+                let keys: Vec<HotKey> = registered.drain().map(|(_, (hk, _, _))| hk).collect();
                 if let Err(e) = manager.unregister_all(&keys) {
                     tracing::debug!("unregistering hotkeys failed: {e}");
                 }
@@ -185,7 +194,9 @@ impl HotkeyService {
     /// The actions currently bound.
     pub fn bound_actions(&self) -> Vec<Action> {
         let mut v: Vec<Action> = match &self.backend {
-            Backend::Global { registered, .. } => registered.values().map(|(_, a)| *a).collect(),
+            Backend::Global { registered, .. } => {
+                registered.values().filter(|(_, _, text)| text.is_none()).map(|(_, a, _)| *a).collect()
+            }
             #[cfg(all(unix, not(target_os = "macos")))]
             Backend::Portal(p) => p.actions(),
         };
@@ -219,6 +230,12 @@ impl HotkeyService {
     /// `GlobalHotKeyEvent::receiver()`, so nothing else in the process may
     /// install `GlobalHotKeyEvent::set_event_handler`.
     pub fn poll(&mut self) -> Option<Action> {
+        self.poll_with_text().map(|(a, _)| a)
+    }
+
+    /// [`poll`](Self::poll), with the text that goes with the action (a
+    /// panel's name for [`Action::OpenPanel`]).
+    pub fn poll_with_text(&mut self) -> Option<(Action, Option<String>)> {
         match &mut self.backend {
             Backend::Global { registered, events, .. } => loop {
                 let event = match events {
@@ -229,21 +246,48 @@ impl HotkeyService {
                 if event.state() != HotKeyState::Pressed {
                     continue;
                 }
-                if let Some((_, action)) = registered.get(&event.id()) {
-                    self.queue.push_back(*action);
+                if let Some((_, action, text)) = registered.get(&event.id()) {
+                    self.queue.push_back((*action, text.clone()));
                 }
             },
             #[cfg(all(unix, not(target_os = "macos")))]
-            Backend::Portal(p) => self.queue.extend(p.drain()),
+            Backend::Portal(p) => self.queue.extend(p.drain().into_iter().map(|a| (a, None))),
         }
         self.queue.pop_front()
     }
 }
 
-fn unregister_global(manager: &GlobalHotKeyManager, registered: &mut HashMap<u32, (HotKey, Action)>, action: Action) {
-    let ids: Vec<u32> = registered.iter().filter(|(_, (_, a))| *a == action).map(|(id, _)| *id).collect();
+type Registered = HashMap<u32, (HotKey, Action, Option<String>)>;
+
+/// Bind `hotkey` to `action` with `text`, replacing what that pair had.
+fn register_global(
+    manager: &GlobalHotKeyManager,
+    registered: &mut Registered,
+    action: Action,
+    text: Option<String>,
+    hotkey: &Hotkey,
+) -> Result<(), HotkeyError> {
+    let hk = to_global(hotkey)?;
+    if let Some((_, other, other_text)) = registered.get(&hk.id()) {
+        if *other == action && *other_text == text {
+            return Ok(());
+        }
+        return Err(HotkeyError::Taken { hotkey: hotkey.to_string() });
+    }
+    unregister_global(manager, registered, action, text.as_deref());
+    manager.register(hk).map_err(|e| match e {
+        global_hotkey::Error::AlreadyRegistered(_) => HotkeyError::Taken { hotkey: hotkey.to_string() },
+        other => HotkeyError::Failed { hotkey: hotkey.to_string(), detail: other.to_string() },
+    })?;
+    registered.insert(hk.id(), (hk, action, text));
+    Ok(())
+}
+
+fn unregister_global(manager: &GlobalHotKeyManager, registered: &mut Registered, action: Action, text: Option<&str>) {
+    let ids: Vec<u32> =
+        registered.iter().filter(|(_, (_, a, t))| *a == action && t.as_deref() == text).map(|(id, _)| *id).collect();
     for id in ids {
-        if let Some((hk, _)) = registered.remove(&id) {
+        if let Some((hk, _, _)) = registered.remove(&id) {
             if let Err(e) = manager.unregister(hk) {
                 tracing::debug!("unregistering hotkey failed: {e}");
             }

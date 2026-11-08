@@ -187,6 +187,8 @@ Errors have a status code and a body of the form:
 | POST | [`/v1/ocr`](#post-v1ocr) | Recognise the text in an image, optionally translate it. |
 | POST | [`/v1/speak`](#post-v1speak) | Text to speech, as audio. |
 | GET, POST | [`/v1/action/<action>`](#v1actionaction) | Ask the desktop program to perform an action. |
+| GET | [`/v1/panels`](#panels) | The panels the loaded modules declare. |
+| POST | [`/v1/panel`](#panels) | Open a module panel in the desktop program. |
 | GET, POST | [`/v1/assets…`](#v1assets) | Files modules declare (models, dictionaries): state, download, check, delete. |
 | GET, POST | [`/v1/presets…`](#presets) | List, apply, save, export and import presets. |
 | POST | [`/v1/modules/<id>/…`](#post-v1modules) | Check, reload or test one module from its folder. |
@@ -390,10 +392,27 @@ The action ids are listed in [cli.md](cli.md#action): `show_main_window`,
 `recognize_and_translate`, `repeat_last_recognition`,
 `recognize_to_clipboard`, `watch_region`, `translate_region_in_place`, `translate_screen_in_place`,
 `swap_languages`, `next_service`, `next_preset`,
-`show_options`, `quit`.
+`show_options`, `quit`, and `open_panel`, whose `text` is the panel to open
+(`module/panel`; see [Panels](#panels)).
 
 [`glossa-cli action`](cli.md#action) sends these requests for you, reading
 the address and token from `config.toml`.
+
+### Panels
+
+`GET /v1/panels` lists the [panels](modules/panels.md) the loaded modules
+declare:
+
+```console
+$ curl -s "http://127.0.0.1:60828/v1/panels?token=$T"
+[{"id":"pocket-glossary/glossary","module":"pocket-glossary","panel":"glossary","title":"Pocket Glossary: Glossary","open_from":["tray","main_menu"]}]
+```
+
+`POST /v1/panel?id=MODULE/PANEL` (or `{"id": "MODULE/PANEL"}` in the body)
+opens one in the desktop program, or raises it when it is open, and answers
+`202 {"accepted": "open_panel", "panel": "…"}`; `404` for a module or panel
+that does not exist, `400` without a name. Running a panel's actions
+without a window is `glossa-cli module panel ID/PANEL --action …`.
 
 ### /v1/assets
 

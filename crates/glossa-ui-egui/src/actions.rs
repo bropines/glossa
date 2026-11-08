@@ -41,6 +41,7 @@ pub fn perform(app: &mut GlossaApp, action: Action, text: Option<String>) {
         Action::ShowDictionary => crate::dictionary::open(app, text),
         Action::ShowHistory => crate::history::open(app),
         Action::ShowKeyboard => app.open_keyboard(),
+        Action::OpenPanel => crate::module_panel::open_named(app, text.as_deref().unwrap_or_default()),
         Action::Quit => app.quit(),
         Action::SwapLanguages => {
             let pair = app.cfg.general.pair;

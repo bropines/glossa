@@ -39,6 +39,25 @@ the notes of its GitHub release.
   `config.toml`. When you upgrade, every module already installed is
   approved for what it declares then, so nothing stops working
   (docs/modules/README.md, *Permissions and trust*).
+- Module panels: windows of a module's own, described in `module.toml`
+  (`[[ui.panels]]`) and drawn by Glossa with its own widgets and colours:
+  text fields, selects, language pickers, file fields, buttons, rows,
+  groups and tabs, lists whose rows run an action, results drawn like the
+  popup's translation or the dictionary's article (or as text, Markdown, a
+  table, JSON), images and progress bars. Buttons run the module's actions;
+  actions may also call the module's own translation, dictionary, detection
+  or speech with no code (`call`), or Glossa's copy, open and speak
+  (`builtin`); a handler can stream partial results while it works
+  (`host.ui.update` in JavaScript, `host.ui_update` in Python,
+  `host.uiUpdate` in Java, the `ui_update` host call for any program).
+  Panels open from a *Modules* submenu of the tray, the main window's menu,
+  a hotkey (`[hotkeys.panels]`), the control API (`GET /v1/panels`, `POST
+  /v1/panel`, the `open_panel` action) and `glossa-cli module panel`, which
+  also runs a panel's actions. A panel keeps the state keys it names
+  between openings and costs nothing until opened; like the other windows,
+  an open panel keeps the graphics loaded. The module editor's preview draws a
+  module's panels live, and fixtures test panel actions (`panel = "…"`).
+  The new Pocket Glossary example shows it all (docs/modules/panels.md).
 - Richer settings pages for modules and built-in services, with no module
   code: options may show or grey out on a condition (`visible_if`,
   `enabled_if`), check their values as you type with a message under the

@@ -93,8 +93,21 @@ pub struct TrustRequest {
 /// as `"<kind> <what>"`. They are hashed only when present, so modules
 /// without them keep their hash, and a new line asks again like a new host.
 pub fn extra_lines(manifest: &Manifest) -> Vec<String> {
-    let _ = manifest;
-    Vec::new()
+    let mut out = Vec::new();
+    // Panels: a window of the module's own, and where Glossa offers it.
+    // (Global hotkeys for panels are the user's own, in `[hotkeys.panels]`;
+    // a module cannot declare one.)
+    for p in &manifest.ui.panels {
+        out.push(format!("panel {}", p.id));
+        for place in &p.open_from {
+            match place.as_str() {
+                "tray" => out.push(format!("tray {}", p.id)),
+                "main_menu" => out.push(format!("menu {}", p.id)),
+                _ => {}
+            }
+        }
+    }
+    out
 }
 
 impl TrustRequest {
@@ -557,6 +570,20 @@ mod tests {
         let two = mirrors("\"https://a.test/m\", \"https://b.test/m\"");
         assert_eq!(one.assets[0].hosts, ["a.test", "b.test"]);
         assert_eq!(one.hash(), two.hash());
+    }
+
+    #[test]
+    fn panels_and_their_menu_entries_are_asked_for() {
+        let plain = request("[permissions]\nnetwork = [\"api.example.com\"]");
+        let panel = "\n[[ui.panels]]\nid = \"main\"\nopen_from = [\"tray\", \"main_menu\"]\nlayout = [\"a\"]\n";
+        let with = request(&format!("[permissions]\nnetwork = [\"api.example.com\"]{panel}"));
+        assert_eq!(with.extra, ["menu main", "panel main", "tray main"]);
+        // An approved module that adds a panel asks again, for the panel.
+        let grant = plain.to_grant(Path::new("/m"));
+        assert!(!with.within(&grant));
+        assert_eq!(with.beyond(Some(&grant)).extra.len(), 3);
+        assert_ne!(with.hash(), plain.hash());
+        assert!(plain.extra.is_empty(), "no panel, no lines, the hash unchanged");
     }
 
     #[test]

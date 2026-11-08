@@ -90,7 +90,13 @@ COMMANDS
     module action ID ACTION [--option KEY=VALUE] [--set-from-env KEY=VAR] [--state KEY=VALUE]
                                       run one of an installed module's [[actions]] (a settings-page
                                       button) with the saved settings, KEY=VALUE over them, and print
-                                      its reply (notice, choices, errors, options)
+                                      its reply (notice, choices, errors, options); with --panel NAME
+                                      any action runs as that panel runs it (call, builtin)
+    module panel [ID/PANEL [--action ACTION] [--state KEY=VALUE] [--item JSON] [--open]]
+                                      module panels: without a name, list them; with one, show its
+                                      elements and state; --action runs one of its actions and prints
+                                      the streamed updates, the state after and what Glossa would do
+                                      (copy, open, play); --open asks a running Glossa to open it
     assets     [list | status ID | download ID [NAME…] | verify ID | remove ID]
                                       files modules declare (models, dictionaries): their state,
                                       downloading (resumes, checks SHA-256; NAMEs pick optional
@@ -172,6 +178,8 @@ const VALUED: &[&str] = &[
     "--option",
     "--state",
     "--panel",
+    "--action",
+    "--item",
 ];
 
 /// Flags that take no value.
@@ -199,6 +207,7 @@ const SWITCHES: &[&str] = &[
     "--languages",
     "--local",
     "--force",
+    "--open",
 ];
 
 /// Flags every command takes.
@@ -245,6 +254,9 @@ fn command_flags(command: &str) -> Option<&'static [&'static str]> {
             "--panel",
             "--local",
             "--force",
+            "--action",
+            "--item",
+            "--open",
         ],
         "detect" | "modules" | "assets" | "python" | "import-classic" | "theme" | "locale" | "config" | "serve"
         | "action" | "doctor" | "" | "help" | "version" => &[],
@@ -683,6 +695,138 @@ fn describe_request(r: &serde_json::Value) -> Vec<String> {
     out
 }
 
+/// `module panel [ID/PANEL]`: list the panels, show one, run one of its
+/// actions, or ask a running Glossa to open it.
+fn module_panel(args: &Args) -> Result<(), Fail> {
+    let Some(name) = args.rest.get(1) else {
+        let e = engine(args)?;
+        let list = e.panels();
+        if args.json {
+            out!("{}", serde_json::to_string_pretty(&list).unwrap_or_default());
+        } else if list.is_empty() {
+            out!("no module declares a panel");
+        } else {
+            for p in list {
+                let from =
+                    if p.open_from.is_empty() { String::new() } else { format!("  ({})", p.open_from.join(", ")) };
+                out!("{}  {}{from}", p.id, p.title);
+            }
+        }
+        return Ok(());
+    };
+    let id = glossa_engine::PanelId::parse(name)?;
+    if args.flags.iter().any(|(n, _)| n == "--open") {
+        let cfg = glossa_core::Config::load(&paths(args).config_file())?;
+        let addr = glossa_engine::server::connect_addr(&cfg.server.bind);
+        let url =
+            format!("http://{addr}/v1/panel?id={}&token={}", glossa_net::url_encode(&id.to_string()), cfg.server.token);
+        let resp = glossa_net::Http::send(&glossa_net::HttpClient::plain(), glossa_net::HttpRequest::post(url))?;
+        if !resp.is_success() {
+            return Err(Fail::Op(format!("Glossa answered {}: {}", resp.status, resp.text())));
+        }
+        return Ok(());
+    }
+    let e = engine(args)?;
+    let page = e.panel_page(&id)?;
+    let Some(action) = args.flag(&["--action"]) else {
+        // The panel as written, and its state as it opens.
+        let m = e.registry().get(&id.module).and_then(|p| p.manifest().cloned());
+        let spec = m.as_ref().and_then(|m| m.ui.panels.iter().find(|p| p.id == id.panel).cloned());
+        if args.json {
+            out!(
+                "{}",
+                serde_json::to_string_pretty(
+                    &json!({ "title": page.window_title, "panel": spec, "state": page.defaults })
+                )
+                .unwrap_or_default()
+            );
+            return Ok(());
+        }
+        out!("{}", page.window_title);
+        fn walk(els: &[glossa_modules::panels::Element], depth: usize) {
+            for el in els {
+                let bind = match &el.bind {
+                    glossa_modules::panels::Bind::State(k) => format!("  state.{k}"),
+                    glossa_modules::panels::Bind::Options(k) => format!("  options.{k}"),
+                    glossa_modules::panels::Bind::None => String::new(),
+                };
+                let what = if el.action.is_empty() { el.type_name.clone() } else { format!("button @{}", el.action) };
+                out!("{}{}  {what}{bind}", "  ".repeat(depth + 1), el.id);
+                walk(&el.children, depth + 1);
+            }
+        }
+        walk(&page.elements, 0);
+        for (k, v) in &page.defaults {
+            out!("state {k} = {v}");
+        }
+        return Ok(());
+    };
+    let mut state = page.defaults.clone();
+    for (name, value) in &args.flags {
+        if name == "--state" {
+            let pair = value.as_deref().unwrap_or_default();
+            let (k, mut v) = key_value(name, pair)?;
+            // Lists and objects too: a panel's state holds them.
+            if let Some(text) = v.as_str().filter(|t| t.starts_with('[') || t.starts_with('{')) {
+                if let Ok(j) = serde_json::from_str(text) {
+                    v = j;
+                }
+            }
+            state.insert(k, v);
+        }
+    }
+    let item = match args.flag(&["--item"]) {
+        None => None,
+        Some(t) => {
+            Some(serde_json::from_str::<serde_json::Value>(t).map_err(|e| Fail::Usage(format!("--item {t:?}: {e}")))?)
+        }
+    };
+    let req = glossa_engine::PanelRequest {
+        state: state.clone(),
+        event: glossa_modules::wire::ActionEvent { kind: "click".into(), element: Some(action.to_owned()), item },
+    };
+    let json = args.json;
+    let printed = |u: glossa_modules::OptionValues| {
+        if !json {
+            for (k, v) in u {
+                eprintln!("update {k} = {v}");
+            }
+        }
+    };
+    let out = e.panel_action(&id, action, req, &glossa_modules::CancelToken::new(), &printed)?;
+    state.extend(out.reply.state.clone());
+    let effects: Vec<serde_json::Value> = out
+        .effects
+        .iter()
+        .map(|f| match f {
+            glossa_engine::Effect::Copy(t) => json!({ "copy": t }),
+            glossa_engine::Effect::OpenUrl(u) => json!({ "open_url": u }),
+            glossa_engine::Effect::Play(a) => json!({ "play": a.mime, "bytes": a.bytes.len() }),
+        })
+        .collect();
+    if json {
+        out!(
+            "{}",
+            serde_json::to_string_pretty(&json!({ "reply": out.reply, "state": state, "effects": effects }))
+                .unwrap_or_default()
+        );
+        return Ok(());
+    }
+    if let Some(n) = &out.reply.notice {
+        out!("{n}");
+    }
+    for (k, msg) in &out.reply.errors {
+        out!("{k}: {msg}");
+    }
+    for f in &effects {
+        out!("would {f}");
+    }
+    for (k, v) in &state {
+        out!("state {k} = {v}");
+    }
+    Ok(())
+}
+
 /// `module test` / `module check`: the module test harness
 /// (`glossa-module-test`). Needs no data folder, so it runs the same on a
 /// developer's machine and in CI.
@@ -694,16 +838,17 @@ fn module_command(args: &Args) -> Result<(), Fail> {
         "check" => true,
         "action" => return module_action(args),
         "pending" | "approve" | "revoke" | "decline" => return module_trust(args, sub),
+        "panel" | "panels" => return module_panel(args),
         "" => {
             return Err(Fail::Usage(
-                "module test DIR…, module check DIR…, module action ID ACTION, module pending, \
-                 module approve ID, module revoke ID or module decline ID"
+                "module test DIR…, module check DIR…, module action ID ACTION, module panel [ID/PANEL], \
+                 module pending, module approve ID, module revoke ID or module decline ID"
                     .into(),
             ))
         }
         other => {
             return Err(Fail::Usage(format!(
-                "unknown module command {other:?}; use test, check, action, pending, approve, revoke or decline"
+                "unknown module command {other:?}; use test, check, action, panel, pending, approve, revoke or decline"
             )))
         }
     };

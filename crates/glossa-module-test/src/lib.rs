@@ -548,7 +548,7 @@ fn run_case(
     let started = Instant::now();
     let result = call(provider, &host, request);
     // An action may only name the module's own fields.
-    if let Ok(Outcome::Action(r)) = &result {
+    if let Ok(Outcome::Action(r, _)) = &result {
         for key in r.choices.keys().chain(r.errors.keys()).chain(r.options.keys()) {
             if !provider.options().iter().any(|o| o.key == *key) {
                 report.problems.push(format!("the reply names {key:?}, which is not one of the module's options"));
@@ -704,8 +704,13 @@ fn build(case: &Case, base: &Path) -> Result<Request, String> {
         Op::Action => {
             let action = case.action.clone().ok_or("an action case needs `action`")?;
             Request::Action(ActionParams {
-                event: Some(ActionEvent { kind: "click".into(), element: Some(action.clone()), item: None }),
+                event: Some(ActionEvent {
+                    kind: "click".into(),
+                    element: Some(action.clone()),
+                    item: case.item.clone(),
+                }),
                 action,
+                panel: case.panel.clone(),
                 state: case.state.clone(),
                 ui_lang: case.ui_lang.clone().unwrap_or_else(|| "en".into()),
                 ..Default::default()
@@ -721,7 +726,15 @@ fn call(p: &dyn Provider, host: &Host, request: Request) -> glossa_core::Result<
         Request::Dictionary(r) => Outcome::Article(p.dictionary(host, &r)?),
         Request::Speak(r) => Outcome::Audio(p.speak(host, &r)?),
         Request::Ocr(r, size) => Outcome::Ocr { result: p.recognize(host, &r)?, image_size: size },
-        Request::Action(params) => Outcome::Action(p.action(host, params)?),
+        Request::Action(params) => {
+            let updates = std::sync::Mutex::new(Vec::new());
+            let reply = p.action_with_updates(host, params, &|u| {
+                if let Ok(mut list) = updates.lock() {
+                    list.push(u);
+                }
+            })?;
+            Outcome::Action(reply, updates.into_inner().unwrap_or_default())
+        }
     })
 }
 

@@ -243,6 +243,9 @@ impl Default for HistoryConfig {
 pub struct HotkeysConfig {
     pub enabled: bool,
     pub bindings: BTreeMap<Action, Hotkey>,
+    /// Hotkeys that open module panels, by `module/panel` name.
+    #[serde(skip_serializing_if = "BTreeMap::is_empty")]
+    pub panels: BTreeMap<String, Hotkey>,
 }
 
 impl Default for HotkeysConfig {
@@ -251,7 +254,7 @@ impl Default for HotkeysConfig {
             .iter()
             .map(|(a, s)| (*a, s.parse().expect("built-in hotkey must parse")))
             .collect();
-        Self { enabled: true, bindings }
+        Self { enabled: true, bindings, panels: BTreeMap::new() }
     }
 }
 
@@ -2469,7 +2472,7 @@ copy_joined_lines = true",
                 match child.as_str() {
                     // Maps keyed by user data: the keys are actions, module
                     // ids and option names, not settings.
-                    "hotkeys.bindings" | "services.options" | "presets.options" => {}
+                    "hotkeys.bindings" | "hotkeys.panels" | "services.options" | "presets.options" => {}
                     // Keyed by window name; each value is a geometry.
                     "windows" => {
                         for geometry in nested.iter().flat_map(|t| t.values()).filter_map(toml::Value::as_table) {

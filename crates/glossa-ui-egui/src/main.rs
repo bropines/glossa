@@ -24,6 +24,7 @@ mod langs;
 mod main_window;
 mod module_actions;
 mod module_editor;
+mod module_panel;
 mod module_settings;
 mod mouse;
 mod notice;
@@ -435,7 +436,7 @@ fn build_shell(engine: Engine, wake: Arc<Wake>) -> Shell {
             Some(h)
         }
         Err(e) => {
-            hotkey_errors.push((None, e));
+            hotkey_errors.push((None, None, e));
             None
         }
     };
@@ -445,6 +446,10 @@ fn build_shell(engine: Engine, wake: Arc<Wake>) -> Shell {
             .map_err(|e| tracing::warn!("no tray icon: {e}"))
             .ok()
     };
+    let mut tray = tray;
+    if let Some(t) = tray.as_mut() {
+        t.set_panels(tray_panels(&engine));
+    }
     refresh_autostart(&cfg);
     let (server, server_error) = if cfg.server.enabled {
         match glossa_engine::server::start(engine.clone()) {
@@ -503,20 +508,49 @@ pub fn register_hotkeys(shell: &mut Shell) {
     for (action, hotkey) in &cfg.hotkeys.bindings {
         if let Err(e) = h.register(*action, hotkey) {
             tracing::warn!("hotkey {hotkey} for {}: {e}", action.id());
-            shell.hotkey_errors.push((Some(*action), e));
+            shell.hotkey_errors.push((Some(*action), None, e));
+        }
+    }
+    register_panel_hotkeys(h, &shell.engine, &cfg, &mut shell.hotkey_errors);
+}
+
+/// The `[hotkeys.panels]` bindings: each opens one module panel.
+pub fn register_panel_hotkeys(
+    h: &mut glossa_platform::HotkeyService,
+    engine: &glossa_engine::Engine,
+    cfg: &glossa_core::Config,
+    errors: &mut Vec<HotkeyFailure>,
+) {
+    // Only for modules that may run: one waiting for approval (or not
+    // loaded) gets no hotkey until it is approved and loaded.
+    let registry = engine.registry();
+    let allowed = |panel: &str| {
+        let module = panel.split_once('/').map(|(m, _)| m).unwrap_or(panel);
+        registry.entry(module).is_some_and(|e| !e.pending)
+    };
+    for (panel, hotkey) in cfg.hotkeys.panels.iter().filter(|(p, _)| allowed(p)) {
+        if let Err(e) = h.register_panel(panel, hotkey) {
+            tracing::warn!("hotkey {hotkey} for panel {panel}: {e}");
+            errors.push((Some(Action::OpenPanel), Some(panel.clone()), e));
         }
     }
 }
 
-/// A hotkey that could not be set up, and for which action (none when the
-/// hotkey service itself failed).
-pub type HotkeyFailure = (Option<Action>, glossa_platform::HotkeyError);
+/// The panels the tray's Modules submenu offers: `(module/panel, title)`.
+pub fn tray_panels(engine: &glossa_engine::Engine) -> Vec<(String, String)> {
+    engine.panels().into_iter().filter(|p| p.open_from.iter().any(|o| o == "tray")).map(|p| (p.id, p.title)).collect()
+}
+
+/// A hotkey that could not be set up, for which action (none when the
+/// hotkey service itself failed) and, for `open_panel`, which panel.
+pub type HotkeyFailure = (Option<Action>, Option<String>, glossa_platform::HotkeyError);
 
 /// A hotkey failure in the interface language, after the action's name when
 /// there is one; the options page lists these.
 pub fn hotkey_error_text(
     locale: &glossa_core::Locale,
     action: Option<Action>,
+    panel: Option<&str>,
     e: &glossa_platform::HotkeyError,
 ) -> String {
     use glossa_platform::HotkeyError as E;
@@ -526,17 +560,20 @@ pub fn hotkey_error_text(
         E::Taken { hotkey } => locale.fmt("options.hotkeys.taken", hotkey),
         E::Failed { hotkey, detail } => locale.fmt_args("options.hotkeys.failed", &[hotkey, detail]),
     };
-    match action {
-        Some(a) => format!("{}: {text}", locale.get(&format!("action.{}", a.id()))),
-        None => text,
+    match (action, panel) {
+        (_, Some(p)) => format!("{} {p}: {text}", locale.get("action.open_panel")),
+        (Some(a), None) => format!("{}: {text}", locale.get(&format!("action.{}", a.id()))),
+        (None, None) => text,
     }
 }
 
 /// Gather what should wake the GUI while it is unloaded.
 fn collect_wake_events(shell: &mut Shell, events: &std::sync::mpsc::Receiver<glossa_engine::Event>) {
     if let Some(h) = shell.hotkeys.as_mut() {
-        while let Some(a) = h.poll() {
-            if actions::needs_selection(a) {
+        while let Some((a, text)) = h.poll_with_text() {
+            if text.is_some() {
+                shell.pending.push(tray::Pending::Action(a, text));
+            } else if actions::needs_selection(a) {
                 // Read it now, before the windows exist (see `read_selection`).
                 if let Some(task) = actions::read_selection(&shell.engine.config(), a) {
                     shell.pending.push(tray::Pending::Task(task));
@@ -603,9 +640,14 @@ fn collect_wake_events(shell: &mut Shell, events: &std::sync::mpsc::Receiver<glo
             }
             // The tray's menu is up while the windows are not: it follows a
             // language chosen from the command line or the control API.
-            glossa_engine::Event::ConfigChanged => {
+            glossa_engine::Event::ConfigChanged | glossa_engine::Event::ModulesReloaded => {
                 if let Some(t) = shell.tray.as_mut() {
                     t.set_locale(&shell.engine.locale());
+                    t.set_panels(tray_panels(&shell.engine));
+                }
+                if matches!(ev, glossa_engine::Event::ModulesReloaded) {
+                    // Panel hotkeys follow which modules may run.
+                    register_hotkeys(shell);
                 }
             }
             _ => {}

@@ -1,0 +1,40 @@
+# Russian text for the panel and the code. A key missing here falls back
+# to the manifest (English).
+[module]
+name = "Карманный глоссарий"
+description = "Карманный глоссарий терминов перевода в собственной панели."
+
+[actions.search]
+label = "Найти"
+help = "Слова, в названии или значении которых есть этот текст"
+
+[actions.word_of_the_day]
+label = "Слово дня"
+
+[actions.look_up]
+label = "Открыть"
+
+[actions.copy_word]
+label = "Копировать"
+
+[actions.listen]
+label = "Прослушать"
+
+[panels.glossary]
+title = "Глоссарий"
+
+[panels.glossary.items.query]
+placeholder = "Поиск по глоссарию"
+
+[panels.glossary.items.word_box]
+label = "Статья"
+
+[panels.glossary.items.source]
+label = "Об этих терминах"
+
+[strings]
+found = "Слов: {0}"
+nothing = "Ничего не нашлось по запросу «{0}»."
+picking = "Выбираю слово…"
+of_the_day = "Слово дня"
+of_the_day_notice = "Сегодня: {0}"

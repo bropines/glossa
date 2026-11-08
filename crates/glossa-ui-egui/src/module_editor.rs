@@ -94,6 +94,8 @@ struct Info {
     name: String,
     version: String,
     page: SettingsPage,
+    /// The module's panels, built from the manifest as last checked.
+    panels: Vec<std::sync::Arc<glossa_modules::panels::PanelPage>>,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -117,6 +119,10 @@ pub struct ModuleEditor {
     log: Option<LogTap>,
     /// Option values typed into the preview; never saved.
     preview_values: OptionValues,
+    /// The panel the preview shows, live: which one (by index into
+    /// `info.panels`) and its engine-side state.
+    preview_panel: Option<(usize, glossa_engine::Panel)>,
+    preview_panel_choice: usize,
     tx: Sender<Reply>,
     rx: Receiver<Reply>,
     /// Workers still running.
@@ -170,6 +176,8 @@ pub fn open(app: &mut GlossaApp, target: Target) {
         drawer: Drawer::Problems,
         log: None,
         preview_values: OptionValues::new(),
+        preview_panel: None,
+        preview_panel_choice: 0,
         tx,
         rx,
         busy: 0,
@@ -413,7 +421,10 @@ impl ModuleEditor {
         }
         if self.info.id != info.id {
             self.preview_values = app.engine.config().services.options.get(&info.id).cloned().unwrap_or_default();
+            self.preview_panel_choice = 0;
         }
+        // The manifest may have changed the panel: draw it afresh.
+        self.preview_panel = None;
         self.info = info;
     }
 
@@ -520,7 +531,8 @@ fn mark_saved(tabs: &mut [Buffer], written: &[(String, String)]) {
 fn manifest_info(dir: &std::path::Path, lang: &str) -> Option<Info> {
     let m = glossa_modules::Manifest::load(&dir.join("module.toml")).ok()?;
     let page = m.settings_page(lang);
-    Some(Info { id: m.module.id, name: m.module.name, version: m.module.version, page })
+    let panels = glossa_modules::panels::pages(&m, lang).into_iter().map(std::sync::Arc::new).collect();
+    Some(Info { id: m.module.id, name: m.module.name, version: m.module.version, page, panels })
 }
 
 pub fn show(app: &mut GlossaApp, ctx: &egui::Context) {
@@ -943,9 +955,52 @@ fn preview(app: &mut GlossaApp, ui: &mut egui::Ui, ed: &mut ModuleEditor) {
                 Some(&run),
             );
         }
-        ui.add_space(12.0);
-        ui.label(RichText::new(app.t("editor.preview_panels")).small().color(look.weak_text()));
+        preview_panels(app, ui, ed);
     });
+}
+
+/// The module's panels, drawn by the renderer the panel windows use, one
+/// at a time. Their actions run in the module as last reloaded; nothing
+/// typed here is kept.
+fn preview_panels(app: &mut GlossaApp, ui: &mut egui::Ui, ed: &mut ModuleEditor) {
+    let look = app.look.clone();
+    if ed.info.panels.is_empty() {
+        return;
+    }
+    ui.add_space(12.0);
+    ui.separator();
+    ui.label(RichText::new(format!("{}: {}", app.t("editor.preview"), app.t("editor.preview_panel"))).strong());
+    ui.label(RichText::new(app.t("editor.preview_panel_note")).small().color(look.weak_text()));
+    let choice = ed.preview_panel_choice.min(ed.info.panels.len() - 1);
+    if ed.info.panels.len() > 1 {
+        ui.horizontal_wrapped(|ui| {
+            for (i, p) in ed.info.panels.iter().enumerate() {
+                if ui.selectable_label(i == choice, &p.title).clicked() {
+                    ed.preview_panel_choice = i;
+                }
+            }
+        });
+    }
+    let choice = ed.preview_panel_choice.min(ed.info.panels.len() - 1);
+    if ed.preview_panel.as_ref().is_none_or(|(i, _)| *i != choice) {
+        // The pictures of the panel shown before go with it.
+        crate::module_panel::forget(&app.ctx, PREVIEW_SALT);
+        let ctx = app.ctx.clone();
+        let panel = app
+            .engine
+            .preview_panel(ed.info.panels[choice].clone(), std::sync::Arc::new(move || ctx.request_repaint()));
+        ed.preview_panel = Some((choice, panel));
+    }
+    let Some((_, panel)) = ed.preview_panel.as_mut() else { return };
+    if let Some(wait) = panel.poll() {
+        ui.ctx().request_repaint_after(wait);
+    }
+    ui.add_space(4.0);
+    let outs = crate::widgets::group(ui, &look, &panel.page().window_title.clone(), |ui| {
+        crate::module_panel::draw(ui, &look, &app.locale, panel, PREVIEW_SALT)
+    });
+    let effects = panel.take_effects();
+    crate::module_panel::carry_out(app, outs, effects);
 }
 
 #[cfg(test)]

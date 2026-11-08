@@ -575,6 +575,75 @@ mod tests {
     }
 
     #[test]
+    fn panel_actions_stream_partial_state_through_ui_update() {
+        let manifest = Manifest::parse(
+            r#"
+            capabilities = ["translate"]
+            [module]
+            id = "js-stream"
+            name = "JS Stream"
+            runtime = "js"
+            [[actions]]
+            id = "explain"
+            "#,
+        )
+        .unwrap();
+        let source = r#"
+            function explain(ev, host) {
+                var so_far = "";
+                ["One", " two", " three"].forEach(function (w) {
+                    so_far += w;
+                    host.ui.update({ result: so_far });
+                });
+                return { state: { result: so_far + ".", source: ev.state.source }, notice: ev.panel + ":" + ev.event.item.title };
+            }
+        "#;
+        let p = ProtocolProvider::new(
+            manifest,
+            GlossaTransport { script: Arc::new(GlossaScript::new("main.js".into(), source)) },
+            ModuleCache::new(),
+        );
+        let http = MockHttp::new();
+        let opts = OptionValues::new();
+        let seen = parking_lot::Mutex::new(Vec::new());
+        let r = with_test_host(&http, &opts, |host| {
+            p.action_with_updates(
+                host,
+                glossa_module_sdk::wire::ActionParams {
+                    action: "explain".into(),
+                    panel: Some("main".into()),
+                    event: Some(glossa_module_sdk::wire::ActionEvent {
+                        kind: "click".into(),
+                        element: Some("words".into()),
+                        item: Some(serde_json::json!({ "title": "row" })),
+                    }),
+                    state: [("source".to_owned(), serde_json::json!("hi"))].into(),
+                    ..Default::default()
+                },
+                &|update| seen.lock().push(update["result"].as_str().unwrap_or_default().to_owned()),
+            )
+        })
+        .unwrap();
+        assert_eq!(*seen.lock(), ["One", "One two", "One two three"], "each update arrives as it is sent");
+        assert_eq!(r.state["result"], "One two three.");
+        assert_eq!(r.state["source"], "hi", "the panel's state reaches the handler");
+        assert_eq!(r.notice.as_deref(), Some("main:row"), "the panel and the clicked row");
+        // Outside a panel the call is accepted and goes nowhere.
+        assert!(with_test_host(&http, &opts, |host| p.action(
+            host,
+            glossa_module_sdk::wire::ActionParams {
+                action: "explain".into(),
+                event: Some(glossa_module_sdk::wire::ActionEvent {
+                    item: Some(serde_json::json!({ "title": "x" })),
+                    ..Default::default()
+                }),
+                ..Default::default()
+            }
+        ))
+        .is_ok());
+    }
+
+    #[test]
     fn missing_entry_points_are_unsupported_not_crashes() {
         let p = provider("function translate() { return 'x'; }", "");
         let http = MockHttp::new();
