@@ -2772,7 +2772,13 @@ fn trust_lines(
         out.push((app.locale.fmt("options.modules.trust.actions", &r.actions.join(", ")), !new.actions.is_empty()));
     }
     for e in &r.extra {
-        out.push((app.locale.fmt("options.modules.trust.extra", e), new.extra.contains(e)));
+        let line = match e.split_once(' ') {
+            Some(("panel", id)) => app.locale.fmt("options.modules.trust.panel", id),
+            Some(("tray", id)) => app.locale.fmt("options.modules.trust.tray", id),
+            Some(("menu", id)) => app.locale.fmt("options.modules.trust.menu", id),
+            _ => app.locale.fmt("options.modules.trust.extra", e),
+        };
+        out.push((line, new.extra.contains(e)));
     }
     out
 }

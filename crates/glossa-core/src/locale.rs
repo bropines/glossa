@@ -1380,6 +1380,9 @@ pub static STRINGS: &[(&str, &str, Option<&str>)] = &[
     ("options.modules.trust.approve", "Approve", None),
     ("options.modules.trust.edit_first", "Approve this module first, at the top of this page.", None),
     ("options.modules.trust.extra", "Also: %s", None),
+    ("options.modules.trust.panel", "Opens a window of its own: %s", None),
+    ("options.modules.trust.tray", "Adds an entry to the tray menu: %s", None),
+    ("options.modules.trust.menu", "Adds an entry to the main window's menu: %s", None),
     ("options.modules.trust.decline", "Decline", None),
     ("options.modules.trust.decline_tip", "Switch the module off. Switch it back on to be asked again.", None),
     // -- the module editor ---------------------------------------------------------------------

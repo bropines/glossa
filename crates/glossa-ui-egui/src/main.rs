@@ -511,16 +511,24 @@ pub fn register_hotkeys(shell: &mut Shell) {
             shell.hotkey_errors.push((Some(*action), None, e));
         }
     }
-    register_panel_hotkeys(h, &cfg, &mut shell.hotkey_errors);
+    register_panel_hotkeys(h, &shell.engine, &cfg, &mut shell.hotkey_errors);
 }
 
 /// The `[hotkeys.panels]` bindings: each opens one module panel.
 pub fn register_panel_hotkeys(
     h: &mut glossa_platform::HotkeyService,
+    engine: &glossa_engine::Engine,
     cfg: &glossa_core::Config,
     errors: &mut Vec<HotkeyFailure>,
 ) {
-    for (panel, hotkey) in &cfg.hotkeys.panels {
+    // Only for modules that may run: one waiting for approval (or not
+    // loaded) gets no hotkey until it is approved and loaded.
+    let registry = engine.registry();
+    let allowed = |panel: &str| {
+        let module = panel.split_once('/').map(|(m, _)| m).unwrap_or(panel);
+        registry.entry(module).is_some_and(|e| !e.pending)
+    };
+    for (panel, hotkey) in cfg.hotkeys.panels.iter().filter(|(p, _)| allowed(p)) {
         if let Err(e) = h.register_panel(panel, hotkey) {
             tracing::warn!("hotkey {hotkey} for panel {panel}: {e}");
             errors.push((Some(Action::OpenPanel), Some(panel.clone()), e));
@@ -636,6 +644,10 @@ fn collect_wake_events(shell: &mut Shell, events: &std::sync::mpsc::Receiver<glo
                 if let Some(t) = shell.tray.as_mut() {
                     t.set_locale(&shell.engine.locale());
                     t.set_panels(tray_panels(&shell.engine));
+                }
+                if matches!(ev, glossa_engine::Event::ModulesReloaded) {
+                    // Panel hotkeys follow which modules may run.
+                    register_hotkeys(shell);
                 }
             }
             _ => {}

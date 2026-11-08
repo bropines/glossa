@@ -347,3 +347,44 @@ fn streamed_updates_coalesce_and_everything_is_capped_in_total() {
     drop(again);
     std::fs::remove_dir_all(&dir).ok();
 }
+
+#[test]
+fn a_waiting_module_shows_no_panel_and_a_new_panel_asks_again() {
+    let dir = std::env::temp_dir().join(format!("glossa-engine-panels-trust-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    let module = dir.join("home").join("modules").join("gloss");
+    std::fs::create_dir_all(&module).unwrap();
+    std::fs::write(module.join("module.toml"), MANIFEST).unwrap();
+    std::fs::write(module.join("main.js"), SCRIPT).unwrap();
+    let paths = Paths::for_exe_dir(dir.clone(), Some(dir.join("home")));
+    let mut cfg = Config::default();
+    cfg.modules.trust_initialised = true;
+    let e = Engine::with_config(paths, cfg).unwrap();
+    let id = PanelId::new("gloss", "main");
+
+    // Installed by hand and not approved: nothing of it shows or opens.
+    let pending = e.pending_modules();
+    assert_eq!(pending.len(), 1);
+    assert!(pending[0].request.extra.contains(&"panel main".to_owned()), "{:?}", pending[0].request.extra);
+    assert!(pending[0].request.extra.contains(&"tray main".to_owned()));
+    assert!(e.panels().is_empty());
+    assert!(matches!(e.panel_page(&id), Err(Error::NeedsApproval { .. })));
+    assert!(e.open_panel(&id, Arc::new(|| {})).is_err());
+    let r = e.panel_action(&id, "load", req(&OptionValues::new(), None), &CancelToken::new(), &|_| {});
+    assert!(matches!(r, Err(Error::NeedsApproval { .. })));
+
+    e.approve_module("gloss", Some(&pending[0].hash)).unwrap();
+    assert_eq!(e.panels().len(), 1);
+    assert!(e.open_panel(&id, Arc::new(|| {})).is_ok());
+
+    // An update that adds a panel asks again, and points at the panel.
+    let second =
+        "\n[[ui.panels]]\nid = \"second\"\nlayout = [\"x\"]\n[[ui.panels.items]]\nid = \"x\"\ntype = \"separator\"\n";
+    std::fs::write(module.join("module.toml"), format!("{MANIFEST}{second}")).unwrap();
+    e.reload_modules();
+    let again = e.pending_modules();
+    assert_eq!(again.len(), 1);
+    assert_eq!(again[0].new.extra, ["panel second"]);
+    assert!(e.panels().is_empty(), "the panels it had wait too");
+    std::fs::remove_dir_all(&dir).ok();
+}

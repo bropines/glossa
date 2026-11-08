@@ -340,7 +340,7 @@ impl GlossaApp {
                 self.hotkey_errors.push((Some(*action), None, e));
             }
         }
-        crate::register_panel_hotkeys(h, &self.cfg, &mut self.hotkey_errors);
+        crate::register_panel_hotkeys(h, &self.engine, &self.cfg, &mut self.hotkey_errors);
     }
 
     /// The panels the loaded modules declare.
@@ -853,6 +853,8 @@ impl GlossaApp {
                 crate::module_actions::reset_pages(|_| true);
                 self.refresh_from_config();
                 self.panels_changed();
+                // Panel hotkeys follow which modules may run.
+                self.register_hotkeys();
             }
             Event::HistoryChanged => {
                 if let Some(h) = self.history.as_mut() {

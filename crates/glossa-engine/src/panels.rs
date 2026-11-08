@@ -119,6 +119,11 @@ impl Engine {
         let registry = self.registry();
         let mut out = Vec::new();
         for entry in registry.entries() {
+            // A module waiting for approval shows nothing of itself: no
+            // panel, no tray or menu entry, no hotkey target.
+            if entry.pending {
+                continue;
+            }
             let Some(m) = entry.provider.manifest() else { continue };
             for page in glossa_modules::panels::pages(m, &lang) {
                 out.push(PanelInfo {
@@ -135,7 +140,12 @@ impl Engine {
 
     /// The page of panel `id`, in the interface language.
     pub fn panel_page(&self, id: &PanelId) -> Result<Arc<PanelPage>> {
-        let provider = self.registry().get(&id.module).ok_or_else(|| Error::NoSuchModule(id.module.clone()))?;
+        let registry = self.registry();
+        let entry = registry.entry(&id.module).ok_or_else(|| Error::NoSuchModule(id.module.clone()))?;
+        if entry.pending {
+            return Err(Error::NeedsApproval { module: id.module.clone() });
+        }
+        let provider = entry.provider.clone();
         let m = provider.manifest().ok_or_else(|| Error::Config(format!("module {} has no panels", id.module)))?;
         let spec = m.ui.panels.iter().find(|p| p.id == id.panel).ok_or_else(|| {
             let known: Vec<&str> = m.ui.panels.iter().map(|p| p.id.as_str()).collect();

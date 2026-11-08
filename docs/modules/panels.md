@@ -99,6 +99,12 @@ pass for one of Glossa's own.
 | the command line | `glossa-cli module panel MODULE/PANEL --open` ([cli.md](../cli.md#module)) |
 | the module editor | its preview draws the module's panels, live |
 
+A module installed by hand shows its panels only once it is
+[approved](README.md#permissions-and-trust): the approval lists each panel
+and the tray or menu entry it adds, and an update that adds a panel or an
+entry asks again. While a module waits, its panels, entries and hotkeys do
+not appear.
+
 A panel costs nothing until it is opened. An open panel is a window like
 the dictionary or the history: while it is on screen Glossa keeps its
 graphics loaded, and they unload (`unload_graphics_after_secs`) only once

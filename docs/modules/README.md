@@ -715,11 +715,15 @@ under *Waiting for your approval*:
 - each file it would download (`[[assets]]`), with its size and host;
 - the Python packages it would install, and the index they come from
   (`requirements`, `requirements.txt` or `pyproject.toml`);
-- its actions (`[[actions]]`).
+- its actions (`[[actions]]`);
+- each [panel](panels.md) (`[[ui.panels]]`): a window of its own, and the
+  tray or main-menu entry it adds. A module without panels is asked nothing
+  about them, and its approval is unchanged.
 
 *Approve* lets it run; *Decline* switches it off (switch it on again to be
 asked again). Until then the module is listed with "needs approval", its
 settings page can be looked at, nothing is downloaded or installed for it,
+its panels, their tray and menu entries and their hotkeys do not appear,
 and every call fails with "module … is waiting for your approval".
 
 What you approved is kept in `config.toml` as `[modules.granted.<id>]`
