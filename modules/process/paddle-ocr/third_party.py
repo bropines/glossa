@@ -23,7 +23,7 @@ def metadata(target):
     cmd = ["cargo", "metadata", "--format-version", "1", "--locked", "--manifest-path", os.path.join(here, "Cargo.toml")]
     if target:
         cmd += ["--filter-platform", target]
-    return json.loads(subprocess.run(cmd, check=True, capture_output=True, text=True).stdout)
+    return json.loads(subprocess.run(cmd, check=True, capture_output=True, encoding="utf-8").stdout)
 
 
 def compiled_in(meta):
