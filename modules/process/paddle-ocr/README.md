@@ -97,7 +97,7 @@ Glossa stops the process, two minutes after the last call
 | part | licence | from |
 |---|---|---|
 | `paddle-ocr` (this folder) | MIT OR Apache-2.0, like Glossa | this repository |
-| its Rust dependencies (`oar-ocr`, `ort`, `image`…) | Apache-2.0, MIT, BSD, Zlib, Unicode-3.0; nothing copyleft | crates.io |
+| its Rust dependencies (`oar-ocr`, `ort`, `image`…) | Apache-2.0, MIT, BSD, Zlib, Unicode-3.0; nothing copyleft. Every crate's licence and notice files are in `THIRD-PARTY-NOTICES.txt` in the archive, written by `third_party.py` | crates.io |
 | ONNX Runtime 1.31.1, packed in `bin` | MIT (`LICENSE-onnxruntime.txt`, `ThirdPartyNotices-onnxruntime.txt` in the archive) | [microsoft/onnxruntime](https://github.com/microsoft/onnxruntime/releases/tag/v1.31.1) |
 | PP-OCRv5 models | Apache-2.0 | [PaddleOCR](https://github.com/PaddlePaddle/PaddleOCR), converted to ONNX by [RapidOCR](https://github.com/RapidAI/RapidOCR) (Apache-2.0) and published on [ModelScope](https://www.modelscope.cn/models/RapidAI/RapidOCR) (Apache-2.0), tag `v3.10.0` |
 
@@ -151,15 +151,18 @@ ORT_DYLIB_PATH=<libonnxruntime> cargo test --release -- --ignored   # real recog
 run the real models, so they need the module's files, recognisers
 included (`rec-latin`, `rec-eslav`, `rec-ch`); without them the harness
 skips the module. CI leaves this module out of its module run until the
-binary is released (`.github/workflows/ci.yml`); `paddle-ocr.yml` runs
-`cargo test` and a smoke test of the packed program on every platform
-when this folder changes.
+binary is released (`.github/workflows/ci.yml`), and the repository's
+harness test expects it to fail on its placeholder hash
+(`crates/glossa-module-test/tests/repo_modules.rs`). A pull request that
+changes this folder runs `cargo test`, clippy, the archive and its smoke
+test on Linux x64 (`paddle-ocr.yml`); a tag or a manual run does so on all
+five platforms.
 
 ## Testing a local build
 
-Until the binary is released, its `sha256` in `module.toml` is a
-placeholder and the download fails its check. To try the module with your
-own build (macOS or Linux):
+Until the binary is released, the `bin` hashes in `module.toml` are
+all-zero placeholders, which Glossa refuses: the module does not load. To
+try it with your own build (macOS or Linux):
 
 ```bash
 cd modules/process/paddle-ocr
@@ -177,10 +180,11 @@ glossa-cli ocr tests/pictures/mixed.png -e paddle-ocr
 ```
 
 `dev-install.sh` copies the module and its fixtures into the data folder
-and points this system's `bin` asset at the local server with the
-archive's real hash; the models still come from ModelScope. On Windows,
-edit the copied `module.toml` the same way by hand (`url`, `sha256`,
-`size` of the `windows` / `x86_64` entry, and `127.0.0.1` in `network`).
+points this system's `bin` asset at the local server with the archive's
+real hash, and drops the other systems' `bin` entries; the models still
+come from ModelScope. On Windows, edit the copied `module.toml` the same
+way by hand (`url`, `sha256`, `size` of the `windows` / `x86_64` entry,
+delete the other `bin` entries, and add `127.0.0.1` to `network`).
 
 ## Releasing the binary
 
@@ -197,7 +201,8 @@ maintainer's decision; nothing is released automatically.
    (A run by hand from *Actions → paddle-ocr* builds the same archives as
    artifacts, without a release.)
 3. The workflow tests and builds on macOS arm64, Linux x64 and arm64 and
-   Windows x64 and arm64, packs each with ONNX Runtime (`package.sh`),
+   Windows x64 and arm64 with the pinned toolchain, packs each with the
+   hash-checked ONNX Runtime and the crates' notices (`package.sh`),
    smoke-tests the archive, and creates a **draft** release with the
    archives, `SHA256SUMS` and `SIZES`.
 4. Copy each archive's `sha256` and `size` from `SIZES` into its `bin`
@@ -205,7 +210,9 @@ maintainer's decision; nothing is released automatically.
    `.github/workflows/ci.yml`, drop the exclusion and fetch the three
    recognisers the fixtures use before the module run
    (`glossa-cli assets download paddle-ocr rec-latin.onnx rec-eslav.onnx rec-ch.onnx`),
-   so CI runs the fixtures. Commit.
+   so CI runs the fixtures, and remove `process/paddle-ocr` from
+   `UNRELEASED` in `crates/glossa-module-test/tests/repo_modules.rs` (that
+   test fails until you do). Commit.
 5. Publish the draft release.
 
 The main release workflow (tags `v*`) does not build this program, and a

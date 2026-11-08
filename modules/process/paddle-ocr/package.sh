@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
 # Pack the module's `bin` asset: the paddle-ocr binary, the ONNX Runtime
-# library beside it, and their licences. The release workflow
-# (.github/workflows/paddle-ocr.yml) runs this on each platform; run it
-# yourself to test the module with a local build (README.md, "Testing a
-# local build").
+# library beside it, their licences and the third-party notices of the
+# crates compiled in. The release workflow (.github/workflows/paddle-ocr.yml)
+# runs this on each platform; run it yourself to test the module with a
+# local build (README.md, "Testing a local build").
 #
 #   package.sh BINARY ORT_DIR OUT
 #
@@ -39,6 +39,9 @@ esac
 cp "$ort/LICENSE" "$stage/LICENSE-onnxruntime.txt"
 cp "$ort/ThirdPartyNotices.txt" "$stage/ThirdPartyNotices-onnxruntime.txt"
 cp "$here/README.md" "$stage/README.md"
+# The notices of every Rust crate compiled in (MIT and BSD ask for them).
+py=$(command -v python3 || command -v python)
+"$py" "$here/third_party.py" > "$stage/THIRD-PARTY-NOTICES.txt"
 cp "$here/../../../LICENSE-MIT" "$stage/LICENSE-MIT.txt"
 cp "$here/../../../LICENSE-APACHE" "$stage/LICENSE-APACHE.txt"
 

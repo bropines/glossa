@@ -89,6 +89,28 @@ fn a_broken_picture_is_a_bad_request_and_the_module_carries_on() {
 }
 
 #[test]
+fn a_request_that_is_not_utf8_is_answered_and_the_next_one_read() {
+    let mut child = Command::new(env!("CARGO_BIN_EXE_paddle-ocr"))
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .spawn()
+        .unwrap();
+    {
+        let mut stdin = child.stdin.take().unwrap();
+        stdin.write_all(b"{\"id\":1,\"method\":\"recognize\",\"params\":{\"lang\":\"\xff\xfe\"}}\n").unwrap();
+        stdin.write_all(b"\xc3(no id at all\n").unwrap();
+        stdin.write_all(b"{\"id\":2,\"method\":\"detect\",\"params\":{}}\n").unwrap();
+    }
+    let out = child.wait_with_output().unwrap();
+    let lines: Vec<Value> =
+        String::from_utf8(out.stdout).unwrap().lines().map(|l| serde_json::from_str(l).unwrap()).collect();
+    assert_eq!(lines.len(), 2, "{lines:?}");
+    assert_eq!((lines[0]["id"].clone(), error_kind(&lines[0])), (json!(1), "bad_request"));
+    assert_eq!((lines[1]["id"].clone(), error_kind(&lines[1])), (json!(2), "unsupported"));
+}
+
+#[test]
 fn lines_that_are_not_requests_are_skipped() {
     let mut child = Command::new(env!("CARGO_BIN_EXE_paddle-ocr"))
         .stdin(Stdio::piped())

@@ -68,12 +68,37 @@ impl Fail {
 }
 
 struct Io {
-    lines: io::Lines<io::StdinLock<'static>>,
+    input: io::StdinLock<'static>,
     out: io::Stdout,
     next_host_id: u64,
 }
 
+/// One line from stdin.
+enum Input {
+    Text(String),
+    /// Not UTF-8; decoded lossily, only to find its id.
+    Garbled(String),
+}
+
 impl Io {
+    /// The next line, or `None` at the end of input (or a read error,
+    /// which means Glossa is gone).
+    fn next_line(&mut self) -> Option<Input> {
+        let mut buf = Vec::new();
+        match self.input.read_until(b'\n', &mut buf) {
+            Ok(0) | Err(_) => None,
+            Ok(_) => {
+                while buf.last().is_some_and(|b| *b == b'\n' || *b == b'\r') {
+                    buf.pop();
+                }
+                Some(match String::from_utf8(buf) {
+                    Ok(s) => Input::Text(s),
+                    Err(e) => Input::Garbled(String::from_utf8_lossy(e.as_bytes()).into_owned()),
+                })
+            }
+        }
+    }
+
     fn send(&mut self, v: &Value) {
         let mut out = self.out.lock();
         // A closed stdout means Glossa is gone; the read loop ends next.
@@ -87,8 +112,11 @@ impl Io {
         self.next_host_id += 1;
         let id = format!("h{}", self.next_host_id);
         self.send(&json!({"id": id, "method": method, "params": params}));
-        for line in self.lines.by_ref() {
-            let line = line.map_err(|e| Fail::new("other", format!("reading stdin: {e}")))?;
+        while let Some(line) = self.next_line() {
+            let Input::Text(line) = line else {
+                eprintln!("paddle-ocr: a line that is not UTF-8 while waiting for {method}; skipped");
+                continue;
+            };
             let Ok(msg) = serde_json::from_str::<Value>(&line) else { continue };
             if msg.get("id").and_then(Value::as_str) != Some(id.as_str()) {
                 continue;
@@ -104,10 +132,24 @@ impl Io {
 }
 
 fn serve() {
-    let mut io = Io { lines: io::stdin().lock().lines(), out: io::stdout(), next_host_id: 0 };
+    let mut io = Io { input: io::stdin().lock(), out: io::stdout(), next_host_id: 0 };
     let mut engine = Engine::new();
     let mut ort_ready = false;
-    while let Some(Ok(line)) = io.lines.next() {
+    while let Some(line) = io.next_line() {
+        let line = match line {
+            Input::Text(line) => line,
+            // A request that is not UTF-8 gets an error if its id can be
+            // read, and is logged otherwise; either way the next line is
+            // read, as for any other line the module cannot use.
+            Input::Garbled(lossy) => {
+                match serde_json::from_str::<Value>(&lossy).ok().and_then(|m| m.get("id").cloned()) {
+                    Some(id) => io.send(&json!({"id": id, "error": {
+                        "kind": "bad_request", "message": "the request is not valid UTF-8"}})),
+                    None => eprintln!("paddle-ocr: a line that is not UTF-8; skipped"),
+                }
+                continue;
+            }
+        };
         if line.trim().is_empty() {
             continue;
         }
@@ -202,17 +244,50 @@ fn files_in(dir: &Path) -> Vec<(String, PathBuf)> {
     names.into_iter().map(|n| (n.clone(), dir.join(n))).filter(|(_, p)| p.is_file()).collect()
 }
 
+/// The limits Glossa's own image API keeps (`glossa_modules::image_ops`):
+/// a picture over them is refused before its pixels are allocated.
+const MAX_PIXELS: u64 = 100_000_000;
+const MAX_SIDE: u32 = 50_000;
+const MAX_ENCODED: usize = 64 << 20;
+
 fn decode(params: &Value) -> Result<image::RgbImage, Fail> {
     let b64 = params
         .get("image_base64")
         .and_then(Value::as_str)
         .ok_or_else(|| Fail::new("bad_request", "no image_base64 in the request"))?;
+    if b64.len() / 4 * 3 > MAX_ENCODED {
+        return Err(Fail::new("bad_request", format!("the picture is over {} MB", MAX_ENCODED >> 20)));
+    }
     let bytes = base64::engine::general_purpose::STANDARD
         .decode(b64.trim())
         .map_err(|e| Fail::new("bad_request", format!("image_base64 is not base64: {e}")))?;
-    let img =
-        image::load_from_memory(&bytes).map_err(|e| Fail::new("bad_request", format!("unreadable picture: {e}")))?;
-    Ok(img.into_rgb8())
+    let unreadable = |e: &dyn std::fmt::Display| Fail::new("bad_request", format!("unreadable picture: {e}"));
+    let reader = || image::ImageReader::new(std::io::Cursor::new(&bytes)).with_guessed_format();
+    // The size from the header first, so a small file claiming a huge
+    // picture never gets its pixels allocated.
+    let (w, h) = reader().map_err(|e| unreadable(&e))?.into_dimensions().map_err(|e| unreadable(&e))?;
+    check_size(w, h)?;
+    let mut limits = image::Limits::default();
+    limits.max_image_width = Some(MAX_SIDE);
+    limits.max_image_height = Some(MAX_SIDE);
+    // RGBA at the pixel limit, with room for the decoder's own buffers.
+    limits.max_alloc = Some(MAX_PIXELS * 4 + (64 << 20));
+    let mut r = reader().map_err(|e| unreadable(&e))?;
+    r.limits(limits);
+    Ok(r.decode().map_err(|e| unreadable(&e))?.into_rgb8())
+}
+
+fn check_size(w: u32, h: u32) -> Result<(), Fail> {
+    if w > MAX_SIDE || h > MAX_SIDE || u64::from(w) * u64::from(h) > MAX_PIXELS {
+        return Err(Fail::new(
+            "bad_request",
+            format!(
+                "the picture is {w}x{h}; at most {MAX_SIDE} pixels a side and {} megapixels",
+                MAX_PIXELS / 1_000_000
+            ),
+        ));
+    }
+    Ok(())
 }
 
 /// The OCR result format of docs/modules/ocr-modules.md: lines with their
@@ -347,6 +422,39 @@ mod tests {
         assert_eq!(decode(&json!({})).err().map(|f| f.kind), Some("bad_request"));
         assert_eq!(decode(&json!({"image_base64": "%%%"})).err().map(|f| f.kind), Some("bad_request"));
         assert_eq!(decode(&json!({"image_base64": "aGVsbG8="})).err().map(|f| f.kind), Some("bad_request"));
+    }
+
+    #[test]
+    fn pictures_over_the_limits_are_refused_before_decoding() {
+        assert!(check_size(1920, 1080).is_ok());
+        assert_eq!(check_size(50_001, 10).err().map(|f| f.kind), Some("bad_request"));
+        assert_eq!(check_size(20_000, 20_000).err().map(|f| f.kind), Some("bad_request"));
+        // A tiny PNG whose header claims 60000x60000 pixels: refused from the
+        // header, without allocating them.
+        let mut png = Vec::new();
+        image::DynamicImage::ImageRgb8(image::RgbImage::new(1, 1))
+            .write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png)
+            .unwrap();
+        png[16..20].copy_from_slice(&60_000u32.to_be_bytes());
+        png[20..24].copy_from_slice(&60_000u32.to_be_bytes());
+        let crc = crc32(&png[12..29]);
+        png[29..33].copy_from_slice(&crc.to_be_bytes());
+        let b64 = base64::engine::general_purpose::STANDARD.encode(&png);
+        let err = decode(&json!({"image_base64": b64})).err().unwrap();
+        assert_eq!(err.kind, "bad_request");
+        assert!(err.message.contains("60000x60000"), "{}", err.message);
+    }
+
+    /// PNG's chunk checksum, so the doctored header above stays valid.
+    fn crc32(data: &[u8]) -> u32 {
+        let mut c = !0u32;
+        for &b in data {
+            c ^= u32::from(b);
+            for _ in 0..8 {
+                c = if c & 1 != 0 { 0xedb8_8320 ^ (c >> 1) } else { c >> 1 };
+            }
+        }
+        !c
     }
 
     #[test]

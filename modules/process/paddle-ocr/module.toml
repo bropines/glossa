@@ -87,9 +87,9 @@ help = "Bigger pictures are scaled down to this before lines are looked for. Low
 # .github/workflows/paddle-ocr.yml and attached to the `paddle-ocr-v<version>`
 # GitHub release (README.md, "Releasing the binary").
 # TODO(release): replace each sha256 and size below with the values the
-# workflow prints for that archive (its SHA256SUMS file). Until then the
-# download fails its check; to try the module, see README.md, "Testing a
-# local build".
+# workflow prints for that archive (its SIZES file). Until then Glossa
+# refuses the all-zero placeholders and the module does not load; to try
+# it, see README.md, "Testing a local build".
 
 [[assets]]
 name = "bin"

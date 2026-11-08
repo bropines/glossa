@@ -36,23 +36,27 @@ cp "$here/module.toml" "$here/README.md" "$dest/"
 mkdir -p "$dest/tests/pictures"
 cp "$here"/tests/*.toml "$dest/tests/"
 cp "$here"/tests/pictures/*.png "$dest/tests/pictures/"
-# Rewrite only the `bin` entry for this system; everything else stays as
-# released, so the models still come from their real URLs.
+# Point this system's `bin` entry at the local archive and drop the other
+# systems' entries, whose placeholder hashes Glossa refuses. Everything
+# else stays as released, so the models still come from their real URLs.
 python3 -I - "$dest/module.toml" "$os" "$arch" "http://127.0.0.1:$port/$name" "$sum" "$size" <<'EOF'
 import re, sys
 path, os_, arch, url, sha, size = sys.argv[1:]
 text = open(path, encoding="utf-8").read()
 blocks = re.split(r"(?m)^(?=\[\[assets\]\])", text)
-for i, b in enumerate(blocks):
-    if 'name = "bin"' in b and f'os = ["{os_}"]' in b and f'arch = ["{arch}"]' in b:
+out, found = [], False
+for b in blocks:
+    if 'name = "bin"' in b:
+        if f'os = ["{os_}"]' not in b or f'arch = ["{arch}"]' not in b:
+            continue
         b = re.sub(r'(?m)^url = .*$', f'url = "{url}"', b)
         b = re.sub(r'(?m)^sha256 = .*$', f'sha256 = "{sha}"', b)
         b = re.sub(r'(?m)^size = .*$', f'size = {size}', b)
-        blocks[i] = b
-        break
-else:
+        found = True
+    out.append(b)
+if not found:
     sys.exit(f"no bin asset for {os_}/{arch} in module.toml")
-text = "".join(blocks).replace('network = ["github.com",', 'network = ["127.0.0.1", "github.com",')
+text = "".join(out).replace('network = ["github.com",', 'network = ["127.0.0.1", "github.com",')
 open(path, "w", encoding="utf-8").write(text)
 EOF
 echo "installed into $dest (bin: $name, $size bytes)"

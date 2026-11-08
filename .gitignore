@@ -12,6 +12,12 @@ __pycache__/
 *.pyc
 .venv/
 
+# The PaddleOCR module's program: its own cargo project, package.sh's
+# archives and the release workflow's unpacked smoke test.
+modules/process/paddle-ocr/target/
+modules/process/paddle-ocr/dist/
+modules/process/paddle-ocr/smoke/
+
 # Native module builds (modules/native/example-c and the like)
 modules/native/**/*.dll
 modules/native/**/*.so
