@@ -1,0 +1,31 @@
+[package]
+name = "paddle-ocr"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.95"
+license = "MIT OR Apache-2.0"
+description = "PaddleOCR (PP-OCRv5) text recognition as a Glossa process module"
+repository = "https://github.com/bropines/glossa"
+publish = false
+
+# Its own project, not a member of the Glossa workspace (the root Cargo.toml
+# excludes it), so building Glossa never compiles the ONNX Runtime bindings.
+[workspace]
+
+[dependencies]
+# Default features off: no `download-binaries` (pyke's prebuilt ONNX
+# Runtime) and no `auto-download` (models fetched by the crate itself). The
+# models and ONNX Runtime come from the module's assets instead.
+oar-ocr = { version = "=0.10.2", default-features = false, features = ["simd"] }
+# The version oar-ocr pins, with `load-dynamic`: ONNX Runtime is opened at
+# run time from the library shipped beside the binary, not linked in.
+ort = { version = "=2.0.0-rc.13", default-features = false, features = ["std", "load-dynamic"] }
+image = { version = "0.25", default-features = false, features = ["png", "jpeg", "webp"] }
+base64 = "0.22"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+[profile.release]
+lto = "thin"
+codegen-units = 4
+strip = true

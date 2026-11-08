@@ -1,0 +1,190 @@
+# Offline text recognition with PaddleOCR (PP-OCRv5 mobile models on ONNX
+# Runtime). A process module: `paddle-ocr` is a small Rust program (src/),
+# downloaded as an asset with ONNX Runtime beside it, that Glossa starts on
+# the first OCR call and stops when idle. Nothing loads until then.
+# README.md has the details, the licences and how the binary is released.
+capabilities = ["ocr"]
+
+[module]
+id = "paddle-ocr"
+name = "PaddleOCR (offline)"
+version = "0.1.0"
+api = 1
+runtime = "process"
+command.windows = ["${ASSETS_DIR}/bin/paddle-ocr.exe"]
+command.unix = ["${ASSETS_DIR}/bin/paddle-ocr"]
+# The models take 100-350 MB while loaded; let them go soon after use.
+idle_timeout_secs = 120
+description = "Offline text recognition with PaddleOCR: Chinese, Japanese, Korean, Cyrillic and Latin-script text, with line boxes."
+homepage = "https://github.com/bropines/glossa/tree/main/modules/process/paddle-ocr"
+author = "Glossa contributors"
+license = "MIT OR Apache-2.0 (models Apache-2.0, ONNX Runtime MIT)"
+
+[permissions]
+# Only where the files come from; the program itself makes no requests.
+network = ["github.com", "www.modelscope.cn"]
+
+# -- options --------------------------------------------------------------------
+# A script's recogniser is used once it is downloaded (Files above: Get).
+# These switch a downloaded one off for `auto`; a picture whose language
+# is set (Japanese, Russian…) always uses that language's recogniser.
+
+[[options]]
+key = "script_latin"
+type = "bool"
+label = "Latin-script languages (rec-latin, 7.9 MB)"
+default = true
+help = "English, German, French, Spanish, Polish, Turkish, Vietnamese and other languages written in Latin letters."
+
+[[options]]
+key = "script_eslav"
+type = "bool"
+label = "Russian, Ukrainian, Belarusian (rec-eslav, 7.9 MB)"
+default = true
+help = "Also reads English."
+
+[[options]]
+key = "script_cyrillic"
+type = "bool"
+label = "Other Cyrillic languages (rec-cyrillic, 8.1 MB)"
+default = true
+help = "Bulgarian, Serbian, Macedonian, Kazakh, Kyrgyz, Mongolian and the rest. Also reads Russian and English, less well than rec-eslav."
+
+[[options]]
+key = "script_ch"
+type = "bool"
+label = "Chinese and Japanese (rec-ch, 16.6 MB)"
+default = true
+help = "Simplified and Traditional Chinese, Japanese and English."
+
+[[options]]
+key = "script_korean"
+type = "bool"
+label = "Korean (rec-korean, 13.5 MB)"
+default = true
+help = "Korean and English."
+
+[[options]]
+key = "threads"
+type = "number"
+label = "Threads"
+default = 0
+min = 0
+max = 64
+help = "Processor threads per model. 0 picks up to four, which was fastest on the machines measured."
+
+[[options]]
+key = "max_side"
+type = "number"
+label = "Largest picture side for detection (px)"
+default = 2000
+min = 320
+max = 8000
+help = "Bigger pictures are scaled down to this before lines are looked for. Lower is faster and uses less memory; higher finds smaller text on large screenshots."
+
+# -- files ----------------------------------------------------------------------
+# The program and ONNX Runtime, one archive per system. Built by
+# .github/workflows/paddle-ocr.yml and attached to the `paddle-ocr-v<version>`
+# GitHub release (README.md, "Releasing the binary").
+# TODO(release): replace each sha256 and size below with the values the
+# workflow prints for that archive (its SHA256SUMS file). Until then the
+# download fails its check; to try the module, see README.md, "Testing a
+# local build".
+
+[[assets]]
+name = "bin"
+url = "https://github.com/bropines/glossa/releases/download/paddle-ocr-v0.1.0/paddle-ocr-0.1.0-macos-aarch64.tar.gz"
+sha256 = "0000000000000000000000000000000000000000000000000000000000000000"
+size = 14200000
+unpack = "tar.gz"
+os = ["macos"]
+arch = ["aarch64"]
+
+[[assets]]
+name = "bin"
+url = "https://github.com/bropines/glossa/releases/download/paddle-ocr-v0.1.0/paddle-ocr-0.1.0-windows-x86_64.zip"
+sha256 = "0000000000000000000000000000000000000000000000000000000000000000"
+size = 9000000
+unpack = "zip"
+os = ["windows"]
+arch = ["x86_64"]
+
+[[assets]]
+name = "bin"
+url = "https://github.com/bropines/glossa/releases/download/paddle-ocr-v0.1.0/paddle-ocr-0.1.0-windows-aarch64.zip"
+sha256 = "0000000000000000000000000000000000000000000000000000000000000000"
+size = 9000000
+unpack = "zip"
+os = ["windows"]
+arch = ["aarch64"]
+
+[[assets]]
+name = "bin"
+url = "https://github.com/bropines/glossa/releases/download/paddle-ocr-v0.1.0/paddle-ocr-0.1.0-linux-x86_64.tar.gz"
+sha256 = "0000000000000000000000000000000000000000000000000000000000000000"
+size = 12000000
+unpack = "tar.gz"
+os = ["linux"]
+arch = ["x86_64"]
+
+[[assets]]
+name = "bin"
+url = "https://github.com/bropines/glossa/releases/download/paddle-ocr-v0.1.0/paddle-ocr-0.1.0-linux-aarch64.tar.gz"
+sha256 = "0000000000000000000000000000000000000000000000000000000000000000"
+size = 11000000
+unpack = "tar.gz"
+os = ["linux"]
+arch = ["aarch64"]
+
+# The models: PP-OCRv5 mobile as RapidOCR 3.10 publishes them in ONNX form,
+# pinned to the v3.10.0 tag. The hashes are RapidOCR's own
+# (default_models.yaml) and were checked against the downloads.
+
+[[assets]]   # finds the lines; every script uses it
+name = "det.onnx"
+url = "https://www.modelscope.cn/models/RapidAI/RapidOCR/resolve/v3.10.0/onnx/PP-OCRv5/det/ch_PP-OCRv5_det_mobile.onnx"
+sha256 = "4d97c44a20d30a81aad087d6a396b08f786c4635742afc391f6621f5c6ae78ae"
+size = 4819576
+
+[[assets]]   # turns upside-down lines round
+name = "cls.onnx"
+url = "https://www.modelscope.cn/models/RapidAI/RapidOCR/resolve/v3.10.0/onnx/PP-OCRv5/cls/ch_PP-LCNet_x0_25_textline_ori_cls_mobile.onnx"
+sha256 = "54379ae5174d026780215fc748a7f31910dee36818e63d49e17dc598ecc82df7"
+size = 1018508
+
+# One recogniser per script, each downloaded only when the user asks for it.
+
+[[assets]]
+name = "rec-latin.onnx"
+url = "https://www.modelscope.cn/models/RapidAI/RapidOCR/resolve/v3.10.0/onnx/PP-OCRv5/rec/latin_PP-OCRv5_rec_mobile.onnx"
+sha256 = "b20bd37c168a570f583afbc8cd7925603890efbcdc000a59e22c269d160b5f5a"
+size = 7904513
+optional = true
+
+[[assets]]
+name = "rec-eslav.onnx"
+url = "https://www.modelscope.cn/models/RapidAI/RapidOCR/resolve/v3.10.0/onnx/PP-OCRv5/rec/eslav_PP-OCRv5_rec_mobile.onnx"
+sha256 = "08705d6721849b1347d26187f15a5e362c431963a2a62bfff4feac578c489aab"
+size = 7911802
+optional = true
+
+[[assets]]
+name = "rec-cyrillic.onnx"
+url = "https://www.modelscope.cn/models/RapidAI/RapidOCR/resolve/v3.10.0/onnx/PP-OCRv5/rec/cyrillic_PP-OCRv5_rec_mobile.onnx"
+sha256 = "90f761b4bfcce0c8c561c0cb5c887b0971d3ec01c32164bdf7374a35b0982711"
+size = 8074092
+optional = true
+
+[[assets]]
+name = "rec-ch.onnx"
+url = "https://www.modelscope.cn/models/RapidAI/RapidOCR/resolve/v3.10.0/onnx/PP-OCRv5/rec/ch_PP-OCRv5_rec_mobile.onnx"
+sha256 = "5825fc7ebf84ae7a412be049820b4d86d77620f204a041697b0494669b1742c5"
+size = 16631306
+optional = true
+
+[[assets]]
+name = "rec-korean.onnx"
+url = "https://www.modelscope.cn/models/RapidAI/RapidOCR/resolve/v3.10.0/onnx/PP-OCRv5/rec/korean_PP-OCRv5_rec_mobile.onnx"
+sha256 = "cd6e2ea50f6943ca7271eb8c56a877a5a90720b7047fe9c41a2e541a25773c9b"
+size = 13488748
+optional = true

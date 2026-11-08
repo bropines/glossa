@@ -1,0 +1,11 @@
+paddle-ocr: PaddleOCR (PP-OCRv5) text recognition for Glossa
+
+Run by Glossa as a process module, it speaks the module protocol on stdin
+and stdout. By hand:
+
+  paddle-ocr --image FILE [--lang LANG] [--models DIR] [--threads N] [--max-side PX]
+
+reads one picture twice (cold, then warm), prints the result as JSON and
+the timings on stderr. DIR (or GLOSSA_ASSETS_DIR) holds det.onnx, cls.onnx
+and rec-<script>.onnx. ONNX Runtime is loaded from ORT_DYLIB_PATH, or from
+the library beside this binary.
