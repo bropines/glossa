@@ -17,7 +17,8 @@ members = [
     "modules/native/example-rot13",
     "modules/native/example-lines",
 ]
-exclude = ["third_party"]
+# paddle-ocr is its own project (ONNX Runtime bindings Glossa never builds).
+exclude = ["third_party", "modules/process/paddle-ocr"]
 
 [workspace.package]
 version = "0.1.0-beta.2"

@@ -909,6 +909,28 @@ mod tests {
     }
 
     #[test]
+    fn a_placeholder_hash_fails_the_module() {
+        let d = temp("placeholder");
+        let zeros = "0".repeat(64);
+        write(
+            &d,
+            "module.toml",
+            &format!("capabilities = [\"translate\"]\n[module]\nid = \"unreleased\"\nname = \"Unreleased\"\nversion = \"1.0.0\"\nruntime = \"process\"\ncommand = [\"${{ASSETS_DIR}}/tool\"]\n[permissions]\nnetwork = [\"dl.test\"]\n[[assets]]\nname = \"tool\"\nurl = \"https://dl.test/tool\"\nsha256 = \"{zeros}\"\nsize = 11\n"),
+        );
+        write(&d, "tests/basic.toml", "[[case]]\nname = \"hi\"\nop = \"translate\"\ntext = \"hi\"\nto = \"de\"\n");
+        let s = Settings { models_dir: Some(d.join("models")), strict: true, ..Settings::default() };
+        for r in [test_module(&d, &s), test_module(&d, &Settings { check_only: true, ..s.clone() })] {
+            assert_eq!(r.status, Status::Fail, "{r:?}");
+            assert!(
+                r.findings.iter().any(|f| f.severity == Severity::Error && f.message.contains("placeholder")),
+                "{:?}",
+                r.findings
+            );
+        }
+        let _ = std::fs::remove_dir_all(&d);
+    }
+
+    #[test]
     fn modules_are_found_below_a_folder() {
         let d = temp("find");
         for m in ["a/x", "a/y", "b"] {

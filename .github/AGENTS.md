@@ -28,9 +28,15 @@ with the software renderer (WARP, `GLOSSA_RENDERER=software`).
 Live tests against Tesseract (Linux) and Apple Vision (macOS, allowed to
 fail) run as extra steps. The Linux job also builds the native and Java
 example modules and runs `glossa-cli module test --strict
---require-runtimes --download modules`, so every module in `modules/` passes
-its fixtures with nothing skipped (`--download` fetches the managed Python
-and packages a Python example declares). Locally
+--require-runtimes --download` over every module in `modules/`, so each
+passes its fixtures with nothing skipped (`--download` fetches the managed
+Python and packages a Python example declares). The one exception is
+`modules/process/paddle-ocr`, left out of that list until its program is
+released: its `bin` asset's sha256 is still the all-zero placeholder, which
+Glossa refuses, so it cannot load. `repo_modules.rs` (`UNRELEASED`) asserts
+that it fails for exactly that reason; filling in the real hashes makes
+that assertion fail, which is the reminder to drop both exceptions (the
+module's README, "Releasing the binary"). Locally
 the same checks run in WSL ([AGENTS.md](../AGENTS.md#build-and-test-in-wsl-never-on-the-windows-host)).
 
 ## release.yml
@@ -54,6 +60,27 @@ the same checks run in WSL ([AGENTS.md](../AGENTS.md#build-and-test-in-wsl-never
   `fill-manifests.sh` and the *Downloads* text.
 - Windows signing runs only when the `WINDOWS_SIGN_PFX` secret is set.
   Never put a secret into a workflow file.
+
+## paddle-ocr.yml
+
+Builds the PaddleOCR module's program (`modules/process/paddle-ocr`, its
+own cargo project outside the workspace) and packs it with ONNX Runtime
+and its crates' licence notices into the module's `bin` archives
+(`package.sh`, `third_party.py`).
+
+- A tag `paddle-ocr-v<version>` (the module's `Cargo.toml` version) or a
+  run by hand builds all five platforms: macOS arm64, Linux x64 and arm64,
+  Windows x64 and arm64. A tag also creates a **draft** release with the
+  archives, `SHA256SUMS` and `SIZES`. Publishing it, and copying the hashes
+  into `module.toml`, is done by hand.
+- A pull request that touches the module or this workflow runs only the
+  Linux x64 job (tests, clippy, build, archive, smoke test). The macOS,
+  Windows and arm64 runners are slow or scarce, and the code they would
+  build is the same, so they wait for a tag or a manual run.
+- The toolchain is pinned to the module's `rust-version`, and each ONNX
+  Runtime archive is checked against the SHA-256 pinned beside
+  `ORT_VERSION`. A new ONNX Runtime version needs all five hashes updated.
+- The main release workflow (tags `v*`) does not build this program.
 
 ## Templates
 

@@ -475,6 +475,15 @@ and every offline translator below depends on it.
 Fills the biggest gap: Linux has no offline OCR, and Windows needs a
 language pack per language. Beats Tesseract on screenshots and CJK.
 
+**Built:** [`modules/process/paddle-ocr`](../../modules/process/paddle-ocr/README.md),
+with measured speed and memory in its README. Differences from the plan
+below: the detector runs at PaddleOCR's own scale (short side at least
+64 px), not RapidOCR's 736, which doubled memory and split one-line
+captures; ONNX Runtime ships inside the per-platform `bin` archive rather
+than as separate assets (the official Windows zip is 83 MB for a 17 MB
+DLL); recognisers are optional assets and *auto* reads each line with every
+downloaded one, keeping the most confident reading.
+
 - **Runtime:** a Rust binary, `paddle-ocr`, on `oar-ocr` + `ort` with
   `load-dynamic`. It speaks the [OCR module protocol](../modules/ocr-modules.md)
   and returns line boxes, so in-place translation works.

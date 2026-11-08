@@ -56,6 +56,17 @@ the notes of its GitHub release.
   that builds `ModuleError` with a struct literal naming every field must
   now end it with `..Default::default()` or use `ModuleError::new`
   ([native-modules.md](docs/modules/native-modules.md#building-errors)).
+- PaddleOCR, an offline text recognition module
+  (`modules/process/paddle-ocr`): PP-OCRv5 models on ONNX Runtime, for
+  Chinese, Japanese, Korean, Russian and other Cyrillic, and Latin-script
+  text, returning line outlines for in-place translation. A small Rust
+  program that Glossa starts on the first OCR call and stops when idle;
+  the program, ONNX Runtime and the models are downloaded as module files
+  (30–45 MB for a typical set), one recogniser per script on request. On a
+  Mac it read a six-line English, Russian and Japanese picture exactly in
+  0.3 s per recogniser. Its program is built for Windows, Linux and macOS
+  on Apple silicon by a separate workflow (`paddle-ocr-v*` tags) and is not
+  released yet.
 - The interface language switches at once, without a restart: every
   window, the tray menu and the macOS menu bar follow the setting as soon
   as it is applied.
@@ -150,6 +161,10 @@ the notes of its GitHub release.
   work (waiting for the network does not count). Over a limit, the call
   fails with a message saying which. Large scripts (over 16 KB) are compiled
   once and kept as bytecode.
+- A module whose `[[assets]]` entry has an all-zero `sha256` (a placeholder
+  left for a file not published yet) no longer loads, and `glossa-cli
+  module check` and `module test` report it as an error, so a forgotten
+  placeholder cannot ship.
 
 ### Changed
 

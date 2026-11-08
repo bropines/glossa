@@ -1,0 +1,48 @@
+# Cases for `glossa-cli module test`. Recognition runs for real, offline, so
+# the module's files must be downloaded first, the recognisers included:
+#
+#   glossa-cli assets download paddle-ocr
+#   glossa-cli assets download paddle-ocr rec-latin.onnx rec-eslav.onnx rec-ch.onnx
+#   glossa-cli module test --strict modules/process/paddle-ocr
+#
+# Without them the harness skips the module. The protocol itself is also
+# tested without any model by `cargo test` in this folder (tests/protocol.rs).
+# pictures/mixed.png is drawn by pictures/render.py.
+
+[[case]]
+name = "reads English, Russian and Japanese lines with their outlines"
+op = "ocr"
+image = "pictures/mixed.png"
+[case.expect]
+# The first call starts the program and loads three models.
+max_ms = 20000
+contains = [
+    "The quick brown fox jumps over the lazy dog.",
+    "Settings Open file Save as PDF Help",
+    "Съешь же ещё этих мягких французских булок.",
+    "Настройки Открыть файл Сохранить",
+    "今日はいい天気ですね。日本語の文章を読みます。",
+]
+result = { blocks = [{ level = "line", text = "The quick brown fox jumps over the lazy dog." }] }
+
+[[case]]
+name = "a language picks its recogniser"
+op = "ocr"
+image = "pictures/mixed.png"
+lang = "ru"
+[case.expect]
+contains = ["Съешь же ещё этих мягких французских булок.", "Настройки Открыть файл Сохранить"]
+
+[[case]]
+name = "Japanese uses the Chinese and Japanese recogniser"
+op = "ocr"
+image = "pictures/mixed.png"
+lang = "ja"
+[case.expect]
+contains = ["今日はいい天気ですね。日本語の文章を読みます。"]
+
+[[case]]
+name = "a picture without text is not found"
+op = "ocr"
+image = { width = 320, height = 80, lines = 0 }
+expect = { error = "not_found" }

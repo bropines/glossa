@@ -10,6 +10,11 @@ use std::path::Path;
 
 use glossa_module_test::{find_modules, test_module, Settings, Status};
 
+/// Modules whose program is not released yet: their `bin` asset still has
+/// the all-zero placeholder hash, which the harness refuses
+/// (modules/process/paddle-ocr/README.md, "Releasing the binary").
+const UNRELEASED: &[&str] = &["process/paddle-ocr"];
+
 #[test]
 fn every_module_in_the_repository_passes_its_fixtures() {
     let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../modules");
@@ -20,6 +25,14 @@ fn every_module_in_the_repository_passes_its_fixtures() {
     for dir in &dirs {
         let report = test_module(dir, &settings);
         eprint!("{}", report.render());
+        if UNRELEASED.iter().any(|m| dir.ends_with(m)) {
+            // Must fail, and only for its placeholder hash: once the binary
+            // is released and the hash filled in, this assertion fails and
+            // the entry has to go.
+            let placeholder = report.findings.iter().any(|f| f.message.contains("all zeros, a placeholder"));
+            assert!(report.status == Status::Fail && placeholder, "{}: remove it from UNRELEASED", dir.display());
+            continue;
+        }
         if report.status == Status::Fail {
             failed.push(report.id.clone());
         }

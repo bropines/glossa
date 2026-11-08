@@ -209,6 +209,7 @@ turn (except OneOCR and the AI endpoints, which only run when chosen).
 | External command | `command-ocr` | either | all | a command line |
 | AI endpoint | `openai`, `ai-…` | either | all | a vision model behind the endpoint (below) |
 | Module | its id | either | all | a module with the OCR capability ([modules/ocr-modules.md](modules/ocr-modules.md)) |
+| PaddleOCR (module) | `paddle-ocr` | offline | Windows, Linux, macOS on Apple silicon | copy [`modules/process/paddle-ocr`](../modules/process/paddle-ocr) into the modules folder and download its files (30–45 MB) |
 
 ### Google Lens
 

@@ -20,6 +20,7 @@ without reshaping its data.
 - [module.toml](#moduletoml)
 - [Trying a module](#trying-a-module)
 - [Bundled modules](#bundled-modules)
+- [Modules with downloads](#modules-with-downloads)
 - [Scripts from other programs](#scripts-from-other-programs)
 - [Guides](#guides)
 
@@ -471,7 +472,9 @@ optional = true                      # fetched only when the user picks it
   deleted if it does not match. Afterwards, knowing a file is ready costs a
   file-system check, never a re-hash; *Check files* (or `glossa-cli assets
   verify`) hashes them again. An unpacked archive is checked by its files
-  and their sizes, since the archive itself is not kept.
+  and their sizes, since the archive itself is not kept. A `sha256` of all
+  zeros is taken for a placeholder: the manifest is refused, so fill in the
+  real hash before publishing the module.
 - **Where.** `<local data>/Glossa/models/<module id>/` (`data/models/` in a
   portable copy). `glossa-cli assets status <id>` prints the folder.
 - **Network.** Every asset URL's host must be in `[permissions] network`
@@ -636,6 +639,15 @@ scanned, and a module with the same id replaces an earlier one.
 
 To hide one without replacing it, switch it off in *Options → Modules*
 (`[modules] disabled` in `config.toml`).
+
+## Modules with downloads
+
+Larger modules live in `modules/` as source and fetch what they need as
+[assets](#assets) once copied into a modules folder:
+
+| id | name | does | downloads |
+|---|---|---|---|
+| `paddle-ocr` | PaddleOCR (offline) | text recognition on this machine: Chinese, Japanese, Korean, Cyrillic, Latin scripts, with line outlines ([README](../../modules/process/paddle-ocr/README.md)) | a Rust program with ONNX Runtime (9–14 MB), PP-OCRv5 models (6 MB, then 8–17 MB per script) |
 
 ## Scripts from other programs
 
