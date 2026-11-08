@@ -9,6 +9,19 @@ the notes of its GitHub release.
 
 ### Added
 
+- Local LLM, an offline translation module (`modules/process/local-llm`):
+  a small language model on llama.cpp, with no account and nothing sent
+  anywhere. Tencent's Hy-MT2 1.8B translation model (33 languages, 1.1 GB)
+  by default, Qwen3 1.7B as the alternative, or your own GGUF file; GPU
+  (Metal on Apple silicon), threads and context length on its settings
+  page, which also points Ollama users at the AI-endpoint route they
+  already have. A small Rust program starts llama-server on the first
+  translation and stops it when the module goes idle, so the 1.5 GB a
+  loaded model takes is given back. On a Mac a sentence takes 0.2–0.6 s,
+  and a start with the model cached 0.3–0.5 s. The program, the official
+  llama.cpp build and the model are downloaded as module files; the
+  program is built by a separate workflow (`local-llm-v*` tags) and is not
+  released yet.
 - Richer settings pages for modules and built-in services, with no module
   code: options may show or grey out on a condition (`visible_if`,
   `enabled_if`), check their values as you type with a message under the

@@ -17,8 +17,10 @@ members = [
     "modules/native/example-rot13",
     "modules/native/example-lines",
 ]
-# paddle-ocr is its own project (ONNX Runtime bindings Glossa never builds).
-exclude = ["third_party", "modules/process/paddle-ocr"]
+# paddle-ocr and local-llm are their own projects, released as module
+# assets on their own tags (paddle-ocr's ONNX Runtime bindings Glossa never
+# builds).
+exclude = ["third_party", "modules/process/paddle-ocr", "modules/process/local-llm"]
 
 [workspace.package]
 version = "0.1.0-beta.2"

@@ -1,0 +1,39 @@
+# The settings page in Russian (docs/modules/README.md#translations).
+
+[module]
+name = "Локальная LLM (офлайн)"
+description = "Офлайн-перевод небольшой языковой моделью (Hy-MT2 или Qwen3) на llama.cpp. Без учётной записи, ничего не уходит с компьютера."
+
+[options.model]
+label = "Модель"
+help = "Сначала скачайте модель в разделе «Файлы». Hy-MT2 создана для перевода и точнее держится текста; Qwen3 знает больше языков."
+
+[options.model.choices]
+hy-mt2 = "Hy-MT2 1.8B, модель для перевода: 33 языка (1,13 ГБ, Apache-2.0)"
+qwen3 = "Qwen3 1.7B, модель общего назначения: больше языков, вольнее (1,28 ГБ, Apache-2.0)"
+custom = "Свой файл GGUF"
+
+[options.custom_model]
+label = "Файл GGUF"
+help = "Чат-модель с инструкциями в формате GGUF, которую запускает llama.cpp. Лицензию проверьте сами: у некоторых (Gemma, Llama) свои условия."
+
+[options.gpu]
+label = "Использовать видеокарту"
+help = "Metal на Mac с Apple silicon. Сборки для Windows и Linux здесь работают на процессоре, на них настройка ничего не меняет."
+
+[options.threads]
+label = "Потоки"
+help = "Потоки процессора для модели. 0 — выбирает llama.cpp."
+
+[options.context]
+label = "Длина контекста (токены)"
+help = "Запрос и ответ вместе. Больше — длиннее тексты и больше памяти."
+
+[settings.items.ollama]
+label = "Уже запущены Ollama или LM Studio? Этот модуль не нужен: добавьте ИИ-подключение с пресетом Ollama (Настройки → Сервисы → ИИ-подключения)."
+
+[settings.items.model_box]
+label = "Модель"
+
+[settings.items.speed]
+label = "Скорость и память"

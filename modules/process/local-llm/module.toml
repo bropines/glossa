@@ -1,0 +1,230 @@
+# Offline translation with a small language model on llama.cpp. A process
+# module: `local-llm` is a small Rust program (src/), downloaded as an
+# asset, that Glossa starts on the first translation. It starts llama-server
+# from the official llama.cpp release (another asset) with the chosen model
+# and stops it when Glossa closes the module, so an idle Glossa holds no
+# model in memory. README.md has the details, the licences and how the
+# program is released.
+# Only `translate`: the program also answers `detect` for Qwen3 and custom
+# models, but Hy-MT2 misnames languages (it called Russian "English" in
+# tests), so detection is not offered.
+capabilities = ["translate"]
+
+[module]
+id = "local-llm"
+name = "Local LLM (offline)"
+version = "0.1.0"
+api = 1
+runtime = "process"
+command.windows = ["${ASSETS_DIR}/bin/local-llm.exe"]
+command.unix = ["${ASSETS_DIR}/bin/local-llm"]
+# A loaded model takes about 1.5 GB; give it back three minutes after the
+# last translation. The next one loads it again in a second or two.
+idle_timeout_secs = 180
+# Keeps one answer well inside Glossa's call timeout on a laptop CPU.
+max_input_chars = 2000
+description = "Offline translation with a small language model (Hy-MT2 or Qwen3) on llama.cpp. No account, nothing leaves the computer."
+homepage = "https://github.com/bropines/glossa/tree/main/modules/process/local-llm"
+author = "Glossa contributors"
+license = "MIT OR Apache-2.0 (llama.cpp MIT, models Apache-2.0)"
+# The settings page uses `file` and [ui.settings].
+min_glossa = "0.1.0-beta.2"
+
+[permissions]
+# Only where the files come from; the program itself talks to llama-server
+# on 127.0.0.1 and nothing else.
+network = ["github.com", "huggingface.co"]
+
+# -- options --------------------------------------------------------------------
+
+[[options]]
+key = "model"
+type = "select"
+label = "Model"
+default = "hy-mt2"
+choices = [
+    { value = "hy-mt2", label = "Hy-MT2 1.8B, a translation model: 33 languages (1.13 GB, Apache-2.0)" },
+    { value = "qwen3", label = "Qwen3 1.7B, a general model: more languages, looser (1.28 GB, Apache-2.0)" },
+    { value = "custom", label = "My own GGUF file" },
+]
+help = "Download the model under Files first. Hy-MT2 was made for translation and keeps closer to the text; Qwen3 knows more languages."
+
+[[options]]
+key = "custom_model"
+type = "file"
+label = "GGUF file"
+filters = ["gguf"]
+visible_if = "options.model == 'custom'"
+help = "An instruction-tuned chat model in GGUF form that llama.cpp runs. Check its licence yourself: some (Gemma, Llama) come with terms of their own."
+
+[[options]]
+key = "gpu"
+type = "bool"
+label = "Use the GPU"
+default = true
+help = "Metal on a Mac with Apple silicon. The Windows and Linux builds here run on the processor, so this changes nothing there."
+
+[[options]]
+key = "threads"
+type = "number"
+label = "Threads"
+default = 0
+min = 0
+max = 256
+help = "Processor threads for the model. 0 lets llama.cpp choose."
+
+[[options]]
+key = "context"
+type = "number"
+label = "Context length (tokens)"
+default = 4096
+min = 512
+max = 32768
+step = 512
+help = "The prompt and the answer together. More holds longer texts and takes more memory."
+
+[ui]
+format = 1
+
+[ui.settings]
+layout = ["ollama", "model_box", "speed"]
+
+[[ui.settings.items]]
+id = "ollama"
+type = "label"
+style = "weak"
+label = "Already running Ollama or LM Studio? You do not need this module: add an AI endpoint with the Ollama preset instead (Options → Services → AI endpoints)."
+
+[[ui.settings.items]]
+id = "model_box"
+type = "group"
+label = "Model"
+children = ["model", "custom_model"]
+
+[[ui.settings.items]]
+id = "speed"
+type = "group"
+label = "Speed and memory"
+collapsed = true
+children = ["gpu", "threads", "context"]
+
+# -- files ----------------------------------------------------------------------
+# The module's program, one archive per system. Built by
+# .github/workflows/local-llm.yml and attached to the `local-llm-v<version>`
+# GitHub release (README.md, "Releasing the binary").
+# TODO(release): replace each sha256 and size below with the values the
+# workflow prints for that archive (its SIZES file). Until then Glossa
+# refuses the all-zero placeholders and the module does not load; to try
+# it, see README.md, "Testing a local build".
+
+[[assets]]
+name = "bin"
+url = "https://github.com/bropines/glossa/releases/download/local-llm-v0.1.0/local-llm-0.1.0-macos-aarch64.tar.gz"
+sha256 = "0000000000000000000000000000000000000000000000000000000000000000"
+size = 350000
+unpack = "tar.gz"
+os = ["macos"]
+arch = ["aarch64"]
+
+[[assets]]
+name = "bin"
+url = "https://github.com/bropines/glossa/releases/download/local-llm-v0.1.0/local-llm-0.1.0-windows-x86_64.zip"
+sha256 = "0000000000000000000000000000000000000000000000000000000000000000"
+size = 350000
+unpack = "zip"
+os = ["windows"]
+arch = ["x86_64"]
+
+[[assets]]
+name = "bin"
+url = "https://github.com/bropines/glossa/releases/download/local-llm-v0.1.0/local-llm-0.1.0-windows-aarch64.zip"
+sha256 = "0000000000000000000000000000000000000000000000000000000000000000"
+size = 350000
+unpack = "zip"
+os = ["windows"]
+arch = ["aarch64"]
+
+[[assets]]
+name = "bin"
+url = "https://github.com/bropines/glossa/releases/download/local-llm-v0.1.0/local-llm-0.1.0-linux-x86_64.tar.gz"
+sha256 = "0000000000000000000000000000000000000000000000000000000000000000"
+size = 350000
+unpack = "tar.gz"
+os = ["linux"]
+arch = ["x86_64"]
+
+[[assets]]
+name = "bin"
+url = "https://github.com/bropines/glossa/releases/download/local-llm-v0.1.0/local-llm-0.1.0-linux-aarch64.tar.gz"
+sha256 = "0000000000000000000000000000000000000000000000000000000000000000"
+size = 350000
+unpack = "tar.gz"
+os = ["linux"]
+arch = ["aarch64"]
+
+# llama.cpp, the official release b12110 (the build behind llama.cpp
+# v0.9.0), MIT. Metal on macOS arm64, the CPU builds elsewhere (each picks
+# the fastest code for the processor at run time). Hashes and sizes are of
+# the downloaded archives; they match the release's own asset digests.
+
+[[assets]]
+name = "llama"
+url = "https://github.com/ggml-org/llama.cpp/releases/download/b12110/llama-b12110-bin-macos-arm64.tar.gz"
+sha256 = "4f5b8de12e0b9516658ca6a5764c6ffb3d7c659c3dd538556b1413c7b4050662"
+size = 16650691
+unpack = "tar.gz"
+os = ["macos"]
+arch = ["aarch64"]
+
+[[assets]]
+name = "llama"
+url = "https://github.com/ggml-org/llama.cpp/releases/download/b12110/llama-b12110-bin-win-cpu-x64.zip"
+sha256 = "98901e327c252875accaf2d1bf364e10e868843b0b63468baad1aa945cdc5da2"
+size = 24708445
+unpack = "zip"
+os = ["windows"]
+arch = ["x86_64"]
+
+[[assets]]
+name = "llama"
+url = "https://github.com/ggml-org/llama.cpp/releases/download/b12110/llama-b12110-bin-win-cpu-arm64.zip"
+sha256 = "f8d20fb07d0b499988ced8963afcd5ded2d2cdd9983b757fbc7e51c4abd722e8"
+size = 13197637
+unpack = "zip"
+os = ["windows"]
+arch = ["aarch64"]
+
+[[assets]]
+name = "llama"
+url = "https://github.com/ggml-org/llama.cpp/releases/download/b12110/llama-b12110-bin-ubuntu-x64.tar.gz"
+sha256 = "368227edcc229be5f9bed16a2223d79b5e41d0ac2e19bcf5825e82291c060e55"
+size = 23051958
+unpack = "tar.gz"
+os = ["linux"]
+arch = ["x86_64"]
+
+[[assets]]
+name = "llama"
+url = "https://github.com/ggml-org/llama.cpp/releases/download/b12110/llama-b12110-bin-ubuntu-arm64.tar.gz"
+sha256 = "4758b51335e37b4346251f2687d64841ff1c07ecb27fc46323945bb2ec9c44d2"
+size = 18723578
+unpack = "tar.gz"
+os = ["linux"]
+arch = ["aarch64"]
+
+# The models, each downloaded only when the user asks for it, pinned to a
+# Hugging Face revision. Both Apache-2.0 (README.md, "Licences").
+
+[[assets]]   # Tencent's translation model, 33 languages; the default
+name = "hy-mt2-1.8b-q4_k_m.gguf"
+url = "https://huggingface.co/tencent/Hy-MT2-1.8B-GGUF/resolve/a0c709d9fac510f2c807aa3af52872340dc37a4a/Hy-MT2-1.8B-Q4_K_M.gguf"
+sha256 = "dc5f44fcf1fa496ee7ad725982c0c8c553a4de00259b53af84c4b89fb0c06699"
+size = 1133080448
+optional = true
+
+[[assets]]   # Alibaba's general model, from the llama.cpp team's conversion
+name = "qwen3-1.7b-q4_k_m.gguf"
+url = "https://huggingface.co/ggml-org/Qwen3-1.7B-GGUF/resolve/daeb8e2d528a760970442092f6bf1e55c3b659eb/Qwen3-1.7B-Q4_K_M.gguf"
+sha256 = "d2387ca2dbfee2ffabce7120d3770dadca0b293052bc2f0e138fdc940d9bc7b5"
+size = 1282439264
+optional = true

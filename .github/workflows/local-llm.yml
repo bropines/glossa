@@ -1,0 +1,161 @@
+name: local-llm
+
+# Builds the local LLM module's program (modules/process/local-llm) for
+# every platform its module.toml lists and packs each with the crates'
+# licence notices: the `bin` asset the module downloads. llama.cpp and the
+# models are separate assets from their own releases; nothing here builds
+# or repackages them.
+#
+# - A tag `local-llm-v<version>` (matching `version` in the module's
+#   Cargo.toml) builds all five platforms and attaches the archives,
+#   SHA256SUMS and SIZES to a **draft** release of that tag. Publish it by
+#   hand, then copy each archive's sha256 and size into module.toml (the
+#   module's README.md, "Releasing the binary").
+# - Run by hand (Actions -> local-llm -> Run workflow), it builds all five
+#   and stops at the run's artifacts.
+# - A pull request that touches the module runs one Linux x64 job only:
+#   the module's tests (with the stand-in llama-server), clippy, a build,
+#   the archive and its smoke test.
+#
+# The main release workflow (tags v*) does not build this program.
+
+on:
+  push:
+    tags: ['local-llm-v*']
+  pull_request:
+    paths: ['modules/process/local-llm/**', '.github/workflows/local-llm.yml']
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: local-llm-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  matrix:
+    name: platforms
+    runs-on: ubuntu-latest
+    outputs:
+      include: ${{ steps.m.outputs.include }}
+    steps:
+      - id: m
+        env:
+          EVENT: ${{ github.event_name }}
+        run: |
+          p() { printf '{"os":"%s","arch":"%s","runner":"%s","ext":"%s"}' "$@"; }
+          all=$(p linux x86_64 ubuntu-22.04 tar.gz)
+          if [ "$EVENT" != pull_request ]; then
+            all="$all,$(p linux aarch64 ubuntu-22.04-arm tar.gz)"
+            all="$all,$(p macos aarch64 macos-latest tar.gz)"
+            all="$all,$(p windows x86_64 windows-2022 zip)"
+            all="$all,$(p windows aarch64 windows-11-arm zip)"
+          fi
+          echo "include=[$all]" >> "$GITHUB_OUTPUT"
+
+  build:
+    name: ${{ matrix.os }}-${{ matrix.arch }}
+    needs: matrix
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include: ${{ fromJSON(needs.matrix.outputs.include) }}
+    defaults:
+      run:
+        shell: bash
+        working-directory: modules/process/local-llm
+    steps:
+      - uses: actions/checkout@v4
+      # The module's rust-version (Cargo.toml), so a newer stable cannot
+      # change what is released.
+      - uses: dtolnay/rust-toolchain@1.95
+        with:
+          components: clippy
+      # package.sh runs third_party.py: a known Python on every runner.
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Version
+        id: v
+        run: |
+          version=$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -1)
+          if [[ "$GITHUB_REF" == refs/tags/local-llm-v* && "${GITHUB_REF#refs/tags/local-llm-v}" != "$version" ]]; then
+            echo "tag ${GITHUB_REF#refs/tags/} does not match Cargo.toml version $version" >&2
+            exit 1
+          fi
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+      - name: Test
+        run: cargo test --locked --release
+      - name: Clippy
+        if: matrix.os == 'linux' && matrix.arch == 'x86_64'
+        run: cargo clippy --locked --release --all-targets -- -D warnings
+      - name: Build
+        run: cargo build --locked --release
+      - name: Sign (macOS, ad hoc)
+        if: matrix.os == 'macos'
+        # Apple silicon runs only signed code. The linker signs the binary
+        # ad hoc already; signing again after strip keeps it valid.
+        run: codesign --force --sign - target/release/local-llm
+      - name: Package
+        id: pack
+        env:
+          OS: ${{ matrix.os }}
+          ARCH: ${{ matrix.arch }}
+          EXT: ${{ matrix.ext }}
+          VERSION: ${{ steps.v.outputs.version }}
+        run: |
+          exe=target/release/local-llm
+          [ "$OS" = windows ] && exe=$exe.exe
+          out=dist/local-llm-$VERSION-$OS-$ARCH.$EXT
+          ./package.sh "$exe" "$out"
+          echo "file=$out" >> "$GITHUB_OUTPUT"
+      - name: Smoke test
+        # The packed program answers the protocol, and runs a translation
+        # through its stand-in llama-server. No model is downloaded here.
+        env:
+          EXT: ${{ matrix.ext }}
+          FILE: ${{ steps.pack.outputs.file }}
+        run: |
+          mkdir smoke
+          if [ "$EXT" = zip ]; then (cd smoke && 7z x -y "../$FILE" >/dev/null); exe=smoke/local-llm.exe
+          else tar xzf "$FILE" -C smoke; exe=smoke/local-llm; fi
+          test -s smoke/THIRD-PARTY-NOTICES.txt
+          "$exe" --version
+          echo '{"id":1,"method":"speak","params":{}}' | "$exe" | grep -q unsupported
+      - uses: actions/upload-artifact@v4
+        with:
+          name: local-llm-${{ matrix.os }}-${{ matrix.arch }}
+          path: modules/process/local-llm/${{ steps.pack.outputs.file }}
+          if-no-files-found: error
+
+  release:
+    name: draft release
+    needs: build
+    if: startsWith(github.ref, 'refs/tags/local-llm-v')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+      - name: Checksums
+        working-directory: dist
+        run: |
+          sha256sum local-llm-* > SHA256SUMS
+          # The two values each `bin` asset in module.toml needs.
+          for f in local-llm-*; do echo "$f sha256=$(sha256sum "$f" | cut -d' ' -f1) size=$(stat -c %s "$f")"; done | tee SIZES
+      - name: Draft release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          gh release create "$TAG" dist/* --repo "$GITHUB_REPOSITORY" --draft \
+            --title "Local LLM module binary ${TAG#local-llm-v}" \
+            --notes "The \`bin\` asset of the local LLM module (modules/process/local-llm): the local-llm program for each platform. llama.cpp and the models are downloaded from their own releases. Copy each archive's sha256 and size (SIZES) into module.toml."

@@ -1,0 +1,30 @@
+[package]
+name = "local-llm"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.95"
+license = "MIT OR Apache-2.0"
+description = "Offline translation with a small language model on llama.cpp, as a Glossa process module"
+repository = "https://github.com/bropines/glossa"
+publish = false
+
+# Its own project, not a member of the Glossa workspace (the root Cargo.toml
+# excludes it): it is released as a module asset on its own tags, like
+# modules/process/paddle-ocr.
+[workspace]
+
+[dependencies]
+# With windows-sys below, the only dependency. HTTP to llama-server on
+# 127.0.0.1 is a few lines over std's TcpStream, so no HTTP client (or TLS
+# stack) is compiled in.
+serde_json = "1"
+
+# Windows only: a job object, so llama-server dies with its supervisor.
+# Declarations only, nothing to build.
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_Security", "Win32_System_JobObjects", "Win32_System_Threading"] }
+
+[profile.release]
+lto = "thin"
+codegen-units = 4
+strip = true
