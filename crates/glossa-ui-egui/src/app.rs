@@ -436,6 +436,12 @@ impl GlossaApp {
         self.ctx.send_viewport_cmd_to(egui::ViewportId::ROOT, egui::ViewportCommand::Focus);
     }
 
+    /// Whether `id` is an AI endpoint the user added (a language model
+    /// rather than a translator), which the service strips mark.
+    pub fn is_ai_endpoint(&self, id: &str) -> bool {
+        self.cfg.services.ai_endpoints.iter().any(|e| e.id == id)
+    }
+
     /// Show the main window without taking the focus from the program the
     /// user is in (for opening it alongside the popup).
     pub fn show_main_unfocused(&mut self) {

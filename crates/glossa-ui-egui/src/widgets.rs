@@ -50,7 +50,7 @@ pub fn service_badge(ui: &mut Ui, id: &str, name: &str, size: f32) {
 
 /// One tab of the service strip: badge + name, the name truncating when
 /// narrow.
-pub fn service_tab(ui: &mut Ui, look: &Look, id: &str, name: &str, selected: bool, width: f32) -> Response {
+pub fn service_tab(ui: &mut Ui, look: &Look, id: &str, name: &str, selected: bool, width: f32, tip: &str) -> Response {
     let h = look.theme.metrics.service_tab_height.clamp(20.0, 44.0);
     let (rect, resp) = ui.allocate_exact_size(vec2(width.max(h), h), Sense::click());
     if ui.is_rect_visible(rect) {
@@ -101,7 +101,104 @@ pub fn service_tab(ui: &mut Ui, look: &Look, id: &str, name: &str, selected: boo
             );
         }
     }
-    resp.on_hover_text(name)
+    resp.on_hover_text(tip)
+}
+
+/// One tab of a service strip.
+pub struct StripService {
+    pub id: String,
+    pub name: String,
+    /// An AI endpoint (a language model): drawn in the strip's AI group.
+    pub ai: bool,
+}
+
+/// The blue the AI group is marked with, whatever the theme's accent.
+const AI_BLUE: Color32 = Color32::from_rgb(66, 133, 244);
+
+/// A row of service tabs: the translators, then the AI services in a group
+/// of their own on a blue plate, so a model ("Google Gemini") is not
+/// mistaken for the translator it shares a name with. `ai_tip` is the
+/// hover text of an AI tab, with `%s` for its name. Returns the service
+/// clicked, when it is not the selected one.
+pub fn service_strip(
+    ui: &mut Ui,
+    look: &Look,
+    services: &[StripService],
+    selected: &str,
+    max_each: f32,
+    ai_tip: &str,
+) -> Option<String> {
+    let n_ai = services.iter().filter(|s| s.ai).count();
+    let n_plain = services.len() - n_ai;
+    // The plate's padding and the gap before it.
+    let (pad, gap) = (3.0, 6.0);
+    let group = if n_ai > 0 && n_plain > 0 {
+        gap + 2.0 * pad
+    } else if n_ai > 0 {
+        2.0 * pad
+    } else {
+        0.0
+    };
+    let room = ui.available_width() - group;
+    let even = (room / services.len().max(1) as f32).clamp(24.0, max_each);
+    // An AI tab gets the width of its whole name when there is room (up to
+    // a third of the strip): cut to its first word, "Google Gemini" would
+    // read as "Google" again.
+    let h = look.theme.metrics.service_tab_height.clamp(20.0, 44.0);
+    let font = egui::FontId::proportional(look.theme.fonts.size * 1.25);
+    let ai_w = |name: &str| {
+        let text = ui.fonts_mut(|f| f.layout_no_wrap(name.to_owned(), font.clone(), Color32::WHITE).size().x);
+        (h - 10.0 + text + 18.0).clamp(even, (room / 3.0).max(even))
+    };
+    let ai_widths: Vec<f32> = services.iter().filter(|s| s.ai).map(|s| ai_w(&s.name)).collect();
+    let plain_each = if n_plain > 0 {
+        ((room - ai_widths.iter().sum::<f32>()) / n_plain as f32).clamp(24.0, max_each)
+    } else {
+        even
+    };
+    let mut clicked = None;
+    ui.horizontal(|ui| {
+        ui.spacing_mut().item_spacing.x = 1.0;
+        let mut tab = |ui: &mut Ui, s: &StripService, width: f32| {
+            let tip = if s.ai { ai_tip.replacen("%s", &s.name, 1) } else { s.name.clone() };
+            let on = s.id == selected;
+            if service_tab(ui, look, &s.id, &s.name, on, width - 1.0, &tip).clicked() && !on {
+                clicked = Some(s.id.clone());
+            }
+        };
+        for s in services.iter().filter(|s| !s.ai) {
+            tab(ui, s, plain_each);
+        }
+        if n_ai == 0 {
+            return;
+        }
+        if n_plain > 0 {
+            ui.add_space(gap - 1.0);
+        }
+        let plate = ui.painter().add(egui::Shape::Noop);
+        let start = ui.cursor().left();
+        ui.add_space(pad);
+        let top = ui.cursor().top();
+        let mut bottom = top;
+        for (s, w) in services.iter().filter(|s| s.ai).zip(&ai_widths) {
+            tab(ui, s, *w);
+            bottom = bottom.max(ui.min_rect().bottom());
+        }
+        ui.add_space(pad);
+        let rect = egui::Rect::from_min_max(egui::pos2(start, top - pad), egui::pos2(ui.cursor().left(), bottom + pad));
+        let radius = look.theme.metrics.button_radius + pad;
+        ui.painter().set(
+            plate,
+            egui::Shape::Rect(egui::epaint::RectShape::new(
+                rect,
+                radius,
+                AI_BLUE.gamma_multiply(0.45),
+                egui::Stroke::new(1.5, AI_BLUE),
+                egui::StrokeKind::Inside,
+            )),
+        );
+    });
+    clicked
 }
 
 /// How tall a language list gets before it scrolls, under its search box.

@@ -432,7 +432,9 @@ fn body(app: &mut GlossaApp, ui: &mut egui::Ui, st: &mut PopupState) -> (bool, e
     let look = app.look.clone();
     let cfg = app.cfg.appearance.popup.clone();
     let mut close = ui.input(|i| i.key_pressed(egui::Key::Escape) || i.viewport().close_requested());
-    let hovered_now = ui.input(|i| i.pointer.has_pointer());
+    // A screenshot shows the popup as it looks under the pointer, with its
+    // service strip.
+    let hovered_now = ui.input(|i| i.pointer.has_pointer()) || app.launch.screenshot.is_some();
     if hovered_now {
         st.last_hover = Instant::now();
     }
@@ -479,7 +481,11 @@ fn body(app: &mut GlossaApp, ui: &mut egui::Ui, st: &mut PopupState) -> (bool, e
             .iter()
             .filter_map(|id| reg.get(id))
             .filter(|p| p.info().capabilities.contains(Capabilities::TRANSLATE))
-            .filter(|p| !is_ai_endpoint(app, &p.info().id))
+            .map(|p| crate::widgets::StripService {
+                id: p.info().id.clone(),
+                name: p.info().name.clone(),
+                ai: app.is_ai_endpoint(&p.info().id),
+            })
             .collect()
     };
     let strip_h =
@@ -650,10 +656,8 @@ fn body(app: &mut GlossaApp, ui: &mut egui::Ui, st: &mut PopupState) -> (bool, e
                 }
                 let picked = crate::dropdown::show(ui, menu_id, anchor, 220.0, 460.0, |ui, _| target_menu(app, st, ui))
                     .flatten();
-                match picked {
-                    Some(MenuPick::Pair(pair)) => retarget(app, st, pair),
-                    Some(MenuPick::Service(id)) => switch_service(app, st, id),
-                    None => {}
+                if let Some(pair) = picked {
+                    retarget(app, st, pair);
                 }
             }
 
@@ -839,26 +843,10 @@ fn body(app: &mut GlossaApp, ui: &mut egui::Ui, st: &mut PopupState) -> (bool, e
             if !st.hovered && strip_h > 0.0 {
                 ui.allocate_space(vec2(ui.available_width(), strip_h));
             } else if !strip_providers.is_empty() {
-                let mut switch_to = None;
                 ui.add_space(2.0);
-                let enabled = &strip_providers;
-                {
-                    let avail = ui.available_width();
-                    let each = (avail / enabled.len() as f32).max(24.0);
-                    ui.horizontal(|ui| {
-                        ui.spacing_mut().item_spacing.x = 1.0;
-                        for p in enabled {
-                            let info = p.info();
-                            let selected = info.id == st.service;
-                            if crate::widgets::service_tab(ui, &look, &info.id, &info.name, selected, each - 1.0)
-                                .clicked()
-                                && !selected
-                            {
-                                switch_to = Some(info.id.clone());
-                            }
-                        }
-                    });
-                }
+                let tip = app.t("service.ai_tip");
+                let switch_to =
+                    crate::widgets::service_strip(ui, &look, &strip_providers, &st.service, f32::INFINITY, &tip);
                 if let Some(id) = switch_to {
                     switch_service(app, st, id);
                 }
@@ -882,20 +870,6 @@ fn body(app: &mut GlossaApp, ui: &mut egui::Ui, st: &mut PopupState) -> (bool, e
     (close, vec2(desired_w.ceil(), h.ceil()).max(MIN_SIZE))
 }
 
-/// What the header's menu picked: a direction, or one of the AI
-/// services, which live there rather than in the service strip.
-enum MenuPick {
-    Pair(LangPair),
-    Service(String),
-}
-
-/// AI endpoints the user added are kept out of the popup's service strip:
-/// their names often start like a translator's ("Google Gemini" next to
-/// Google) and they are picked rarely, so the header menu lists them.
-fn is_ai_endpoint(app: &GlossaApp, id: &str) -> bool {
-    app.cfg.services.ai_endpoints.iter().any(|e| e.id == id)
-}
-
 /// Take the popup's text to the main window and bring that window up.
 fn open_in_main(app: &mut GlossaApp, st: &PopupState) {
     app.main.source = st.source.clone();
@@ -914,9 +888,9 @@ fn switch_service(app: &mut GlossaApp, st: &mut PopupState, id: String) {
 }
 
 /// The header's language menu: the automatic direction, a swap of the
-/// languages just used, the AI services, recent targets, then every
-/// language with a search.
-fn target_menu(app: &GlossaApp, st: &PopupState, ui: &mut egui::Ui) -> Option<MenuPick> {
+/// languages just used, recent targets, then every language with a search.
+/// Returns the direction picked.
+fn target_menu(app: &GlossaApp, st: &PopupState, ui: &mut egui::Ui) -> Option<LangPair> {
     let mut out = None;
     let to = st.pair.to;
     let automatic = st.pair == LangPair::new(LangId::AUTO, LangId::AUTO);
@@ -931,24 +905,6 @@ fn target_menu(app: &GlossaApp, st: &PopupState, ui: &mut egui::Ui) -> Option<Me
             );
             if ui.button(label).clicked() {
                 out = Some(LangPair::new(o.pair.to, o.pair.from));
-            }
-        }
-    }
-    let mut service = None;
-    let reg = app.engine.registry();
-    let ai: Vec<_> = app
-        .cfg
-        .services
-        .ai_endpoints
-        .iter()
-        .filter(|e| app.cfg.services.enabled.contains(&e.id))
-        .filter(|e| reg.get(&e.id).is_some_and(|p| p.info().capabilities.contains(Capabilities::TRANSLATE)))
-        .collect();
-    if !ai.is_empty() {
-        ui.separator();
-        for e in ai {
-            if ui.selectable_label(st.service == e.id, &e.name).clicked() {
-                service = Some(e.id.clone());
             }
         }
     }
@@ -994,12 +950,12 @@ fn target_menu(app: &GlossaApp, st: &PopupState, ui: &mut egui::Ui) -> Option<Me
             }
         }
     });
-    if out.is_some() || service.is_some() {
+    if out.is_some() {
         search.clear();
         ui.close();
     }
     ui.ctx().data_mut(|d| d.insert_temp(search_id, search));
-    service.map(MenuPick::Service).or(out.map(MenuPick::Pair))
+    out
 }
 
 /// Translate the popup's text again in `pair`. A picked target stays for

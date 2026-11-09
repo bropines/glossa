@@ -808,31 +808,22 @@ fn stacked_results(app: &mut GlossaApp, ui: &mut egui::Ui, height: f32) {
 fn service_strip(app: &mut GlossaApp, ui: &mut egui::Ui) {
     let look = app.look.clone();
     let reg = app.engine.registry();
-    let services: Vec<(String, String)> = app
+    let services: Vec<crate::widgets::StripService> = app
         .cfg
         .services
         .enabled
         .iter()
         .filter_map(|id| {
-            reg.get(id)
-                .filter(|p| p.info().capabilities.contains(Capabilities::TRANSLATE))
-                .map(|p| (id.clone(), p.info().name.clone()))
+            reg.get(id).filter(|p| p.info().capabilities.contains(Capabilities::TRANSLATE)).map(|p| {
+                crate::widgets::StripService { id: id.clone(), name: p.info().name.clone(), ai: app.is_ai_endpoint(id) }
+            })
         })
         .collect();
     if services.is_empty() {
         return;
     }
-    let each = (ui.available_width() / services.len() as f32).clamp(32.0, 160.0);
-    let mut clicked = None;
-    ui.horizontal(|ui| {
-        ui.spacing_mut().item_spacing.x = 1.0;
-        for (id, name) in &services {
-            let selected = *id == app.cfg.services.active;
-            if crate::widgets::service_tab(ui, &look, id, name, selected, each - 1.0).clicked() && !selected {
-                clicked = Some(id.clone());
-            }
-        }
-    });
+    let tip = app.t("service.ai_tip");
+    let clicked = crate::widgets::service_strip(ui, &look, &services, &app.cfg.services.active, 160.0, &tip);
     if let Some(id) = clicked {
         app.set_active_service(&id);
     }

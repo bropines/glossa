@@ -222,9 +222,10 @@ the notes of its GitHub release.
 
 ### Changed
 
-- The popup's service strip no longer shows AI endpoints added in the
-  options ("Google Gemini" looked like a second Google). They are listed
-  in the header's language menu instead, and picking one translates with it.
+- AI endpoints added in the options sit in their own group at the end of
+  the service strips (popup and main window), on a blue plate, so "Google
+  Gemini" no longer looks like a second Google. Hovering one says it is an
+  AI service.
 - JavaScript (Glossa modules, classic QTranslate scripts, pot-app plugins)
   now runs on QuickJS instead of boa. Glossa is about 3 MB smaller, a script
   call is several times faster and uses a fraction of the memory, and every
