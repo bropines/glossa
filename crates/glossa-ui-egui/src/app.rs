@@ -436,6 +436,14 @@ impl GlossaApp {
         self.ctx.send_viewport_cmd_to(egui::ViewportId::ROOT, egui::ViewportCommand::Focus);
     }
 
+    /// Show the main window without taking the focus from the program the
+    /// user is in (for opening it alongside the popup).
+    pub fn show_main_unfocused(&mut self) {
+        self.main_visible = true;
+        self.ctx.send_viewport_cmd_to(egui::ViewportId::ROOT, egui::ViewportCommand::Visible(true));
+        self.ctx.send_viewport_cmd_to(egui::ViewportId::ROOT, egui::ViewportCommand::Minimized(false));
+    }
+
     /// Keep the main window above the others, or not, as set.
     pub fn apply_main_window_level(&self) {
         let level = if self.cfg.appearance.main_always_on_top {

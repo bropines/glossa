@@ -352,6 +352,7 @@ One table per endpoint. Each becomes a translator of its own; its settings
 | `auto_position` | bool | `true` | Options → Appearance → Popup | Place it next to the selection, kept on screen. |
 | `activate_on_open` | bool | `false` | Options → Appearance → Popup | Take the keyboard focus when it opens. |
 | `pin_when_dragging` | bool | `true` | Options → Appearance → Popup | Stop hiding automatically once it has been dragged. |
+| `open_main_too` | bool | `false` | Options → Appearance → Popup | Show the main window, with the same text, whenever the popup opens. It does not take the focus. |
 | `show_border` | bool | `true` | Options → Appearance → Popup | Draw the coloured border. |
 | `auto_hide_secs` | integer | `5` | Options → Appearance → Popup | Hide after this many seconds without the pointer over it, 0–600. `0` never hides. |
 | `transparency` | integer | `15` | Options → Appearance → Popup | 0 (opaque) to 90 percent. |

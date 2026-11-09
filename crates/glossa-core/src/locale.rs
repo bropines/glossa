@@ -927,6 +927,7 @@ pub static STRINGS: &[(&str, &str, Option<&str>)] = &[
     ("options.appearance.auto_position", "Enable auto position", Some("w:14:1160")),
     ("options.appearance.activate", "Activate when opened", Some("w:14:1159")),
     ("options.appearance.pin_when_dragging", "Pin when dragging", Some("w:14:1161")),
+    ("options.appearance.open_main_too", "Open the main window with the popup", None),
     ("options.appearance.popup_group", "Popup window", Some("w:14:1124")),
     ("options.appearance.back_color", "Background color:", Some("w:14:1092")),
     ("options.appearance.text_color", "Text color:", Some("w:14:1091")),

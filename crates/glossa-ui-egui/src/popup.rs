@@ -96,6 +96,11 @@ pub fn open(app: &mut GlossaApp, text: String, cursor: Option<(i32, i32)>) {
     let min_w = app.cfg.appearance.popup.min_width;
     let pair = popup_pair(app);
     let job = translate(app, &text, &service, pair);
+    if app.cfg.appearance.popup.open_main_too {
+        app.main.source = text.clone();
+        app.translate_main();
+        app.show_main_unfocused();
+    }
     let now = Instant::now();
     // A language list left open by the last popup goes with it.
     crate::dropdown::close(&app.ctx, target_menu_id());
@@ -579,6 +584,15 @@ fn body(app: &mut GlossaApp, ui: &mut egui::Ui, st: &mut PopupState) -> (bool, e
                 .selectable(false)
                 .truncate(),
             );
+            // A double click on the header (the title or a free spot in its
+            // row) takes the text to the main window.
+            let header_double_click = title_resp.double_clicked()
+                || (bg.double_clicked() && bg.interact_pointer_pos().is_some_and(|p| row.contains(p)));
+            if header_double_click {
+                crate::dropdown::close(ui.ctx(), target_menu_id());
+                open_in_main(app, st);
+                close = true;
+            }
             if title_resp.drag_started() {
                 st.moved = true;
                 if cfg.pin_when_dragging {
@@ -623,7 +637,9 @@ fn body(app: &mut GlossaApp, ui: &mut egui::Ui, st: &mut PopupState) -> (bool, e
                 if title_resp.hovered() {
                     ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
                 }
-                if title_resp.clicked() {
+                // The second click of a double click opens the main window
+                // instead of closing the list again.
+                if title_resp.clicked() && !header_double_click {
                     crate::dropdown::toggle_unfocused(ui.ctx(), menu_id);
                 }
                 let anchor = title_resp.on_hover_text(app.t("popup.change_target")).rect;
@@ -878,6 +894,13 @@ enum MenuPick {
 /// Google) and they are picked rarely, so the header menu lists them.
 fn is_ai_endpoint(app: &GlossaApp, id: &str) -> bool {
     app.cfg.services.ai_endpoints.iter().any(|e| e.id == id)
+}
+
+/// Take the popup's text to the main window and bring that window up.
+fn open_in_main(app: &mut GlossaApp, st: &PopupState) {
+    app.main.source = st.source.clone();
+    app.translate_main();
+    app.show_main();
 }
 
 /// Translate the popup's text with another service, and remember it for

@@ -1926,6 +1926,7 @@ fn appearance(app: &mut GlossaApp, ui: &mut egui::Ui, st: &mut OptionsState) {
         ui.checkbox(&mut p.auto_position, app.t("options.appearance.auto_position"));
         ui.checkbox(&mut p.activate_on_open, app.t("options.appearance.activate"));
         ui.checkbox(&mut p.pin_when_dragging, app.t("options.appearance.pin_when_dragging"));
+        ui.checkbox(&mut p.open_main_too, app.t("options.appearance.open_main_too"));
         ui.checkbox(&mut p.show_border, app.t("options.appearance.show_border"));
         backdrop_row(app, ui, &app.t("options.appearance.popup_backdrop"), "popup-backdrop", &mut p.backdrop);
         let has_backdrop = p.backdrop != glossa_core::config::Backdrop::None;

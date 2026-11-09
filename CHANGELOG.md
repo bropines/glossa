@@ -9,6 +9,11 @@ the notes of its GitHub release.
 
 ### Added
 
+- A double click on the popup's header (the language line or a free spot
+  beside the buttons) opens the main window with the popup's text.
+- Options → Appearance → Popup → "Open the main window with the popup":
+  every popup also shows the main window with the same text, without
+  taking the focus from the program you are in.
 - The PaddleOCR module's program is released (`paddle-ocr-v0.1.0`), so
   it now installs and downloads its files like any other module.
 - Local LLM, an offline translation module (`modules/process/local-llm`):

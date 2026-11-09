@@ -314,6 +314,7 @@
     "options.appearance.auto_position": "Подбирать положение автоматически",
     "options.appearance.activate": "Делать активным при открытии",
     "options.appearance.pin_when_dragging": "Закреплять при перетаскивании",
+    "options.appearance.open_main_too": "Открывать главное окно вместе с попапом",
     "options.appearance.popup_group": "Всплывающее окно",
     "options.appearance.back_color": "Цвет фона:",
     "options.appearance.text_color": "Цвет текста:",

@@ -821,6 +821,10 @@ pub struct PopupConfig {
     pub activate_on_open: bool,
     /// Stop auto-hiding once the user drags it somewhere.
     pub pin_when_dragging: bool,
+    /// Show the main window, with the same text, whenever the popup opens.
+    /// The main window does not take the focus, so the program the text
+    /// came from keeps it.
+    pub open_main_too: bool,
     /// Draw the coloured border around it.
     pub show_border: bool,
     /// Hide after this many seconds without the pointer over it. 0 never
@@ -869,6 +873,7 @@ impl Default for PopupConfig {
             auto_position: true,
             activate_on_open: false,
             pin_when_dragging: true,
+            open_main_too: false,
             show_border: true,
             auto_hide_secs: 5,
             transparency: 15,
