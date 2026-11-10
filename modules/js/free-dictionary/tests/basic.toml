@@ -37,3 +37,45 @@ op = "dictionary"
 text = "Haus"
 from = "de"
 expect = { error = "source_language" }
+
+[[case]]
+name = "a rate limit is typed"
+op = "dictionary"
+text = "slow"
+from = "en"
+expect = { error = "rate_limited" }
+[[case.http]]
+url = "https://api.dictionaryapi.dev/api/v2/entries/en/slow"
+status = 429
+body = "Too Many Requests"
+
+[[case]]
+name = "an outage is an http error"
+op = "dictionary"
+text = "down"
+from = "en"
+expect = { error = "module", error_contains = "dictionaryapi.dev answered 503" }
+[[case.http]]
+url = "https://api.dictionaryapi.dev/api/v2/entries/en/down"
+status = 503
+body = "Service Unavailable"
+
+[[case]]
+name = "an answer that is not a list of entries is a bad response"
+op = "dictionary"
+text = "shape"
+from = "en"
+expect = { error = "bad_response", error_contains = "changed its answer" }
+[[case.http]]
+url = "https://api.dictionaryapi.dev/api/v2/entries/en/shape"
+body = '{"word": "shape", "meanings": []}'
+
+# A health check against the real service: only the shape of the answer is
+# checked. Skipped offline; `--live --case "live:"` runs it.
+[[case]]
+name = "live: looks up a word"
+op = "dictionary"
+live = true
+text = "house"
+from = "en"
+expect = { headword = "house" }

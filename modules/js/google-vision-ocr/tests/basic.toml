@@ -105,3 +105,45 @@ action = "all_languages"
 [case.expect]
 text = "58 languages."
 result = { choices = { custom_hints = [{ value = "af", label = "Afrikaans" }, { value = "sq" }] } }
+
+[[case]]
+name = "the quota is a rate limit"
+op = "ocr"
+image = { width = 200, height = 60 }
+expect = { error = "rate_limited" }
+[[case.http]]
+method = "POST"
+url = "https://vision.googleapis.com/v1/images:annotate"
+status = 429
+body = '{"error": {"code": 429, "message": "Quota exceeded for quota metric.", "status": "RESOURCE_EXHAUSTED"}}'
+
+[[case]]
+name = "an outage is an http error"
+op = "ocr"
+image = { width = 200, height = 60 }
+expect = { error = "module", error_contains = "HTTP 503" }
+[[case.http]]
+method = "POST"
+url = "https://vision.googleapis.com/v1/images:annotate"
+status = 503
+body = "Service Unavailable"
+
+[[case]]
+name = "an answer without responses is a bad response"
+op = "ocr"
+image = { width = 200, height = 60 }
+expect = { error = "bad_response", error_contains = "changed its answer" }
+[[case.http]]
+method = "POST"
+url = "https://vision.googleapis.com/v1/images:annotate"
+body = '{"results": []}'
+
+[[case]]
+name = "a page instead of JSON is a bad response"
+op = "ocr"
+image = { width = 200, height = 60 }
+expect = { error = "bad_response" }
+[[case.http]]
+method = "POST"
+url = "https://vision.googleapis.com/v1/images:annotate"
+body = "<html>Sign in</html>"

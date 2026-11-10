@@ -77,7 +77,8 @@ def recognize(req, host):
         URL,
         headers={"apikey": key, "Content-Type": "application/x-www-form-urlencoded"},
         body=form,
-        timeout=60,
+        # Under Glossa's own 30 s for a call, so a stall is reported by name.
+        timeout=25,
     )
     status, body = resp.get("status", 0), resp.get("body", "")
     if status in (401, 403) or "api key" in body.lower()[:300]:
@@ -101,6 +102,8 @@ def recognize(req, host):
     if not results:
         raise ModuleError("not_found", "no text in the picture")
     page = results[0]
+    if not isinstance(page, dict):
+        raise ModuleError("bad_response", "OCR.space changed its answer: %s" % body[:200])
     text = (page.get("ParsedText") or "").replace("\r\n", "\n").strip()
 
     lines = []
