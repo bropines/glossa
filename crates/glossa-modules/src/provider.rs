@@ -94,6 +94,12 @@ impl CancelToken {
     pub fn is_cancelled(&self) -> bool {
         self.0.load(Ordering::SeqCst)
     }
+
+    /// The flag itself, for `glossa_net::HttpRequest::cancel`: the HTTP
+    /// layer stops waiting to retry when it is raised.
+    pub fn flag(&self) -> Arc<AtomicBool> {
+        self.0.clone()
+    }
 }
 
 /// A provider. Every operation defaults to "unsupported"; implement those the

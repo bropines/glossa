@@ -250,6 +250,13 @@ the notes of its GitHub release.
 
 ### Fixed
 
+- Retries are made by one layer, with manners. The wait before a retry is
+  scaled by a random 50–100 %, so several requests that failed together do
+  not come back together; a `Retry-After` on a 429 or 503 is obeyed when it
+  is short (up to 5 s; 30 s for Google Lens) and ends the retries when it
+  is longer; and cancelling a translation ends the wait at once instead of
+  sleeping it out. Google Lens no longer retries on top of the HTTP
+  client's own retries, which could ask a failing Lens six times.
 - The popup's copy button no longer shows a "Copied" message, which
   turned up now and then and spoiled the popup's look. A failed copy is
   still reported.

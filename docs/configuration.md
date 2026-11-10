@@ -247,7 +247,7 @@ programs cannot register global hotkeys, bind keys to the
 | key | type | default | set in | what it does |
 |---|---|---|---|---|
 | `timeout_secs` | integer | `10` | Options → Internet | Timeout for one request to a service, 1–300 s. (AI endpoints have their own timeout.) |
-| `max_retries` | integer | `1` | Options → Internet | Retries after a connection error, a timeout, or a 429 or 5xx answer, 0–5. Google Translate does not retry a 429: it asks its next address instead, and leaves the refusing one alone for a while (30 s, doubling to 10 min). |
+| `max_retries` | integer | `1` | Options → Internet | Retries after a connection error or a 429, 500, 502, 503 or 504 answer, 0–5 (a timeout is not repeated: the next service is asked instead). The wait before a retry is about 0.6 s, doubling, scaled by a random 50–100 %; a `Retry-After` of up to 5 s on a 429 or 503 is obeyed instead, and a longer one ends the retries. Cancelling the translation ends the wait. Google Translate does not retry a 429: it asks its next address instead, and leaves the refusing one alone for a while (30 s, doubling to 10 min). |
 | `user_agent` | string | `""` | file only | Sent with every request unless a service sets its own. Empty uses Glossa's default. |
 | `proxy` | table | | | See [`[network.proxy]`](#networkproxy). |
 

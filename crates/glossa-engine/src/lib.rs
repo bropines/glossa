@@ -982,7 +982,10 @@ impl Engine {
         let registry = self.registry();
         let config = self.config();
         let http = self.inner.http.read().clone();
-        let p = Pipeline { registry: &registry, config: &config, http: http.as_ref(), cancel };
+        // Every request of this job carries its cancel flag, so a wait
+        // before a retry ends when the job is cancelled.
+        let http = glossa_net::Cancellable::new(http.as_ref(), cancel.flag());
+        let p = Pipeline { registry: &registry, config: &config, http: &http, cancel };
         f(&p)
     }
 
@@ -1326,8 +1329,9 @@ impl Engine {
                 provider.options(),
                 cfg.services.options.get(&provider.info().id),
             );
+            let http = glossa_net::Cancellable::new(http.as_ref(), cancel.flag());
             let host = Host {
-                http: http.as_ref(),
+                http: &http,
                 options: &opts_values,
                 ui_language: LangId::ENGLISH,
                 preferred_domain: &cfg.advanced.preferred_domain,
@@ -1523,8 +1527,9 @@ impl Engine {
                 provider.options(),
                 cfg.services.options.get(&provider.info().id),
             );
+            let http = glossa_net::Cancellable::new(http.as_ref(), cancel.flag());
             let host = Host {
-                http: http.as_ref(),
+                http: &http,
                 options: &opts,
                 ui_language: LangId::ENGLISH,
                 preferred_domain: &cfg.advanced.preferred_domain,
