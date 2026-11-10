@@ -36,3 +36,34 @@ error_contains = "qwzxv"
 [[case.http]]
 url = "https://dic.academic.ru/"
 body = "<html>Ничего не найдено</html>"
+
+# -- errors: other statuses, and answers in a shape the module does not know --
+
+[[case]]
+name = "a rate limit is typed"
+op = "dictionary"
+text = "дом"
+from = "ru"
+to = "en"
+[case.expect]
+error = "rate_limited"
+
+[[case.http]]
+url = "https://dic.academic.ru/searchall.php"
+status = 429
+body = ''
+
+[[case]]
+name = "a server error is an http error"
+op = "dictionary"
+text = "дом"
+from = "ru"
+to = "en"
+[case.expect]
+error = "module"
+error_contains = "Academic answered 502"
+
+[[case.http]]
+url = "https://dic.academic.ru/searchall.php"
+status = 502
+body = '<html><body>Bad gateway</body></html>'

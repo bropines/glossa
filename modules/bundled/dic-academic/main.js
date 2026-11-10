@@ -14,6 +14,10 @@
 // dictionary it came from. The snippets are escaped twice (&amp;#160;), so
 // entities are decoded until none are left. No list means no results.
 
+// Well under Glossa's own budget for a call (30 s), so a stalled service
+// fails with its name on the error instead of the call being abandoned.
+var TIMEOUT = 15000;
+
 var SITE = "https://dic.academic.ru";
 
 function decode(s) {
@@ -38,13 +42,14 @@ function dictionary(req, host) {
   if (!word) throw new ModuleError("bad_request", "nothing to look up");
   var from = req.from === "auto" ? "xx" : req.from;
   var url = SITE + "/searchall.php?SWord=" + encodeURIComponent(word) + "&from=" + from + "&to=ru&did=&stype=";
-  var r = host.fetch(url);
+  var r = host.fetch(url, { timeout: TIMEOUT });
   if (r.status === 429) throw new ModuleError("rate_limited", "Academic asks to slow down");
   if (!r.ok) throw new ModuleError("http", "Academic answered " + r.status);
 
-  var start = r.body.indexOf('id="found_articles"');
+  var page = String(r.body || "");
+  var start = page.indexOf('id="found_articles"');
   if (start < 0) throw new ModuleError("not_found", word);
-  var list = r.body.slice(start);
+  var list = page.slice(start);
   var end = list.indexOf("</ul>");
   if (end > 0) list = list.slice(0, end);
 
@@ -70,3 +75,18 @@ function dictionary(req, host) {
   if (!count) throw new ModuleError("not_found", word);
   return article;
 }
+
+// A surprise in the shape of an answer (a field gone, a list that became an
+// object) means the service changed, not that the user did something wrong:
+// say so instead of letting a TypeError reach them.
+function guarded(service, method) {
+  return function (req, host) {
+    try {
+      return method(req, host);
+    } catch (e) {
+      if (e instanceof ModuleError) throw e;
+      throw new ModuleError("bad_response", service + " changed its answer: " + (e && e.message ? e.message : String(e)));
+    }
+  };
+}
+dictionary = guarded("Academic", dictionary);

@@ -45,3 +45,62 @@ error = "source_language"
 url = "https://api.lingvolive.com/"
 status = 500
 body = '{"message":"An error has occurred."}'
+
+# -- errors: other statuses, and answers in a shape the module does not know --
+
+[[case]]
+name = "a rate limit is typed"
+op = "dictionary"
+text = "lamp"
+from = "en"
+to = "ru"
+[case.expect]
+error = "rate_limited"
+
+[[case.http]]
+url = "https://api.lingvolive.com/Translation/tutor-cards"
+status = 429
+body = ''
+
+[[case]]
+name = "another status is an http error"
+op = "dictionary"
+text = "lamp"
+from = "en"
+to = "ru"
+[case.expect]
+error = "module"
+error_contains = "Lingvo answered 403"
+
+[[case.http]]
+url = "https://api.lingvolive.com/Translation/tutor-cards"
+status = 403
+body = '<html><body>Bad gateway</body></html>'
+
+[[case]]
+name = "an answer that is not a list of cards is a bad response"
+op = "dictionary"
+text = "lamp"
+from = "en"
+to = "ru"
+[case.expect]
+error = "bad_response"
+error_contains = "changed its answer"
+
+[[case.http]]
+url = "https://api.lingvolive.com/Translation/tutor-cards"
+body = '{"cards":[]}'
+
+[[case]]
+name = "cards in another shape are a bad response, not a crash"
+op = "dictionary"
+text = "lamp"
+from = "en"
+to = "ru"
+[case.expect]
+error = "bad_response"
+error_contains = "changed its answer"
+
+[[case.http]]
+url = "https://api.lingvolive.com/Translation/tutor-cards"
+body = '[{"heading":"lamp","translations":["лампа"]}]'

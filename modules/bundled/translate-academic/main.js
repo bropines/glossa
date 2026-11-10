@@ -14,6 +14,10 @@
 // first few dictionaries, with site-relative links made absolute. A word with
 // no entries gives a page without any translate_definition block.
 
+// Well under Glossa's own budget for a call (30 s), so a stalled service
+// fails with its name on the error instead of the call being abandoned.
+var TIMEOUT = 15000;
+
 var SITE = "https://translate.academic.ru";
 
 function dictionary(req, host) {
@@ -23,12 +27,12 @@ function dictionary(req, host) {
   var to = req.to === "auto" || req.to === from ? (from === "ru" ? "en" : "ru") : req.to;
   // The word is a path segment, so "/" in it must be escaped too.
   var url = SITE + "/" + encodeURIComponent(word) + "/" + from + "/" + to + "/";
-  var r = host.fetch(url);
+  var r = host.fetch(url, { timeout: TIMEOUT });
   if (r.status === 404) throw new ModuleError("not_found", word);
   if (r.status === 429) throw new ModuleError("rate_limited", "Academic asks to slow down");
   if (!r.ok) throw new ModuleError("http", "Academic answered " + r.status);
 
-  var page = r.body;
+  var page = String(r.body || "");
   var start = page.indexOf('<ul class="terms-list"');
   if (start < 0 || page.indexOf('class="translate_definition"') < 0) throw new ModuleError("not_found", word);
   // The list alone, and in it the first entries, found with indexOf: a
@@ -58,3 +62,18 @@ function dictionary(req, host) {
     .replace(/(href|src)="\/\//g, '$1="https://');
   return { headword: word, html: html, link: url };
 }
+
+// A surprise in the shape of an answer (a field gone, a list that became an
+// object) means the service changed, not that the user did something wrong:
+// say so instead of letting a TypeError reach them.
+function guarded(service, method) {
+  return function (req, host) {
+    try {
+      return method(req, host);
+    } catch (e) {
+      if (e instanceof ModuleError) throw e;
+      throw new ModuleError("bad_response", service + " changed its answer: " + (e && e.message ? e.message : String(e)));
+    }
+  };
+}
+dictionary = guarded("Academic", dictionary);

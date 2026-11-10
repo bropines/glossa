@@ -18,6 +18,10 @@
 //
 // The same word's other entries (house, verb) are fetched too, up to two.
 
+// Well under Glossa's own budget for a call (30 s), so a stalled service
+// fails with its name on the error instead of the call being abandoned.
+var TIMEOUT = 15000;
+
 var SITE = "https://www.oxfordlearnersdictionaries.com";
 
 function text(html) {
@@ -64,11 +68,11 @@ function between(html, start, stops) {
 }
 
 function load(host, url) {
-  var r = host.fetch(url);
+  var r = host.fetch(url, { timeout: TIMEOUT });
   if (r.status === 404) return null;
   if (r.status === 429) throw new ModuleError("rate_limited", "Oxford asks to slow down");
   if (!r.ok) throw new ModuleError("http", "Oxford answered " + r.status);
-  return r.body;
+  return String(r.body || "");
 }
 
 // One entry page → { headword, pos, pronunciations, senses: [{ def, examples }] }.
@@ -141,3 +145,18 @@ function dictionary(req, host) {
   if (!article.explanations.length) throw new ModuleError("not_found", word);
   return article;
 }
+
+// A surprise in the shape of an answer (a field gone, a list that became an
+// object) means the service changed, not that the user did something wrong:
+// say so instead of letting a TypeError reach them.
+function guarded(service, method) {
+  return function (req, host) {
+    try {
+      return method(req, host);
+    } catch (e) {
+      if (e instanceof ModuleError) throw e;
+      throw new ModuleError("bad_response", service + " changed its answer: " + (e && e.message ? e.message : String(e)));
+    }
+  };
+}
+dictionary = guarded("Oxford", dictionary);

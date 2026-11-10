@@ -29,3 +29,34 @@ error_contains = "дом"
 [[case.http]]
 url = "https://www.multitran.com/m.exe"
 body = "<html>nothing here</html>"
+
+# -- errors: other statuses, and answers in a shape the module does not know --
+
+[[case]]
+name = "a rate limit is typed"
+op = "dictionary"
+text = "lamp"
+from = "en"
+to = "ru"
+[case.expect]
+error = "rate_limited"
+
+[[case.http]]
+url = "https://www.multitran.com/m.exe"
+status = 429
+body = ''
+
+[[case]]
+name = "a server error is an http error"
+op = "dictionary"
+text = "lamp"
+from = "en"
+to = "ru"
+[case.expect]
+error = "module"
+error_contains = "Multitran answered 503"
+
+[[case.http]]
+url = "https://www.multitran.com/m.exe"
+status = 503
+body = '<html><body>Bad gateway</body></html>'
