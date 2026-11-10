@@ -1,0 +1,17 @@
+# What can be checked without Google: the module starts in its own
+# environment with chrome-lens-py imported, and a connection that cannot be
+# made comes back as a typed error. The proxy below is this machine's
+# discard port, where nothing listens, so the case never leaves the
+# computer. Recognition itself is in live.toml.
+#
+# The module's packages must be installed: `glossa-cli module test
+# --download` gets them (and a Python, if need be) first.
+
+[[case]]
+name = "an unreachable proxy is a network error"
+op = "ocr"
+image = { width = 320, height = 80, lines = 1 }
+options = { proxy = "http://127.0.0.1:9" }
+[case.expect]
+error = "network"
+error_contains = "Google Lens could not be reached"
