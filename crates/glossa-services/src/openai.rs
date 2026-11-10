@@ -699,6 +699,13 @@ impl Provider for OpenAi {
         &self.options
     }
 
+    /// An endpoint on this computer (Ollama, LM Studio, a llama.cpp server)
+    /// is local; every request goes to the one base URL.
+    fn is_local(&self, options: &glossa_modules::OptionValues) -> bool {
+        let base = options.get("base_url").and_then(|v| v.as_str()).unwrap_or("");
+        glossa_net::is_loopback_url(&api_root(base, self.preset.base_url))
+    }
+
     fn translate(&self, host: &Host, req: &TranslateRequest) -> Result<Translation> {
         match self.translate_once(host, req) {
             Err(e) if self.drop_effort_after(host, &model_for(host, self.preset), &e) => self.translate_once(host, req),

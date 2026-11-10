@@ -3,10 +3,27 @@
 //! preset holds).
 //!
 //! The engine decides what counts as a secret here, because only it knows
-//! the modules' declared option kinds; a preset never leaves with one. An
-//! imported preset is held to more: it keeps only options the installed
-//! module declares, and never an address (a URL, endpoint or host), since
-//! applying it would send the keys already stored for that service there.
+//! the modules' declared option kinds; a preset never leaves with one. Nor
+//! does it carry a command (an option whose value is run as a program):
+//! none is saved, exported, imported, or applied from a preset already in
+//! the settings.
+//!
+//! An imported preset is someone else's file, and is held to more:
+//!
+//! - it keeps only options the installed module declares;
+//! - never an address (a URL, endpoint or host), since applying it would
+//!   send the keys already stored for that service there;
+//! - never a path or anything named like a program, an interpreter or a
+//!   script, and never raw request headers or body fields;
+//! - it cannot put a provider that runs a command (the external OCR
+//!   command) into a role unless the user set that command up already;
+//! - it can make language detection more private (`detect = "offline"`),
+//!   never less;
+//! - anything else in the file (a `[server]`, `[modules]` or `[network]`
+//!   table, say) is not a preset's to set, and is reported and ignored.
+//!
+//! [`PresetReport`] lists what was left out and what applying the preset
+//! will change, for the front end to show.
 //!
 //! Every change emits [`Event::PresetsChanged`], so a window holding an
 //! unsaved copy of the settings (Options) can take it in.
@@ -14,8 +31,9 @@
 use std::path::Path;
 use std::sync::Arc;
 
+use glossa_core::config::DetectMode;
 use glossa_core::preset::{self, Preset};
-use glossa_core::{Error, LangPair, Result};
+use glossa_core::{Config, Error, LangPair, Result};
 use glossa_modules::OptionKind;
 use serde::{Deserialize, Serialize};
 
@@ -50,10 +68,37 @@ pub struct PresetReport {
     /// Credentials left out, as `module.key` (saving, importing a file
     /// someone put a key into).
     pub dropped_secrets: Vec<String>,
-    /// Options an import left out, as `module.key`: addresses (URLs,
-    /// endpoints, hosts), and options no installed module declares.
+    /// Options left out, as `module.key`. Always: commands (options whose
+    /// value is run as a program). From an import also: addresses (URLs,
+    /// endpoints, hosts), paths, raw request headers and fields, and
+    /// options no installed module declares.
     #[serde(default)]
     pub dropped_options: Vec<String>,
+    /// What an imported file asked for and was refused, as `key = value`:
+    /// a role for a provider that runs a command the user has not set up
+    /// (`ocr = command-ocr`), less private language detection
+    /// (`detect = service`), and settings that are not a preset's
+    /// (`server`, `modules`, `network`…).
+    #[serde(default)]
+    pub blocked: Vec<String>,
+    /// What applying the preset changes, compared with the settings now
+    /// (for an import: what it will change once applied).
+    #[serde(default)]
+    pub changes: Vec<PresetChange>,
+}
+
+/// One setting a preset changes.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PresetChange {
+    /// `active`, `enabled`, `dictionary_active`, `dictionary_enabled`,
+    /// `tts`, `ocr`, `pair`, `detect`, or `options.MODULE.KEY`.
+    pub what: String,
+    pub from: String,
+    pub to: String,
+    /// The new value brings in a provider that sends text, pictures or
+    /// speech off this computer and was not in that role before.
+    #[serde(default)]
+    pub online: bool,
 }
 
 /// The largest preset file read, in bytes. Real ones are a few hundred.
@@ -103,6 +148,102 @@ impl Engine {
         declared || preset::looks_secret(key)
     }
 
+    /// Whether an option's value is run as a program: declared as a
+    /// command, or named like one (a declared path is a path: kept in the
+    /// user's own presets, left out of imported ones).
+    fn option_is_command(&self, module: &str, key: &str) -> bool {
+        let registry = self.registry();
+        let kind = registry.get(module).and_then(|p| p.options().iter().find(|s| s.key == key).map(|s| s.kind.clone()));
+        match kind {
+            Some(OptionKind::Command) => true,
+            Some(OptionKind::File) => false,
+            _ => preset::looks_like_command(key),
+        }
+    }
+
+    /// Remove every command from a preset's options; returns what was
+    /// removed, as `module.key`.
+    fn strip_commands(&self, p: &mut Preset) -> Vec<String> {
+        let mut dropped = Vec::new();
+        for (module, values) in p.options.iter_mut() {
+            values.retain(|key, _| {
+                let command = self.option_is_command(module, key);
+                if command {
+                    dropped.push(format!("{module}.{key}"));
+                }
+                !command
+            });
+        }
+        p.options.retain(|_, v| !v.is_empty());
+        dropped
+    }
+
+    /// Whether provider `id` runs a program named in its settings, and the
+    /// user has not named one: the provider is not in use in any role and
+    /// none of its command settings is filled in.
+    fn runs_a_command_not_set_up(&self, id: &str, cfg: &Config) -> bool {
+        let registry = self.registry();
+        let Some(provider) = registry.get(id) else { return false };
+        let commands: Vec<&str> =
+            provider.options().iter().filter(|s| s.kind == OptionKind::Command).map(|s| s.key.as_str()).collect();
+        if commands.is_empty() {
+            return false;
+        }
+        let set_up = commands.iter().any(|key| {
+            cfg.services.option(id, key).and_then(|v| v.as_str()).is_some_and(|v| !v.trim().is_empty())
+        });
+        !set_up
+    }
+
+    /// What applying `p` changes in `cfg`.
+    fn changes(&self, p: &Preset, cfg: &Config) -> Vec<PresetChange> {
+        let registry = self.registry();
+        let mut after = cfg.clone();
+        p.apply_to(&mut after, &|id| registry.get(id).is_some());
+        let is_online = |id: &str| {
+            registry.get(id).is_some_and(|prov| {
+                let options = glossa_modules::provider::resolve_options(prov.options(), after.services.options.get(id));
+                !prov.is_local(&options)
+            })
+        };
+        let mut out = Vec::new();
+        let mut one = |what: &str, from: &str, to: &str, online: bool| {
+            if from != to {
+                out.push(PresetChange { what: what.to_owned(), from: from.to_owned(), to: to.to_owned(), online });
+            }
+        };
+        let (b, a) = (&cfg.services, &after.services);
+        let list = |before: &[String], now: &[String]| now.iter().any(|id| !before.contains(id) && is_online(id));
+        one("active", &b.active, &a.active, false);
+        one("enabled", &b.enabled.join(", "), &a.enabled.join(", "), list(&b.enabled, &a.enabled));
+        one("dictionary_active", &b.dictionary_active, &a.dictionary_active, false);
+        one(
+            "dictionary_enabled",
+            &b.dictionary_enabled.join(", "),
+            &a.dictionary_enabled.join(", "),
+            list(&b.dictionary_enabled, &a.dictionary_enabled),
+        );
+        one("tts", &b.tts, &a.tts, is_online(&a.tts));
+        one("ocr", &cfg.ocr.provider, &after.ocr.provider, is_online(&after.ocr.provider));
+        let pair = |p: LangPair| format!("{} > {}", p.from.bcp47(), p.to.bcp47());
+        one("pair", &pair(cfg.general.pair), &pair(after.general.pair), false);
+        one("detect", cfg.general.detect.name(), after.general.detect.name(), after.general.detect != DetectMode::Offline);
+        for (module, values) in &p.options {
+            for (key, value) in values {
+                let show = |v: Option<&serde_json::Value>| match v {
+                    Some(serde_json::Value::String(s)) => s.clone(),
+                    Some(v) => v.to_string(),
+                    None => String::new(),
+                };
+                let before = show(b.option(module, key));
+                if a.option(module, key) == Some(value) {
+                    one(&format!("options.{module}.{key}"), &before, &show(Some(value)), false);
+                }
+            }
+        }
+        out
+    }
+
     /// Save the current services as a preset called `name`, replacing a
     /// preset of the user's with that name. `with_pair` records the
     /// language pair too.
@@ -114,6 +255,7 @@ impl Engine {
         let cfg = self.config();
         let mut p = Preset::capture(&name, &cfg, with_pair, &|_, _| false);
         let dropped = p.strip_secrets(&|m, k| self.option_is_secret(m, k));
+        let dropped_options = self.strip_commands(&mut p);
         self.update_config(|c| {
             match c.presets.iter_mut().find(|q| preset::same_name(&q.name, &name)) {
                 Some(q) => *q = p.clone(),
@@ -122,16 +264,24 @@ impl Engine {
             c.services.preset = p.name.clone();
         })?;
         self.presets_changed(None);
-        Ok(PresetReport { name, dropped_secrets: dropped, ..PresetReport::default() })
+        Ok(PresetReport { name, dropped_secrets: dropped, dropped_options, ..PresetReport::default() })
     }
 
     /// Apply a preset. Services it names that are not installed are skipped
     /// and listed in the report. Writes the settings file, so front ends
     /// with a UI call [`Engine::apply_preset_async`].
     pub fn apply_preset(&self, name: &str) -> Result<PresetReport> {
-        let (p, _) = self.require_preset(name)?;
+        let (mut p, _) = self.require_preset(name)?;
+        // A preset never sets a command, wherever it came from: one stored
+        // by an older version's import, or pasted into the settings file,
+        // is applied without it.
+        let dropped_options = self.strip_commands(&mut p);
+        if !dropped_options.is_empty() {
+            tracing::warn!(preset = %p.name, dropped = ?dropped_options, "commands in the preset were not applied");
+        }
         let registry = self.registry();
         let available = |id: &str| registry.get(id).is_some();
+        let changes = self.changes(&p, &self.config());
         let mut applied = Default::default();
         self.update_config(|c| applied = p.apply_to(c, &available))?;
         if !applied.missing.is_empty() {
@@ -139,17 +289,21 @@ impl Engine {
         }
         let name = p.name.clone();
         self.presets_changed(Some(p));
-        Ok(PresetReport { name, missing: applied.missing, ..PresetReport::default() })
+        Ok(PresetReport { name, missing: applied.missing, dropped_options, changes, ..PresetReport::default() })
     }
 
     /// [`Engine::apply_preset`] on a worker thread; the outcome comes back
     /// as [`Event::PresetApplied`].
     pub fn apply_preset_async(&self, name: String) {
         let engine = self.clone();
-        self.spawn("preset", move || {
-            let result = engine.apply_preset(&name).map_err(Arc::new);
-            engine.emit(Event::PresetApplied { result });
-        });
+        self.spawn_or(
+            "preset",
+            move || {
+                let result = engine.apply_preset(&name).map_err(Arc::new);
+                engine.emit(Event::PresetApplied { result });
+            },
+            |e| self.emit(Event::PresetApplied { result: Err(Arc::new(e)) }),
+        );
     }
 
     /// The preset after the current one (the first when none is current),
@@ -229,6 +383,7 @@ impl Engine {
         // Saved presets hold no secrets already; this catches one a user
         // typed into config.toml by hand.
         p.strip_secrets(&|m, k| self.option_is_secret(m, k));
+        self.strip_commands(&mut p);
         Ok(p.to_file())
     }
 
@@ -240,10 +395,12 @@ impl Engine {
     }
 
     /// Add a preset from an exported file's text. A name already taken
-    /// gets a number. Of the module options, only those the installed
-    /// module declares are kept, and of those no credential and no address
-    /// (both listed in the report). Services it names that are not
-    /// installed are listed; it is stored anyway, so it works once they are.
+    /// gets a number. The file is someone else's, so it is cut down to what
+    /// a shared preset may decide (the module documentation above lists
+    /// what goes); the report says what was left out, what was refused and
+    /// what applying it will change. Nothing is applied here. Services it
+    /// names that are not installed are listed; it is stored anyway, so it
+    /// works once they are.
     pub fn import_preset_text(&self, text: &str) -> Result<PresetReport> {
         if text.len() as u64 > MAX_PRESET_FILE {
             return Err(Error::Config(format!("a preset file is at most {} KB", MAX_PRESET_FILE / 1024)));
@@ -251,8 +408,47 @@ impl Engine {
         let mut p = Preset::from_file(text)?;
         let name = check_name(&p.name)?;
         let registry = self.registry();
+        let cfg = self.config();
         let mut dropped_secrets = Vec::new();
         let mut dropped_options = Vec::new();
+        let mut blocked = foreign_keys(text);
+
+        // A provider that runs a command stays out of every role unless the
+        // user set that command up: the file must not be what starts it.
+        let mut refuse = |role: &str, id: &str| -> bool {
+            let refused = self.runs_a_command_not_set_up(id, &cfg);
+            if refused {
+                blocked.push(format!("{role} = {id}"));
+            }
+            refused
+        };
+        for (role, id) in [
+            ("ocr", &mut p.ocr),
+            ("tts", &mut p.tts),
+            ("active", &mut p.active),
+            ("dictionary_active", &mut p.dictionary_active),
+        ] {
+            if !id.is_empty() && refuse(role, id) {
+                id.clear();
+            }
+        }
+        for (role, ids) in [
+            ("enabled", &mut p.enabled),
+            ("order", &mut p.order),
+            ("dictionary_enabled", &mut p.dictionary_enabled),
+            ("dictionary_order", &mut p.dictionary_order),
+        ] {
+            ids.retain(|id| !refuse(role, id));
+        }
+        blocked.dedup();
+        // Detection may become more private, never less.
+        if let Some(mode) = p.detect.filter(|m| *m != DetectMode::Offline) {
+            if mode != cfg.general.detect {
+                blocked.push(format!("detect = {}", mode.name()));
+            }
+            p.detect = None;
+        }
+
         for (module, values) in p.options.iter_mut() {
             let specs = registry.get(module).map(|m| m.options().to_vec()).unwrap_or_default();
             values.retain(|key, value| {
@@ -268,7 +464,12 @@ impl Engine {
                     dropped_secrets.push(label);
                     return false;
                 }
-                if spec.kind == OptionKind::Url || preset::looks_like_address(key, value) {
+                if spec.kind.is_executable()
+                    || preset::looks_like_command(key)
+                    || preset::looks_like_raw_request(key)
+                    || spec.kind == OptionKind::Url
+                    || preset::looks_like_address(key, value)
+                {
                     dropped_options.push(label);
                     return false;
                 }
@@ -279,12 +480,13 @@ impl Engine {
         p.name = check_name(&preset::unique_name(&name, &|n| self.preset(n).is_some()))?;
         let missing = p.missing(&|id| registry.get(id).is_some());
         let name = p.name.clone();
-        if !dropped_options.is_empty() {
-            tracing::info!(preset = %name, dropped = ?dropped_options, "import left options out");
+        if !dropped_options.is_empty() || !blocked.is_empty() {
+            tracing::info!(preset = %name, dropped = ?dropped_options, blocked = ?blocked, "import left settings out");
         }
+        let changes = self.changes(&p, &cfg);
         self.update_config(|c| c.presets.push(p))?;
         self.presets_changed(None);
-        Ok(PresetReport { name, missing, dropped_secrets, dropped_options })
+        Ok(PresetReport { name, missing, dropped_secrets, dropped_options, blocked, changes })
     }
 
     /// Import a preset from a file of at most [`MAX_PRESET_FILE`] bytes.
@@ -306,6 +508,31 @@ impl Engine {
     fn presets_changed(&self, applied: Option<Preset>) {
         self.emit(Event::PresetsChanged { applied: applied.map(Arc::new) });
     }
+}
+
+/// The top-level keys of a preset file that are not a preset's: tables
+/// lifted from `config.toml` (`server`, `modules`, `network`, `classic`…),
+/// or anything a newer or a made-up format adds. They are never read; they
+/// are reported so that a file asking for more than a preset may is seen
+/// to have asked.
+fn foreign_keys(text: &str) -> Vec<String> {
+    const KNOWN: [&str; 13] = [
+        "glossa_preset",
+        "name",
+        "order",
+        "enabled",
+        "active",
+        "dictionary_order",
+        "dictionary_enabled",
+        "dictionary_active",
+        "tts",
+        "ocr",
+        "pair",
+        "detect",
+        "options",
+    ];
+    let Ok(table) = toml::from_str::<toml::Table>(text) else { return Vec::new() };
+    table.keys().filter(|k| !KNOWN.contains(&k.as_str())).cloned().collect()
 }
 
 /// A secret, or a type from a newer format whose nature is unknown: never
@@ -441,6 +668,200 @@ mod tests {
         let before = e.config().services.options.clone();
         e.apply_preset("Shared").unwrap();
         assert_eq!(e.config().services.options, before, "no option changed");
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// The attack the audit reproduced: a shared preset that sets the
+    /// external OCR command and switches OCR to it, so the next text
+    /// recognition runs a program of the file's choosing.
+    #[cfg(unix)]
+    #[test]
+    fn an_imported_preset_cannot_run_a_program() {
+        let (e, dir) = engine("command");
+        std::fs::create_dir_all(&dir).unwrap();
+        let marker = dir.join("pwned");
+        let before = e.config();
+        let file = format!(
+            "glossa_preset = 1\nname = \"Fast OCR\"\nocr = \"command-ocr\"\n\
+             [options.command-ocr]\ncommand = \"sh -c 'touch {}' {{image}}\"\ntimeout_secs = 5\nauto_lang3 = \"deu\"\n",
+            marker.display()
+        );
+        let report = e.import_preset_text(&file).unwrap();
+        assert_eq!(report.dropped_options, vec!["command-ocr.command".to_owned()], "{report:?}");
+        assert_eq!(report.blocked, vec!["ocr = command-ocr".to_owned()], "{report:?}");
+        assert!(report.changes.iter().all(|c| c.what != "ocr"), "{report:?}");
+        let (stored, _) = e.preset("Fast OCR").unwrap();
+        assert!(stored.ocr.is_empty());
+        assert!(!stored.options.get("command-ocr").is_some_and(|o| o.contains_key("command")));
+
+        e.apply_preset("Fast OCR").unwrap();
+        let cfg = e.config();
+        assert_eq!(cfg.ocr.provider, before.ocr.provider, "OCR was not switched");
+        assert_eq!(cfg.services.option("command-ocr", "command"), None);
+        // Harmless settings of the same module still come through.
+        assert_eq!(cfg.services.option("command-ocr", "auto_lang3"), Some(&json!("deu")));
+        let png = vec![0x89, b'P', b'N', b'G', 0x0D, 0x0A, 0x1A, 0x0A];
+        let _ = e.recognize_using("command-ocr", png, glossa_core::LangId::ENGLISH, None);
+        assert!(!marker.exists(), "the preset's program ran");
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// A preset already in the settings (imported by an older version, or
+    /// pasted into config.toml) does not get its command applied either,
+    /// and the user's own command survives every preset.
+    #[test]
+    fn no_preset_sets_or_carries_a_command() {
+        let (e, dir) = engine("command-apply");
+        let options = |command: &str| -> preset::PresetOptions {
+            [("command-ocr".to_owned(), [("command".to_owned(), json!(command))].into_iter().collect())]
+                .into_iter()
+                .collect()
+        };
+        e.update_config(|c| {
+            c.services.set_option("command-ocr", "command", json!("tesseract {image} -"));
+            c.presets.push(Preset {
+                name: "Old import".into(),
+                ocr: "command-ocr".into(),
+                options: options("evil {image}"),
+                ..Preset::default()
+            });
+        })
+        .unwrap();
+        let report = e.apply_preset("Old import").unwrap();
+        assert_eq!(report.dropped_options, vec!["command-ocr.command".to_owned()]);
+        let cfg = e.config();
+        assert_eq!(cfg.services.option("command-ocr", "command"), Some(&json!("tesseract {image} -")));
+        // The user set the command up, so their own preset may choose it.
+        assert_eq!(cfg.ocr.provider, "command-ocr");
+
+        let saved = e.save_preset("Mine", false).unwrap();
+        assert!(saved.dropped_options.contains(&"command-ocr.command".to_owned()), "{saved:?}");
+        let text = e.export_preset_text("Mine").unwrap();
+        assert!(!text.contains("tesseract {image}"), "{text}");
+        assert!(text.contains("ocr = \"command-ocr\""), "{text}");
+
+        // With the command set up, a shared preset may select the engine
+        // (it runs the user's command), but still not replace the command.
+        let report = e
+            .import_preset_text("name = \"Shared\"\nocr = \"command-ocr\"\n[options.command-ocr]\ncommand = \"evil\"\n")
+            .unwrap();
+        assert!(report.blocked.is_empty(), "{report:?}");
+        assert_eq!(report.dropped_options, vec!["command-ocr.command".to_owned()]);
+        assert_eq!(e.preset("Shared").unwrap().0.ocr, "command-ocr");
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// A module's own program-like settings: declared as `command` or
+    /// `file`, or only named like one.
+    #[test]
+    fn an_imported_preset_sets_no_path_interpreter_or_raw_request_of_a_module() {
+        let (e, dir) = engine("module-commands");
+        let m = e.paths().user_module_dir().join("runner");
+        std::fs::create_dir_all(&m).unwrap();
+        let option = |key: &str, kind: &str| format!("[[options]]\nkey = \"{key}\"\ntype = \"{kind}\"\nlabel = \"{key}\"\n");
+        let manifest = format!(
+            "capabilities = [\"translate\"]\n[module]\nid = \"runner\"\nname = \"Runner\"\nruntime = \"js\"\n{}{}{}{}{}{}{}",
+            option("launcher", "command"),
+            option("model", "file"),
+            option("python_path", "text"),
+            option("player_cmd", "text"),
+            option("browser", "text"),
+            option("extra_headers", "multiline"),
+            option("style", "text"),
+        );
+        std::fs::write(m.join("module.toml"), manifest).unwrap();
+        std::fs::write(m.join("main.js"), "function translate(req) { return req.text; }").unwrap();
+        e.reload_modules();
+        assert!(e.registry().get("runner").is_some(), "{:?}", e.module_status().failed);
+        let report = e
+            .import_preset_text(
+                "name = \"R\"\nenabled = [\"runner\", \"google\"]\nactive = \"runner\"\n[options.runner]\nlauncher = \"/tmp/x.sh\"\n\
+                 model = \"/tmp/evil.bin\"\npython_path = \"/tmp/python\"\nplayer_cmd = \"sh -c x\"\nbrowser = \"/tmp/b\"\n\
+                 extra_headers = \"X-Forwarded-For: 1\"\nstyle = \"formal\"\n",
+            )
+            .unwrap();
+        for key in ["launcher", "model", "python_path", "player_cmd", "browser", "extra_headers"] {
+            assert!(report.dropped_options.contains(&format!("runner.{key}")), "{key}: {report:?}");
+        }
+        let (p, _) = e.preset("R").unwrap();
+        assert_eq!(p.options["runner"].keys().collect::<Vec<_>>(), vec!["style"]);
+        // It declares a command the user never filled in: no role for it.
+        assert!(report.blocked.contains(&"active = runner".to_owned()), "{report:?}");
+        assert!(report.blocked.contains(&"enabled = runner".to_owned()), "{report:?}");
+        assert_eq!(p.enabled, vec!["google".to_owned()]);
+        assert!(p.active.is_empty());
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// What else a file might ask for that is not a preset's to give.
+    #[test]
+    fn an_imported_preset_changes_nothing_outside_a_presets_remit() {
+        let (e, dir) = engine("foreign");
+        let before = e.config();
+        let report = e
+            .import_preset_text(
+                "glossa_preset = 1\nname = \"Sneaky\"\ndetect = \"service\"\n\
+                 [server]\nenabled = true\nbind = \"0.0.0.0\"\ntoken = \"known\"\n\
+                 [modules]\nallow_native = true\nallow_legacy_scripts = true\ntrusted = [\"evil\"]\ndirs = [\"/tmp/evil\"]\n\
+                 [network]\noffline_only = false\n[network.proxy]\nmode = \"manual\"\nhost = \"evil.example\"\n\
+                 [classic]\npath = \"/tmp/evil\"\n[general]\nsecret_storage = \"file\"\n",
+            )
+            .unwrap();
+        for key in ["server", "modules", "network", "classic", "general"] {
+            assert!(report.blocked.contains(&key.to_owned()), "{key}: {report:?}");
+        }
+        e.apply_preset("Sneaky").unwrap();
+        let after = e.config();
+        assert_eq!(after.server, before.server);
+        assert_eq!(after.modules, before.modules);
+        assert_eq!(after.network, before.network);
+        assert_eq!(after.classic, before.classic);
+        assert_eq!(after.ocr, before.ocr);
+        assert_eq!(after.general.secret_storage, before.general.secret_storage);
+        assert_eq!(after.general.detect, before.general.detect, "detection did not become less private");
+
+        // `ocr` as a table is not a preset: the file is refused whole.
+        assert!(e.import_preset_text("name = \"T\"\n[ocr]\nprovider = \"lens\"\n").is_err());
+
+        // More private detection is a preset's to ask for.
+        e.update_config(|c| c.general.detect = DetectMode::Service).unwrap();
+        let report = e.import_preset_text("name = \"Quiet\"\ndetect = \"offline\"\n").unwrap();
+        assert!(report.blocked.is_empty(), "{report:?}");
+        assert!(report.changes.iter().any(|c| c.what == "detect" && c.to == "offline" && !c.online), "{report:?}");
+        let report = e.import_preset_text("name = \"Loud\"\ndetect = \"offline_then_service\"\n").unwrap();
+        assert_eq!(report.blocked, vec!["detect = offline_then_service".to_owned()]);
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn an_import_says_what_applying_it_will_change() {
+        let (e, dir) = engine("changes");
+        e.update_config(|c| {
+            c.ocr.provider = "tesseract".into();
+            c.services.tts = "system-tts".into();
+            c.services.enabled = vec!["lingva".into()];
+            c.services.active = "lingva".into();
+            c.services.set_option("deepl", "formality", json!("more"));
+        })
+        .unwrap();
+        let report = e
+            .import_preset_text(
+                "name = \"Shared\"\nenabled = [\"lingva\", \"google\"]\nactive = \"google\"\nocr = \"lens\"\ntts = \"google\"\n\
+                 [options.deepl]\nformality = \"less\"\n",
+            )
+            .unwrap();
+        let change = |what: &str| report.changes.iter().find(|c| c.what == what).unwrap_or_else(|| panic!("{what}: {report:?}"));
+        assert_eq!((change("ocr").from.as_str(), change("ocr").to.as_str()), ("tesseract", "lens"));
+        assert!(change("ocr").online, "pictures would start going to Google");
+        assert!(change("tts").online);
+        assert_eq!(change("active").to, "google");
+        assert!(change("enabled").online && change("enabled").to.contains("google"));
+        assert_eq!((change("options.deepl.formality").from.as_str(), change("options.deepl.formality").to.as_str()), ("more", "less"));
+        // Nothing was applied by importing.
+        assert_eq!(e.config().ocr.provider, "tesseract");
+        // Applying reports the same.
+        let applied = e.apply_preset("Shared").unwrap();
+        assert!(applied.changes.iter().any(|c| c.what == "ocr" && c.to == "lens"), "{applied:?}");
         std::fs::remove_dir_all(&dir).ok();
     }
 

@@ -26,7 +26,7 @@ impl Default for WindowsOcr {
 
 impl WindowsOcr {
     pub fn new() -> Self {
-        let mut info = ProviderInfo::new(WINDOWS_OCR_ID, NAME, Capabilities::OCR);
+        let mut info = ProviderInfo::new(WINDOWS_OCR_ID, NAME, Capabilities::OCR | Capabilities::OFFLINE);
         info.description =
             "The text recognition built into Windows 10 and 11. Offline; reads the languages whose OCR pack is installed."
                 .into();

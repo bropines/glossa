@@ -10,12 +10,20 @@
 //!    first. So a Russian speaker can select English or Russian text anywhere
 //!    and always get the other one, with no language menu touched.
 //! 4. **Translate**, moving on to the next provider when one fails in a way
-//!    another might not (a timeout, a rate limit — not a missing key).
+//!    another might not (a timeout, a rate limit — not a missing key). Text
+//!    longer than the provider takes goes in pieces cut at paragraph and
+//!    sentence ends, and comes back joined.
 //! 5. Optionally **translate back**, as a check that the meaning survived.
+//!
+//! Who may see the text is decided here and nowhere else. The language is
+//! detected on this computer or by a service the user enabled, never by
+//! "whatever can" (`[general] detect`); and with `[network] offline_only`
+//! only providers that stay on this computer are candidates at all.
 
 use std::sync::Arc;
 use std::time::Instant;
 
+use glossa_core::config::DetectMode;
 use glossa_core::{
     text, Capabilities, Config, Detection, Error, LangId, LangPair, Result, TranslateRequest, Translation,
 };
@@ -66,7 +74,16 @@ pub struct TranslationOutcome {
     pub back: Option<Translation>,
     /// Providers that were tried and failed before the one that answered.
     pub failed: Vec<(String, String)>,
+    /// The end of the text was not translated: it is longer than the
+    /// provider takes even in [`MAX_CHUNKS`] pieces. Front ends say so,
+    /// because the translation looks complete.
+    pub truncated: bool,
 }
+
+/// The most pieces one text is sent in. A provider with a small limit
+/// (MyMemory takes 500 characters) would otherwise get hundreds of requests
+/// for one long selection and answer with a ban.
+pub const MAX_CHUNKS: usize = 40;
 
 impl TranslationOutcome {
     /// The result as the command line (`--json`) and the control API give
@@ -83,6 +100,7 @@ impl TranslationOutcome {
             back: self.back.as_ref().map(|b| b.text.clone()),
             failed: self.failed.clone(),
             elapsed_ms: self.translation.elapsed_ms,
+            truncated: self.truncated,
         }
     }
 }
@@ -111,6 +129,9 @@ pub struct TranslateReport {
     pub failed: Vec<(String, String)>,
     /// How long the answering service took.
     pub elapsed_ms: u64,
+    /// `true` when the end of the text was left out: it was too long for
+    /// the service even in pieces.
+    pub truncated: bool,
 }
 
 /// One pass through the pipeline. Borrowed state only: build one per call.
@@ -135,9 +156,13 @@ impl Pipeline<'_> {
         Ok(t)
     }
 
-    /// The providers to try for `cap`, in order: the preferred one, then the
-    /// enabled ones in the user's order, then (when `include_all`) every other
-    /// capable provider.
+    /// The providers to try for `cap`, in order: the preferred one, then
+    /// (with fail-over) the enabled ones in the user's order. Nothing else:
+    /// a provider the user did not choose or enable never sees the text.
+    /// Only a configuration that names no service at all (a first run
+    /// before the lists are filled) gets every capable provider, and never
+    /// for language detection. With "offline only" on, providers that leave
+    /// this computer are left out.
     pub fn candidates(&self, cap: Capabilities, preferred: Option<&str>, fail_over: bool) -> Vec<Arc<dyn Provider>> {
         let s = &self.config.services;
         let (active, enabled, order) = if cap == Capabilities::DICTIONARY {
@@ -162,12 +187,35 @@ impl Pipeline<'_> {
         }
         let mut out: Vec<Arc<dyn Provider>> =
             ids.iter().filter_map(|id| self.registry.get(id)).filter(|p| p.info().capabilities.contains(cap)).collect();
-        if out.is_empty() {
-            // Nothing configured can do it: fall back to anything that can,
-            // rather than failing a fresh install whose config names nothing.
+        if out.is_empty() && enabled.is_empty() && cap != Capabilities::DETECT_LANGUAGE {
+            // Nothing is configured: anything that can, rather than failing
+            // a fresh install whose config names nothing. Detection never
+            // gets this: the text would go to services nobody chose.
             out = self.registry.with_capability(cap);
         }
+        if self.config.network.offline_only {
+            out.retain(|p| self.offline_refusal(p.as_ref()).is_none());
+        }
         out
+    }
+
+    /// With "offline only" on, why `provider` may not be used: it does not
+    /// stay on this computer. `None` when it may (or the switch is off).
+    pub fn offline_refusal(&self, provider: &dyn Provider) -> Option<Error> {
+        if !self.config.network.offline_only || provider.is_local(&self.options_for(provider)) {
+            return None;
+        }
+        Some(Error::OfflineOnly(format!("{} is an online service", provider.info().name)))
+    }
+
+    /// The error for a job no candidate is left for: "offline only" when
+    /// that is why, else that nothing can do `what`.
+    pub(crate) fn no_provider(&self, what: &'static str) -> Error {
+        if self.config.network.offline_only {
+            Error::OfflineOnly(format!("no enabled service for {what} works on this computer alone"))
+        } else {
+            Error::NoProvider(what)
+        }
     }
 
     pub(crate) fn host<'b>(&'b self, options: &'b OptionValues) -> Host<'b> {
@@ -189,9 +237,20 @@ impl Pipeline<'_> {
         )
     }
 
-    /// Detect the language of `text` with the first provider that can.
+    /// Detect the language of `text` as `[general] detect` says: with the
+    /// detector built into Glossa, with the first enabled service that can,
+    /// or with the built-in one first and a service for what it is unsure
+    /// of. The text never goes to a service the user did not enable.
     pub fn detect(&self, text: &str, preferred: Option<&str>) -> Result<Detection> {
         self.detect_noting(text, preferred, &mut Vec::new())
+    }
+
+    /// What the built-in detector says, with the user's two languages as
+    /// the tie-breakers.
+    fn detect_offline(&self, text: &str) -> Option<crate::langdetect::Guess> {
+        let g = &self.config.general;
+        let hints: Vec<LangId> = [g.first_language, g.second_language].into_iter().filter(|l| l.is_language()).collect();
+        crate::langdetect::detect(text, &hints)
     }
 
     /// [`detect`](Self::detect), adding to `unreachable` each provider that
@@ -203,7 +262,15 @@ impl Pipeline<'_> {
         preferred: Option<&str>,
         unreachable: &mut Vec<(String, String)>,
     ) -> Result<Detection> {
-        let mut last = Error::NoProvider("language detection");
+        let mode = self.config.general.detect;
+        let offline = if mode == DetectMode::Service { None } else { self.detect_offline(text) };
+        let usable = offline.map(|g| g.detection).filter(Detection::is_usable);
+        match (mode, offline) {
+            (DetectMode::Offline, _) => return usable.ok_or(Error::LanguageNotDetected),
+            (DetectMode::OfflineThenService, Some(g)) if g.sure && g.detection.is_usable() => return Ok(g.detection),
+            _ => {}
+        }
+        let mut last = if usable.is_some() { Error::LanguageNotDetected } else { Error::NoProvider("language detection") };
         for p in self.candidates(Capabilities::DETECT_LANGUAGE, preferred, true) {
             self.cancel_check()?;
             let opts = self.options_for(p.as_ref());
@@ -218,7 +285,9 @@ impl Pipeline<'_> {
                 }
             }
         }
-        Err(last)
+        // No service answered (none enabled, or no network): the built-in
+        // detector's guess, unsure as it was, beats none.
+        usable.ok_or(last)
     }
 
     /// Work out the direction for `text`, detecting when needed.
@@ -268,7 +337,7 @@ impl Pipeline<'_> {
         let fail_over = opts.fail_over.unwrap_or(self.config.services.fail_over);
         let candidates = self.candidates(Capabilities::TRANSLATE, opts.provider.as_deref(), fail_over);
         if candidates.is_empty() {
-            return Err(Error::NoProvider("translation"));
+            return Err(self.no_provider("translation"));
         }
         let mut unreachable = Vec::new();
         let (pair, detected) = self.resolve_direction_noting(&source, pair, opts.provider.as_deref(), &mut unreachable);
@@ -315,21 +384,14 @@ impl Pipeline<'_> {
                 ));
                 continue;
             };
-            let text = match info.max_input_chars {
-                Some(max) => text::truncate_at_boundary(&source, max).to_owned(),
-                None => source.clone(),
-            };
-            let mut req = TranslateRequest::new(text, LangPair::new(from, pair.to));
+            let mut req = TranslateRequest::new(source.clone(), LangPair::new(from, pair.to));
             req.style = opts.style.clone();
             let opts_values = self.options_for(provider.as_ref());
             let call_started = Instant::now();
             let host = self.host(&opts_values);
-            let result = match &opts.progress {
-                Some(progress) => provider.translate_stream(&host, &req, &|text| (progress.0)(text)),
-                None => provider.translate(&host, &req),
-            };
+            let result = self.translate_within_limit(provider.as_ref(), &host, &req, opts.progress.as_ref());
             match result {
-                Ok(mut t) if !t.is_empty() => {
+                Ok((mut t, truncated)) if !t.is_empty() => {
                     t.provider_id = info.id.clone();
                     t.elapsed_ms = call_started.elapsed().as_millis() as u64;
                     let resolved_from = match (from, t.detected_from) {
@@ -339,12 +401,24 @@ impl Pipeline<'_> {
                     let resolved = LangPair::new(resolved_from, pair.to);
                     let back = if opts.back_translate && resolved.from.is_language() {
                         let back_req = TranslateRequest::new(t.text.clone(), resolved.swapped());
-                        provider.translate(&self.host(&opts_values), &back_req).ok()
+                        let host = self.host(&opts_values);
+                        self.translate_within_limit(provider.as_ref(), &host, &back_req, None).ok().map(|(b, _)| b)
                     } else {
                         None
                     };
                     tracing::debug!(provider = %info.id, total_ms = started.elapsed().as_millis() as u64, "translated");
-                    return Ok(TranslationOutcome { translation: t, pair: resolved, source, detected, back, failed });
+                    if truncated {
+                        tracing::warn!(provider = %info.id, "the text is too long for the provider; its end was left out");
+                    }
+                    return Ok(TranslationOutcome {
+                        translation: t,
+                        pair: resolved,
+                        source,
+                        detected,
+                        back,
+                        failed,
+                        truncated,
+                    });
                 }
                 Ok(_) => {
                     let e = Error::bad_response(&info.name, "empty translation");
@@ -366,6 +440,97 @@ impl Pipeline<'_> {
             Some(p) => Error::TargetLanguageUnsupported { provider: p.info().name.clone(), lang: pair.to },
             None => Error::NoProvider("translation"),
         }))
+    }
+
+    /// Translate `req` with `provider`, in pieces when the text is longer
+    /// than the provider takes ([`glossa_core::ProviderInfo::max_input_chars`]).
+    ///
+    /// The pieces are cut at paragraph, line and sentence ends
+    /// ([`text::split_for_limit`]) and sent one after another, each trimmed,
+    /// with the whitespace the source had between them put back between the
+    /// answers. One at a time, so the provider's own handling of a rate
+    /// limit (its waits, its retries) works as for any request; a piece that
+    /// fails fails the provider, and fail-over takes the whole text to the
+    /// next one. Cancelling stops between pieces.
+    ///
+    /// Returns the translation and whether the end was left out: more than
+    /// [`MAX_CHUNKS`] pieces are not sent.
+    fn translate_within_limit(
+        &self,
+        provider: &dyn Provider,
+        host: &Host,
+        req: &TranslateRequest,
+        progress: Option<&Progress>,
+    ) -> Result<(Translation, bool)> {
+        let call = |req: &TranslateRequest, before: &str| match progress {
+            Some(progress) if before.is_empty() => provider.translate_stream(host, req, &|text| (progress.0)(text)),
+            Some(progress) => provider.translate_stream(host, req, &|text| (progress.0)(&format!("{before}{text}"))),
+            None => provider.translate(host, req),
+        };
+        let max = match provider.info().max_input_chars {
+            Some(max) if text::char_count(&req.text) > max => max.max(1),
+            _ => return call(req, "").map(|t| (t, false)),
+        };
+        let mut pieces = text::split_for_limit(&req.text, max);
+        let truncated = pieces.len() > MAX_CHUNKS;
+        pieces.truncate(MAX_CHUNKS);
+        tracing::debug!(provider = %provider.info().id, pieces = pieces.len(), max, truncated, "long text sent in pieces");
+
+        let mut whole: Option<Translation> = None;
+        // The whitespace owed before the next answer: what the source had
+        // after the last piece's text and before this one's.
+        let mut gap = String::new();
+        let mut from = req.from;
+        for piece in pieces {
+            self.cancel_check()?;
+            let core = piece.trim();
+            if core.is_empty() {
+                gap.push_str(piece);
+                continue;
+            }
+            let lead = &piece[..piece.len() - piece.trim_start().len()];
+            let tail = &piece[piece.trim_end().len()..];
+            gap.push_str(lead);
+            let mut part_req = req.clone();
+            part_req.text = core.to_owned();
+            part_req.from = from;
+            let part = match whole.as_mut() {
+                None => {
+                    let part = call(&part_req, "")?;
+                    // The pieces after the first go out in the language the
+                    // first was found to be in, so a short last piece is not
+                    // taken for another language.
+                    if let Some(d) = part.detected_from.filter(|d| d.is_language()) {
+                        if from == LangId::AUTO && provider.info().supports_language(d) {
+                            from = d;
+                        }
+                    }
+                    whole = Some(Translation { alternatives: Vec::new(), parts_of_speech: Vec::new(), ..part });
+                    gap = tail.to_owned();
+                    continue;
+                }
+                Some(whole) => {
+                    whole.text.push_str(&gap);
+                    let part = call(&part_req, &whole.text)?;
+                    if part.is_empty() {
+                        return Err(Error::bad_response(&provider.info().name, "empty translation for part of the text"));
+                    }
+                    part
+                }
+            };
+            let whole = whole.as_mut().expect("set by the first piece");
+            whole.text.push_str(&part.text);
+            let join = |a: &mut Option<String>, b: Option<String>| {
+                if let (Some(a), Some(b)) = (a.as_mut(), b) {
+                    a.push_str(&gap);
+                    a.push_str(&b);
+                }
+            };
+            join(&mut whole.romanisation, part.romanisation);
+            join(&mut whole.source_romanisation, part.source_romanisation);
+            gap = tail.to_owned();
+        }
+        whole.map(|t| (t, truncated)).ok_or(Error::EmptyInput)
     }
 
     fn cancel_check(&self) -> Result<()> {
@@ -416,6 +581,9 @@ mod tests {
             reg.add_builtin(Arc::new(p));
         }
         let mut cfg = Config::default();
+        // These tests are about the services; the built-in detector has its
+        // own below.
+        cfg.general.detect = DetectMode::Service;
         cfg.services.active = active.into();
         cfg.services.enabled = enabled.iter().map(|s| s.to_string()).collect();
         cfg.services.order = cfg.services.enabled.clone();
@@ -435,19 +603,21 @@ mod tests {
     #[test]
     fn smart_direction_sends_the_first_language_to_the_second_and_back() {
         // first = ru, second = en (the defaults).
-        let (reg, cfg) = setup(vec![echo("a"), detector(LangId::RUSSIAN)], "a", &["a"]);
+        // The detector is one of the user's enabled services: detection
+        // asks no others.
+        let (reg, cfg) = setup(vec![echo("a"), detector(LangId::RUSSIAN)], "a", &["a", "det"]);
         let out = run(&reg, &cfg, "привет", LangPair::new(LangId::AUTO, LangId::AUTO)).unwrap();
         assert_eq!(out.translation.text, "a:ru->en:привет");
         assert_eq!(out.pair, LangPair::new(LangId::RUSSIAN, LangId::ENGLISH));
 
-        let (reg, cfg) = setup(vec![echo("a"), detector(LangId::from_code("de").unwrap())], "a", &["a"]);
+        let (reg, cfg) = setup(vec![echo("a"), detector(LangId::from_code("de").unwrap())], "a", &["a", "det"]);
         let out = run(&reg, &cfg, "hallo", LangPair::new(LangId::AUTO, LangId::AUTO)).unwrap();
         assert_eq!(out.pair.to, LangId::RUSSIAN, "a third language comes home to the first");
     }
 
     #[test]
     fn a_target_equal_to_the_detected_language_flips_under_smart_direction() {
-        let (reg, cfg) = setup(vec![echo("a"), detector(LangId::ENGLISH)], "a", &["a"]);
+        let (reg, cfg) = setup(vec![echo("a"), detector(LangId::ENGLISH)], "a", &["a", "det"]);
         let out = run(&reg, &cfg, "hello", LangPair::new(LangId::AUTO, LangId::ENGLISH)).unwrap();
         assert_eq!(out.pair, LangPair::new(LangId::ENGLISH, LangId::RUSSIAN));
     }
@@ -464,7 +634,7 @@ mod tests {
                 Ok(Detection::certain(LangId::ENGLISH))
             })),
         };
-        let (reg, cfg) = setup(vec![echo("a"), det], "a", &["a"]);
+        let (reg, cfg) = setup(vec![echo("a"), det], "a", &["a", "det"]);
         let out = run(&reg, &cfg, "x", LangPair::new(LangId::ENGLISH, LangId::RUSSIAN)).unwrap();
         assert_eq!(out.translation.text, "a:en->ru:x");
         assert_eq!(calls.load(Ordering::SeqCst), 0);
@@ -567,13 +737,264 @@ mod tests {
         assert_eq!(out.source, "one two");
     }
 
+    /// A provider that upper-cases what it gets and counts its calls, with
+    /// an input limit.
+    fn shouting(id: &str, max: usize, calls: Arc<AtomicUsize>) -> FnProvider {
+        let mut p = FnProvider::translator(id, move |_, req| {
+            calls.fetch_add(1, Ordering::SeqCst);
+            assert!(req.text.chars().count() <= max, "over the limit: {:?}", req.text);
+            assert_eq!(req.text, req.text.trim(), "pieces go out trimmed");
+            Ok(Translation::plain(req.text.to_uppercase()))
+        });
+        p.info.max_input_chars = Some(max);
+        p
+    }
+
+    /// The defect: text beyond the provider's limit was cut off silently and
+    /// the result looked complete. Now it is sent in pieces and nothing is
+    /// lost, the whitespace between the pieces included.
     #[test]
-    fn long_text_is_cut_to_the_providers_limit() {
-        let mut short = echo("a");
-        short.info.max_input_chars = Some(5);
-        let (reg, cfg) = setup(vec![short], "a", &["a"]);
+    fn long_text_is_translated_in_pieces_at_sentence_and_paragraph_ends() {
+        let calls = Arc::new(AtomicUsize::new(0));
+        let (reg, cfg) = setup(vec![shouting("a", 30, calls.clone())], "a", &["a"]);
+        let text = "First sentence here. Second one follows!\n\nA new paragraph starts. And ends.\n  Indented last line";
+        let out = run(&reg, &cfg, text, LangPair::new(LangId::ENGLISH, LangId::RUSSIAN)).unwrap();
+        assert_eq!(out.translation.text, text.to_uppercase(), "everything, with its line breaks and spaces");
+        assert!(!out.truncated);
+        assert!(calls.load(Ordering::SeqCst) >= 4, "{} requests", calls.load(Ordering::SeqCst));
+        assert!(!out.report().truncated);
+
+        // Text within the limit is one request, as before.
+        calls.store(0, Ordering::SeqCst);
         let out = run(&reg, &cfg, "abcd efgh", LangPair::new(LangId::ENGLISH, LangId::RUSSIAN)).unwrap();
-        assert_eq!(out.translation.text, "a:en->ru:abcd");
+        assert_eq!((out.translation.text.as_str(), calls.load(Ordering::SeqCst)), ("ABCD EFGH", 1));
+
+        // No spaces to cut at (CJK): still whole.
+        let cjk = "今日は晴れです。明日は雨が降るでしょう。週末は友達と映画を見に行きます。楽しみにしています。";
+        let out = run(&reg, &cfg, cjk, LangPair::new(LangId::from_code("ja").unwrap(), LangId::RUSSIAN)).unwrap();
+        assert_eq!(out.translation.text, cjk);
+    }
+
+    #[test]
+    fn text_too_long_even_in_pieces_is_marked_truncated() {
+        let calls = Arc::new(AtomicUsize::new(0));
+        let (reg, cfg) = setup(vec![shouting("a", 10, calls.clone())], "a", &["a"]);
+        let text = "word ".repeat(MAX_CHUNKS * 2 + 10);
+        let out = run(&reg, &cfg, &text, LangPair::new(LangId::ENGLISH, LangId::RUSSIAN)).unwrap();
+        assert!(out.truncated, "the result says its end is missing");
+        assert!(out.report().truncated);
+        assert_eq!(calls.load(Ordering::SeqCst), MAX_CHUNKS);
+        assert!(out.translation.text.starts_with("WORD WORD"));
+        assert!(out.translation.text.len() < text.trim().len());
+    }
+
+    #[test]
+    fn a_piece_that_fails_fails_the_provider_and_the_next_gets_the_whole_text() {
+        let calls = Arc::new(AtomicUsize::new(0));
+        let c = calls.clone();
+        let mut flaky = FnProvider::translator("a", move |_, req| {
+            if c.fetch_add(1, Ordering::SeqCst) == 1 {
+                return Err(Error::RateLimited { provider: "A".into(), retry_after_secs: None });
+            }
+            Ok(Translation::plain(req.text.to_uppercase()))
+        });
+        flaky.info.max_input_chars = Some(12);
+        let (reg, cfg) = setup(vec![flaky, echo("b")], "a", &["a", "b"]);
+        let out = run(&reg, &cfg, "one two three. four five six.", LangPair::new(LangId::ENGLISH, LangId::RUSSIAN)).unwrap();
+        assert_eq!(out.translation.text, "b:en->ru:one two three. four five six.", "not half of one and half of the other");
+        assert_eq!(calls.load(Ordering::SeqCst), 2, "the pieces after the failed one were not sent");
+        assert_eq!(out.failed[0].0, "a");
+    }
+
+    #[test]
+    fn cancelling_stops_between_pieces() {
+        let cancel = CancelToken::new();
+        let c = cancel.clone();
+        let mut p = FnProvider::translator("a", move |_, req| {
+            c.cancel();
+            Ok(Translation::plain(req.text.clone()))
+        });
+        p.info.max_input_chars = Some(8);
+        let (reg, cfg) = setup(vec![p], "a", &["a"]);
+        let http = MockHttp::new();
+        let pipeline = Pipeline { registry: &reg, config: &cfg, http: &http, cancel: &cancel };
+        let result = pipeline.translate(
+            "one two three four five six",
+            LangPair::new(LangId::ENGLISH, LangId::RUSSIAN),
+            &TranslateOptions::default(),
+        );
+        assert!(matches!(result, Err(Error::Cancelled)), "{result:?}");
+    }
+
+    #[test]
+    fn pieces_report_progress_as_one_growing_text_and_share_one_source_language() {
+        let seen_from = Arc::new(parking_lot::Mutex::new(Vec::new()));
+        let seen = seen_from.clone();
+        let mut p = FnProvider::translator("a", move |_, req| {
+            seen.lock().push(req.from);
+            Ok(Translation { detected_from: Some(LangId::ENGLISH), ..Translation::plain(req.text.to_uppercase()) })
+        });
+        p.info.max_input_chars = Some(10);
+        let (reg, mut cfg) = setup(vec![p], "a", &["a"]);
+        cfg.general.smart_direction = false;
+        let http = MockHttp::new();
+        let cancel = CancelToken::new();
+        let pipeline = Pipeline { registry: &reg, config: &cfg, http: &http, cancel: &cancel };
+        let out = pipeline
+            .translate("alpha beta gamma delta", LangPair::new(LangId::AUTO, LangId::RUSSIAN), &TranslateOptions::default())
+            .unwrap();
+        assert_eq!(out.translation.text, "ALPHA BETA GAMMA DELTA");
+        let from = seen_from.lock().clone();
+        assert_eq!(from[0], LangId::AUTO);
+        assert!(from[1..].iter().all(|f| *f == LangId::ENGLISH), "{from:?}");
+        assert_eq!(out.pair.from, LangId::ENGLISH);
+    }
+
+    // -- who detects the language -------------------------------------------
+
+    /// A detector that counts how often the text reached it.
+    fn counting_detector(id: &str, lang: LangId, calls: Arc<AtomicUsize>) -> FnProvider {
+        FnProvider {
+            info: ProviderInfo::new(id, id, Capabilities::DETECT_LANGUAGE),
+            translate: None,
+            detect: Some(Box::new(move |_, _| {
+                calls.fetch_add(1, Ordering::SeqCst);
+                Ok(Detection::certain(lang))
+            })),
+        }
+    }
+
+    const RUSSIAN_SENTENCE: &str = "Съешь же ещё этих мягких французских булок, да выпей чаю.";
+
+    /// The defect: with no enabled service able to detect, the text went to
+    /// every detector in the registry (Google, Bing, Yandex, LibreTranslate),
+    /// whatever the user had enabled.
+    #[test]
+    fn detection_never_reaches_a_service_that_is_not_enabled() {
+        let calls = Arc::new(AtomicUsize::new(0));
+        for mode in [DetectMode::Service, DetectMode::OfflineThenService, DetectMode::Offline] {
+            let (reg, mut cfg) = setup(
+                vec![
+                    echo("private"),
+                    counting_detector("google", LangId::ENGLISH, calls.clone()),
+                    counting_detector("bing", LangId::ENGLISH, calls.clone()),
+                ],
+                "private",
+                &["private"],
+            );
+            cfg.general.detect = mode;
+            // Short and long, sure and unsure.
+            for text in ["hi", "привет", RUSSIAN_SENTENCE] {
+                let out = run(&reg, &cfg, text, LangPair::new(LangId::AUTO, LangId::AUTO)).unwrap();
+                assert_eq!(out.translation.provider_id, "private");
+            }
+            assert_eq!(calls.load(Ordering::SeqCst), 0, "{mode:?}: the text reached a detector nobody enabled");
+        }
+    }
+
+    #[test]
+    fn the_builtin_detector_answers_without_any_service() {
+        let (reg, mut cfg) = setup(vec![echo("a")], "a", &["a"]);
+        cfg.general.detect = DetectMode::Offline;
+        let out = run(&reg, &cfg, RUSSIAN_SENTENCE, LangPair::new(LangId::AUTO, LangId::AUTO)).unwrap();
+        assert_eq!(out.pair, LangPair::new(LangId::RUSSIAN, LangId::ENGLISH));
+        assert_eq!(out.detected.map(|d| d.lang), Some(LangId::RUSSIAN));
+        let out = run(&reg, &cfg, "The weather is lovely today, let us go for a long walk.", LangPair::new(LangId::AUTO, LangId::AUTO))
+            .unwrap();
+        assert_eq!(out.pair, LangPair::new(LangId::ENGLISH, LangId::RUSSIAN));
+        // A word or two: the user's languages (ru, en) decide.
+        let out = run(&reg, &cfg, "привет", LangPair::new(LangId::AUTO, LangId::AUTO)).unwrap();
+        assert_eq!(out.pair, LangPair::new(LangId::RUSSIAN, LangId::ENGLISH));
+    }
+
+    #[test]
+    fn offline_mode_asks_no_service_even_an_enabled_one() {
+        let calls = Arc::new(AtomicUsize::new(0));
+        let (reg, mut cfg) =
+            setup(vec![echo("a"), counting_detector("det", LangId::ENGLISH, calls.clone())], "a", &["a", "det"]);
+        cfg.general.detect = DetectMode::Offline;
+        for text in ["привет", RUSSIAN_SENTENCE, "12345"] {
+            run(&reg, &cfg, text, LangPair::new(LangId::AUTO, LangId::AUTO)).unwrap();
+        }
+        assert_eq!(calls.load(Ordering::SeqCst), 0);
+    }
+
+    #[test]
+    fn the_default_asks_an_enabled_service_only_about_what_the_builtin_detector_is_unsure_of() {
+        let calls = Arc::new(AtomicUsize::new(0));
+        let german = LangId::from_code("de").unwrap();
+        let (reg, mut cfg) = setup(vec![echo("a"), counting_detector("det", german, calls.clone())], "a", &["a", "det"]);
+        cfg.general.detect = DetectMode::OfflineThenService;
+        assert_eq!(Config::default().general.detect, DetectMode::OfflineThenService);
+        // Sure: answered here, the service never sees it.
+        let out = run(&reg, &cfg, RUSSIAN_SENTENCE, LangPair::new(LangId::AUTO, LangId::AUTO)).unwrap();
+        assert_eq!((out.pair.from, calls.load(Ordering::SeqCst)), (LangId::RUSSIAN, 0));
+        // One short word: the enabled service decides.
+        let out = run(&reg, &cfg, "gut", LangPair::new(LangId::AUTO, LangId::AUTO)).unwrap();
+        assert_eq!((out.pair.from, calls.load(Ordering::SeqCst)), (german, 1));
+
+        // The service is unreachable (no network): the built-in guess stands.
+        let down = FnProvider {
+            info: ProviderInfo::new("det", "det", Capabilities::DETECT_LANGUAGE),
+            translate: None,
+            detect: Some(Box::new(|_, _| Err(Error::Network("down".into())))),
+        };
+        let (reg, mut cfg) = setup(vec![echo("a"), down], "a", &["a", "det"]);
+        cfg.general.detect = DetectMode::OfflineThenService;
+        let out = run(&reg, &cfg, "привет", LangPair::new(LangId::AUTO, LangId::AUTO)).unwrap();
+        assert_eq!(out.pair, LangPair::new(LangId::RUSSIAN, LangId::ENGLISH));
+    }
+
+    // -- offline only ---------------------------------------------------------
+
+    #[test]
+    fn offline_only_leaves_out_every_provider_that_is_not_local() {
+        let online_calls = Arc::new(AtomicUsize::new(0));
+        let c = online_calls.clone();
+        let online = FnProvider::translator("online", move |_, _| {
+            c.fetch_add(1, Ordering::SeqCst);
+            Ok(Translation::plain("leaked"))
+        });
+        let mut local = echo("local");
+        local.info.capabilities |= Capabilities::OFFLINE;
+        let (reg, mut cfg) = setup(
+            vec![online, local, counting_detector("det", LangId::ENGLISH, online_calls.clone())],
+            "online",
+            &["online", "local", "det"],
+        );
+        cfg.network.offline_only = true;
+        cfg.general.detect = DetectMode::OfflineThenService;
+        let out = run(&reg, &cfg, "привет", LangPair::new(LangId::AUTO, LangId::AUTO)).unwrap();
+        assert_eq!(out.translation.provider_id, "local");
+        assert_eq!(online_calls.load(Ordering::SeqCst), 0, "neither the translator nor the detector was asked");
+
+        // Nothing local enabled: a clear error, not a request.
+        cfg.services.enabled = vec!["online".into()];
+        let err = run(&reg, &cfg, "привет", LangPair::new(LangId::AUTO, LangId::AUTO)).unwrap_err();
+        assert!(matches!(err, Error::OfflineOnly(_)), "{err:?}");
+        // Asked for by name: refused too.
+        let http = MockHttp::new();
+        let cancel = CancelToken::new();
+        let p = Pipeline { registry: &reg, config: &cfg, http: &http, cancel: &cancel };
+        let err = p
+            .translate(
+                "x",
+                LangPair::new(LangId::ENGLISH, LangId::RUSSIAN),
+                &TranslateOptions { provider: Some("online".into()), fail_over: Some(false), ..Default::default() },
+            )
+            .unwrap_err();
+        assert!(matches!(err, Error::OfflineOnly(_)), "{err:?}");
+        assert_eq!(online_calls.load(Ordering::SeqCst), 0);
+    }
+
+    /// A service the user uninstalled or mistyped is not replaced by
+    /// whatever else is installed.
+    #[test]
+    fn a_configured_install_does_not_fall_back_to_services_nobody_enabled() {
+        let (reg, mut cfg) = setup(vec![echo("other")], "gone", &["gone"]);
+        cfg.services.active = "gone".into();
+        let err = run(&reg, &cfg, "x", LangPair::new(LangId::ENGLISH, LangId::RUSSIAN)).unwrap_err();
+        assert!(matches!(err, Error::NoProvider(_)), "{err:?}");
     }
 
     #[test]

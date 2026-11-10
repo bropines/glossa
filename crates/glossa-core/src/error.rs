@@ -133,6 +133,12 @@ pub enum Error {
     #[error("{0}")]
     Platform(String),
 
+    /// "Offline only" is switched on and this would have left the machine:
+    /// a request to a host that is not this computer, or a service that
+    /// does not say it works without the network.
+    #[error("offline only is switched on: {0}")]
+    OfflineOnly(String),
+
     /// The user cancelled, or a newer request superseded this one.
     #[error("cancelled")]
     Cancelled,

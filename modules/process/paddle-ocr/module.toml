@@ -3,7 +3,7 @@
 # downloaded as an asset with ONNX Runtime beside it, that Glossa starts on
 # the first OCR call and stops when idle. Nothing loads until then.
 # README.md has the details, the licences and how the binary is released.
-capabilities = ["ocr"]
+capabilities = ["ocr", "offline"]
 
 [module]
 id = "paddle-ocr"

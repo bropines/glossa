@@ -53,14 +53,19 @@ const USAGE: &str = "\
 glossa-cli — translate, look up and recognise text from the command line
 
 USAGE
-    glossa-cli [--json] [--home DIR] [-v] <command> [options] [text…]
+    glossa-cli [--json] [--home DIR] [--offline] [-v] <command> [options] [text…]
     glossa-cli --version              the version and the commit it was built from
 
+    --offline                         for this run, nothing leaves this computer: only services
+                                      running here are used ([network] offline_only makes it permanent)
+
 COMMANDS
-    translate  [-f FROM] [-t TO] [-s SERVICE] [--back] [--save-history] [--full] [TEXT…]
+    translate  [-f FROM] [-t TO] [-s SERVICE] [--back] [--save-history] [--full]
+               [--detect offline|service|offline_then_service] [TEXT…]
                                       stdin if no text; piped output is the translation alone
-                                      unless --full
-    detect     [TEXT…]
+                                      unless --full; text longer than the service takes goes in pieces
+    detect     [--detect offline|service|offline_then_service] [TEXT…]
+                                      offline: the detector built into Glossa, nothing is sent
     dict       [-f FROM] [-t TO] [-s SERVICE] WORD
     ocr        IMAGE [-l LANG] [-t TO] [-e ENGINE] [-F text|json|hocr|alto]
                [--in-place] [--join-lines] [--translate-with ocr|translator]
@@ -180,6 +185,7 @@ const VALUED: &[&str] = &[
     "--panel",
     "--action",
     "--item",
+    "--detect",
 ];
 
 /// Flags that take no value.
@@ -208,17 +214,21 @@ const SWITCHES: &[&str] = &[
     "--local",
     "--force",
     "--open",
+    "--offline",
 ];
 
 /// Flags every command takes.
-const GLOBAL: &[&str] = &["--json", "-v", "--verbose", "-h", "--help", "-V", "--version", "--home"];
+const GLOBAL: &[&str] = &["--json", "-v", "--verbose", "-h", "--help", "-V", "--version", "--home", "--offline"];
 
 /// The flags each command takes besides the global ones, or `None` for a
 /// command that does not exist (that error is reported instead).
 fn command_flags(command: &str) -> Option<&'static [&'static str]> {
     Some(match command {
-        "translate" | "tr" => &["-f", "--from", "-t", "--to", "-s", "--service", "--back", "--save-history", "--full"],
-        "dict" | "dictionary" => &["-f", "--from", "-t", "--to", "-s", "--service"],
+        "translate" | "tr" => {
+            &["-f", "--from", "-t", "--to", "-s", "--service", "--back", "--save-history", "--full", "--detect"]
+        }
+        "dict" | "dictionary" => &["-f", "--from", "-t", "--to", "-s", "--service", "--detect"],
+        "detect" => &["--detect"],
         "ocr" => &[
             "-l",
             "--lang",
@@ -234,7 +244,7 @@ fn command_flags(command: &str) -> Option<&'static [&'static str]> {
             "--join-lines",
             "--translate-with",
         ],
-        "speak" => &["-o", "--out", "-l", "--lang", "--slow"],
+        "speak" => &["-o", "--out", "-l", "--lang", "--slow", "--detect"],
         "preset" | "presets" => &["-o", "--out", "--languages", "--local", "--force"],
         "services" => &["-c", "--capability"],
         "history" => &["--search", "--favorites", "--export"],
@@ -258,7 +268,7 @@ fn command_flags(command: &str) -> Option<&'static [&'static str]> {
             "--item",
             "--open",
         ],
-        "detect" | "modules" | "assets" | "python" | "import-classic" | "theme" | "locale" | "config" | "serve"
+        "modules" | "assets" | "python" | "import-classic" | "theme" | "locale" | "config" | "serve"
         | "action" | "doctor" | "" | "help" | "version" => &[],
         _ => return None,
     })
@@ -409,6 +419,17 @@ fn paths(args: &Args) -> Paths {
 
 fn engine(args: &Args) -> Result<Engine, Fail> {
     let e = Engine::start(paths(args))?;
+    // For this run only; neither is written to the settings file.
+    let detect = match args.flag(&["--detect"]) {
+        None => None,
+        Some(name) => Some(glossa_core::config::DetectMode::from_name(name).ok_or_else(|| {
+            Fail::Usage(format!("--detect is offline, service or offline_then_service, not {name:?}"))
+        })?),
+    };
+    let overrides = glossa_engine::SessionOverrides { offline_only: args.has(&["--offline"]), detect };
+    if overrides != glossa_engine::SessionOverrides::default() {
+        e.set_session_overrides(overrides)?;
+    }
     e.attach_secret_store(glossa_platform::secrets::system_store());
     for w in e.startup_warnings() {
         eprintln!("glossa-cli: {}", w.message(&glossa_core::Locale::english()));
@@ -1001,6 +1022,12 @@ fn run(args: &Args) -> Result<(), Fail> {
                 }
                 for (id, why) in &out.failed {
                     eprintln!("[{id} did not answer: {why}]");
+                }
+                if out.truncated {
+                    eprintln!(
+                        "[the text is too long for {}, even in pieces: its end was NOT translated]",
+                        out.translation.provider_id
+                    );
                 }
                 eprintln!(
                     "[{} · {} → {} · {} ms]",
@@ -1735,7 +1762,21 @@ fn preset(args: &Args, words: &[String]) -> Result<(), Fail> {
             out!("left out (a preset never keeps keys or tokens): {}", r.dropped_secrets.join(", "));
         }
         if !r.dropped_options.is_empty() {
-            out!("left out (addresses, and settings no installed module declares): {}", r.dropped_options.join(", "));
+            out!(
+                "left out (commands, paths, addresses, and settings no installed module declares): {}",
+                r.dropped_options.join(", ")
+            );
+        }
+        if !r.blocked.is_empty() {
+            out!("refused (not for a shared preset to set): {}", r.blocked.join("; "));
+        }
+        if !r.changes.is_empty() {
+            out!("{}", if verb == "imported" { "applying it will change:" } else { "changed:" });
+            for c in &r.changes {
+                let from = if c.from.is_empty() { "(not set)" } else { c.from.as_str() };
+                let online = if c.online { "   [online: leaves this computer]" } else { "" };
+                out!("    {}: {from} -> {}{online}", c.what, c.to);
+            }
         }
     };
     let named = |name: &str, new_name: Option<&str>| {

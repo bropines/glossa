@@ -19,6 +19,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
+use crate::config::DetectMode;
 use crate::lang::LangPair;
 use crate::secrets::IN_STORE;
 use crate::Config;
@@ -58,6 +59,10 @@ pub struct Preset {
     /// The language pair, when the preset sets one.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub pair: Option<LangPair>,
+    /// Who detects the language (`[general] detect`), when the preset sets
+    /// it: the built-in *Private* one keeps detection on this computer.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub detect: Option<DetectMode>,
     /// Module option values, secrets excluded. Merged over the current
     /// values: an option the preset does not name keeps its value.
     #[serde(skip_serializing_if = "BTreeMap::is_empty")]
@@ -117,6 +122,44 @@ pub fn looks_like_address(key: &str, value: &Value) -> bool {
     named || valued
 }
 
+/// Whether an option names something that is run or loaded as code: a
+/// command line, a program, an interpreter, a script, a library, or the
+/// path to one. An imported preset never sets one: applying it would run
+/// whatever the file says, as the user.
+///
+/// Errs towards "yes", like [`looks_secret`]: any option named like a path
+/// counts, because a path is where programs are.
+pub fn looks_like_command(key: &str) -> bool {
+    let k = normalise_key(key);
+    const PARTS: [&str; 15] = [
+        "command",
+        "exec",
+        "program",
+        "binary",
+        "script",
+        "shell",
+        "interpreter",
+        "python",
+        "java",
+        "node",
+        "library",
+        "plugin",
+        "path",
+        "argv",
+        "browser",
+    ];
+    const WORDS: [&str; 11] = ["cmd", "bin", "exe", "dll", "lib", "args", "run", "file", "dir", "player", "jar"];
+    PARTS.iter().any(|p| k.contains(p)) || k.split('_').any(|w| WORDS.contains(&w))
+}
+
+/// Whether an option shapes the raw request a service gets (extra headers,
+/// extra body fields). An imported preset never sets one: with the user's
+/// key attached, that is more than a shared file should decide.
+pub fn looks_like_raw_request(key: &str) -> bool {
+    let k = normalise_key(key);
+    k.contains("header") || k.contains("extra_body") || k.contains("extra_field")
+}
+
 /// `apiKey`, `X-Api-Key` and `api key` as `api_key`, `x_api_key`, `api_key`.
 fn normalise_key(key: &str) -> String {
     let mut out = String::with_capacity(key.len() + 4);
@@ -161,6 +204,7 @@ impl Preset {
             tts: s.tts.clone(),
             ocr: cfg.ocr.provider.clone(),
             pair: with_pair.then_some(cfg.general.pair),
+            detect: Some(cfg.general.detect),
             options: s.options.clone(),
         };
         p.strip_secrets(is_secret);
@@ -239,6 +283,9 @@ impl Preset {
         }
         if let Some(pair) = self.pair {
             cfg.general.pair = pair;
+        }
+        if let Some(detect) = self.detect {
+            cfg.general.detect = detect;
         }
         Applied { missing }
     }
@@ -332,6 +379,7 @@ pub fn builtin() -> Vec<Preset> {
             dictionary_order: ids(&["google-dictionary", "wiktionary"]),
             dictionary_enabled: ids(&["google-dictionary", "wiktionary"]),
             dictionary_active: "google-dictionary".into(),
+            detect: Some(DetectMode::OfflineThenService),
             ..Preset::default()
         },
         Preset {
@@ -343,6 +391,9 @@ pub fn builtin() -> Vec<Preset> {
             dictionary_enabled: ids(&["wiktionary", "wikipedia"]),
             dictionary_active: "wiktionary".into(),
             tts: "system-tts".into(),
+            // Private means the text goes to the services listed here and
+            // to nobody else, so finding out its language stays local.
+            detect: Some(DetectMode::Offline),
             ..Preset::default()
         },
         Preset {
@@ -353,6 +404,7 @@ pub fn builtin() -> Vec<Preset> {
             dictionary_order: ids(&["wiktionary", "oxford-learners", "google-dictionary", "multitran"]),
             dictionary_enabled: ids(&["wiktionary", "oxford-learners", "google-dictionary", "multitran"]),
             dictionary_active: "wiktionary".into(),
+            detect: Some(DetectMode::OfflineThenService),
             ..Preset::default()
         },
     ]
@@ -510,6 +562,50 @@ mod tests {
         }
         assert!(!looks_like_address("model", &json!("gpt-4o-mini")));
         assert!(!looks_like_address("formality", &json!("more")));
+    }
+
+    #[test]
+    fn commands_and_paths_are_recognised_by_name() {
+        for k in [
+            "command",
+            "cmd",
+            "python",
+            "python_path",
+            "javaPath",
+            "executable",
+            "exe",
+            "browser_path",
+            "player_command",
+            "model_path",
+            "script",
+            "shell",
+            "args",
+            "library",
+            "binary",
+            "tesseract_bin",
+            "data_dir",
+        ] {
+            assert!(looks_like_command(k), "{k}");
+        }
+        for k in ["model", "formality", "temperature", "romanisation", "profile", "voice", "prompt", "side", "runs"] {
+            assert!(!looks_like_command(k), "{k}");
+        }
+        assert!(looks_like_raw_request("extra_headers") && looks_like_raw_request("extra_body"));
+        assert!(!looks_like_raw_request("system_prompt"));
+    }
+
+    /// The Private preset promises the text goes to its own services only.
+    #[test]
+    fn the_private_preset_keeps_language_detection_on_this_computer() {
+        let private = builtin().into_iter().find(|p| p.name == "Private").unwrap();
+        assert_eq!(private.detect, Some(DetectMode::Offline));
+        let mut c = cfg();
+        assert_eq!(c.general.detect, DetectMode::OfflineThenService, "the default");
+        private.apply_to(&mut c, &|_| true);
+        assert_eq!(c.general.detect, DetectMode::Offline);
+        // A preset that says nothing about it leaves it alone.
+        Preset { name: "X".into(), ..Preset::default() }.apply_to(&mut c, &|_| true);
+        assert_eq!(c.general.detect, DetectMode::Offline);
     }
 
     #[test]

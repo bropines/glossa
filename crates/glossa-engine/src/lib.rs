@@ -18,6 +18,7 @@ pub mod bundled;
 pub mod catalog;
 pub mod dbus;
 pub mod export;
+pub mod langdetect;
 pub mod module_dev;
 pub mod ocr;
 pub mod panels;
@@ -58,7 +59,7 @@ pub use glossa_modules::assets::{AssetState, AssetStatus, Progress as AssetProgr
 pub use ocr::{TranslatedBlock, TranslatedLine};
 pub use panels::{Effect, Panel, PanelId, PanelInfo, PanelNotice, PanelOutcome, PanelRequest};
 pub use pipeline::{Pipeline, Progress, TranslateOptions, TranslateReport, TranslationOutcome};
-pub use presets::{PresetEntry, PresetReport};
+pub use presets::{PresetChange, PresetEntry, PresetReport};
 pub use python::{python_dirs, ModulePython, PythonReport, PYTHON_JOB};
 
 /// The presets an AI endpoint can start from, for front ends.
@@ -214,6 +215,7 @@ fn provider_translation(ocr: &OcrResult, to: LangId) -> Option<TranslationOutcom
         detected: None,
         back: None,
         failed: Vec::new(),
+        truncated: false,
     })
 }
 
@@ -305,6 +307,28 @@ struct Inner {
     /// Module folders the user created or copied in the module editor in
     /// this session, canonical: the editor's saves approve these.
     authored: Mutex<std::collections::HashSet<PathBuf>>,
+    /// Settings forced for this run only ([`Engine::set_session_overrides`]).
+    session: RwLock<SessionOverrides>,
+}
+
+/// Settings a front end forces for one run without writing them to the
+/// settings file (`glossa-cli --offline`, `--detect`).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct SessionOverrides {
+    /// Treat `[network] offline_only` as on. It can only add the
+    /// restriction: `false` leaves the setting as the file has it.
+    pub offline_only: bool,
+    /// Use this instead of `[general] detect`.
+    pub detect: Option<glossa_core::config::DetectMode>,
+}
+
+impl SessionOverrides {
+    fn apply(&self, config: &mut Config) {
+        config.network.offline_only |= self.offline_only;
+        if let Some(detect) = self.detect {
+            config.general.detect = detect;
+        }
+    }
 }
 
 /// Something that went wrong at start without stopping it
@@ -420,6 +444,7 @@ impl Engine {
             python_jobs: Mutex::new(HashMap::new()),
             python_cache: Mutex::new(HashMap::new()),
             authored: Mutex::new(Default::default()),
+            session: RwLock::new(SessionOverrides::default()),
         };
         let engine = Engine { inner: Arc::new(inner) };
         engine.reload_modules();
@@ -433,8 +458,28 @@ impl Engine {
         &self.inner.paths
     }
 
+    /// The settings in effect: those of the settings file, with this run's
+    /// overrides ([`Engine::set_session_overrides`]) over them. The
+    /// overrides are never written to the file by the engine; a front end
+    /// that sets them must not write this copy back whole.
     pub fn config(&self) -> Config {
-        self.inner.config.read().clone()
+        let mut config = self.inner.config.read().clone();
+        self.inner.session.read().apply(&mut config);
+        config
+    }
+
+    /// Force settings for this run only. Nothing is written to the settings
+    /// file, and a later [`Engine::update_config`] keeps them in force.
+    pub fn set_session_overrides(&self, overrides: SessionOverrides) -> Result<()> {
+        let before = self.config();
+        *self.inner.session.write() = overrides;
+        let after = self.config();
+        if before.network != after.network {
+            *self.inner.http.write() = Arc::new(HttpClient::new(&after.network)?);
+            // The module runtimes hold "may download on first use".
+            self.reload_modules();
+        }
+        Ok(())
     }
 
     /// Change settings, save them, and apply whatever the change affects.
@@ -451,13 +496,15 @@ impl Engine {
         };
         self.write_config(&after)?;
         if before.network != after.network {
-            *self.inner.http.write() = Arc::new(HttpClient::new(&after.network)?);
+            // This run's overrides stay in force for the new client.
+            *self.inner.http.write() = Arc::new(HttpClient::new(&self.config().network)?);
         }
         if before.modules != after.modules
             || before.services.ai_endpoints != after.services.ai_endpoints
             || before.classic != after.classic
             || before.ocr != after.ocr
             || before.dictionary.offline != after.dictionary.offline
+            || before.network.offline_only != after.network.offline_only
         {
             self.reload_modules();
         }
@@ -653,7 +700,8 @@ impl Engine {
             cache: self.inner.module_cache.clone(),
             cache_dir: paths.cache_dir.join("modules"),
             models_dir: paths.models_dir(),
-            auto_download_assets: cfg.modules.auto_download_assets,
+            // Offline only: a module's first call must not start a download.
+            auto_download_assets: cfg.modules.auto_download_assets && !cfg.network.offline_only,
             disabled: cfg.modules.disabled.clone(),
             trust: self.trust_policy(cfg),
             preferred_domain: cfg.advanced.preferred_domain.clone(),
@@ -959,7 +1007,17 @@ impl Engine {
         }
     }
 
+    /// Run `f` on a worker thread. A thread that cannot be started is only
+    /// logged: for a job a front end waits on, use [`Engine::spawn_or`].
     fn spawn(&self, name: &str, f: impl FnOnce() + Send + 'static) {
+        self.spawn_or(name, f, |_| {});
+    }
+
+    /// Run `f` on a worker thread, or, when the system gives no thread (out
+    /// of memory, a thread limit), call `failed` here with the reason. A job
+    /// someone waits for must end in an event either way: without one the
+    /// window that asked shows "working" for ever.
+    fn spawn_or(&self, name: &str, f: impl FnOnce() + Send + 'static, failed: impl FnOnce(Error)) {
         // 8 MB of address space, committed only as used: module scripts
         // run here, and turning a deeply nested result (an OCR layout) into
         // JSON recurses through the JavaScript engine.
@@ -973,9 +1031,18 @@ impl Engine {
                 tracing::error!("worker thread for {job} panicked: {msg}");
             }
         };
-        if let Err(e) = std::thread::Builder::new().name(format!("glossa-{name}")).stack_size(8 << 20).spawn(f) {
-            tracing::error!("could not start a worker thread: {e}");
+        if let Err(e) = Self::start_thread(name, f) {
+            tracing::error!("could not start a worker thread for {name}: {e}");
+            failed(Error::Internal(format!("could not start a worker thread for {name}: {e}")));
         }
+    }
+
+    fn start_thread(name: &str, f: impl FnOnce() + Send + 'static) -> std::io::Result<()> {
+        #[cfg(test)]
+        if tests::THREADS_FAIL.with(|fail| fail.get()) {
+            return Err(std::io::Error::other("no threads left (test)"));
+        }
+        std::thread::Builder::new().name(format!("glossa-{name}")).stack_size(8 << 20).spawn(f).map(|_| ())
     }
 
     fn with_pipeline<T>(&self, cancel: &CancelToken, f: impl FnOnce(&Pipeline) -> T) -> T {
@@ -1070,6 +1137,11 @@ impl Engine {
                 Some(o) => glossa_modules::provider::resolve_options(provider.options(), Some(o)),
                 None => p.options_for(provider.as_ref()),
             };
+            // Judged with the settings being tested: an address typed but
+            // not applied yet is the one the request would go to.
+            if p.config.network.offline_only && !provider.is_local(&options) {
+                return Err(Error::OfflineOnly(format!("{} is an online service", provider.info().name)));
+            }
             provider.translate(&p.host(&options), &req)
         })?;
         Ok((t.text, started.elapsed()))
@@ -1093,16 +1165,21 @@ impl Engine {
             }));
         }
         let me = self.clone();
-        self.spawn("translate", move || {
-            let result = catch_panic("translation", || me.with_pipeline(&cancel, |p| p.translate(&text, pair, &opts)));
-            if cancel.is_cancelled() || !me.current(slot, job) {
-                return;
-            }
-            if let (Ok(out), true) = (&result, matches!(slot, Slot::Main | Slot::Popup | Slot::OcrResult)) {
-                me.record_history(out);
-            }
-            me.emit(Event::Translated { slot, job, result: result.map(Arc::new).map_err(Arc::new) });
-        });
+        self.spawn_or(
+            "translate",
+            move || {
+                let result =
+                    catch_panic("translation", || me.with_pipeline(&cancel, |p| p.translate(&text, pair, &opts)));
+                if cancel.is_cancelled() || !me.current(slot, job) {
+                    return;
+                }
+                if let (Ok(out), true) = (&result, matches!(slot, Slot::Main | Slot::Popup | Slot::OcrResult)) {
+                    me.record_history(out);
+                }
+                me.emit(Event::Translated { slot, job, result: result.map(Arc::new).map_err(Arc::new) });
+            },
+            |e| self.emit(Event::Translated { slot, job, result: Err(Arc::new(e)) }),
+        );
         job
     }
 
@@ -1134,7 +1211,7 @@ impl Engine {
             // a failing dictionary reports its own error instead of another
             // dictionary's article turning up in its place.
             let fail_over = cfg.services.fail_over;
-            let mut last = Error::NoProvider("dictionary lookup");
+            let mut last = p.no_provider("dictionary lookup");
             for provider in p.candidates(Capabilities::DICTIONARY, provider, fail_over) {
                 p.host_check()?;
                 let opts = p.options_for(provider.as_ref());
@@ -1175,16 +1252,21 @@ impl Engine {
     pub fn dictionary_async(&self, slot: Slot, text: String, pair: LangPair, provider: Option<String>) -> u64 {
         let (job, cancel) = self.begin(slot);
         let me = self.clone();
-        self.spawn("dictionary", move || {
-            let result = catch_panic("dictionary lookup", || me.lookup(&text, pair, provider.as_deref(), &cancel));
-            if cancel.is_cancelled() || !me.current(slot, job) {
-                return;
-            }
-            if result.is_ok() {
-                me.remember_lookup(&text);
-            }
-            me.emit(Event::Dictionary { slot, job, query: text, result: result.map(Arc::new).map_err(Arc::new) });
-        });
+        let query = text.clone();
+        self.spawn_or(
+            "dictionary",
+            move || {
+                let result = catch_panic("dictionary lookup", || me.lookup(&text, pair, provider.as_deref(), &cancel));
+                if cancel.is_cancelled() || !me.current(slot, job) {
+                    return;
+                }
+                if result.is_ok() {
+                    me.remember_lookup(&text);
+                }
+                me.emit(Event::Dictionary { slot, job, query: text, result: result.map(Arc::new).map_err(Arc::new) });
+            },
+            |e| self.emit(Event::Dictionary { slot, job, query, result: Err(Arc::new(e)) }),
+        );
         job
     }
 
@@ -1193,6 +1275,10 @@ impl Engine {
     /// once; does nothing for engines without a slow first call.
     pub fn warm_up_ocr(&self) {
         let Some(provider) = self.registry().get(&self.config().ocr.provider) else { return };
+        // Warming up may open a connection (Lens does).
+        if self.with_pipeline(&CancelToken::new(), |p| p.offline_refusal(provider.as_ref())).is_some() {
+            return;
+        }
         let spawned = std::thread::Builder::new().name("glossa-ocr-warm-up".into()).spawn(move || provider.warm_up());
         if let Err(e) = spawned {
             tracing::debug!("OCR warm-up not started: {e}");
@@ -1270,34 +1356,58 @@ impl Engine {
     fn recognize_with(&self, image: Vec<u8>, opts: &RecognizeOptions, cancel: &CancelToken) -> Result<OcrOutcome> {
         let cfg = self.config();
         if let Some(dir) = &cfg.ocr.save_image_dir {
-            let name = format!("glossa-{}.png", glossa_core::now_unix());
+            let name = ocr_image_name(glossa_core::now_unix());
             if let Err(e) = std::fs::create_dir_all(dir).and_then(|_| std::fs::write(dir.join(name), &image)) {
                 tracing::warn!("could not save the OCR image: {e}");
             }
         }
         let registry = self.registry();
         let http = self.inner.http.read().clone();
+        let options_of = |p: &dyn Provider| {
+            glossa_modules::provider::resolve_options(p.options(), cfg.services.options.get(&p.info().id))
+        };
+        let is_local = |p: &dyn Provider| p.is_local(&options_of(p));
+        let offline_only = cfg.network.offline_only;
+        let refused = |p: &dyn Provider| Error::OfflineOnly(format!("{} is an online service", p.info().name));
         let providers: Vec<Arc<dyn Provider>> = match opts.provider.as_deref() {
             Some(id) => {
                 let p = registry.get(id).ok_or_else(|| Error::NoSuchModule(id.to_owned()))?;
                 if !p.info().capabilities.contains(Capabilities::OCR) {
                     return Err(Error::Unsupported { provider: p.info().name.clone(), capability: "text recognition" });
                 }
+                if offline_only && !is_local(p.as_ref()) {
+                    return Err(refused(p.as_ref()));
+                }
                 vec![p]
             }
             None => {
-                let mut v: Vec<Arc<dyn Provider>> = registry.get(&cfg.ocr.provider).into_iter().collect();
-                v.extend(
-                    registry
-                        .with_capability(Capabilities::OCR)
-                        .into_iter()
-                        .filter(|p| quiet_ocr_fallback(&p.info().id, &cfg.ocr.provider)),
-                );
+                let chosen = registry.get(&cfg.ocr.provider).filter(|p| p.info().capabilities.contains(Capabilities::OCR));
+                let mut v: Vec<Arc<dyn Provider>> = Vec::new();
+                match &chosen {
+                    Some(p) if offline_only && !is_local(p.as_ref()) => {
+                        // The engine the user chose would send the picture
+                        // out. Saying so beats quietly using another one.
+                        return Err(refused(p.as_ref()));
+                    }
+                    Some(p) => v.push(p.clone()),
+                    None => {}
+                }
+                // The picture goes to the chosen engine and, when that one
+                // fails, only to engines that keep it on this computer. An
+                // online engine is never a fallback: choosing Tesseract
+                // must not end in an upload because Tesseract was missing.
+                v.extend(registry.with_capability(Capabilities::OCR).into_iter().filter(|p| {
+                    quiet_ocr_fallback(&p.info().id, &cfg.ocr.provider, p.info().capabilities.contains(Capabilities::OFFLINE) || is_local(p.as_ref()))
+                }));
                 v
             }
         };
         if providers.is_empty() {
-            return Err(Error::NoProvider("text recognition"));
+            return Err(if offline_only {
+                Error::OfflineOnly("no text recognition engine on this computer is available".into())
+            } else {
+                Error::NoProvider("text recognition")
+            });
         }
         let to = opts.translate_to.filter(|l| l.is_language());
         let mut req = OcrRequest::new(ImageSource::Bytes(image));
@@ -1475,18 +1585,22 @@ impl Engine {
     pub fn recognize_async_with(&self, slot: Slot, image: Vec<u8>, opts: RecognizeOptions) -> u64 {
         let (job, cancel) = self.begin(slot);
         let me = self.clone();
-        self.spawn("ocr", move || {
-            let result = catch_panic("text recognition", || me.recognize_with(image, &opts, &cancel));
-            if cancel.is_cancelled() || !me.current(slot, job) {
-                return;
-            }
-            if let (Ok(out), Slot::Ocr) = (&result, slot) {
-                if let Some(t) = &out.translation {
-                    me.record_history(t);
+        self.spawn_or(
+            "ocr",
+            move || {
+                let result = catch_panic("text recognition", || me.recognize_with(image, &opts, &cancel));
+                if cancel.is_cancelled() || !me.current(slot, job) {
+                    return;
                 }
-            }
-            me.emit(Event::Recognized { slot, job, result: result.map(Arc::new).map_err(Arc::new) });
-        });
+                if let (Ok(out), Slot::Ocr) = (&result, slot) {
+                    if let Some(t) = &out.translation {
+                        me.record_history(t);
+                    }
+                }
+                me.emit(Event::Recognized { slot, job, result: result.map(Arc::new).map_err(Arc::new) });
+            },
+            |e| self.emit(Event::Recognized { slot, job, result: Err(Arc::new(e)) }),
+        );
         job
     }
 
@@ -1512,12 +1626,29 @@ impl Engine {
         let lang = if lang.is_language() { lang } else { self.detect(text).map(|d| d.lang).unwrap_or(LangId::ENGLISH) };
         let registry = self.registry();
         let http = self.inner.http.read().clone();
+        let is_local = |p: &dyn Provider| {
+            p.is_local(&glossa_modules::provider::resolve_options(p.options(), cfg.services.options.get(&p.info().id)))
+        };
+        let offline_only = cfg.network.offline_only;
+        // The chosen voice, then only voices on this computer: text meant
+        // for the system voice is not sent to an online one because the
+        // system voice lacked the language.
         let mut providers: Vec<Arc<dyn Provider>> = registry.get(&cfg.services.tts).into_iter().collect();
         providers.extend(
-            registry.with_capability(Capabilities::LISTEN).into_iter().filter(|p| p.info().id != cfg.services.tts),
+            registry
+                .with_capability(Capabilities::LISTEN)
+                .into_iter()
+                .filter(|p| p.info().id != cfg.services.tts && is_local(p.as_ref())),
         );
+        if offline_only {
+            providers.retain(|p| is_local(p.as_ref()));
+        }
         let req = SpeakRequest { text: text.to_owned(), lang, slow };
-        let mut last = Error::NoProvider("speech");
+        let mut last = if offline_only {
+            Error::OfflineOnly("no voice on this computer is available".into())
+        } else {
+            Error::NoProvider("speech")
+        };
         for provider in providers.into_iter().filter(|p| p.info().capabilities.contains(Capabilities::LISTEN)) {
             let opts = glossa_modules::provider::resolve_options(
                 provider.options(),
@@ -1542,13 +1673,17 @@ impl Engine {
     pub fn speak_async(&self, slot: Slot, text: String, lang: LangId, slow: Option<bool>) -> u64 {
         let (job, cancel) = self.begin(slot);
         let me = self.clone();
-        self.spawn("speech", move || {
-            let result = catch_panic("speech", || me.speak_with(&text, lang, slow, &cancel));
-            if cancel.is_cancelled() || !me.current(slot, job) {
-                return;
-            }
-            me.emit(Event::Spoken { slot, job, result: result.map(Arc::new).map_err(Arc::new) });
-        });
+        self.spawn_or(
+            "speech",
+            move || {
+                let result = catch_panic("speech", || me.speak_with(&text, lang, slow, &cancel));
+                if cancel.is_cancelled() || !me.current(slot, job) {
+                    return;
+                }
+                me.emit(Event::Spoken { slot, job, result: result.map(Arc::new).map_err(Arc::new) });
+            },
+            |e| self.emit(Event::Spoken { slot, job, result: Err(Arc::new(e)) }),
+        );
         job
     }
 
@@ -1792,24 +1927,191 @@ fn ocr_falls_over(e: &Error) -> bool {
 }
 
 /// Whether the engine `id` may be tried when the chosen one (`chosen`)
-/// fails. OneOCR copies about 55 MB of the Snipping Tool's libraries on
-/// first use, and an AI endpoint would send the picture to a service chosen
-/// for translation: both run only when chosen, never as a quiet fallback.
-fn quiet_ocr_fallback(id: &str, chosen: &str) -> bool {
-    id != chosen && id != glossa_ocr::oneocr::ONEOCR_ID && !ai::is_endpoint(id)
+/// fails. Only an engine that keeps the picture on this computer (`local`):
+/// a screenshot is never uploaded to a service the user did not choose,
+/// whatever went wrong with the one they did. OneOCR copies about 55 MB of
+/// the Snipping Tool's libraries on first use, and an AI endpoint, local or
+/// not, was chosen for translation: both run only when chosen.
+fn quiet_ocr_fallback(id: &str, chosen: &str, local: bool) -> bool {
+    local && id != chosen && id != glossa_ocr::oneocr::ONEOCR_ID && !ai::is_endpoint(id)
+}
+
+/// The file name of a saved OCR picture: the time, and a number that makes
+/// two pictures taken in the same second (a watched region, an API client
+/// in a loop) two files.
+fn ocr_image_name(unix_secs: i64) -> String {
+    static COUNTER: AtomicU64 = AtomicU64::new(0);
+    let millis = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.subsec_millis());
+    let n = COUNTER.fetch_add(1, Ordering::Relaxed);
+    format!("glossa-{unix_secs}-{millis:03}-{n}.png")
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
+    thread_local! {
+        /// Makes [`Engine::start_thread`] fail on this test's thread.
+        pub(super) static THREADS_FAIL: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+    }
+
     #[test]
     fn pictures_go_to_an_ai_endpoint_or_oneocr_only_when_chosen() {
-        assert!(quiet_ocr_fallback("tesseract", "lens"));
-        assert!(!quiet_ocr_fallback("lens", "lens"));
-        assert!(!quiet_ocr_fallback(ai::BUILTIN_ID, "lens"));
-        assert!(!quiet_ocr_fallback("ai-local-vllm", "lens"));
-        assert!(!quiet_ocr_fallback(glossa_ocr::oneocr::ONEOCR_ID, "lens"));
+        assert!(quiet_ocr_fallback("tesseract", "lens", true));
+        assert!(!quiet_ocr_fallback("lens", "lens", true));
+        assert!(!quiet_ocr_fallback(ai::BUILTIN_ID, "lens", true));
+        assert!(!quiet_ocr_fallback("ai-local-vllm", "lens", true));
+        assert!(!quiet_ocr_fallback(glossa_ocr::oneocr::ONEOCR_ID, "lens", true));
+        // An engine that sends the picture out is never a fallback.
+        assert!(!quiet_ocr_fallback("lens", "tesseract", false));
+        assert!(!quiet_ocr_fallback("ocr-space", "lens", false));
+    }
+
+    #[test]
+    fn saved_ocr_pictures_taken_in_one_second_get_different_names() {
+        let names: std::collections::HashSet<String> = (0..50).map(|_| ocr_image_name(1_700_000_000)).collect();
+        assert_eq!(names.len(), 50);
+        assert!(names.iter().all(|n| n.starts_with("glossa-1700000000-") && n.ends_with(".png")));
+    }
+
+    /// The defect: an offline engine was chosen, it failed, and the picture
+    /// went to Google Lens. The picture now stays here: the chosen engine's
+    /// error is reported and nothing is sent.
+    #[cfg(unix)]
+    #[test]
+    fn a_failing_offline_engine_never_falls_back_to_an_online_one() {
+        let (e, dir) = engine("ocr-no-upload");
+        e.update_config(|c| {
+            c.ocr.provider = "tesseract".into();
+            c.ocr.tesseract.path = dir.join("no-tesseract").to_string_lossy().into_owned();
+            // Lens through its command line: were it tried, the error would
+            // name this file.
+            c.ocr.lens.mode = glossa_core::config::LensMode::Cli;
+            c.ocr.lens.cli_path = dir.join("lens-was-called").to_string_lossy().into_owned();
+        })
+        .unwrap();
+        let registry = e.registry();
+        let lens = registry.get("lens").unwrap();
+        assert!(!lens.is_local(&Default::default()), "Lens is online");
+        assert!(registry.get("tesseract").unwrap().is_local(&Default::default()));
+        let command = registry.get(glossa_ocr::command::COMMAND_OCR_ID).unwrap();
+        assert!(!command.is_local(&Default::default()), "a command is not known to stay offline");
+        let png = vec![0x89, b'P', b'N', b'G', 0x0D, 0x0A, 0x1A, 0x0A];
+        let err = e.recognize(png, LangId::ENGLISH, None).unwrap_err();
+        let said = err.to_string();
+        assert!(said.contains("no-tesseract") && !said.contains("lens-was-called"), "{err:?}");
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn offline_only_refuses_online_ocr_voices_and_translators_with_a_clear_error() {
+        let (e, dir) = engine("offline-only");
+        e.update_config(|c| {
+            c.network.offline_only = true;
+            c.ocr.provider = "lens".into();
+            c.services.tts = "google".into();
+            c.services.enabled = vec!["google".into(), "bing".into()];
+            c.services.active = "google".into();
+        })
+        .unwrap();
+        let png = vec![0x89, b'P', b'N', b'G', 0x0D, 0x0A, 0x1A, 0x0A];
+        let err = e.recognize(png.clone(), LangId::ENGLISH, None).unwrap_err();
+        assert!(matches!(err, Error::OfflineOnly(ref m) if m.contains("Lens")), "{err:?}");
+        let err = e.recognize_using("lens", png, LangId::ENGLISH, None).unwrap_err();
+        assert!(matches!(err, Error::OfflineOnly(_)), "{err:?}");
+        let err = e
+            .translate("hello", LangPair::new(LangId::ENGLISH, LangId::RUSSIAN), &TranslateOptions::default())
+            .unwrap_err();
+        assert!(matches!(err, Error::OfflineOnly(_)), "{err:?}");
+        assert!(err.to_string().contains("offline only"), "{err}");
+        let err = e.dictionary("hello", LangPair::new(LangId::ENGLISH, LangId::RUSSIAN), Some("google-dictionary"));
+        assert!(matches!(err, Err(Error::OfflineOnly(_))), "{err:?}");
+        let err = e.test_provider("google", None).unwrap_err();
+        assert!(matches!(err, Error::OfflineOnly(_)), "{err:?}");
+        // The engine's own client refuses too, for anything that gets past
+        // the checks above (a module, a download).
+        let http = e.inner.http.read().clone();
+        let err = glossa_net::Http::send(http.as_ref(), glossa_net::HttpRequest::get("https://example.com/")).unwrap_err();
+        assert!(matches!(err, Error::OfflineOnly(_)), "{err:?}");
+
+        // An AI endpoint on this computer is local; the same one pointed
+        // elsewhere is not.
+        let id = e.add_ai_endpoint("Mine", "ollama").unwrap();
+        let endpoint = e.registry().get(&id).unwrap();
+        let options = |url: &str| -> OptionValues { [("base_url".to_owned(), serde_json::json!(url))].into_iter().collect() };
+        assert!(endpoint.is_local(&options("http://localhost:11434/v1")));
+        assert!(endpoint.is_local(&options("http://127.0.0.1:1234/v1/chat/completions")));
+        assert!(!endpoint.is_local(&options("https://api.openai.com/v1")));
+        assert!(!endpoint.is_local(&options("http://localhost.evil.example/v1")));
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// `glossa-cli --offline`: in force for the run, absent from the file,
+    /// and still in force after the settings are changed and saved.
+    #[test]
+    fn session_overrides_apply_without_being_saved() {
+        let (e, dir) = engine("session");
+        e.update_config(|c| {
+            c.services.enabled = vec!["google".into()];
+            c.services.active = "google".into();
+        })
+        .unwrap();
+        e.set_session_overrides(SessionOverrides {
+            offline_only: true,
+            detect: Some(glossa_core::config::DetectMode::Offline),
+        })
+        .unwrap();
+        assert!(e.config().network.offline_only);
+        let translate =
+            || e.translate("hello", LangPair::new(LangId::ENGLISH, LangId::RUSSIAN), &TranslateOptions::default());
+        assert!(matches!(translate(), Err(Error::OfflineOnly(_))));
+        e.update_config(|c| c.network.timeout_secs = 7).unwrap();
+        assert!(matches!(translate(), Err(Error::OfflineOnly(_))), "a rebuilt client is still offline");
+        let http = e.inner.http.read().clone();
+        let sent = glossa_net::Http::send(http.as_ref(), glossa_net::HttpRequest::get("https://example.com/"));
+        assert!(matches!(sent, Err(Error::OfflineOnly(_))), "{sent:?}");
+        e.shutdown();
+        let saved = Config::load(&e.paths().config_file()).unwrap();
+        assert!(!saved.network.offline_only, "the override is not written");
+        assert_eq!(saved.general.detect, glossa_core::config::DetectMode::OfflineThenService);
+        assert_eq!(saved.network.timeout_secs, 7);
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// The defect: when no worker thread could be started nothing was
+    /// emitted, and the window that asked waited for ever.
+    #[test]
+    fn a_job_whose_thread_cannot_start_ends_in_an_error_event() {
+        let (e, dir) = engine("no-threads");
+        let events = e.subscribe();
+        THREADS_FAIL.with(|f| f.set(true));
+        let pair = LangPair::new(LangId::ENGLISH, LangId::RUSSIAN);
+        let t = e.translate_async(Slot::Main, "hello".into(), pair, TranslateOptions::default());
+        let d = e.dictionary_async(Slot::Dictionary, "hello".into(), pair, None);
+        let o = e.recognize_async(Slot::Ocr, vec![1], LangId::ENGLISH, None);
+        let s = e.speak_async(Slot::Speech, "hello".into(), LangId::ENGLISH, None);
+        e.apply_preset_async("Private".into());
+        THREADS_FAIL.with(|f| f.set(false));
+        let mut ended = Vec::new();
+        let mut preset = false;
+        for ev in events.try_iter() {
+            match ev {
+                Event::Translated { job, result: Err(err), .. } if matches!(*err, Error::Internal(_)) => ended.push(job),
+                Event::Dictionary { job, query, result: Err(_), .. } => {
+                    assert_eq!(query, "hello");
+                    ended.push(job);
+                }
+                Event::Recognized { job, result: Err(_), .. } | Event::Spoken { job, result: Err(_), .. } => {
+                    ended.push(job)
+                }
+                Event::PresetApplied { result: Err(_) } => preset = true,
+                _ => {}
+            }
+        }
+        assert_eq!(ended, vec![t, d, o, s], "every job reported its failure");
+        assert!(preset);
+        std::fs::remove_dir_all(&dir).ok();
     }
 
     #[test]
@@ -2365,6 +2667,7 @@ mod tests {
             detected: None,
             back: None,
             failed: vec![],
+            truncated: false,
         };
         e.record_history(&out);
         assert_eq!(e.history().len(), 1);
@@ -2461,6 +2764,7 @@ mod tests {
             detected: None,
             back: None,
             failed: vec![("bing".into(), "timed out".into())],
+            truncated: false,
         };
         let v = serde_json::to_value(out.report()).unwrap();
         assert_eq!(
@@ -2468,7 +2772,8 @@ mod tests {
             serde_json::json!({
                 "text": "Привет", "from": "en", "to": "ru", "service": "google",
                 "romanization": "Privet", "source_romanization": "həˈlō", "alternatives": [],
-                "back": null, "failed": [["bing", "timed out"]], "elapsed_ms": 12
+                "back": null, "failed": [["bing", "timed out"]], "elapsed_ms": 12,
+                "truncated": false
             })
         );
     }

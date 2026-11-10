@@ -490,7 +490,7 @@ impl Cx<'_> {
                     self.set(&spec.key, s.into());
                 }
             }
-            OptionKind::Text | OptionKind::Secret | OptionKind::Url => {
+            OptionKind::Text | OptionKind::Secret | OptionKind::Url | OptionKind::Command => {
                 let mut s = current.as_str().unwrap_or("").to_owned();
                 let edit = egui::TextEdit::singleline(&mut s)
                     .desired_width(width)

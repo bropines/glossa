@@ -183,7 +183,7 @@ network = ["api.example.com", "*.example.org"]   # "*" for any host; empty = no 
 
 [[options]]                   # each becomes a field on the module's settings page
 key = "api_key"
-type = "secret"               # text | secret | url | bool | number | select | multiselect | multiline | lang | file
+type = "secret"               # text | secret | url | bool | number | select | multiselect | multiline | lang | file | command
 label = "API key"
 help = "Get one at https://example.com/keys"
 required = true
@@ -288,6 +288,18 @@ The types added for richer pages:
 | `multiselect` | a list of strings from `choices` | checkboxes in a dropdown |
 | `lang` | a language code (`de`, `zh-Hans`, `auto`) | Glossa's searchable language picker |
 | `file` | a path | a text field and a *Browse…* button; the module gets the path, not the file |
+| `command` | a command line or a program the module runs | a text field |
+
+Declare a setting as `command` when its value is run: a program, an
+interpreter, a command line. Glossa treats `command` and `file` values as
+the user's own to set. A preset carries neither when it is imported, and an
+imported preset cannot switch a role (the OCR engine, the voice, a
+translator) to a module with a `command` setting the user has not filled in:
+otherwise a shared preset file could run a program. Settings merely *named*
+like a command or a path (`python_path`, `player_cmd`, `model_dir`) are left
+out of imports too, whatever their type. A Glossa release that does not know
+`command` shows the field as needing a newer version and treats its value
+as a secret, which is as safe.
 
 A type this Glossa does not know (from a newer release) does not stop the
 module: the field shows a "needs a newer version" line.

@@ -8,7 +8,7 @@
 # Only `translate`: the program also answers `detect` for Qwen3 and custom
 # models, but Hy-MT2 misnames languages (it called Russian "English" in
 # tests), so detection is not offered.
-capabilities = ["translate"]
+capabilities = ["translate", "offline"]
 
 [module]
 id = "local-llm"

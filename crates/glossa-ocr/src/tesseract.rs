@@ -42,7 +42,7 @@ pub struct Tesseract {
 
 impl Tesseract {
     pub fn new(cfg: TesseractConfig) -> Self {
-        let mut info = ProviderInfo::new(TESSERACT_ID, NAME, Capabilities::OCR);
+        let mut info = ProviderInfo::new(TESSERACT_ID, NAME, Capabilities::OCR | Capabilities::OFFLINE);
         info.description =
             "The open-source recogniser, run as a program. Offline; reads the languages whose data is installed."
                 .into();
