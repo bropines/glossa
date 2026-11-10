@@ -15,6 +15,7 @@ writing a module.
 - [Running the harness](#running-the-harness)
 - [Fixtures](#fixtures)
 - [Recorded HTTP](#recorded-http)
+- [Live health checks](#live-health-checks)
 - [What is checked](#what-is-checked)
 - [Templates](#templates)
 - [Debugging with logs](#debugging-with-logs)
@@ -102,6 +103,15 @@ finds most of it for you; the rest needs a moment's thought.
   network`.
 - List exact hosts. `"*"` is reported as a warning: it lets the module
   reach anything.
+
+**README**
+
+- A module that needs a key or setup, scrapes pages or uses an endpoint its
+  service does not document says so in a `README.md`: how it gets its
+  answers (an official API, an unofficial endpoint, HTML scraping), how to
+  get the key, what leaves the user's machine and where it goes, the limits
+  and the cost. The modules in this repository use one layout for it; copy
+  [`modules/python/ocr-space/README.md`](../../modules/python/ocr-space/README.md).
 
 **Size and memory**
 
@@ -304,6 +314,44 @@ offline; mark such cases `live = true`.
 Permissions still apply: a request to a host the manifest does not list
 fails before it reaches the recordings, exactly as in the program.
 
+## Live health checks
+
+Recorded answers keep passing after the service has changed, so they say
+nothing about whether a module still works today. And they cannot simply be
+run with `--live`: a case that expects "Привет, мир" fails as soon as the
+service words it "Привет, мир!". A module that calls a network service
+therefore also has **live-only cases**, by this convention:
+
+- they live in `tests/live.toml` (or at the end of `basic.toml` when there
+  is only one), each with `live = true`, so an offline run skips them;
+- the name starts with `live:`, so `--case "live:"` picks them and nothing
+  else;
+- they ask for something ordinary (a common word, a plain sentence) and
+  expect only what any right answer has: at most the detected language or
+  the headword. The harness's own [shape checks](#what-is-checked) do the
+  rest: no empty translation, an article with a headword and something in
+  it.
+
+```toml
+# tests/live.toml
+[[case]]
+name = "live: translates a sentence"
+op = "translate"
+live = true
+text = "Good morning, how are you?"
+from = "auto"
+to = "de"
+expect = { detected = "en" }
+```
+
+```bash
+glossa-cli module test --live --case "live:" modules/my-module
+```
+
+In this repository, `.github/workflows/modules-live.yml` runs them weekly
+for the bundled modules and the JavaScript examples and keeps one issue,
+labelled `modules-live`, naming the modules whose service stopped answering.
+
 ## What is checked
 
 **Without running anything** (`module check` and `module test`):
@@ -343,7 +391,12 @@ process module including its start.
 
 ## Templates
 
-Each runtime has a small example in the repository that passes its own
+The [Glossa module kit](https://github.com/bropines/glossa-module-kit) is a repository to start from
+without cloning this one: a template per runtime with fixtures, editor
+types for the JavaScript API, and a GitHub Action that runs this harness in
+your module's CI.
+
+Each runtime also has a small example in this repository that passes its own
 fixtures. Copy the one for your runtime, change the `id`, and keep the
 `tests/` folder growing with the module:
 

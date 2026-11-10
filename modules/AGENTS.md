@@ -31,6 +31,16 @@ AGENTS.md for a module in its own repository is in
   nothing in the script that looks like a key.
 - List a new one in `docs/modules/README.md` (*Bundled modules*) and the
   README's feature list.
+- Each has a `README.md` in the common layout (how it gets its answers,
+  what leaves the machine, limits, content) and a `tests/live.toml` with
+  live-only cases named `live: …` that check only the shape of a real
+  answer ([testing.md](../docs/modules/testing.md#live-health-checks));
+  `.github/workflows/modules-live.yml` runs those weekly.
+- Every `host.fetch` passes a `timeout` under the call budget, and the
+  entry points are wrapped in `guarded(...)` at the end of `main.js`, so
+  an answer in an unexpected shape is a `bad_response` naming the service
+  rather than a TypeError. Option labels are translated in
+  `locales/ru.toml`, which only a copied module uses.
 
 ## Examples
 
