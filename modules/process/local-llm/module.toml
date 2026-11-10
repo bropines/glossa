@@ -27,8 +27,9 @@ description = "Offline translation with a small language model (Hy-MT2 or Qwen3)
 homepage = "https://github.com/bropines/glossa/tree/main/modules/process/local-llm"
 author = "Glossa contributors"
 license = "MIT OR Apache-2.0 (llama.cpp MIT, models Apache-2.0)"
-# The settings page uses `file` and [ui.settings].
-min_glossa = "0.1.0-beta.2"
+# [[assets]] came with this release (the settings page's `file` and
+# [ui.settings] with the one before).
+min_glossa = "0.1.0-beta.3"
 
 [permissions]
 # Only where the files come from; the program itself talks to llama-server

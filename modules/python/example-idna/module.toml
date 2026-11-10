@@ -14,6 +14,9 @@ description = "Turns internationalised domain names into their ASCII (punycode) 
 license = "MIT"
 idle_timeout_secs = 60
 requirements = ["idna==3.10"]
+# `requirements` came with this release; an older build would start the
+# module without its package.
+min_glossa = "0.1.0-beta.3"
 
 [permissions]
 network = []
