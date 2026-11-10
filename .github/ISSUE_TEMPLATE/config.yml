@@ -1,5 +1,8 @@
 blank_issues_enabled: false
 contact_links:
+  - name: Troubleshooting
+    url: https://github.com/bropines/glossa/blob/main/docs/troubleshooting.md
+    about: Hotkeys, the popup, permissions, proxies, text recognition, modules. Look here first.
   - name: Documentation
     url: https://github.com/bropines/glossa/tree/main/docs
     about: Modules, the module protocol, themes and the architecture.

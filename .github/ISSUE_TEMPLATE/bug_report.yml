@@ -5,8 +5,10 @@ body:
   - type: markdown
     attributes:
       value: |
-        Thanks for taking the time. Please write in English; translate any
-        text in screenshots that is in another language.
+        Thanks for taking the time. Write in English or in Russian
+        (можно по-русски). Before filing, look at
+        [Troubleshooting](https://github.com/bropines/glossa/blob/main/docs/troubleshooting.md):
+        the usual problems are answered there.
 
         **Never paste API keys, tokens or passwords**, including ones in your
         `config.toml`, a classic `Service.js`, or the log. Replace them with
@@ -29,8 +31,8 @@ body:
     id: version
     attributes:
       label: Glossa version
-      description: Tray menu → About Glossa, or Options → Updates. For a build from source, the commit.
-      placeholder: 0.1.0
+      description: Tray menu → About Glossa, Options → Updates, or `glossa-cli --version`. For a build from source, the commit.
+      placeholder: 0.1.0-beta.2
     validations:
       required: true
   - type: input
@@ -38,9 +40,20 @@ body:
     attributes:
       label: Operating system
       description: Version and, on Linux, the desktop and whether it is X11 or Wayland.
-      placeholder: Windows 11 24H2 / Debian 12, KDE Plasma 6, Wayland
+      placeholder: Windows 11 24H2 / macOS 15.5, Apple silicon / Debian 12, KDE Plasma 6, Wayland
     validations:
       required: true
+  - type: textarea
+    id: doctor
+    attributes:
+      label: Output of `glossa-cli doctor`
+      description: |
+        Run `glossa-cli doctor` in a terminal and paste everything it prints: the system, what works
+        in your session (hotkeys, selection, screen capture), permissions, OCR engines, modules, the
+        folders in use and the proxy. It prints no keys or tokens, but it does show folder paths with
+        your user name; trim them if you prefer. On macOS `glossa-cli` is in the release's `.zip`,
+        not inside `Glossa.app`.
+      render: text
   - type: input
     id: service
     attributes:
@@ -59,11 +72,12 @@ body:
       label: Log excerpt
       description: |
         The lines around the problem from `glossa.log` in the cache folder:
-        `%LOCALAPPDATA%\Glossa\glossa.log` on Windows, `~/.cache/glossa/glossa.log`
+        `%LOCALAPPDATA%\Glossa\glossa.log` on Windows,
+        `~/Library/Caches/Glossa/glossa.log` on macOS, `~/.cache/glossa/glossa.log`
         on Linux, `data\cache\glossa.log` beside the program in portable mode
-        (or under `GLOSSA_HOME` if you set it). For more detail, set
-        `GLOSSA_LOG=debug` before starting Glossa, or run the failing command
-        with `glossa-cli -v`.
+        (or `cache/glossa.log` under `GLOSSA_HOME` if you set it). `glossa-cli doctor`
+        prints the path. For more detail, set `GLOSSA_LOG=debug` before starting
+        Glossa, or run the failing command with `glossa-cli -v`.
       render: text
   - type: textarea
     id: more
