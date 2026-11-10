@@ -566,9 +566,19 @@ optional = true                      # fetched only when the user picks it
 - **Optional** assets (one language pair, voice or recogniser of many) do
   not hold the module back. They are downloaded one by one, by name; the
   `assets` host call says which are still missing.
+- **Flaky networks.** A download that fails on the network, times out, or
+  gets a 5xx or a 429 is tried again after a pause (one second doubling to
+  thirty, or the server's `Retry-After`, at most two minutes), carrying on
+  from the bytes already on disk with a `Range` request. While bytes keep
+  arriving it keeps trying; after five attempts in a row that brought
+  nothing, the next URL of the asset gets its turn. A server that ignores
+  `Range` sends the file again from its start. A 404 or 403 is not retried.
+  Serve assets from a host that supports `Range` (GitHub releases and
+  Hugging Face do) and large files survive a bad connection.
 - **Integrity.** A download resumes a partial file (`Range` requests), is
   checked against `sha256` and `size` before it is put in place, and is
-  deleted if it does not match. Afterwards, knowing a file is ready costs a
+  deleted if it does not match (a file put together from several pieces
+  is fetched once more from nothing first). Afterwards, knowing a file is ready costs a
   file-system check, never a re-hash; *Check files* (or `glossa-cli assets
   verify`) hashes them again. An unpacked archive is checked by its files
   and their sizes, since the archive itself is not kept. A `sha256` of all

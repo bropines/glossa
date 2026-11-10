@@ -250,6 +250,19 @@ the notes of its GitHub release.
 
 ### Fixed
 
+- Downloads of module files (models, helper programs, the managed Python
+  and `uv`) no longer give up at the first hiccup. A dropped connection, a
+  timeout, a busy server (5xx) or a rate limit (429, waiting as long as
+  `Retry-After` asks) is retried with growing pauses, and the download
+  carries on from the bytes already on disk with a `Range` request; as
+  long as bytes keep arriving it keeps going, and after five attempts in
+  a row without any the next mirror is tried. A server that cannot resume
+  sends the file again from the start, and the progress bar waits rather
+  than jumping back. A connection that goes silent (a laptop that slept)
+  is noticed after three network timeouts instead of hanging. The SHA-256
+  is still checked over the whole file, and a file put together from
+  pieces that fails it is fetched once more from nothing before the
+  download is reported as damaged. Cancel works during the pauses.
 - The popup's copy button no longer shows a "Copied" message, which
   turned up now and then and spoiled the popup's look. A failed copy is
   still reported.
