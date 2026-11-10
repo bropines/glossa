@@ -146,7 +146,7 @@ fn control_api(cfg: &Config) -> Value {
     json!({
         "enabled": cfg.server.enabled,
         "bind": cfg.server.bind,
-        "pot_compat_without_token": cfg.server.pot_compat_without_token,
+        "pot_routes_without_token": cfg.server.pot_routes_without_token,
         "answer": answer,
     })
 }

@@ -33,17 +33,33 @@
 //!
 //! Security: loopback by default; every request must carry the token
 //! (`Authorization: Bearer …` or `?token=…`), which is never empty (the
-//! engine replaces an empty one). The one exception is pot-app's routes,
-//! which pot-app's bindings call without a token: with
-//! `[server] pot_compat_without_token` on, they are let through from a
-//! loopback peer only. They can only open windows, never return data. Any
-//! request carrying a header only browsers send (`Origin`, `Sec-Fetch-*`,
-//! `Referer`) is refused, so a web page cannot reach the API from the user's
-//! browser, not even with an `<img>`; and the `Host` must be an address or
-//! `localhost`, which defeats DNS rebinding.
+//! engine replaces an empty one). pot-app's routes, which pot-app's
+//! bindings call without a token, are let through without one only with
+//! `[server] pot_routes_without_token` switched on (it is off unless the
+//! user or the pot-app import turned it on), and then only from a loopback
+//! peer; they can only open windows, never return data, and take a small
+//! body. Any request carrying a header only browsers send (`Origin`,
+//! `Sec-Fetch-*`, `Referer`) is refused, so a web page cannot reach the API
+//! from the user's browser, not even with an `<img>`; and the `Host` must
+//! be an address or `localhost`, which defeats DNS rebinding.
+//!
+//! Listening beyond loopback (`bind = "0.0.0.0:…"`) is plain HTTP: the
+//! token crosses the network in the clear. So whatever changes the program
+//! itself (approving modules, installing Python, module files, presets) is
+//! answered only to a loopback peer, whatever the bind address and whoever
+//! holds the token ([`ADMIN_PREFIXES`]); a remote user goes through an SSH
+//! tunnel, which arrives as loopback.
+//!
+//! `/health` also lets a client make sure it talks to the Glossa that owns
+//! its data folder before it sends the token: see [`runtime`].
+//!
+//! The listener and its limits (connections at once, head and body sizes,
+//! timeouts) are in [`http`].
 
-use std::io::Read;
-use std::net::SocketAddr;
+mod http;
+pub mod runtime;
+
+use std::net::{IpAddr, SocketAddr, TcpListener, TcpStream};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
@@ -51,16 +67,20 @@ use std::time::Duration;
 use base64::Engine as _;
 use glossa_core::{Action, Capabilities, Error, LangId, LangPair};
 use serde_json::{json, Value};
-use tiny_http::{Header, Method, Request, Response, Server};
 
+use self::http::{BodyError, Method, Reply, Request};
 use crate::{Engine, TranslateOptions};
+
+pub use runtime::{find as find_running, Found, Running};
 
 /// A running control server. Dropping it stops the server.
 pub struct ServerHandle {
     pub addr: SocketAddr,
     stop: Arc<AtomicBool>,
-    server: Arc<Server>,
     thread: Option<std::thread::JoinHandle<()>>,
+    /// The runtime file `glossa-cli` finds this server by; withdrawn when
+    /// the server stops.
+    published: Option<runtime::Published>,
 }
 
 impl ServerHandle {
@@ -69,9 +89,16 @@ impl ServerHandle {
     }
 
     fn shutdown(&mut self) {
+        // First, so that nobody is sent to a server that is going away.
+        self.published = None;
         self.stop.store(true, Ordering::SeqCst);
-        self.server.unblock();
         if let Some(t) = self.thread.take() {
+            // Wake the accept loop with a connection of our own; it sees
+            // the flag and leaves.
+            let wake: Option<SocketAddr> = connect_addr(&self.addr.to_string()).parse().ok();
+            if let Some(wake) = wake {
+                let _ = TcpStream::connect_timeout(&wake, Duration::from_secs(1));
+            }
             let _ = t.join();
         }
     }
@@ -83,38 +110,47 @@ impl Drop for ServerHandle {
     }
 }
 
-const MAX_BODY: u64 = 32 * 1024 * 1024;
+/// The largest body of an ordinary request: text to translate, a preset.
+const MAX_BODY: u64 = 1024 * 1024;
+/// The largest picture `/v1/ocr` takes, the one route that needs room: a
+/// 4K screenshot as PNG, also when sent as base64 inside JSON.
+const MAX_IMAGE_BODY: u64 = 32 * 1024 * 1024;
+/// The largest body of pot-app's `/translate`, which may be open without
+/// the token: text for the popup.
+const MAX_POT_BODY: u64 = 64 * 1024;
+
+/// What the request threads share.
+struct Shared {
+    /// This run's secret, proving to `glossa-cli` who answers
+    /// ([`runtime`]). Never sent anywhere.
+    secret: String,
+}
 
 /// Start the server per the settings. Refuses to listen beyond loopback
 /// without a token.
 pub fn start(engine: Engine) -> Result<ServerHandle, Error> {
     let cfg = engine.config().server;
     let addr = checked_bind(&cfg.bind, &cfg.token)?;
-    let server = Arc::new(Server::http(addr).map_err(|e| Error::Platform(format!("control API on {addr}: {e}")))?);
-    let bound = server.server_addr().to_ip().unwrap_or(addr);
+    let listener = TcpListener::bind(addr).map_err(|e| Error::Platform(format!("control API on {addr}: {e}")))?;
+    let bound = listener.local_addr().unwrap_or(addr);
     let stop = Arc::new(AtomicBool::new(false));
-    let (s, st) = (server.clone(), stop.clone());
+    let shared = Arc::new(Shared { secret: crate::random_token() });
+    let published = runtime::Published::publish(engine.paths(), bound, &shared.secret);
+    let st = stop.clone();
+    let handler: Arc<dyn Fn(Request) -> Option<(Request, Reply)> + Send + Sync> =
+        Arc::new(move |mut req| Some(handle(&engine, &shared, &mut req)).map(|reply| (req, reply)));
     let thread = std::thread::Builder::new()
         .name("glossa-api".into())
-        .spawn(move || {
-            while !st.load(Ordering::SeqCst) {
-                match s.recv_timeout(Duration::from_millis(500)) {
-                    Ok(Some(req)) => {
-                        let engine = engine.clone();
-                        // Each request on its own thread: a slow translation
-                        // must not hold up a key binding.
-                        let _ = std::thread::Builder::new()
-                            .name("glossa-api-req".into())
-                            .spawn(move || handle(&engine, req));
-                    }
-                    Ok(None) => {}
-                    Err(_) => break,
-                }
-            }
-        })
+        .spawn(move || http::serve(|| listener.accept(), &st, http::MAX_CONNECTIONS, handler))
         .map_err(|e| Error::Platform(e.to_string()))?;
     tracing::info!("control API listening on http://{bound}");
-    Ok(ServerHandle { addr: bound, stop, server, thread: Some(thread) })
+    if !bound.ip().is_loopback() {
+        tracing::warn!(
+            "the control API listens beyond this machine ({bound}) over plain HTTP: the token and everything sent              can be read on the network. Module approval, Python, module files and presets are answered to this              machine only. Prefer bind = \"127.0.0.1:{}\" with an SSH tunnel (docs/control-api.md)",
+            bound.port()
+        );
+    }
+    Ok(ServerHandle { addr: bound, stop, thread: Some(thread), published })
 }
 
 /// The address to listen on. The engine never leaves the token empty, but
@@ -126,6 +162,14 @@ fn checked_bind(bind: &str, token: &str) -> Result<SocketAddr, Error> {
         return Err(Error::Config("the control API may listen beyond loopback only with a token".into()));
     }
     Ok(addr)
+}
+
+/// Whether a connection comes from this machine: `127.0.0.0/8`, `::1`, or
+/// the former written as an IPv4-mapped IPv6 address (`::ffff:127.0.0.1`),
+/// which is how a dual-stack listener (`bind = "[::]:…"`) sees a local IPv4
+/// client and which `Ipv6Addr::is_loopback` alone does not recognise.
+fn is_loopback_peer(ip: IpAddr) -> bool {
+    ip.to_canonical().is_loopback()
 }
 
 /// Where `glossa-cli action` (or anything else on this machine) should
@@ -140,21 +184,19 @@ pub fn connect_addr(bind: &str) -> String {
     }
 }
 
-struct Reply {
-    status: u16,
-    body: Vec<u8>,
-    content_type: &'static str,
-    /// The `Allow` header of a 405.
-    allow: Option<&'static str>,
-}
-
 impl Reply {
     fn json(status: u16, v: Value) -> Reply {
-        Reply { status, body: v.to_string().into_bytes(), content_type: "application/json; charset=utf-8", allow: None }
+        Reply {
+            status,
+            body: v.to_string().into_bytes(),
+            content_type: "application/json; charset=utf-8",
+            allow: None,
+            retry_after: None,
+        }
     }
 
     fn bytes(status: u16, body: Vec<u8>, content_type: &'static str) -> Reply {
-        Reply { status, body, content_type, allow: None }
+        Reply { status, body, content_type, allow: None, retry_after: None }
     }
 
     fn error(status: u16, message: impl std::fmt::Display) -> Reply {
@@ -190,31 +232,21 @@ impl Reply {
     }
 }
 
-fn handle(engine: &Engine, mut req: Request) {
+fn handle(engine: &Engine, shared: &Shared, req: &mut Request) -> Reply {
     // A bug behind one request answers 500 instead of ending the program
     // (release builds unwind; the panic hook has logged the panic).
-    let reply = match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| route(engine, &mut req))) {
+    match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| route(engine, shared, req))) {
         Ok(reply) => reply,
         Err(payload) => {
             let msg = glossa_core::error::panic_message(payload.as_ref());
             tracing::error!("control API request panicked: {msg}");
             Reply::error(500, format!("internal error: {msg}"))
         }
-    };
-    let mut resp = Response::from_data(reply.body).with_status_code(reply.status);
-    if let Ok(h) = Header::from_bytes("Content-Type", reply.content_type) {
-        resp = resp.with_header(h);
     }
-    if let Some(allow) = reply.allow {
-        if let Ok(h) = Header::from_bytes("Allow", allow) {
-            resp = resp.with_header(h);
-        }
-    }
-    let _ = req.respond(resp);
 }
 
 fn header<'a>(req: &'a Request, name: &str) -> Option<&'a str> {
-    req.headers().iter().find(|h| h.field.as_str().as_str().eq_ignore_ascii_case(name)).map(|h| h.value.as_str())
+    req.header(name)
 }
 
 fn query_param(url: &str, key: &str) -> Option<String> {
@@ -284,8 +316,21 @@ const POT_ROUTES: &[&str] =
 /// this far.)
 fn pot_route_open(engine: &Engine, req: &Request, path: &str) -> bool {
     POT_ROUTES.contains(&path)
-        && engine.config().server.pot_compat_without_token
-        && req.remote_addr().is_some_and(|a| a.ip().is_loopback())
+        && engine.config().server.pot_routes_without_token
+        && is_loopback_peer(req.peer().ip())
+}
+
+/// Routes that change the program itself rather than use it: approving
+/// modules (which lets their code run), installing Python and packages,
+/// downloading and deleting module files, checking and reloading modules,
+/// and presets (which rewrite the service lists and the settings). They
+/// are answered only to a loopback peer, with the token as everywhere:
+/// when the API listens on the network, the token travels in the clear,
+/// and whoever picked it up must not be able to do more than translate.
+const ADMIN_PREFIXES: &[&str] = &["/v1/trust", "/v1/python", "/v1/modules", "/v1/presets", "/v1/assets"];
+
+fn is_admin_route(path: &str) -> bool {
+    ADMIN_PREFIXES.iter().any(|p| path.strip_prefix(p).is_some_and(|rest| rest.is_empty() || rest.starts_with('/')))
 }
 
 /// The methods a known path answers, for a 405 and its `Allow` header.
@@ -315,17 +360,23 @@ fn method_allowed(method: &Method, allow: &str) -> bool {
     allow.split(", ").any(|m| m == method.as_str())
 }
 
-fn read_body(req: &mut Request) -> Result<Vec<u8>, Reply> {
-    let mut body = Vec::new();
-    req.as_reader().take(MAX_BODY + 1).read_to_end(&mut body).map_err(|e| Reply::error(400, e))?;
-    if body.len() as u64 > MAX_BODY {
-        return Err(Reply::error(413, "request body too large"));
-    }
-    Ok(body)
+/// The request's body, when it is at most `limit` bytes; a longer one is
+/// a 413 by its `Content-Length`, before any of it is read.
+fn read_body(req: &mut Request, limit: u64) -> Result<Vec<u8>, Reply> {
+    req.body(limit).map_err(|e| match e {
+        BodyError::TooLarge { limit } => {
+            Reply::error(413, format!("request body too large: this route takes at most {limit} bytes"))
+        }
+        BodyError::Io(e) => Reply::error(400, format!("the request body could not be read: {e}")),
+    })
 }
 
 fn json_body(req: &mut Request) -> Result<Value, Reply> {
-    let body = read_body(req)?;
+    json_body_up_to(req, MAX_BODY)
+}
+
+fn json_body_up_to(req: &mut Request, limit: u64) -> Result<Value, Reply> {
+    let body = read_body(req, limit)?;
     if body.is_empty() {
         return Ok(json!({}));
     }
@@ -540,7 +591,7 @@ fn trust_route(engine: &Engine, rest: &str, body: &Value) -> Reply {
     }
 }
 
-fn route(engine: &Engine, req: &mut Request) -> Reply {
+fn route(engine: &Engine, shared: &Shared, req: &mut Request) -> Reply {
     if from_a_browser(req) {
         return Reply::error(403, "browser requests are not accepted");
     }
@@ -550,16 +601,25 @@ fn route(engine: &Engine, req: &mut Request) -> Reply {
     }
     let url = req.url().to_owned();
     let path = url.split('?').next().unwrap_or("/").trim_end_matches('/').to_owned();
-    let method = req.method().clone();
+    let method = req.method();
 
     if path.is_empty() || path == "/health" {
-        return Reply::json(
-            200,
-            json!({ "name": "glossa", "version": glossa_core::VERSION, "commit": glossa_core::COMMIT }),
-        );
+        let mut health = json!({ "name": "glossa", "version": glossa_core::VERSION, "commit": glossa_core::COMMIT });
+        // `glossa-cli` asks who answers before it sends the token.
+        if let Some(challenge) = query_param(&url, "challenge").filter(|c| runtime::challenge_ok(c)) {
+            health["proof"] = json!(runtime::proof(&shared.secret, &challenge, req.peer()));
+        }
+        return Reply::json(200, health);
     }
     if !authorised(engine, req) && !pot_route_open(engine, req, &path) {
         return Reply::error(401, "missing or wrong token");
+    }
+    if is_admin_route(&path) && !is_loopback_peer(req.peer().ip()) {
+        return Reply::error(
+            403,
+            "this route is answered only on the machine Glossa runs on; from elsewhere, use an SSH tunnel \
+             (ssh -L 60828:127.0.0.1:60828 …)",
+        );
     }
     if let Some(allow) = allowed_methods(&path) {
         if !method_allowed(&method, allow) {
@@ -649,9 +709,9 @@ fn route(engine: &Engine, req: &mut Request) -> Reply {
         "/v1/ocr" => {
             let is_image = header(req, "Content-Type")
                 .is_some_and(|c| c.starts_with("image/") || c.starts_with("application/octet-stream"));
-            let body = if is_image { json!({}) } else { tri!(json_body(req)) };
+            let body = if is_image { json!({}) } else { tri!(json_body_up_to(req, MAX_IMAGE_BODY)) };
             let image = if is_image {
-                tri!(read_body(req))
+                tri!(read_body(req, MAX_IMAGE_BODY))
             } else {
                 let Some(b64) = body.get("image_base64").and_then(|v| v.as_str()) else {
                     return Reply::error(400, "send image bytes or {\"image_base64\": …}");
@@ -725,9 +785,12 @@ fn route(engine: &Engine, req: &mut Request) -> Reply {
             let Some(action) = Action::from_id(id) else {
                 return Reply::error(404, format!("no action {id:?}"));
             };
-            let text = query_param(&url, "text").or_else(|| {
-                read_body(req).ok().filter(|b| !b.is_empty()).map(|b| String::from_utf8_lossy(&b).into_owned())
-            });
+            let text = match query_param(&url, "text") {
+                Some(text) => Some(text),
+                None => Some(tri!(read_body(req, MAX_BODY)))
+                    .filter(|b| !b.is_empty())
+                    .map(|b| String::from_utf8_lossy(&b).into_owned()),
+            };
             engine.request_action(action, text);
             Reply::json(202, json!({ "accepted": action.id() }))
         }
@@ -736,7 +799,7 @@ fn route(engine: &Engine, req: &mut Request) -> Reply {
         "/input_translate" => pot_action(engine, Action::ShowMainWindow, None),
         "/ocr_recognize" => pot_action(engine, Action::TextRecognition, None),
         "/ocr_translate" => pot_action(engine, Action::RecognizeAndTranslate, None),
-        "/translate" => match read_body(req) {
+        "/translate" => match read_body(req, MAX_POT_BODY) {
             Ok(b) => pot_action(engine, Action::ShowPopup, Some(String::from_utf8_lossy(&b).into_owned())),
             Err(r) => r,
         },
@@ -744,7 +807,7 @@ fn route(engine: &Engine, req: &mut Request) -> Reply {
         "/v1/panel" => {
             // `?id=module/panel`, or `{"id": "module/panel"}` in the body.
             let id = query_param(&url, "id").or_else(|| {
-                read_body(req)
+                read_body(req, MAX_BODY)
                     .ok()
                     .and_then(|b| serde_json::from_slice::<serde_json::Value>(&b).ok())
                     .and_then(|v| v.get("id").and_then(|i| i.as_str()).map(str::to_owned))
@@ -789,7 +852,7 @@ pub fn presets_list(engine: &Engine) -> Value {
 /// duplicate, delete (POST). Names come in the JSON body or the query.
 fn presets_route(engine: &Engine, req: &mut Request, op: &str, url: &str) -> Reply {
     if op == "import" {
-        let body = tri!(read_body(req));
+        let body = tri!(read_body(req, MAX_BODY));
         return match engine.import_preset_text(&String::from_utf8_lossy(&body)) {
             Ok(report) => Reply::json(200, json!(report)),
             Err(e) => Reply::from_error(&e),
@@ -868,8 +931,7 @@ mod tests {
     use super::*;
     use crate::Event;
     use glossa_core::{Config, History, Paths};
-    use std::io::Write;
-    use std::net::TcpStream;
+    use std::io::{Read, Write};
 
     fn engine() -> (Engine, std::path::PathBuf) {
         let dir = std::env::temp_dir().join(format!("glossa-api-{}-{}", std::process::id(), rand_suffix()));
@@ -878,6 +940,14 @@ mod tests {
         cfg.server.bind = "127.0.0.1:0".into();
         cfg.server.token = "secret".into();
         (Engine::with_config(paths, cfg).unwrap(), dir)
+    }
+
+    /// An engine with pot-app's routes open without the token, as the
+    /// pot-app import (or the user) sets them.
+    fn engine_with_pot_routes() -> (Engine, std::path::PathBuf) {
+        let (e, dir) = engine();
+        e.update_config(|c| c.server.pot_routes_without_token = true).unwrap();
+        (e, dir)
     }
 
     fn rand_suffix() -> u64 {
@@ -1200,8 +1270,16 @@ mod tests {
 
     #[test]
     fn pot_app_routes_work_without_the_token_from_this_machine_only_when_allowed() {
+        // Off unless switched on: a new install answers them only with the token.
         let (e, dir) = engine();
+        assert!(!e.config().server.pot_routes_without_token);
         let server = start(e.clone()).unwrap();
+        for path in ["/selection_translate", "/input_translate", "/ocr_recognize", "/ocr_translate"] {
+            assert_eq!(call(server.addr, "GET", path, "").0, 401, "{path}");
+            assert_eq!(call(server.addr, "GET", &format!("{path}?token=secret"), "").0, 202, "{path}");
+        }
+        assert_eq!(call(server.addr, "POST", "/translate", "hello").0, 401);
+        e.update_config(|c| c.server.pot_routes_without_token = true).unwrap();
         for path in ["/selection_translate", "/input_translate", "/ocr_recognize", "/ocr_translate"] {
             assert_eq!(call(server.addr, "GET", path, "").0, 202, "{path}");
         }
@@ -1210,9 +1288,301 @@ mod tests {
         assert_eq!(call(server.addr, "GET", "/v1/action/show_popup", "").0, 401);
         assert_eq!(call(server.addr, "GET", "/v1/services", "").0, 401);
 
-        e.update_config(|c| c.server.pot_compat_without_token = false).unwrap();
+        e.update_config(|c| c.server.pot_routes_without_token = false).unwrap();
         assert_eq!(call(server.addr, "GET", "/selection_translate", "").0, 401);
         assert_eq!(call(server.addr, "GET", "/selection_translate?token=secret", "").0, 202);
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn local_peers_are_recognised_in_every_spelling() {
+        for ip in ["127.0.0.1", "127.8.9.10", "::1", "::ffff:127.0.0.1", "::ffff:7f00:1"] {
+            assert!(is_loopback_peer(ip.parse().unwrap()), "{ip}");
+        }
+        for ip in ["192.168.1.5", "10.0.0.1", "0.0.0.0", "::", "fe80::1", "::ffff:192.168.1.5", "2001:db8::1"] {
+            assert!(!is_loopback_peer(ip.parse().unwrap()), "{ip}");
+        }
+    }
+
+    #[test]
+    fn the_routes_that_change_the_program_are_named_whole() {
+        for path in [
+            "/v1/trust",
+            "/v1/trust/x/approve",
+            "/v1/python",
+            "/v1/python/install",
+            "/v1/python/x/install",
+            "/v1/modules/x/reload",
+            "/v1/presets",
+            "/v1/presets/apply",
+            "/v1/presets/import",
+            "/v1/presets/export",
+            "/v1/assets",
+            "/v1/assets/x/download",
+        ] {
+            assert!(is_admin_route(path), "{path}");
+        }
+        for path in [
+            "/v1/translate",
+            "/v1/ocr",
+            "/v1/speak",
+            "/v1/services",
+            "/v1/action/show_popup",
+            "/v1/panels",
+            "/v1/presetsx",
+            "/v1/trusted",
+            "/translate",
+        ] {
+            assert!(!is_admin_route(path), "{path}");
+        }
+    }
+
+    /// An address of this machine other than loopback, if it has one: the
+    /// source address of a route to the documentation network (no packet
+    /// is sent).
+    fn lan_address() -> Option<IpAddr> {
+        let probe = std::net::UdpSocket::bind("0.0.0.0:0").ok()?;
+        probe.connect("192.0.2.1:9").ok()?;
+        probe.local_addr().ok().map(|a| a.ip()).filter(|ip| !ip.is_loopback() && !ip.is_unspecified())
+    }
+
+    #[test]
+    fn a_network_peer_may_translate_but_not_change_the_program() {
+        let dir = std::env::temp_dir().join(format!("glossa-api-lan-{}-{}", std::process::id(), rand_suffix()));
+        let paths = Paths::for_exe_dir(dir.clone(), Some(dir.join("home")));
+        let mut cfg = Config::default();
+        cfg.server.bind = "0.0.0.0:0".into();
+        cfg.server.token = "secret".into();
+        cfg.server.pot_routes_without_token = true;
+        let e = Engine::with_config(paths, cfg).unwrap();
+        let server = start(e.clone()).unwrap();
+        let port = server.addr.port();
+        let local = SocketAddr::new("127.0.0.1".parse().unwrap(), port);
+        let authed = |addr: SocketAddr, method: &str, path: &str, body: &str| {
+            request(
+                addr,
+                &format!(
+                    "{method} {path} HTTP/1.1\r\nHost: {addr}\r\nAuthorization: Bearer secret\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                    body.len()
+                ),
+            )
+        };
+        // From this machine everything works as before.
+        assert_eq!(authed(local, "GET", "/v1/trust", "").0, 200);
+        assert_eq!(authed(local, "POST", "/v1/presets/apply", r#"{"name":"Private"}"#).0, 200);
+        assert_eq!(e.config().services.preset, "Private");
+        assert_eq!(call(local, "GET", "/selection_translate", "").0, 202, "pot-app's routes are open locally");
+
+        let Some(ip) = lan_address() else {
+            eprintln!("no network address on this machine: the remote half is not tested");
+            std::fs::remove_dir_all(&dir).ok();
+            return;
+        };
+        let lan = SocketAddr::new(ip, port);
+        // The token still lets a network peer use Glossa…
+        assert_eq!(authed(lan, "GET", "/v1/services", "").0, 200);
+        assert_eq!(authed(lan, "POST", "/v1/action/show_popup", "text").0, 202);
+        // …but not approve modules, install Python, touch module files or presets.
+        for (method, path, body) in [
+            ("GET", "/v1/trust", ""),
+            ("POST", "/v1/trust/some-module/approve", "{}"),
+            ("GET", "/v1/python", ""),
+            ("POST", "/v1/python/install", ""),
+            ("POST", "/v1/modules/some-module/reload", ""),
+            ("GET", "/v1/presets", ""),
+            ("POST", "/v1/presets/apply", r#"{"name":"Everyday"}"#),
+            ("POST", "/v1/presets/import", "glossa_preset = 1"),
+            ("GET", "/v1/assets", ""),
+            ("POST", "/v1/assets/some-module/download", ""),
+        ] {
+            let (status, body) = authed(lan, method, path, body);
+            assert_eq!(status, 403, "{method} {path}: {body}");
+            assert!(body.contains("SSH tunnel"), "{body}");
+        }
+        assert_eq!(e.config().services.preset, "Private", "nothing was applied from the network");
+        // Without the token a network peer learns nothing, as before, and
+        // pot-app's open routes are for this machine only.
+        assert_eq!(call(lan, "POST", "/v1/presets/apply", "{}").0, 401);
+        assert_eq!(
+            request(lan, &format!("GET /selection_translate HTTP/1.1\r\nHost: {lan}\r\nConnection: close\r\n\r\n")).0,
+            401
+        );
+        server.stop();
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn bodies_are_capped_by_route_before_they_are_read() {
+        let (e, dir) = engine_with_pot_routes();
+        let rx = e.subscribe();
+        let server = start(e).unwrap();
+        let announce = |path: &str, len: u64| {
+            request(
+                server.addr,
+                &format!("POST {path} HTTP/1.1\r\nHost: 127.0.0.1\r\nContent-Length: {len}\r\nConnection: close\r\n\r\n"),
+            )
+        };
+        // Announced only: the refusal comes from the length, at once.
+        let started = std::time::Instant::now();
+        assert_eq!(announce("/translate", MAX_POT_BODY + 1).0, 413, "pot-app's open route takes text, not megabytes");
+        assert_eq!(announce("/v1/translate?token=secret", MAX_BODY + 1).0, 413);
+        assert_eq!(announce("/v1/action/show_popup?token=secret", MAX_BODY + 1).0, 413);
+        assert_eq!(announce("/v1/presets/import?token=secret", MAX_BODY + 1).0, 413);
+        assert_eq!(announce("/v1/ocr?token=secret", MAX_IMAGE_BODY + 1).0, 413);
+        // What could end the program with the previous listener: a length no
+        // memory holds, on a route that never reads its body.
+        assert_eq!(announce("/health", 99_999_999_999_999).0, 200);
+        assert_eq!(announce("/v1/translate?token=secret", u64::MAX).0, 413);
+        assert!(started.elapsed() < Duration::from_secs(10), "took {:?}", started.elapsed());
+        assert_eq!(next_action(&rx), None, "none of them reached the interface");
+
+        // A picture larger than the text limit still goes to /v1/ocr: the
+        // limit there is the image's. (Not an image, so a 4xx or 5xx from
+        // the engines, but not a 413.)
+        let big = "x".repeat(MAX_BODY as usize + 10);
+        let (status, _) = request(
+            server.addr,
+            &format!(
+                "POST /v1/ocr?token=secret HTTP/1.1\r\nHost: 127.0.0.1\r\nContent-Type: image/png\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{big}",
+                big.len()
+            ),
+        );
+        assert_ne!(status, 413);
+        // pot-app's route at its limit is accepted whole.
+        let text = "я".repeat(MAX_POT_BODY as usize / 2);
+        assert_eq!(call(server.addr, "POST", "/translate", &text).0, 202);
+        assert_eq!(next_action(&rx), Some((Action::ShowPopup, Some(text))));
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn the_cli_finds_the_instance_of_its_own_data_folder_and_no_other() {
+        let (e, dir) = engine();
+        let paths = e.paths().clone();
+        assert_eq!(find_running(&paths), Found::None, "nothing runs yet");
+        let server = start(e.clone()).unwrap();
+        let file = runtime::runtime_file(&paths);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            assert_eq!(std::fs::metadata(&file).unwrap().permissions().mode() & 0o777, 0o600);
+        }
+        let found = find_running(&paths).running().expect("the running server proves itself");
+        assert_eq!(found.addr, server.addr.to_string(), "the port really bound, not the one in the settings");
+        assert_eq!(found.token, "secret");
+        assert_eq!(found.pid, std::process::id());
+
+        // Another data folder whose settings name the very same port (as
+        // every default install does) finds nothing, and so sends nothing.
+        let (other, other_dir) = engine();
+        other.update_config(|c| c.server.bind = server.addr.to_string()).unwrap();
+        assert_eq!(find_running(other.paths()), Found::None);
+
+        // The secret is not in what /health says, with or without a challenge.
+        let secret = serde_json::from_str::<Value>(&std::fs::read_to_string(&file).unwrap()).unwrap()["instance"]
+            .as_str()
+            .unwrap()
+            .to_owned();
+        assert_eq!(secret.len(), 64);
+        let (_, health) = call(server.addr, "GET", "/health?challenge=abc123", "");
+        assert!(!health.contains(&secret), "{health}");
+        let proof = serde_json::from_str::<Value>(&health).unwrap()["proof"].as_str().unwrap().to_owned();
+        assert_eq!(proof.len(), 64);
+        assert!(!call(server.addr, "GET", "/health", "").1.contains("proof"));
+        assert!(!call(server.addr, "GET", "/health?challenge=a%20b", "").1.contains("proof"), "not a challenge");
+
+        // Stopped: the file is withdrawn.
+        server.stop();
+        assert!(!file.exists());
+        assert_eq!(find_running(&paths), Found::None);
+        std::fs::remove_dir_all(&dir).ok();
+        std::fs::remove_dir_all(&other_dir).ok();
+    }
+
+    /// A program answering `/health` like a Glossa, recording everything it
+    /// is sent.
+    fn impostor() -> (SocketAddr, Arc<std::sync::Mutex<String>>) {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap();
+        let seen = Arc::new(std::sync::Mutex::new(String::new()));
+        let log = seen.clone();
+        std::thread::spawn(move || {
+            for mut conn in listener.incoming().flatten() {
+                let _ = conn.set_read_timeout(Some(Duration::from_millis(300)));
+                let mut buf = [0u8; 4096];
+                let n = conn.read(&mut buf).unwrap_or(0);
+                log.lock().unwrap().push_str(&String::from_utf8_lossy(&buf[..n]));
+                let body = r#"{"name":"glossa","version":"9.9.9","proof":"00"}"#;
+                let _ = conn.write_all(
+                    format!("HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}", body.len())
+                        .as_bytes(),
+                );
+            }
+        });
+        (addr, seen)
+    }
+
+    #[test]
+    fn whoever_else_holds_the_port_is_never_sent_the_token() {
+        let (e, dir) = engine();
+        let paths = e.paths().clone();
+        let (addr, seen) = impostor();
+        // The settings name the impostor's port, and no Glossa runs: the
+        // old check ("/health says glossa") would have sent the token.
+        e.update_config(|c| c.server.bind = addr.to_string()).unwrap();
+        assert_eq!(find_running(&paths), Found::None);
+        assert!(seen.lock().unwrap().is_empty(), "nothing at all was sent");
+
+        // Even a runtime file pointing at it, with its writer alive (the
+        // lock held), does not help: it cannot answer the challenge.
+        let lock = std::fs::File::create(paths.data_dir.join("control-api.lock")).unwrap();
+        lock.try_lock().unwrap();
+        std::fs::write(
+            runtime::runtime_file(&paths),
+            json!({ "addr": addr.to_string(), "pid": 1, "instance": "the-real-secret" }).to_string(),
+        )
+        .unwrap();
+        match find_running(&paths) {
+            Found::Unverified(why) => assert!(why.contains("not the one that owns this data folder"), "{why}"),
+            other => panic!("{other:?}"),
+        }
+        let sent = seen.lock().unwrap().clone();
+        assert!(sent.contains("GET /health?challenge="), "{sent}");
+        assert!(!sent.contains("secret") && !sent.to_lowercase().contains("authorization"), "{sent}");
+
+        // The writer gone (the lock free): the file is stale and removed.
+        lock.unlock().unwrap();
+        drop(lock);
+        assert_eq!(find_running(&paths), Found::None);
+        assert!(!runtime::runtime_file(&paths).exists(), "a stale runtime file is cleaned up");
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn a_second_server_for_one_data_folder_does_not_take_over_the_runtime_file() {
+        let (e, dir) = engine();
+        let first = start(e.clone()).unwrap();
+        let second = start(e.clone()).unwrap();
+        assert_ne!(first.addr, second.addr);
+        assert_eq!(find_running(e.paths()).running().unwrap().addr, first.addr.to_string());
+        // The second stopping leaves the first one's file alone.
+        second.stop();
+        assert_eq!(find_running(e.paths()).running().unwrap().addr, first.addr.to_string());
+        first.stop();
+        assert_eq!(find_running(e.paths()), Found::None);
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn a_stopped_server_stops_answering_and_frees_its_port() {
+        let (e, dir) = engine();
+        let server = start(e).unwrap();
+        let addr = server.addr;
+        assert_eq!(call(addr, "GET", "/health", "").0, 200);
+        let started = std::time::Instant::now();
+        server.stop();
+        assert!(started.elapsed() < Duration::from_secs(3), "stopping took {:?}", started.elapsed());
+        assert!(TcpListener::bind(addr).is_ok(), "the port is free again");
         std::fs::remove_dir_all(&dir).ok();
     }
 
@@ -1504,7 +1874,7 @@ mod tests {
 
     #[test]
     fn pot_app_routes_map_onto_their_actions() {
-        let (e, dir) = engine();
+        let (e, dir) = engine_with_pot_routes();
         let rx = e.subscribe();
         let server = start(e).unwrap();
         for (path, action) in [

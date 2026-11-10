@@ -289,7 +289,14 @@ impl Session {
                     } else if compositor.has_remote_desktop_portal() {
                         f("selection", Partly, "Ctrl+C through the RemoteDesktop portal, then the clipboard")
                     } else {
-                        f("selection", Partly, "the clipboard only: copy first")
+                        // The portal is tried on desktops not known to
+                        // have it too, so this is "partly", not "no".
+                        f(
+                            "selection",
+                            Partly,
+                            "only if a RemoteDesktop portal answers; else translate the clipboard \
+                             (or set [advanced] clipboard_as_selection)",
+                        )
                     },
                     if compositor.has_remote_desktop_portal() {
                         f("synthetic_input", Partly, "the RemoteDesktop portal; the desktop asks once")

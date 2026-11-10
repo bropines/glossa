@@ -1600,9 +1600,9 @@ pub static STRINGS: &[(&str, &str, Option<&str>)] = &[
     ("limitation.wayland.capture", "Screen capture goes through the desktop portal (or grim on wlroots compositors); the first time, the desktop may ask whether Glossa may take screenshots.", None),
     ("limitation.wayland.typing", "Wayland does not allow typing into other programs: \"replace selection\" leaves the translation on the clipboard for you to paste.", None),
     ("limitation.wayland.typing_portal", "Copying from and pasting into other programs goes through the desktop's remote desktop portal: the first time, the desktop asks whether Glossa may use the keyboard.", None),
-    ("limitation.wayland.no_primary", "%s does not let Glossa read the highlighted text; copy it with Ctrl+C first and Glossa will use the clipboard.", None),
+    ("limitation.wayland.no_primary", "%s does not let Glossa read the highlighted text. Copy it with Ctrl+C and use Translate clipboard; to have the selection hotkeys take the clipboard instead, set clipboard_as_selection = true under [advanced] in config.toml.", None),
     ("limitation.wayland.no_primary_portal", "%s does not let Glossa read the highlighted text directly; Glossa copies it with Ctrl+C through the desktop's remote desktop portal.", None),
-    ("limitation.wayland.no_primary_unknown", "This compositor does not let Glossa read the highlighted text; copy it with Ctrl+C first and Glossa will use the clipboard.", None),
+    ("limitation.wayland.no_primary_unknown", "This compositor may not let Glossa read the highlighted text. If it does not, copy the text with Ctrl+C and use Translate clipboard; to have the selection hotkeys take the clipboard instead, set clipboard_as_selection = true under [advanced] in config.toml.", None),
     ("limitation.wayland.popup_position", "The popup cannot be placed at the text cursor; it opens near the mouse or in the centre of the screen.", None),
     ("limitation.no_display", "No graphical session was found (neither WAYLAND_DISPLAY nor DISPLAY is set): clipboard, hotkeys and screen capture are unavailable.", None),
 ];

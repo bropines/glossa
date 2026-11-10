@@ -600,7 +600,8 @@ A preset never holds an API key or token.
 - `rename`, `duplicate` (built-in presets too; without `NEW` the copy is
   called `NAME (2)`) and `delete` work on your own presets.
 
-When a Glossa is running with the [control API](control-api.md) on, every
+When a Glossa is running with this data folder and the
+[control API](control-api.md) on, every
 subcommand goes through it ([`/v1/presets`](control-api.md#presets)), so the
 running program sees the change at once and does not write its own
 settings over it. Otherwise, or with `--local`, the command changes
@@ -608,7 +609,12 @@ settings over it. Otherwise, or with `--local`, the command changes
 reached (its control API is off, or `--local` was given) would write its
 settings over such a change, so the command refuses to make it and says
 so; `--force` makes it anyway, with a warning. `list` and `export` only
-read and always work.
+read and always work. A Glossa running with *another* data folder is never
+contacted, even when both name the same port: the command finds its own by
+the data folder and checks who answers before sending the token
+([control-api.md](control-api.md#how-glossa-cli-finds-glossa)); when
+something else answers there it says so on stderr and carries on as if
+nothing ran.
 
 `import` keeps only the settings the installed modules declare, never a
 key and never an address (URL, endpoint, host), and lists what it left out
@@ -797,7 +803,9 @@ action requested: show_dictionary (serendipity)
 
 Useful for scripts on a machine without a desktop session, and for trying
 the API. If the desktop program is running with the API on, the port is
-taken and `serve` fails with exit 1.
+taken and `serve` fails with exit 1. While it runs, the other `glossa-cli`
+commands find it as they find the desktop program, by `control-api.json` in
+the data folder.
 
 On Linux and the BSDs `serve` also offers the [D-Bus
 service](control-api.md#d-bus) (unless `[server] dbus` is false), printing
@@ -812,23 +820,32 @@ HTTP API alone. With no session bus at all (a server, an ssh login),
 glossa-cli action ACTION [TEXT…]
 ```
 
-Asks a running Glossa to perform an action, as if its hotkey had been
-pressed. It sends `GET /v1/action/ACTION?token=…&text=…` to the address in
-`[server] bind`, with the token from `[server] token`, both read from
-`config.toml` (so `--home` or `GLOSSA_HOME` must point at the same data
-folder as the running program). When `bind` listens on every address
-(`0.0.0.0:PORT` or `[::]:PORT`), the request goes to `127.0.0.1:PORT` or
-`[::1]:PORT`. Nothing is printed on success.
+Asks the Glossa running with this data folder to perform an action, as if
+its hotkey had been pressed (so `--home` or `GLOSSA_HOME` must point at the
+same data folder as the running program). It sends
+`POST /v1/action/ACTION` with the text as the body and the token from
+`[server] token` in the `Authorization` header.
+
+The address is not taken from `[server] bind`: the port there may belong
+to another program, another user's Glossa or a Glossa with another data
+folder, and whoever listens would get the token. The command reads
+`control-api.json`, which the running Glossa keeps in its data folder,
+connects to the address in it, and sends the token only after that
+process has proved it wrote the file
+([control-api.md](control-api.md#how-glossa-cli-finds-glossa)). Nothing is
+printed on success.
 
 ```console
 $ glossa-cli action show_popup "text to translate"
 $ glossa-cli action text_recognition
 $ glossa-cli action nonsense
-glossa-cli: Glossa answered 404: {"error":"no action \"nonsense\""}
+glossa-cli: no action "nonsense"
 ```
 
-If no Glossa is listening (not running, or its control API is off), the
-command fails with a connection error and exit 1.
+If no Glossa runs with this data folder (or its control API is off), the
+command says so and exits 1; nothing is sent anywhere. The same when
+something else answers at the address: `note: not using the control API
+(…); the token was not sent`.
 
 `ACTION` is one of the ids below. `TEXT`, when given, is used instead of
 reading the selection by the actions marked "text"; the others ignore it.
@@ -904,7 +921,7 @@ System
 
 Desktop features
   hotkeys          partly  the desktop portal's GlobalShortcuts (GNOME 48 or later); confirmed in its dialog
-  selection        partly  the clipboard only: copy first
+  selection        partly  Ctrl+C through the RemoteDesktop portal, then the clipboard
   …
 OCR engines
   lens             yes     lens_scan at /home/me/.local/bin/lens_scan

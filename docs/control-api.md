@@ -48,8 +48,9 @@ curl -s -H "Authorization: Bearer $T" -d '{"text":"Hello","to":"ru"}' \
 curl -s -X POST "http://127.0.0.1:60828/v1/action/show_popup?token=$T&text=Hello"
 ```
 
-[`glossa-cli action`](cli.md#action) sends action requests for you, reading
-the address and token from `config.toml`.
+[`glossa-cli action`](cli.md#action) sends action requests for you: it finds
+the Glossa running with your data folder, makes sure of it, and only then
+sends the token (see [How glossa-cli finds Glossa](#how-glossa-cli-finds-glossa)).
 
 ## Enabling it
 
@@ -76,17 +77,18 @@ one copy runs per user, login session and data folder, held by a lock of
 the session's own (a named mutex and pipe on Windows, a lock file and a Unix
 socket in the user's runtime folder elsewhere), and the second start hands
 over through it. The API is only the fallback, for a running copy too old
-to have the pipe. Copies with different data folders (`GLOSSA_HOME`) run
-side by side.
+to have the pipe, and then only for a copy that proves it owns the data
+folder ([How glossa-cli finds Glossa](#how-glossa-cli-finds-glossa)).
+Copies with different data folders (`GLOSSA_HOME`) run side by side.
 
 [`glossa-cli serve`](cli.md#serve) runs the same API without the desktop
 program, for scripts and for trying it out; there, actions are only printed.
 
 ## The token
 
-Every request except `/health` (and, from this machine, pot-app's routes;
-see [pot-app compatibility](#pot-app-compatibility)) must carry the token,
-either as a header or in the query string:
+Every request except `/health` must carry the token, either as a header or
+in the query string (pot-app's routes can be opened to this machine without
+it; see [pot-app compatibility](#pot-app-compatibility)):
 
 ```
 Authorization: Bearer 0123456789abcdef…
@@ -145,9 +147,18 @@ Match the `[server]` section: `[ocr.lens]` has a `token` key of its own.
   With a valid id, fail-over to the other enabled services still applies.
 - A known path asked with the wrong method is a 405 with an `Allow` header
   listing the methods it answers.
-- A trailing `/` in the path is ignored. Bodies are limited to 32 MiB.
+- A trailing `/` in the path is ignored.
+- Bodies are limited by route: 1 MiB everywhere, 32 MiB for `/v1/ocr`
+  (a picture), 64 KiB for pot-app's `POST /translate`. A longer body is a
+  413 by its `Content-Length`, before any of it is read. The body must come
+  with a `Content-Length` (as `curl -d` and `--data-binary @file` send it);
+  a chunked body is a 411. The request line and headers together may take
+  16 KiB.
 - Each request runs on its own thread: a slow translation does not hold up
-  an action.
+  an action. At most 32 connections are served at once; one more is
+  answered 503 with `Retry-After: 1`. A client that does not finish its
+  request headers within 10 seconds, or its body within a minute, is
+  dropped. Every answer closes its connection.
 - Translations made through the API are added to the history only with
   `"history": true` (see [/v1/translate](#v1translate)).
 
@@ -163,16 +174,20 @@ Errors have a status code and a body of the form:
 |---|---|
 | 400 | Invalid JSON, a missing `text`, empty text, an unknown language, capability, service or OCR engine id, a boolean that is not one, an unknown OCR `format`, the same source and target language, a configuration problem with a translation service. |
 | 401 | The token is missing or wrong. |
-| 403 | The request came from a browser: it carries an `Origin`, `Sec-Fetch-Site`, `Sec-Fetch-Mode`, `Sec-Fetch-Dest`, `Sec-Fetch-User` or `Referer` header (any value). Or its `Host` header is a name other than `localhost` (see [Security](#security)). |
+| 403 | The request came from a browser: it carries an `Origin`, `Sec-Fetch-Site`, `Sec-Fetch-Mode`, `Sec-Fetch-Dest`, `Sec-Fetch-User` or `Referer` header (any value). Or its `Host` header is a name other than `localhost`. Or it asks for one of the [routes answered to this machine only](#routes-for-this-machine-only) from another machine (see [Security](#security)). |
 | 404 | No such route or action; no service can do what was asked (no speech service). |
 | 405 | The path exists but not for this method; the `Allow` header lists the methods it answers. |
 | 412 | The service needs a key that is not set, a module's files have not been downloaded ([`/v1/assets`](#v1assets)), or a Python module's Python or packages are not there yet ([`/v1/python`](#v1python)). |
-| 413 | The body is larger than 32 MiB. |
+| 408 | The request headers did not arrive within 10 seconds. |
+| 411 | The body was sent chunked; send it with a `Content-Length`. |
+| 413 | The body is larger than the route takes (1 MiB; 32 MiB for `/v1/ocr`; 64 KiB for pot-app's `/translate`). |
+| 431 | The request line and headers are larger than 16 KiB, or there are more than 64 headers. |
 | 422 | No text was found in the image, or the language could not be detected. |
 | 429 | The service is rate-limiting. |
 | 500 | A bug in Glossa: the code handling the request panicked. The program keeps running; the log has the details. |
 | 502 | The service failed otherwise (network error, unexpected answer). |
-| 503 | `/v1/ocr` only: the OCR engine is not installed or not set up (Lens set to *CLI only* without chrome-lens-py, Tesseract missing, no engine at all). The request was fine; the machine needs setting up. |
+| 501 | The method is not one of GET, POST, PUT, DELETE, PATCH, HEAD. |
+| 503 | `/v1/ocr`: the OCR engine is not installed or not set up (Lens set to *CLI only* without chrome-lens-py, Tesseract missing, no engine at all). The request was fine; the machine needs setting up. With `Retry-After: 1`, on any route: 32 requests are being served already. |
 | 504 | The service timed out. |
 
 ## Endpoints
@@ -207,6 +222,45 @@ $ curl -s http://127.0.0.1:60828/health
 `commit` is the commit the program was built from (`-dirty` when it had
 uncommitted changes), empty when unknown. `/` answers the same. Neither needs the token, so a script can check that
 Glossa is running before it does anything else.
+
+That something answers `/health` with `"name":"glossa"` does not make it
+*your* Glossa: any program can listen on the port and say so. Before
+sending the token to an address you did not just start yourself, do what
+`glossa-cli` does, below.
+
+#### How glossa-cli finds Glossa
+
+`60828` is every installation's default port, and whoever listens on it
+would be handed the token by a client that trusted the port: another
+user's Glossa on a shared machine, a Glossa running with another data
+folder, or a program that took the port to collect tokens. So `glossa-cli`
+(and a second launch of `glossa`) never go by the port in `config.toml`:
+
+1. A running control API writes `control-api.json` into its **data
+   folder** (readable by the user only, mode 0600): the address it really
+   listens on, its process id, and a secret made for this run. It keeps
+   `control-api.lock` beside it locked while it runs; a `control-api.json`
+   whose lock is free was left by a crash and is removed by the next
+   reader.
+2. The client reads that file from *its* data folder. No file: no Glossa
+   runs with this folder, and nothing is sent anywhere.
+3. It connects to the address in the file and asks
+   `GET /health?challenge=<random>`. The answer has a `proof` field:
+   HMAC-SHA256, keyed with the secret from the file, over
+   `glossa-control-v1`, the challenge and the client's own address and
+   port as the server sees them, one per line, as lowercase hex. Only the
+   process that wrote the file can compute it, and a program passing the
+   challenge on to the real Glossa gets a proof for its own connection,
+   which does not match.
+4. Only when the proof matches is the token sent (in the `Authorization`
+   header). Otherwise the command says so and falls back to what it does
+   without a running Glossa.
+
+The secret is not the token, never leaves the file and the process, and
+changes at every start. `challenge` is 1–128 letters and digits; anything
+else gets the plain answer without `proof`. When two servers run for one
+data folder (the desktop program and `glossa-cli serve`), the first one
+keeps the file.
 
 ### GET /v1/services
 
@@ -368,7 +422,7 @@ its result shows on screen, not in the response. If the window system was
 unloaded to save memory, the request brings it back.
 
 `text` (in the query string, or else the whole request body as plain UTF-8
-text) is used instead of reading the selection by the actions that take
+text, up to 1 MiB) is used instead of reading the selection by the actions that take
 text: `show_main_window`, `show_popup`, `show_dictionary`,
 `listen_selection`, `copy_translation`, `replace_selection`,
 `convert_layout`, `listen_translation`. Without it, those actions read the
@@ -395,8 +449,8 @@ The action ids are listed in [cli.md](cli.md#action): `show_main_window`,
 `show_options`, `quit`, and `open_panel`, whose `text` is the panel to open
 (`module/panel`; see [Panels](#panels)).
 
-[`glossa-cli action`](cli.md#action) sends these requests for you, reading
-the address and token from `config.toml`.
+[`glossa-cli action`](cli.md#action) sends these requests for you, to the
+Glossa running with your data folder.
 
 ### Panels
 
@@ -414,9 +468,23 @@ opens one in the desktop program, or raises it when it is open, and answers
 that does not exist, `400` without a name. Running a panel's actions
 without a window is `glossa-cli module panel ID/PANEL --action …`.
 
+### Routes for this machine only
+
+`/v1/assets`, `/v1/python`, `/v1/presets`, `/v1/modules` and `/v1/trust`
+(everything under them, reading included) change the program itself:
+they approve modules, which lets their code run, install Python and
+packages, download and delete files, and rewrite the service lists. They
+are answered only to a connection from this machine (`127.0.0.0/8`, `::1`,
+or the same written as an IPv4-mapped IPv6 address), whatever `[server]
+bind` says and even with the right token: from another machine they are a
+403. When the API listens on the network the token crosses it unencrypted,
+and whoever picked it up must not be able to do more than translate. To
+manage Glossa from another machine, forward the port over SSH, which
+arrives as a local connection (see [Security](#security)).
+
 ### /v1/assets
 
-The files modules declare in `[[assets]]`
+For this machine only (above). The files modules declare in `[[assets]]`
 ([modules/README.md](modules/README.md#assets)).
 
 | method | path | does |
@@ -443,7 +511,8 @@ the last download failed. An unknown module is a 404; one without files a
 
 ### /v1/python
 
-The Python that Python modules run with
+For this machine only ([above](#routes-for-this-machine-only)). The Python
+that Python modules run with
 ([modules/README.md](modules/README.md#python-dependencies)).
 
 | method | path | does |
@@ -461,7 +530,8 @@ An unknown or non-Python module is a 404.
 
 Named sets of services ([configuration.md](configuration.md#presets)). Names
 go in a JSON body (`{"name": "Work"}`) or the query (`?name=Work`) and
-ignore case. Every route needs the token. Changes apply to the running
+ignore case. Every route needs the token and is answered to this machine
+only ([above](#routes-for-this-machine-only)). Changes apply to the running
 program at once, and a preset never carries a key or token.
 
 | method | path | does |
@@ -487,7 +557,8 @@ routes when Glossa is running.
 
 ### POST /v1/modules
 
-The [module editor](modules/editor.md)'s loop, for an editor outside
+For this machine only ([above](#routes-for-this-machine-only)). The
+[module editor](modules/editor.md)'s loop, for an editor outside
 Glossa. The module must have been loaded from a folder (not a built-in or
 bundled one; copy those first).
 
@@ -504,7 +575,8 @@ $ curl -s -X POST -H "Authorization: Bearer $T" http://127.0.0.1:60828/v1/module
 
 ### /v1/trust
 
-Modules installed by hand wait for approval before they run
+For this machine only ([above](#routes-for-this-machine-only)). Modules
+installed by hand wait for approval before they run
 ([modules/README.md](modules/README.md#permissions-and-trust)).
 
 | method | path | what it does |
@@ -533,15 +605,23 @@ tools made for pot-app can drive it:
 | `/input_translate` | any | `show_main_window` |
 | `/ocr_recognize` | any | `text_recognition` |
 | `/ocr_translate` | any | `recognize_and_translate` |
-| `/translate` | POST | `show_popup` with the request body as the text |
+| `/translate` | POST | `show_popup` with the request body as the text (at most 64 KiB) |
 
 They answer `202 {"accepted": "<action>"}` like `/v1/action/…`. `/translate`
 with another method is a 405.
 
-pot-app's bindings send no token, so these five routes accept requests
-without one when all of these hold:
+Like every route they need the token: add `?token=…` to the bindings'
+URLs. pot-app's own bindings send none, so to keep them unchanged you can
+open these five routes to this machine:
 
-- `[server] pot_compat_without_token` is on (the default);
+```toml
+[server]
+pot_routes_without_token = true
+```
+
+They then accept requests without a token when all of these hold:
+
+- `[server] pot_routes_without_token` is on (it is **off** by default);
 - the request comes from a loopback address (this machine);
 - it carries none of the headers browsers send (no request with one gets
   anywhere, as below), and its `Host` is `127.0.0.1`, `localhost` or
@@ -550,8 +630,14 @@ without one when all of these hold:
 A token, when sent, is still accepted. Every other route needs the token
 regardless.
 
-What this opens up: any program running on this machine, as any user, can
-show the popup or the main window, start a screen recognition, or put text
+Until 0.1.0-beta.2 this was on by default, under the name
+`pot_compat_without_token`. That key is ignored now: it was written into
+every `config.toml`, so a file could not say whether its user had wanted
+it, and an upgrade must not leave the routes open by accident. If your
+bindings stopped working after an update, set the new key or add the token.
+
+What switching it on opens up: any program running on this machine, as any
+user (another account on a shared machine included), can show the popup or the main window, start a screen recognition, or put text
 of its choosing into the popup. It cannot read anything back (the answer is
 only `{"accepted": …}`), cannot reach the translation, OCR or speech
 endpoints that use your service keys, and cannot type into other programs
@@ -563,12 +649,12 @@ src="http://127.0.0.1:60828/selection_translate">`) sends no `Origin`, but
 every current browser sends fetch metadata with it (`Sec-Fetch-Site`,
 `Sec-Fetch-Mode`, `Sec-Fetch-Dest`; Chrome and Edge since 2020, Firefox
 since version 90, Safari since 16.4), and Glossa refuses any request with
-one, or with a `Referer`. That is why the tokenless default is safe to keep:
-what remains open is programs already running on this machine, which could
-equally press the hotkey. The one gap is a browser too old to send fetch
-metadata, on an `https` page (whose links to `http` carry no `Referer`).
-If that matters, set `pot_compat_without_token = false` and add `?token=…`
-to the bindings' URLs.
+one, or with a `Referer`. What the setting opens is therefore programs
+already running on this machine. Text put into the popup is sent to your
+translation services like any other, which is why it is your choice and
+not the default. The one gap towards the web is a browser too old to send
+fetch metadata, on an `https` page (whose links to `http` carry no
+`Referer`).
 
 ## D-Bus
 
@@ -752,16 +838,41 @@ In Windows PowerShell 5.1, `curl` is an alias of `Invoke-WebRequest`; call
 - **Loopback only by default.** `127.0.0.1` is reachable from this machine
   alone. Binding another address (`0.0.0.0:60828`) requires a token; the
   traffic is plain HTTP, so the token and the text cross the network
-  unencrypted. Expose it only on a network you trust, or reach it through an
-  SSH tunnel instead.
+  unencrypted, and Glossa writes a warning to its log when it starts that
+  way. The routes that change the program (module approval, Python,
+  module files, presets) are
+  [not answered to other machines](#routes-for-this-machine-only) at all.
+- **From another machine, use an SSH tunnel** instead of binding to the
+  network. Leave `bind = "127.0.0.1:60828"` and, on the machine you work
+  from:
+
+  ```bash
+  ssh -N -L 60828:127.0.0.1:60828 you@the-machine-with-glossa
+  curl -s -H "Authorization: Bearer $T" http://127.0.0.1:60828/v1/services
+  ```
+
+  The token and the text travel inside SSH, and the connection reaches
+  Glossa as a local one, so every route works. (Anyone who can log in to
+  that machine by SSH can do the same, as they could run `curl` there.)
 - **The token is the main defence.** Any program running as any user on the
   machine can connect to a loopback port; without the token it gets only
-  `/health` and, unless `[server] pot_compat_without_token` is off, the
+  `/health` and, if you switched `[server] pot_routes_without_token` on, the
   window-opening [pot-app routes](#pot-app-compatibility). The token is
   never empty. Keep the data folder private: the token is stored there in
   plain text, and so are service keys unless they are kept in the system
   keychain (`[general] secret_storage`, see
   [configuration.md](configuration.md#general)).
+- **The token goes only to your own Glossa.** `glossa-cli` and a second
+  launch of `glossa` do not trust the port: they send the token only to
+  the process that proves it wrote `control-api.json` in their data folder
+  ([How glossa-cli finds Glossa](#how-glossa-cli-finds-glossa)). A script
+  of yours that reads the token from `config.toml` and sends it to
+  `127.0.0.1:60828` has no such check; use `glossa-cli action` in key
+  bindings on a machine you share.
+- **Limits.** 32 connections at once, 1 MiB bodies (32 MiB for a picture
+  to `/v1/ocr`, 64 KiB for pot-app's `/translate`), 16 KiB of headers, and
+  timeouts on slow clients, so a local program cannot exhaust Glossa's
+  memory or threads through the port.
 - **Prefer the header.** A token in the query string ends up in shell
   history and in the process list while `curl` runs.
 - **Browsers are refused.** A request with any of the headers only

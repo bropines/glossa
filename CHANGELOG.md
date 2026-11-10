@@ -7,6 +7,52 @@ the notes of its GitHub release.
 
 ## [Unreleased]
 
+### Security
+
+- `glossa-cli` and a second launch of `glossa` send the control API token
+  only to the Glossa that owns their data folder. They used to send it to
+  whatever answered `/health` with "glossa" on the port named in
+  `config.toml`: another user's Glossa on a shared machine, a Glossa
+  running with another data folder (where `preset apply` then failed with
+  "missing or wrong token" instead of changing its own settings), or any
+  program that took port 60828. A running control API now describes
+  itself in `control-api.json` in its data folder (readable by the user
+  alone), and a client checks a proof only that process can give before
+  it sends anything
+  ([control-api.md](docs/control-api.md#how-glossa-cli-finds-glossa)).
+  `glossa-cli action` and `module panel --open` send the token in a
+  header and the text in the body, no longer in the URL.
+- pot-app's routes (`/selection_translate`, `POST /translate`…) need the
+  token like every other route. They were open to every program on the
+  machine, another user's included, which could put text of its choosing
+  into the popup and so send it to your translation services. **If you
+  call them from key bindings made for pot-app, add `?token=…` to the
+  URLs, or set `[server] pot_routes_without_token = true`** to open them
+  to this machine again. The old key, `pot_compat_without_token`, is
+  ignored: it was on by default and written into every `config.toml`, so
+  it could not tell a choice from the default. `POST /translate` takes at
+  most 64 KiB.
+- With the control API bound beyond loopback (`bind = "0.0.0.0:…"`), where
+  the token crosses the network unencrypted, the routes that change the
+  program itself (`/v1/trust`, `/v1/python`, `/v1/modules`, `/v1/presets`,
+  `/v1/assets`) are answered to this machine only, token or not: a token
+  picked up on the network can no longer approve a module, start a Python
+  install or apply a preset. A local connection written as an IPv4-mapped
+  IPv6 address is recognised as local. Glossa warns in its log when it
+  listens that way, and the documentation shows the SSH tunnel to use
+  instead.
+- The control API can no longer be made to end the program or exhaust it.
+  A request announcing an absurd `Content-Length` (to any route, `/health`
+  included, without the token) made the previous listener allocate a
+  buffer of that size when it discarded the request, which ends the
+  program where the system refuses the allocation. The listener is now Glossa's own: at most 32 connections
+  at once (one more gets `503` with `Retry-After`), bodies of 1 MiB
+  (32 MiB for a picture to `/v1/ocr`) refused by their announced length
+  before anything is read, 16 KiB of headers, timeouts for clients that
+  send slowly, and an accept loop that logs a failure and carries on
+  instead of ending silently. `tiny_http` and its three dependencies are
+  gone.
+
 ### Added
 
 - A double click on the popup's header (the language line or a free spot
