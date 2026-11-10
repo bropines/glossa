@@ -29,7 +29,7 @@ const TEXT_ZOOM_STEP: f32 = 1.1;
 pub struct MainState {
     pub source: String,
     pub outcome: Option<Arc<TranslationOutcome>>,
-    pub error: Option<String>,
+    pub error: Option<crate::errors::ErrorView>,
     pub busy: bool,
     pub job: u64,
     /// While a streaming service writes: the translation so far.
@@ -66,13 +66,6 @@ impl MainState {
             spell: Default::default(),
         }
     }
-}
-
-/// A short message shown at the bottom of the main window or as a popup.
-pub struct Toast {
-    pub text: String,
-    pub error: bool,
-    pub at: Instant,
 }
 
 pub struct GlossaApp {
@@ -139,7 +132,9 @@ pub struct GlossaApp {
 
     pub tasks_tx: Sender<Task>,
     tasks: Receiver<Task>,
-    pub toast: Option<Toast>,
+    /// The message each window is showing, by the window that raised it
+    /// (see [`crate::toast`]).
+    pub toasts: HashMap<egui::ViewportId, crate::toast::Toast>,
     /// The main window's visibility as we last set it.
     pub main_visible: bool,
     /// macOS: shown in the Dock and Cmd+Tab (a full window is open).
@@ -262,7 +257,7 @@ impl GlossaApp {
             keyboard_open: false,
             tasks_tx,
             tasks,
-            toast: None,
+            toasts: HashMap::new(),
             main_visible: start_visible,
             in_app_switcher: false,
             mode_checked: None,
@@ -359,20 +354,41 @@ impl GlossaApp {
         }
     }
 
-    /// Tell the user something: at the bottom of the main window while it
-    /// is on screen, else in a notice by the pointer (the main window is
-    /// usually hidden in the tray when a hotkey's action has news).
+    /// Tell the user something, in the window that is being drawn when the
+    /// message is raised (History's export failing shows in History): see
+    /// [`crate::toast`]. A message raised outside any window (a hotkey's
+    /// action, an event) belongs to the main window, and goes by the pointer
+    /// while that is hidden in the tray, as it usually is then.
     pub fn notify(&mut self, text: impl Into<String>, error: bool) {
-        let text = text.into();
+        self.notify_with(text.into(), None, error);
+    }
+
+    /// Tell the user an engine error: its message in the interface language,
+    /// with what the service or system said in small print. The English
+    /// original goes to the log, where a bug report will be read.
+    pub fn report(&mut self, e: &glossa_core::Error) {
+        tracing::warn!("error shown to the user: {e}");
+        let text = self.locale.describe_error(e);
+        self.notify_with(text, e.detail(), true);
+    }
+
+    /// [`Self::notify`], with a line of small print under the message.
+    pub fn notify_with(&mut self, text: String, detail: Option<String>, error: bool) {
         if error {
             tracing::info!("message for the user: {text}");
         }
-        if self.main_on_screen() {
-            self.toast = Some(Toast { text, error, at: Instant::now() });
-            self.ctx.request_repaint();
+        let origin = self.ctx.viewport_id();
+        if origin == egui::ViewportId::ROOT && !self.main_on_screen() {
+            crate::notice::at_cursor(self, text, detail, error);
         } else {
-            crate::notice::at_cursor(self, text, error);
+            self.toasts.insert(origin, crate::toast::Toast::new(text, detail, error, self.frames));
+            self.ctx.request_repaint();
         }
+    }
+
+    /// The number of the frame being drawn, for [`crate::toast`].
+    pub fn frame_number(&self) -> u64 {
+        self.frames
     }
 
     /// Whether the main window is showing (not hidden, not minimised).
@@ -398,7 +414,7 @@ impl GlossaApp {
                     self.notify(msg, false);
                 }
                 Ok(()) => {}
-                Err(e) => self.notify(e.to_string(), true),
+                Err(e) => self.report(&e),
             },
             None => self.ctx.copy_text(text.to_owned()),
         }
@@ -462,6 +478,9 @@ impl GlossaApp {
 
     pub fn hide_main(&mut self) {
         self.main_visible = false;
+        // An error left open in it has been seen; kept, it would hold the
+        // graphics loaded (see `maybe_unload`) for a window no one sees.
+        self.toasts.remove(&egui::ViewportId::ROOT);
         self.remember_main_geometry();
         self.ctx.send_viewport_cmd_to(egui::ViewportId::ROOT, egui::ViewportCommand::Visible(false));
     }
@@ -824,7 +843,8 @@ impl GlossaApp {
                         self.main.outcome = Some(out);
                     }
                     Err(e) => {
-                        self.main.error = Some(self.describe(&e));
+                        tracing::info!("translation failed: {e}");
+                        self.main.error = Some(crate::errors::ErrorView::new(&self.locale, &e));
                     }
                 }
             }
@@ -841,13 +861,13 @@ impl GlossaApp {
                 }
             }
             Event::Translated { slot: Slot::Popup, job, result } => {
-                let msg = result.as_ref().err().map(|e| self.describe(e));
+                let msg = result.as_ref().err().map(|e| crate::errors::ErrorView::new(&self.locale, e));
                 if let Some(p) = self.popup.as_mut() {
                     p.on_result(job, result, msg);
                 }
             }
             Event::Dictionary { job, query, result, .. } => {
-                let msg = result.as_ref().err().map(|e| self.describe(e));
+                let msg = result.as_ref().err().map(|e| crate::errors::ErrorView::new(&self.locale, e));
                 if let Some(d) = self.dictionary.as_mut() {
                     d.on_result(job, query, result, msg);
                 }
@@ -863,10 +883,7 @@ impl GlossaApp {
                         self.notify(m, true);
                     }
                 }
-                Err(e) => {
-                    let m = self.describe(&e);
-                    self.notify(m, true);
-                }
+                Err(e) => self.report(&e),
             },
             Event::ConfigChanged => self.refresh_from_config(),
             Event::ModulesReloaded => {
@@ -900,7 +917,7 @@ impl GlossaApp {
                     let text = crate::presets::report_text(self, "preset.applied", &r);
                     self.notify(text, false);
                 }
-                Err(e) => self.notify(e.to_string(), true),
+                Err(e) => self.report(&e),
             },
             // The waker has already asked for a frame; the options page
             // reads the new state when it draws.
@@ -909,41 +926,21 @@ impl GlossaApp {
         }
     }
 
-    /// A human message for an engine error, in the interface language where
-    /// the classic program had one.
+    /// A human message for an engine error, in the interface language,
+    /// with what the service said on a line of its own.
     pub fn describe(&self, e: &glossa_core::Error) -> String {
         describe_error(&self.locale, e)
     }
 }
 
-/// [`GlossaApp::describe`], for a worker thread holding only the locale.
+/// [`GlossaApp::describe`], for a worker thread holding only the locale:
+/// for the places that show an error as one piece of text. Windows with room
+/// for small print and buttons use [`crate::errors::ErrorView`] instead.
 pub fn describe_error(locale: &glossa_core::locale::Locale, e: &glossa_core::Error) -> String {
-    use glossa_core::Error as E;
-    let key = match e {
-        E::EmptyInput => Some("msg.nothing_to_translate"),
-        E::LanguageNotDetected => Some("msg.cannot_detect"),
-        E::SourceLanguageUnsupported { .. } => Some("msg.source_unsupported"),
-        E::TargetLanguageUnsupported { .. } => Some("msg.target_unsupported"),
-        E::Timeout(_) => Some("msg.timeout"),
-        E::Network(_) => Some("msg.no_connection"),
-        E::Unsupported { .. } => Some("msg.capability_unsupported"),
-        E::NoTextRecognised => Some("msg.no_text_in_image"),
-        E::AssetsMissing { .. } | E::RuntimeMissing { .. } => Some("msg.assets_missing"),
-        E::NeedsApproval { .. } => Some("msg.needs_approval"),
-        _ => None,
-    };
-    match key {
-        // The localised headline, with the specifics after it.
-        Some(k) => {
-            let head = locale.get(k).to_owned();
-            match e {
-                E::Network(_) | E::Unsupported { .. } | E::AssetsMissing { .. } | E::RuntimeMissing { .. } => {
-                    format!("{head}\n{e}")
-                }
-                _ => head,
-            }
-        }
-        None => e.to_string(),
+    let head = locale.describe_error(e);
+    match e.detail() {
+        Some(detail) => format!("{head}\n{detail}"),
+        None => head,
     }
 }
 
@@ -1034,7 +1031,7 @@ impl GlossaApp {
             return;
         }
         let delay = self.cfg.appearance.unload_graphics_after_secs;
-        let busy = self.main.busy || self.watch.is_some() || self.toast.is_some() || self.ocr_background.is_some();
+        let busy = self.main.busy || self.watch.is_some() || !self.toasts.is_empty() || self.ocr_background.is_some();
         if !glossa_platform::idle::IdlePump::supported()
             || self.launch.screenshot.is_some()
             || delay == 0
@@ -1205,13 +1202,7 @@ impl eframe::App for GlossaApp {
             self.in_app_switcher = windowed;
             glossa_platform::window::set_in_app_switcher(windowed);
         }
-        if let Some(t) = &self.toast {
-            if t.at.elapsed() > Duration::from_secs(4) {
-                self.toast = None;
-            } else {
-                ctx.request_repaint_after(Duration::from_millis(500));
-            }
-        }
+        crate::toast::tick(self, ctx);
         if self.watch.is_some() {
             ctx.request_repaint_after(Duration::from_millis(250));
         }
@@ -1266,6 +1257,7 @@ impl eframe::App for GlossaApp {
         crate::about::show_about(self, &ctx);
         crate::welcome::show(self, &ctx);
         crate::keyboard::show_keyboard(self, &ctx);
+        crate::toast::sweep(self);
         if let Some((what, path)) = self.launch.screenshot.clone() {
             crate::screenshot::flow(self, &ctx, &what, &path);
         }

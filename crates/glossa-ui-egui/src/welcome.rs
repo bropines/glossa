@@ -135,6 +135,7 @@ pub fn show(app: &mut GlossaApp, ctx: &egui::Context) {
             custom,
             &crate::chrome::Caption { minimize: false, maximize: false, ..crate::chrome::Caption::new(&title) },
         );
+        crate::toast::draw(app, ui.ctx());
         let all = pages();
         st.page = st.page.min(all.len() - 1);
         let page = all[st.page];
@@ -824,7 +825,7 @@ fn permissions(app: &mut GlossaApp, ui: &mut egui::Ui, pal: &Palette) {
                         }
                         if secondary_button(ui, &app.t("options.permissions.open_settings")).clicked() {
                             if let Err(e) = perm::open_settings(p) {
-                                app.notify(e.to_string(), true);
+                                app.report(&e);
                             }
                         }
                     });

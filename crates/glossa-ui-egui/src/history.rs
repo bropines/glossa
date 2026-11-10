@@ -110,6 +110,7 @@ pub fn show(app: &mut GlossaApp, ctx: &egui::Context) {
             open = false;
         }
         crate::chrome::frame(ui, &app.look, custom, &crate::chrome::Caption::new(&title));
+        crate::toast::draw(app, ui.ctx());
         body(app, ui, &mut st, &mut open);
     });
     app.child_backdrop(&title, false);
@@ -154,7 +155,7 @@ fn body(app: &mut GlossaApp, ui: &mut egui::Ui, st: &mut HistoryState, open: &mu
                     let fmt = ExportFormat::from_extension(&ext).unwrap_or(ExportFormat::Text);
                     match app.engine.export_history(&path, fmt, st.favorites_only) {
                         Ok(n) => app.notify(format!("{n} → {}", path.display()), false),
-                        Err(e) => app.notify(e.to_string(), true),
+                        Err(e) => app.report(&e),
                     }
                 }
             }

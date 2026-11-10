@@ -14,7 +14,9 @@ pub struct DictState {
     pub query: String,
     pub job: u64,
     pub article: Option<Arc<Article>>,
-    pub error: Option<String>,
+    pub error: Option<crate::errors::ErrorView>,
+    /// The failure is "no such word", from every dictionary asked.
+    no_results: bool,
     pub busy: bool,
     pub service: Option<String>,
     pub from: LangId,
@@ -32,6 +34,7 @@ pub fn open(app: &mut GlossaApp, word: Option<String>) {
         job: 0,
         article: None,
         error: None,
+        no_results: false,
         busy: false,
         service: Some(app.cfg.services.dictionary_active.clone()).filter(|s| !s.is_empty()),
         from,
@@ -64,7 +67,7 @@ impl DictState {
         job: u64,
         _query: String,
         result: Result<Arc<Article>, Arc<Error>>,
-        message: Option<String>,
+        message: Option<crate::errors::ErrorView>,
     ) {
         if job != self.job {
             return;
@@ -75,8 +78,11 @@ impl DictState {
                 self.article = Some(a);
                 self.error = None;
             }
-            Err(_) => {
+            Err(e) => {
                 self.article = None;
+                // A dictionary without the word is an answer, not a fault:
+                // `show` says so in its own words, with nothing to retry.
+                self.no_results = matches!(&*e, Error::Module { detail, .. } if detail.starts_with("no results"));
                 self.error = message;
             }
         }
@@ -95,6 +101,7 @@ pub fn show(app: &mut GlossaApp, ctx: &egui::Context) {
             open = false;
         }
         crate::chrome::frame(ui, &app.look, custom, &crate::chrome::Caption::new(&title));
+        crate::toast::draw(app, ui.ctx());
         app.text_zoom_keys(ui);
         body(app, ui, &mut st);
     });
@@ -200,16 +207,32 @@ fn body(app: &mut GlossaApp, ui: &mut egui::Ui, st: &mut DictState) {
             });
         });
     }
+    // What "try the next dictionary" would ask, should the lookup have failed.
+    let mut fix = None;
+    let dictionaries: Vec<(String, String)> = app
+        .engine
+        .providers(Capabilities::DICTIONARY)
+        .into_iter()
+        .filter(|p| p.enabled)
+        .map(|p| (p.info.id.clone(), p.info.name.clone()))
+        .collect();
+    let asked = st.service.clone().unwrap_or_default();
+    let ids: Vec<String> = dictionaries.iter().map(|(id, _)| id.clone()).collect();
+    let next = crate::errors::next_service(&ids, &asked).map(str::to_owned);
+    let next_name =
+        next.as_ref().and_then(|n| dictionaries.iter().find(|(id, _)| id == n)).map(|(_, name)| name.clone());
     let article_panel = egui::CentralPanel::default().show(ui, |ui| {
         egui::ScrollArea::vertical().id_salt("article").show(ui, |ui| {
             ui.set_width(ui.available_width());
             if st.busy {
                 ui.add_space(20.0);
                 ui.vertical_centered(|ui| ui.add(egui::Spinner::new().size(24.0)));
+            } else if st.error.is_some() && st.no_results {
+                ui.label(RichText::new(app.locale.fmt("dict.no_results", &st.query)).color(look.error()));
             } else if let Some(e) = &st.error {
-                let msg =
-                    if e.contains("no results") { app.locale.fmt("dict.no_results", &st.query) } else { e.clone() };
-                ui.label(RichText::new(msg).color(look.error()));
+                let body = egui::TextStyle::Body.resolve(ui.style());
+                let style = crate::errors::Style { font: body, weak: look.weak_text(), compact: false };
+                fix = crate::errors::show(ui, app, e, &style, next_name.as_deref());
             } else if let Some(a) = st.article.clone() {
                 app.fonts.ensure(&app.ctx, &a.to_plain_text());
                 if let Some(h) = &a.html {
@@ -235,6 +258,19 @@ fn body(app: &mut GlossaApp, ui: &mut egui::Ui, st: &mut DictState) {
             }
         });
     });
+    if let (Some(fix), Some(e)) = (fix, st.error.clone()) {
+        match crate::errors::apply(app, &e, fix, &asked) {
+            Some(crate::errors::Fix::Retry) => lookup(app, st),
+            Some(crate::errors::Fix::NextService) => {
+                if let Some(id) = next {
+                    st.service = Some(id.clone());
+                    let _ = app.engine.update_config(move |c| c.services.dictionary_active = id);
+                    lookup(app, st);
+                }
+            }
+            _ => {}
+        }
+    }
     app.text_zoom_wheel(ui, article_panel.response.rect);
     // The article's context menu, for a right click anywhere over it (its
     // text and links take the clicks themselves).

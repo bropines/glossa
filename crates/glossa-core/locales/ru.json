@@ -590,8 +590,6 @@
     "options.modules.java": "Java (для модулей на Java):",
     "options.modules.java_hint": "JAVA_HOME, затем java из PATH",
     "options.modules.call_timeout": "Время ожидания вызова, мс:",
-    "msg.needs_approval": "Этот модуль ждёт вашего одобрения. Посмотрите, что он просит, в разделе Настройки, Модули.",
-    "msg.assets_missing": "Этой службе нужны файлы, которые ещё не скачаны. Скачайте их в её настройках (Настройки, Службы).",
     "error.unsupported": "Сервис %s этого не поддерживает.",
     "error.source_unsupported": "%s не поддерживает исходный язык (%s).",
     "error.target_unsupported": "%s не поддерживает язык перевода (%s).",

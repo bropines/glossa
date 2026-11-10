@@ -422,6 +422,7 @@ pub fn show(app: &mut GlossaApp, ctx: &egui::Context) {
         }
         let _trace = crate::frametrace::begin(ui.ctx(), "options");
         crate::chrome::frame(ui, &app.look, custom, &crate::chrome::Caption::new(&title));
+        crate::toast::draw(app, ui.ctx());
         open &= body(app, ui, &mut st);
     });
     app.child_backdrop(&title, false);
@@ -480,8 +481,10 @@ fn apply(app: &mut GlossaApp, st: &mut OptionsState) -> bool {
                 st.login_status_rx = if st.autostart { ask_login_status(&app.ctx) } else { None };
             }
             Err(e) => {
-                autostart_error = Some(app.locale.fmt("options.basics.autostart_failed", &e.to_string()));
-                st.autostart_done = Some(Err(e.to_string()));
+                tracing::warn!("start at login: {e}");
+                let why = app.describe(&e);
+                autostart_error = Some(app.locale.fmt("options.basics.autostart_failed", &why));
+                st.autostart_done = Some(Err(why));
                 attention = true;
             }
         }
@@ -494,7 +497,7 @@ fn apply(app: &mut GlossaApp, st: &mut OptionsState) -> bool {
                 None => (app.t("options.saved"), false),
             }
         }
-        Err(e) => (e.to_string(), true),
+        Err(e) => (app.describe(&e), true),
     });
     if attention {
         // The note is under the checkbox on the first page.
@@ -1283,7 +1286,7 @@ fn module_assets(app: &mut GlossaApp, ui: &mut egui::Ui, st: &mut OptionsState, 
     if let Some(name) = fetch_one {
         st.assets_note = None;
         if let Err(e) = app.engine.start_asset_download(id, &[name]) {
-            st.assets_note = Some((e.to_string(), true));
+            st.assets_note = Some((app.describe(&e), true));
         }
     }
     if let Some(job) = &report.job {
@@ -1312,7 +1315,7 @@ fn module_assets(app: &mut GlossaApp, ui: &mut egui::Ui, st: &mut OptionsState, 
             if ui.button(label).clicked() {
                 st.assets_note = None;
                 if let Err(e) = app.engine.start_asset_download(id, &[]) {
-                    st.assets_note = Some((e.to_string(), true));
+                    st.assets_note = Some((app.describe(&e), true));
                 }
             }
         }
@@ -1324,8 +1327,10 @@ fn module_assets(app: &mut GlossaApp, ui: &mut egui::Ui, st: &mut OptionsState, 
             let (tx, rx) = std::sync::mpsc::channel();
             let (engine, ctx, id, ok) =
                 (app.engine.clone(), app.ctx.clone(), id.to_owned(), app.t("options.assets.verified"));
+            let locale = app.locale.clone();
             std::thread::spawn(move || {
-                let r = engine.verify_module_assets(&id).map_err(|e| e.to_string()).and_then(|r| {
+                let described = |e| crate::app::describe_error(&locale, &e);
+                let r = engine.verify_module_assets(&id).map_err(described).and_then(|r| {
                     if r.assets.iter().all(|a| a.state == glossa_engine::AssetState::Ready) {
                         Ok(ok)
                     } else {
@@ -1354,7 +1359,7 @@ fn module_assets(app: &mut GlossaApp, ui: &mut egui::Ui, st: &mut OptionsState, 
         if any_on_disk && ui.add_enabled(!report.busy, egui::Button::new(app.t("options.assets.remove"))).clicked() {
             st.assets_note = None;
             if let Err(e) = app.engine.start_asset_removal(id) {
-                st.assets_note = Some((e.to_string(), true));
+                st.assets_note = Some((app.describe(&e), true));
             }
         }
     });
@@ -1435,7 +1440,7 @@ fn module_python(app: &mut GlossaApp, ui: &mut egui::Ui, id: &str) {
             };
             if ui.button(label).clicked() {
                 if let Err(e) = app.engine.start_python_install(Some(id)) {
-                    app.notify(e.to_string(), true);
+                    app.report(&e);
                 }
             }
         }
@@ -1649,7 +1654,7 @@ fn ai_endpoints(app: &mut GlossaApp, ui: &mut egui::Ui, st: &mut OptionsState) {
                         st.selected_service = None;
                     }
                 }
-                Err(e) => st.message = Some((e.to_string(), true)),
+                Err(e) => st.message = Some((app.describe(&e), true)),
             }
         }
         // Wrapped: the pane can be narrower than the row, and a row wider
@@ -1681,7 +1686,7 @@ fn ai_endpoints(app: &mut GlossaApp, ui: &mut egui::Ui, st: &mut OptionsState) {
                         st.selected_service = Some(id);
                         st.new_ai_name.clear();
                     }
-                    Err(e) => st.message = Some((e.to_string(), true)),
+                    Err(e) => st.message = Some((app.describe(&e), true)),
                 }
             }
         });
@@ -1706,8 +1711,9 @@ fn ai_tools(
             let (tx, rx) = std::sync::mpsc::channel();
             let (engine, ctx, id) = (app.engine.clone(), app.ctx.clone(), id.to_owned());
             let values = values.clone();
+            let locale = app.locale.clone();
             std::thread::spawn(move || {
-                let r = engine.list_models(&id, Some(&values)).map_err(|e| e.to_string());
+                let r = engine.list_models(&id, Some(&values)).map_err(|e| crate::app::describe_error(&locale, &e));
                 let _ = tx.send(AiReply::Models(id, r));
                 ctx.request_repaint();
             });
@@ -1720,8 +1726,9 @@ fn ai_tools(
         {
             let (tx, rx) = std::sync::mpsc::channel();
             let (engine, ctx, id) = (app.engine.clone(), app.ctx.clone(), id.to_owned());
+            let locale = app.locale.clone();
             std::thread::spawn(move || {
-                let r = engine.test_provider(&id, Some(&values)).map_err(|e| e.to_string());
+                let r = engine.test_provider(&id, Some(&values)).map_err(|e| crate::app::describe_error(&locale, &e));
                 let _ = tx.send(AiReply::Test(r));
                 ctx.request_repaint();
             });
@@ -2577,7 +2584,7 @@ fn modules(app: &mut GlossaApp, ui: &mut egui::Ui, st: &mut OptionsState) {
                             Some((app.locale.fmt_args("options.modules.imported", &[&settings, &entries]), false));
                         reload_draft = true;
                     }
-                    Err(e) => st.message = Some((e.to_string(), true)),
+                    Err(e) => st.message = Some((app.describe(&e), true)),
                 }
             }
         }
@@ -2722,12 +2729,13 @@ fn module_approvals(app: &mut GlossaApp, ui: &mut egui::Ui, st: &mut OptionsStat
         let ctx = app.ctx.clone();
         let (tx, rx) = std::sync::mpsc::channel();
         st.trust_job = Some(rx);
+        let locale = app.locale.clone();
         std::thread::spawn(move || {
             let done = match &hash {
                 Some(h) => engine.approve_module(&id, Some(h)),
                 None => engine.decline_module(&id),
             };
-            let _ = tx.send(done.map_err(|e| e.to_string()));
+            let _ = tx.send(done.map_err(|e| crate::app::describe_error(&locale, &e)));
             ctx.request_repaint();
         });
     }
@@ -2971,7 +2979,7 @@ pub(crate) fn permissions(app: &mut GlossaApp, ui: &mut egui::Ui) {
                 }
                 if ui.button(app.t("options.permissions.open_settings")).clicked() {
                     if let Err(e) = perm::open_settings(p) {
-                        app.notify(e.to_string(), true);
+                        app.report(&e);
                     }
                 }
             });

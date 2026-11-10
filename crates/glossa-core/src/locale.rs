@@ -1309,8 +1309,6 @@ pub static STRINGS: &[(&str, &str, Option<&str>)] = &[
     ("options.modules.java", "Java (for Java modules):", None),
     ("options.modules.java_hint", "JAVA_HOME, then java from PATH", None),
     ("options.modules.call_timeout", "Call timeout, ms:", None),
-    ("msg.needs_approval", "This module is waiting for your approval. Look at what it asks for in Options, Modules.", None),
-    ("msg.assets_missing", "This service needs files that have not been downloaded yet. Download them in its settings (Options, Services).", None),
     ("error.unsupported", "%s does not support this.", None),
     ("error.source_unsupported", "%s does not translate from %s.", None),
     ("error.target_unsupported", "%s does not translate into %s.", None),
