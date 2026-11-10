@@ -16,12 +16,20 @@ use glossa_core::ocr::Rect as GRect;
 use crate::app::GlossaApp;
 
 const TITLE: &str = "Glossa notice";
-/// How long a notice stays: errors a little longer, they need reading.
+/// How long a notice stays. An error stays long enough to be read, which
+/// depends on how much there is to read: see [`error_life`].
 const LIFE: Duration = Duration::from_millis(3500);
-const ERROR_LIFE: Duration = Duration::from_millis(6000);
 const WIDTH: f32 = 360.0;
-/// Longest message shown before it is cut short (with the rest in the log).
-const MAX_TEXT_HEIGHT: f32 = 96.0;
+/// Most lines of the message shown; a longer one ends in an ellipsis (the
+/// whole of it is in the log).
+const MAX_ROWS: usize = 6;
+
+/// How long an error stays: eight seconds to notice it and start reading,
+/// and time to read it at an unhurried 15 characters a second, up to half a
+/// minute. It never needs waiting out: a click puts it away.
+fn error_life(chars: usize) -> Duration {
+    Duration::from_millis(8000 + chars as u64 * 1000 / 15).min(Duration::from_secs(30))
+}
 
 pub struct Notice {
     text: String,
@@ -40,7 +48,8 @@ pub struct Notice {
 impl Notice {
     fn life(&self) -> Duration {
         if self.error {
-            ERROR_LIFE
+            let preview = self.preview.as_ref().map_or(0, |p| p.chars().count());
+            error_life(self.text.chars().count() + preview)
         } else {
             LIFE
         }
@@ -58,12 +67,13 @@ pub fn show(app: &mut GlossaApp, region: GRect, text: String, preview: Option<St
 }
 
 /// Show a notice by the mouse pointer: for messages with nowhere else to go.
-pub fn at_cursor(app: &mut GlossaApp, text: String, error: bool) {
+/// `detail` is a line of small print under it (what a service said).
+pub fn at_cursor(app: &mut GlossaApp, text: String, detail: Option<String>, error: bool) {
     let (x, y) = glossa_platform::window::cursor_position().unwrap_or((200, 200));
     // Under the pointer's arrow, which is about this tall at 100%.
     let scale = glossa_platform::window::monitor_at(x, y).map(|m| m.desktop_scale()).unwrap_or(1.0);
     let region = GRect::new(x as f32, y as f32, 0.0, 16.0 * scale);
-    show(app, region, text, None, error, false);
+    show(app, region, text, detail, error, false);
 }
 
 /// Drop the notice once its time is up.
@@ -94,9 +104,15 @@ pub fn draw(app: &mut GlossaApp, ctx: &egui::Context) {
     let text_w = WIDTH - 2.0 * margin.x - spinner;
     let body = egui::TextStyle::Body.resolve(&ctx.global_style());
     let small = egui::TextStyle::Small.resolve(&ctx.global_style());
-    let text_h = ctx
-        .fonts_mut(|f| f.layout(n.text.clone(), body.clone(), egui::Color32::WHITE, text_w).size().y)
-        .min(MAX_TEXT_HEIGHT);
+    // Laid out here, in the colour it is drawn in, and drawn as it was
+    // measured: cut after `MAX_ROWS` lines with an ellipsis, not clipped
+    // mid-line by the window's edge.
+    let colour = if n.error { look.error() } else { look.popup_text };
+    let mut job = egui::text::LayoutJob::simple(n.text.clone(), body.clone(), colour, text_w);
+    job.wrap.max_rows = MAX_ROWS;
+    job.wrap.overflow_character = Some('…');
+    let galley = ctx.fonts_mut(|f| f.layout_job(job));
+    let text_h = galley.size().y;
     let preview_h = if n.preview.is_some() { small.size + 6.0 } else { 0.0 };
     let size = vec2(WIDTH, (text_h + preview_h + 2.0 * margin.y + 4.0).ceil());
     let pos = notice_pos(n.region, size * scale, monitor.map(|m| m.work_area)) / scale;
@@ -113,7 +129,7 @@ pub fn draw(app: &mut GlossaApp, ctx: &egui::Context) {
         .with_position(pos)
         .with_inner_size(size);
     let mut dismissed = false;
-    let (text, preview, error, busy) = (n.text.clone(), n.preview.clone(), n.error, n.busy);
+    let (preview, error, busy) = (n.preview.clone(), n.error, n.busy);
     let radius = look.theme.metrics.overlay_radius.max(look.theme.metrics.button_radius).clamp(4.0, 12.0);
     ctx.show_viewport_immediate(egui::ViewportId::from_hash_of(TITLE), builder, |ui, _| {
         let frame = egui::Frame::new()
@@ -127,9 +143,7 @@ pub fn draw(app: &mut GlossaApp, ctx: &egui::Context) {
                 if busy {
                     ui.add(egui::Spinner::new().size(14.0));
                 }
-                let colour = if error { look.error() } else { look.popup_text };
-                ui.set_max_height(MAX_TEXT_HEIGHT);
-                ui.add(egui::Label::new(RichText::new(&text).color(colour).strong()).wrap());
+                ui.label(galley.clone());
             });
             if let Some(p) = &preview {
                 ui.add(egui::Label::new(RichText::new(p).small().color(look.weak_text())).truncate());
@@ -185,6 +199,15 @@ mod tests {
         assert_eq!(notice_pos(GRect::new(100.0, 950.0, 300.0, 50.0), size, work), pos2(100.0, 878.0));
         // Too close to the right edge: pulled in.
         assert_eq!(notice_pos(GRect::new(1800.0, 100.0, 100.0, 50.0), size, work).x, 1580.0);
+    }
+
+    #[test]
+    fn an_error_stays_long_enough_to_read() {
+        assert!(error_life(0) >= Duration::from_secs(8));
+        // Two lines of text: more than the six seconds it used to get.
+        assert!(error_life(120) >= Duration::from_secs(15));
+        assert!(error_life(120) > error_life(40));
+        assert_eq!(error_life(100_000), Duration::from_secs(30));
     }
 
     #[test]

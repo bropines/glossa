@@ -117,6 +117,7 @@ pub fn show(app: &mut GlossaApp, ctx: &egui::Context) {
             open = false;
         }
         crate::chrome::frame(ui, &app.look, custom, &crate::chrome::Caption::new(&title));
+        crate::toast::draw(app, ui.ctx());
         body(app, ui, &mut st, &mut open);
     });
     app.child_backdrop(&title, false);
@@ -166,7 +167,7 @@ fn body(app: &mut GlossaApp, ui: &mut egui::Ui, st: &mut HistoryState, open: &mu
                             let text = app.locale.fmt_args("history.exported", &[&n, &path]);
                             app.notify(text, false);
                         }
-                        Err(e) => app.notify(e.to_string(), true),
+                        Err(e) => app.report(&e),
                     }
                 }
             }

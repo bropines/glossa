@@ -404,6 +404,7 @@ pub fn show(app: &mut GlossaApp, ctx: &egui::Context) {
             ui.ctx().send_viewport_cmd(egui::ViewportCommand::Focus);
         }
         crate::chrome::frame(ui, &app.look, custom, &crate::chrome::Caption::new(&title));
+        crate::toast::draw(app, ui.ctx());
         app.text_zoom_keys(ui);
         open &= body(app, ui, &mut st);
         geometry = ui.input(|i| {
@@ -953,8 +954,9 @@ fn copy(app: &mut GlossaApp, st: &mut ResultWindow, text: &str) {
     if text.trim().is_empty() {
         return;
     }
+    let locale = app.locale.clone();
     let result = match app.clipboard.as_mut() {
-        Some(cb) => cb.set_text(text).map_err(|e| e.to_string()),
+        Some(cb) => cb.set_text(text).map_err(|e| crate::app::describe_error(&locale, &e)),
         None => {
             app.ctx.copy_text(text.to_owned());
             Ok(())
@@ -980,8 +982,9 @@ fn run(app: &mut GlossaApp, st: &mut ResultWindow, cmd: Command) -> bool {
             }
         }
         Command::CopyImage => {
+            let locale = app.locale.clone();
             let result = match app.clipboard.as_mut() {
-                Some(cb) => cb.set_image(&st.image).map_err(|e| e.to_string()),
+                Some(cb) => cb.set_image(&st.image).map_err(|e| crate::app::describe_error(&locale, &e)),
                 None => Err(app.t("ocr.result.no_clipboard")),
             };
             let m = result.map(|_| app.t("msg.copied")).unwrap_or_else(|e| e);

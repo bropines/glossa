@@ -58,8 +58,7 @@ pub fn open_named(app: &mut GlossaApp, name: &str) {
     match PanelId::parse(name) {
         Ok(id) => open(app, &id),
         Err(e) => {
-            let m = app.describe(&e);
-            app.notify(m, true);
+            app.report(&e);
         }
     }
 }
@@ -76,8 +75,7 @@ pub fn open(app: &mut GlossaApp, id: &PanelId) {
             app.ctx.request_repaint();
         }
         Err(e) => {
-            let m = app.describe(&e);
-            app.notify(m, true);
+            app.report(&e);
         }
     }
 }
@@ -129,6 +127,7 @@ fn show_one(app: &mut GlossaApp, ctx: &egui::Context, w: &mut PanelWindow) -> bo
             open = false;
         }
         crate::chrome::frame(ui, &app.look, custom, &crate::chrome::Caption::new(&title));
+        crate::toast::draw(app, ui.ctx());
         egui::CentralPanel::default().show(ui, |ui| {
             egui::ScrollArea::vertical().id_salt(("panel-scroll", &salt)).auto_shrink([false, false]).show(ui, |ui| {
                 outs = draw(ui, &app.look, &app.locale, &mut w.panel, &salt);

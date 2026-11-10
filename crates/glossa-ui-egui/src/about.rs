@@ -74,6 +74,7 @@ pub fn show_about(app: &mut GlossaApp, ctx: &egui::Context) {
             custom,
             &crate::chrome::Caption { minimize: false, maximize: false, ..crate::chrome::Caption::new(&title) },
         );
+        crate::toast::draw(app, ui.ctx());
         egui::CentralPanel::default().show(ui, |ui| contents(app, ui, &mut open));
     });
     app.child_backdrop(&title, false);

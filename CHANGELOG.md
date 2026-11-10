@@ -255,6 +255,33 @@ the notes of its GitHub release.
 - The about box no longer shows the `-dirty` mark of a development build
   (`glossa-cli --version` and `doctor` still do), and the Appearance
   preview's popup header reads as the real popup's does.
+- Errors say what happened in the interface language. Every failure the
+  engine can report has its own message that names the service or module
+  and, where there is one, the way out ("DeepL needs an API key. Enter it
+  in Options → Services."), in English and Russian; before, all but a
+  handful came out as the engine's English text. What the service itself
+  answered is kept as small print under the message, and the original
+  goes to the log. A classic `lang.json` keeps its own wording for the
+  messages it has.
+- A failed translation or lookup is no longer a dead end. The main
+  window's result pane, the popup and the dictionary put buttons under
+  the message that fit the failure: "Try again" (no connection, a timeout,
+  too many requests, an answer that could not be read, a server error),
+  "Service settings" (a missing key, or the service refusing it with HTTP
+  401 or 403), "Download files" (a module whose files or Python packages
+  are not there yet), "Open Modules" (a module waiting for approval) and
+  "Try <the next service>".
+- An error message at the bottom of a window stays until it is closed and
+  has a Copy button; "Copied" and other notes still go away after four
+  seconds. An error shown by the pointer stays for as long as it takes to
+  read (eight seconds and up, with its length) and a long one ends in an
+  ellipsis after six lines instead of being cut off by the window's edge.
+- A message appears in the window that raised it: History, Dictionary,
+  Options, the module editor, module panels, the OCR result, Welcome,
+  About and the keyboard show their own, where they all used to appear in
+  the main window, behind the one being used. One raised by the popup or
+  an overlay, or by a window closed before it could show it, appears by
+  the pointer.
 - AI endpoints added in the options sit in their own group at the end of
   the service strips (popup and main window), on a blue plate, so "Google
   Gemini" no longer looks like a second Google. Hovering one says it is an

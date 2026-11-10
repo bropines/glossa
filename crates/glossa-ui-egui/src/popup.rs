@@ -30,7 +30,7 @@ pub struct PopupState {
     pub source: String,
     pub job: u64,
     pub outcome: Option<Arc<TranslationOutcome>>,
-    pub error: Option<String>,
+    pub error: Option<crate::errors::ErrorView>,
     pub busy: bool,
     /// While a streaming service writes: the translation so far.
     pub partial: Option<String>,
@@ -239,7 +239,7 @@ impl PopupState {
         &mut self,
         job: u64,
         result: Result<Arc<TranslationOutcome>, Arc<Error>>,
-        message: Option<String>,
+        message: Option<crate::errors::ErrorView>,
     ) {
         if job != self.job {
             return;
@@ -502,7 +502,7 @@ fn body(app: &mut GlossaApp, ui: &mut egui::Ui, st: &mut PopupState) -> (bool, e
         .clone()
         .filter(|_| st.busy)
         .or_else(|| st.outcome.as_ref().map(|o| display_text(o)))
-        .or_else(|| st.error.clone())
+        .or_else(|| st.error.as_ref().map(|e| e.headline.clone()))
         .unwrap_or_default();
     let wrap_w = (max_w - 16.0).max(60.0);
     let text_w = ui.ctx().fonts_mut(|f| f.layout(body_text, font.clone(), Color32::WHITE, wrap_w)).size().x;
@@ -767,8 +767,26 @@ fn body(app: &mut GlossaApp, ui: &mut egui::Ui, st: &mut PopupState) -> (bool, e
                 // Nothing can translate: say where services are switched on
                 // instead of the bare "no provider" error.
                 crate::main_window::no_translator_note(app, ui, Some(text_color));
-            } else if let Some(e) = &st.error {
-                ui.label(RichText::new(e).color(look.error()).font(font.clone()));
+            } else if let Some(e) = st.error.clone() {
+                // The message, and under it the ways out as small buttons.
+                let ids: Vec<String> = strip_providers.iter().map(|s| s.id.clone()).collect();
+                let next = crate::errors::next_service(&ids, &st.service).map(str::to_owned);
+                let next_name = next.as_deref().and_then(|id| service_name(app, id)).map(|n| short_service(&n));
+                let style =
+                    crate::errors::Style { font: font.clone(), weak: text_color.gamma_multiply(0.62), compact: true };
+                if let Some(fix) = crate::errors::show(ui, app, &e, &style, next_name.as_deref()) {
+                    let asked = st.service.clone();
+                    match crate::errors::apply(app, &e, fix, &asked) {
+                        Some(crate::errors::Fix::Retry) => retarget_same(app, st),
+                        Some(crate::errors::Fix::NextService) => {
+                            if let Some(id) = next {
+                                st.error = None;
+                                switch_service(app, st, id);
+                            }
+                        }
+                        _ => {}
+                    }
+                }
             } else if let Some(o) = st.outcome.clone() {
                 let primary = o.translation.text.clone();
                 let rtl = o.pair.to.is_rtl() || glossa_core::text::guessed_direction(&primary).is_rtl();
@@ -986,6 +1004,15 @@ fn retarget(app: &mut GlossaApp, st: &mut PopupState, pair: LangPair) {
     st.error = None;
     let (source, service) = (st.source.clone(), st.service.clone());
     st.job = translate(app, &source, &service, pair);
+}
+
+/// Ask the same service for the same translation again (after a failure).
+fn retarget_same(app: &mut GlossaApp, st: &mut PopupState) {
+    st.busy = true;
+    st.partial = None;
+    st.error = None;
+    let (source, service) = (st.source.clone(), st.service.clone());
+    st.job = translate(app, &source, &service, st.pair);
 }
 
 /// `f32::clamp` that cannot panic. When the window is smaller than the layout
