@@ -9,6 +9,8 @@ the notes of its GitHub release.
 
 ### Added
 
+- `glossa --help` lists the desktop program's flags and `glossa --version`
+  prints its version; both answer on the terminal and exit.
 - A double click on the popup's header (the language line or a free spot
   beside the buttons) opens the main window with the popup's text.
 - Options → Appearance → Popup → "Open the main window with the popup":
@@ -250,6 +252,9 @@ the notes of its GitHub release.
 
 ### Fixed
 
+- `glossa` with a flag it does not know (or a stray word, or a flag missing
+  its value) says so and exits with 64. It used to ignore the mistake and
+  start, so `glossa --help` opened the application.
 - The popup's copy button no longer shows a "Copied" message, which
   turned up now and then and spoiled the popup's look. A failed copy is
   still reported.

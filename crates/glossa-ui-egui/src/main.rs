@@ -65,32 +65,181 @@ pub struct Launch {
     pub popup_text: Option<String>,
 }
 
-fn parse_args() -> Launch {
+/// What a flag does. Every variant has exactly one row in [`FLAGS`], and
+/// the parser reaches a variant only through that table, so a flag cannot
+/// be parsed without also being listed by `--help`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Flag {
+    Hidden,
+    Home,
+    Popup,
+    Screenshot,
+    ScreenshotList,
+    Version,
+    Help,
+}
+
+/// One row of `--help`: the spellings, the value's name and what it does.
+struct FlagDoc {
+    flag: Flag,
+    names: &'static [&'static str],
+    value: &'static str,
+    help: &'static str,
+}
+
+/// Every flag the program takes. docs/cli.md ("The desktop program's own
+/// flags") describes the same list at more length.
+const FLAGS: &[FlagDoc] = &[
+    FlagDoc {
+        flag: Flag::Hidden,
+        names: &["--hidden", "--tray"],
+        value: "",
+        help: "Start in the tray, whatever the settings say (autostart uses this).",
+    },
+    FlagDoc {
+        flag: Flag::Home,
+        names: &["--home"],
+        value: "DIR",
+        help: "Use DIR as the data folder, as GLOSSA_HOME does (--home=DIR works too).",
+    },
+    FlagDoc {
+        flag: Flag::Popup,
+        names: &["--popup"],
+        value: "TEXT",
+        help: "Show TEXT translated in the popup at start.",
+    },
+    FlagDoc {
+        flag: Flag::Screenshot,
+        names: &["--screenshot"],
+        value: "[WHAT [FILE]]",
+        help: "Development aid: draw one window to a PNG and exit.",
+    },
+    FlagDoc {
+        flag: Flag::ScreenshotList,
+        names: &["--screenshot-list"],
+        value: "",
+        help: "Print every window --screenshot can draw and exit.",
+    },
+    FlagDoc { flag: Flag::Version, names: &["--version", "-V"], value: "", help: "Print the version and exit." },
+    FlagDoc { flag: Flag::Help, names: &["--help", "-h"], value: "", help: "Print this help and exit." },
+];
+
+/// What the command line asks for.
+#[derive(Debug)]
+enum Invocation {
+    Run(Launch),
+    Help,
+    Version,
+    ScreenshotList,
+}
+
+fn help_text() -> String {
+    let rows: Vec<(String, &str)> = FLAGS
+        .iter()
+        .map(|f| {
+            let names = f.names.join(", ");
+            (if f.value.is_empty() { names } else { format!("{names} {}", f.value) }, f.help)
+        })
+        .collect();
+    let width = rows.iter().map(|(left, _)| left.len()).max().unwrap_or(0);
+    let mut out = format!(
+        "Glossa {}, the desktop program (glossa-cli is the command-line one).\n\nUsage: glossa [flags]\n\n",
+        glossa_core::long_version()
+    );
+    for (left, help) in rows {
+        out.push_str(&format!("  {left:width$}  {help}\n"));
+    }
+    out.push_str(
+        "\nStarted while it is already running, glossa shows the running program's\nmain window instead (its popup, with --popup TEXT).\n",
+    );
+    out
+}
+
+/// Arguments macOS adds to an app's command line on its own: the process
+/// serial number of a Finder launch (`-psn_0_12345`) and the defaults it
+/// lets be overridden per launch (`-NSQuitAlwaysKeepsWindows NO`,
+/// `-AppleLanguages (en)`), each followed by its value.
+fn system_argument(arg: &str) -> bool {
+    cfg!(target_os = "macos") && (arg.starts_with("-psn_") || arg.starts_with("-NS") || arg.starts_with("-Apple"))
+}
+
+/// Read the command line (without the program's name). An argument the
+/// program does not know is an error rather than ignored: `glossa --help`
+/// used to start the application.
+fn parse(args: impl IntoIterator<Item = String>) -> Result<Invocation, String> {
     let mut l = Launch::default();
-    let mut it = std::env::args().skip(1);
+    let mut it = args.into_iter().peekable();
     while let Some(a) = it.next() {
-        match a.as_str() {
-            "--hidden" | "--tray" => l.hidden = true,
-            "--home" => l.home = it.next().map(Into::into),
-            // --home=DIR, as glossa-cli takes it too.
-            a if a.starts_with("--home=") => l.home = Some(a["--home=".len()..].into()),
-            "--popup" => l.popup_text = it.next(),
-            // For the smoke test: every window --screenshot can draw.
-            "--screenshot-list" => {
-                for t in screenshot::targets() {
-                    println!("{t}");
-                }
-                std::process::exit(0);
+        if system_argument(&a) {
+            if !a.starts_with("-psn_") {
+                it.next_if(|value| !value.starts_with('-'));
             }
-            "--screenshot" => {
+            continue;
+        }
+        // --home=DIR, as glossa-cli takes it too.
+        let (name, inline) = match a.split_once('=') {
+            Some((name, value)) if name.starts_with("--") => (name, Some(value.to_owned())),
+            _ => (a.as_str(), None),
+        };
+        let Some(doc) = FLAGS.iter().find(|f| f.names.contains(&name)) else {
+            return Err(if a.starts_with('-') {
+                format!("unknown flag {name}")
+            } else {
+                format!("unexpected argument {a:?}")
+            });
+        };
+        let takes_value = matches!(doc.flag, Flag::Home | Flag::Popup);
+        if inline.is_some() && !takes_value {
+            return Err(format!("{name} takes no value"));
+        }
+        let mut value =
+            || inline.clone().or_else(|| it.next()).ok_or_else(|| format!("{name} needs a value ({})", doc.value));
+        match doc.flag {
+            Flag::Hidden => l.hidden = true,
+            Flag::Home => l.home = Some(value()?.into()),
+            Flag::Popup => l.popup_text = Some(value()?),
+            Flag::Screenshot => {
                 let what = it.next().unwrap_or_else(|| "main".into());
                 let to = it.next().unwrap_or_else(|| format!("glossa-{what}.png"));
                 l.screenshot = Some((what, to.into()));
             }
-            _ => {}
+            Flag::ScreenshotList => return Ok(Invocation::ScreenshotList),
+            Flag::Version => return Ok(Invocation::Version),
+            Flag::Help => return Ok(Invocation::Help),
         }
     }
-    l
+    Ok(Invocation::Run(l))
+}
+
+/// The exit code for a command line the program does not understand
+/// (`EX_USAGE`), clear of the codes `--screenshot` uses.
+const USAGE_ERROR: i32 = 64;
+
+/// The launch the command line asks for. `--help`, `--version`,
+/// `--screenshot-list` and a mistake answer on the terminal and leave
+/// before anything else starts: no window, no tray icon, no data folder.
+fn parse_args() -> Launch {
+    let invocation = parse(std::env::args().skip(1));
+    if !matches!(invocation, Ok(Invocation::Run(_))) {
+        // A release build on Windows has no console of its own.
+        glossa_platform::console::attach_parent();
+    }
+    match invocation {
+        Ok(Invocation::Run(launch)) => return launch,
+        Ok(Invocation::Help) => print!("{}", help_text()),
+        Ok(Invocation::Version) => println!("glossa {}", glossa_core::long_version()),
+        // For the smoke test: every window --screenshot can draw.
+        Ok(Invocation::ScreenshotList) => {
+            for t in screenshot::targets() {
+                println!("{t}");
+            }
+        }
+        Err(e) => {
+            eprintln!("glossa: {e}\nTry 'glossa --help'.");
+            std::process::exit(USAGE_ERROR);
+        }
+    }
+    std::process::exit(0);
 }
 
 /// What survives while the graphics are unloaded: the engine and everything
@@ -940,6 +1089,72 @@ fn tail(x: f32, y: f32, ax: f32, ay: f32, bx: f32, by: f32, cx: f32, cy: f32) ->
 
 #[cfg(test)]
 mod tests {
+    use super::{help_text, parse, Flag, Invocation, FLAGS};
+
+    fn args(list: &[&str]) -> Result<Invocation, String> {
+        parse(list.iter().map(|s| (*s).to_owned()))
+    }
+
+    #[test]
+    fn help_lists_every_flag_the_parser_takes() {
+        let help = help_text();
+        let cli_md = include_str!("../../../docs/cli.md");
+        let section = cli_md.split("## The desktop program's own flags").nth(1).expect("the section in docs/cli.md");
+        for doc in FLAGS {
+            for name in doc.names {
+                assert!(help.contains(name), "--help does not mention {name}");
+                assert!(section.contains(&format!("`{name}")), "docs/cli.md does not mention {name}");
+                // And the parser takes it, under that spelling.
+                let line: Vec<&str> =
+                    if doc.value.is_empty() || doc.flag == Flag::Screenshot { vec![name] } else { vec![name, "value"] };
+                assert!(args(&line).is_ok(), "{name} is listed but not parsed");
+            }
+        }
+        // One row per flag, so none can be parsed without being listed.
+        for (i, doc) in FLAGS.iter().enumerate() {
+            assert!(FLAGS[..i].iter().all(|other| other.flag != doc.flag), "{:?} is listed twice", doc.flag);
+        }
+    }
+
+    #[test]
+    fn flags_are_read_and_mistakes_are_errors() {
+        let Ok(Invocation::Run(l)) = args(&["--hidden", "--home=/tmp/g", "--popup", "hello"]) else { panic!() };
+        assert!(l.hidden && l.home.as_deref() == Some(std::path::Path::new("/tmp/g")));
+        assert_eq!(l.popup_text.as_deref(), Some("hello"));
+        let Ok(Invocation::Run(l)) = args(&["--tray", "--home", "x", "--screenshot", "about", "a.png"]) else {
+            panic!()
+        };
+        assert_eq!(l.screenshot, Some(("about".to_owned(), "a.png".into())));
+        // Autostart's command line, and no arguments at all.
+        assert!(matches!(args(&["--hidden"]), Ok(Invocation::Run(l)) if l.hidden));
+        assert!(matches!(args(&[]), Ok(Invocation::Run(l)) if !l.hidden));
+
+        assert!(matches!(args(&["--help"]), Ok(Invocation::Help)));
+        assert!(matches!(args(&["-h"]), Ok(Invocation::Help)));
+        assert!(matches!(args(&["--hidden", "--version"]), Ok(Invocation::Version)));
+        assert!(matches!(args(&["--screenshot-list"]), Ok(Invocation::ScreenshotList)));
+
+        assert_eq!(args(&["--hiden"]).unwrap_err(), "unknown flag --hiden");
+        assert_eq!(args(&["--frobnicate=1"]).unwrap_err(), "unknown flag --frobnicate");
+        assert!(args(&["stray"]).unwrap_err().contains("unexpected argument"));
+        assert!(args(&["--home"]).unwrap_err().contains("needs a value"));
+        assert!(args(&["--hidden=yes"]).unwrap_err().contains("takes no value"));
+    }
+
+    /// Finder and LaunchServices add arguments of their own to an app's
+    /// command line; they must not stop it from starting.
+    #[test]
+    #[cfg(target_os = "macos")]
+    fn arguments_macos_adds_are_ignored() {
+        let Ok(Invocation::Run(l)) =
+            args(&["-psn_0_123456", "-NSDocumentRevisionsDebugMode", "YES", "-AppleLanguages", "(en)", "--hidden"])
+        else {
+            panic!()
+        };
+        assert!(l.hidden);
+        assert!(matches!(args(&["-ApplePersistenceIgnoreState", "--hidden"]), Ok(Invocation::Run(l)) if l.hidden));
+    }
+
     /// Writes the application icon as a PNG when `GLOSSA_ICON_OUT` names a
     /// file, for the README and installers:
     /// `GLOSSA_ICON_OUT=assets/icons/glossa.png cargo test -p glossa-ui-egui export_icon -- --ignored`

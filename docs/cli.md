@@ -957,6 +957,17 @@ by tests.
 | `--popup TEXT` | Show `TEXT` translated in the popup at start. |
 | `--screenshot WHAT [FILE]` | Development aid: draw one window (`main`, `popup`, `options`, `options:PAGE`, `dictionary`, `history`, `keyboard`, `about`, `welcome`, `ocr-result`, `module-editor`, `module-editor:test`, `panel:MODULE/PANEL`) to a PNG and exit. `panel:` opens a loaded module's panel. `module-editor` opens the module editor on the folder in `GLOSSA_SCREENSHOT_MODULE`, or on a new module from the translator template; `module-editor:test` also runs its tests. `options:font` opens Options with the font list open; `options:autostart` shows the note given after turning on starting at login, without changing anything. It exits with 2 when the picture is blank, 3 when no picture came within 90 seconds of starting, 4 when a string has no text in any language and 6 for an unknown window. |
 | `--screenshot-list` | Print every window `--screenshot` can draw, one per line, and exit (module panels, which depend on the data folder, are not listed). `scripts/screenshot-smoke.sh` renders them all. |
+| `--version`, `-V` | Print the version (and the commit it was built from) and exit. |
+| `--help`, `-h` | Print this list and exit. |
+
+`--help`, `--version` and `--screenshot-list` answer on the terminal and
+exit without opening a window or touching the data folder. A flag `glossa`
+does not know, a stray word or a missing value is an error: it prints what
+was wrong and exits with 64 instead of starting the program. (The arguments
+macOS adds to an app's command line by itself, `-psn_…`, `-NS…` and
+`-Apple…`, are passed over.) On Windows the release `glossa.exe` is a
+windowed program: it prints to the terminal it was started from, and the
+prompt may return before the text appears.
 
 Starting `glossa` while it is already running shows the running program's
 main window instead of starting a second copy (with `--popup TEXT`, the
