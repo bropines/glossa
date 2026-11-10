@@ -150,6 +150,17 @@ impl Look {
         c(self.theme.error)
     }
 
+    /// The colour of text saying something is in order ("Granted", "up to
+    /// date").
+    pub fn success(&self) -> Color32 {
+        c(self.theme.success)
+    }
+
+    /// What marks the AI endpoints among the services.
+    pub fn ai_accent(&self) -> Color32 {
+        c(self.theme.ai)
+    }
+
     pub fn edit_back(&self) -> Color32 {
         c(self.theme.edit.normal.back).gamma_multiply(self.window_alpha.max(0.3))
     }

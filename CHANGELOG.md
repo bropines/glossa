@@ -9,6 +9,23 @@ the notes of its GitHub release.
 
 ### Added
 
+- Checking for updates. Options → Updates shows the version, when the last
+  check was and what it found, and has "Check now" and a switch for a check
+  once a day (off by default); `glossa-cli update` does the same check. A
+  newer version is named with a button that opens its release page; nothing
+  is downloaded or installed. The check is one request to GitHub's list of
+  the project's releases, through your proxy
+  ([configuration](docs/configuration.md#updates)).
+- With no translation service switched on, the main window and the popup
+  say so and offer a button to Options → Services, instead of an empty
+  strip.
+- The history window says "No translations yet" or "Nothing matches" when
+  its list is empty, labels its count, and offers "Undo" for a few seconds
+  after an entry is deleted. The dictionary window does the same after
+  "Clear history", and says "Type a word and press Enter" before the first
+  lookup.
+- Themes: `success` (text saying something is in order) and `ai` (the plate
+  behind AI endpoints in the service strips), both optional.
 - A double click on the popup's header (the language line or a free spot
   beside the buttons) opens the main window with the popup's text.
 - Options → Appearance → Popup → "Open the main window with the popup":
@@ -222,6 +239,22 @@ the notes of its GitHub release.
 
 ### Changed
 
+- "Speech input", which is not built yet, is no longer offered on the
+  hotkey page. A binding already in `config.toml` still loads.
+- Service tabs cut a long name with an ellipsis, and show the badge alone
+  when there is no room for a name, instead of clipping letters.
+- The font list leaves out the fonts the system hides (names starting
+  with a dot on macOS) and the `@` vertical twins on Windows; its first
+  entry reads "Default (theme font)".
+- The OCR result window reports a picture with no text once, calmly, with
+  one "Select again" button; "Translate in place" and the boxes toggle are
+  disabled when the recognition found no places to draw on.
+- The dictionary window names the dictionary under an article instead of
+  its id, and says "no results" in the interface language whatever the
+  dictionary. The history export says "Exported N entries to PATH".
+- The about box no longer shows the `-dirty` mark of a development build
+  (`glossa-cli --version` and `doctor` still do), and the Appearance
+  preview's popup header reads as the real popup's does.
 - AI endpoints added in the options sit in their own group at the end of
   the service strips (popup and main window), on a blue plate, so "Google
   Gemini" no longer looks like a second Google. Hovering one says it is an

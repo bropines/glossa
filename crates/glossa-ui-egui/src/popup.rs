@@ -763,6 +763,10 @@ fn body(app: &mut GlossaApp, ui: &mut egui::Ui, st: &mut PopupState) -> (bool, e
                     ui.add(egui::Spinner::new().size(14.0));
                     ui.label(RichText::new(app.t("msg.translating")).color(text_color));
                 });
+            } else if st.outcome.is_none() && !st.from_ocr && !app.has_translator() {
+                // Nothing can translate: say where services are switched on
+                // instead of the bare "no provider" error.
+                crate::main_window::no_translator_note(app, ui, Some(text_color));
             } else if let Some(e) = &st.error {
                 ui.label(RichText::new(e).color(look.error()).font(font.clone()));
             } else if let Some(o) = st.outcome.clone() {

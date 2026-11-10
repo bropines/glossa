@@ -436,6 +436,16 @@ impl GlossaApp {
         self.ctx.send_viewport_cmd_to(egui::ViewportId::ROOT, egui::ViewportCommand::Focus);
     }
 
+    /// Whether any service that is switched on can translate. Without one
+    /// the windows say so and point at Options → Services, instead of
+    /// leaving an empty strip and a bare "no provider" error.
+    pub fn has_translator(&self) -> bool {
+        let registry = self.engine.registry();
+        self.cfg.services.enabled.iter().any(|id| {
+            registry.get(id).is_some_and(|p| p.info().capabilities.contains(glossa_core::Capabilities::TRANSLATE))
+        })
+    }
+
     /// Whether `id` is an AI endpoint the user added (a language model
     /// rather than a translator), which the service strips mark.
     pub fn is_ai_endpoint(&self, id: &str) -> bool {
@@ -905,8 +915,32 @@ impl GlossaApp {
             // The waker has already asked for a frame; the options page
             // reads the new state when it draws.
             Event::AssetsChanged { .. } => {}
+            // Options → Updates shows a check the user asked for; one made
+            // on the schedule speaks up only when it found something.
+            Event::UpdateChecked { automatic, .. } => {
+                if automatic {
+                    self.announce_update();
+                }
+            }
             Event::Started { .. } | Event::Translated { .. } | Event::Progress { .. } => {}
         }
+    }
+
+    /// Tell the user once about a newer version the automatic check found:
+    /// when it is found, or at the next start of the interface when it was
+    /// found while only the tray icon was up.
+    pub fn announce_update(&mut self) {
+        if !self.cfg.updates.check_automatically {
+            return;
+        }
+        let state = self.engine.update_state();
+        let Some(release) = state.newer_than(glossa_core::VERSION) else { return };
+        if state.announced == release.version {
+            return;
+        }
+        let text = self.locale.fmt("msg.update_found", &release.version);
+        self.engine.mark_update_announced(&release.version);
+        self.notify(text, false);
     }
 
     /// A human message for an engine error, in the interface language where
@@ -1083,6 +1117,7 @@ impl eframe::App for GlossaApp {
             if let Some(text) = self.launch.popup_text.clone() {
                 crate::popup::open(self, text, None);
             }
+            self.announce_update();
             if !self.main_visible && !self.startup_warnings.is_empty() {
                 let text = format!("{}\n{}", self.t("main.startup_warnings"), self.startup_warnings.join("\n"));
                 self.startup_warnings.clear();

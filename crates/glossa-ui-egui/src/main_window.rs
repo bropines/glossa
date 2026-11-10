@@ -643,6 +643,10 @@ fn result_pane(app: &mut GlossaApp, ui: &mut egui::Ui, height: f32) {
                 let rtl = glossa_core::text::guessed_direction(&partial).is_rtl();
                 let text = RichText::new(partial).font(look.text_font()).color(c(look.theme.edit.normal.text));
                 crate::bidi::label(ui, text, rtl);
+            } else if app.main.outcome.is_none() && !app.has_translator() {
+                // Before the error: "no provider available" says less than
+                // this does, and offers no way out.
+                no_translator_note(app, ui, None);
             } else if let Some(err) = app.main.error.clone() {
                 ui.label(RichText::new(err).color(look.error()).font(look.text_font()));
             } else if let Some(o) = app.main.outcome.clone() {
@@ -820,6 +824,9 @@ fn service_strip(app: &mut GlossaApp, ui: &mut egui::Ui) {
         })
         .collect();
     if services.is_empty() {
+        // Nothing to switch between: say why the strip is empty and where
+        // services are switched on, rather than leaving a blank band.
+        no_translator_note(app, ui, None);
         return;
     }
     let tip = app.t("service.ai_tip");
@@ -827,6 +834,20 @@ fn service_strip(app: &mut GlossaApp, ui: &mut egui::Ui) {
     if let Some(id) = clicked {
         app.set_active_service(&id);
     }
+}
+
+/// What stands in for translations while no translation service is switched
+/// on: one line saying so and a button that opens Options → Services.
+/// `color` is the text colour where the theme's weak text would not read
+/// (the popup has its own).
+pub fn no_translator_note(app: &mut GlossaApp, ui: &mut egui::Ui, color: Option<egui::Color32>) {
+    let color = color.unwrap_or_else(|| app.look.weak_text());
+    ui.horizontal_wrapped(|ui| {
+        ui.label(RichText::new(app.t("main.no_translator")).color(color));
+        if ui.button(app.t("main.no_translator.open")).clicked() {
+            crate::options::open_at(app, "services");
+        }
+    });
 }
 
 /// The source pane's context menu: undo and redo, the clipboard at the
