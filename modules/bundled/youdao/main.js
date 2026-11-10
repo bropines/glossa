@@ -14,10 +14,34 @@
 //                            trs: [{ tr: [{ l: { pos?, i: ["", { "#text": "house" }, …], "#tran": "…" } }] }] }] }
 //   blng_sents_part        { "sentence-pair": [{ sentence, "sentence-translation" }] }
 //
-// A word Youdao does not know comes back with none of these blocks. Audio for
+// A word Youdao does not know comes back with none of these blocks.
+//
+// Whatever is asked, one side is Chinese: an English or French word is
+// explained in Chinese, a Chinese word in English. A lookup into any other
+// language is refused as an unsupported target, so Glossa moves on to a
+// dictionary that has that language instead of showing Chinese to someone
+// who asked for German. Audio for
 // a speech key ("house&type=1") is at /dictvoice?audio=<key>.
 
 var SITE = "https://dict.youdao.com";
+
+// Well under Glossa's own budget for a call (30 s), so a stalled service
+// fails with its name on the error instead of the call being abandoned.
+var TIMEOUT = 15000;
+
+function isChinese(code) {
+  return /^zh\b/.test(String(code || ""));
+}
+
+// What the article will be written in, given what the word is in.
+function checkTarget(from, to) {
+  if (to === "auto") return;
+  if (isChinese(from)) {
+    if (to !== "en") throw new ModuleError("target_language", "Youdao explains Chinese words in English only");
+  } else if (!isChinese(to)) {
+    throw new ModuleError("target_language", "Youdao explains English and French words in Chinese only");
+  }
+}
 
 function strip(s) {
   return String(s || "").replace(/<[^>]*>/g, "").replace(/\s+/g, " ").trim();
@@ -33,11 +57,13 @@ function words(i) {
 function dictionary(req, host) {
   var word = req.text.trim();
   if (!word) throw new ModuleError("bad_request", "nothing to look up");
+  if (req.from !== "auto") checkTarget(req.from, req.to);
   var url = SITE + "/jsonapi?q=" + encodeURIComponent(word) + (req.from === "fr" ? "&le=fr" : "");
-  var r = host.fetch(url);
+  var r = host.fetch(url, { timeout: TIMEOUT });
   if (r.status === 429) throw new ModuleError("rate_limited", "Youdao asks to slow down");
   if (!r.ok) throw new ModuleError("http", "Youdao answered " + r.status);
   var data = r.json();
+  if (!data || typeof data !== "object") throw new ModuleError("bad_response", "Youdao changed its answer: not an object");
 
   var article = {
     headword: word,
@@ -51,6 +77,8 @@ function dictionary(req, host) {
   var block = data.ec || data.fc || data.ce;
   var entry = block && block.word && (Array.isArray(block.word) ? block.word[0] : block.word);
   if (!entry) throw new ModuleError("not_found", word);
+  // An unknown source: the block that answered says which way this went.
+  if (req.from === "auto") checkTarget(block === data.ce ? "zh" : "en", req.to);
 
   var rp = entry["return-phrase"];
   if (rp) article.headword = words(rp.l ? rp.l.i : rp) || word;
@@ -94,3 +122,18 @@ function dictionary(req, host) {
   if (!article.explanations.length) throw new ModuleError("not_found", word);
   return article;
 }
+
+// A surprise in the shape of an answer (a field gone, a list that became an
+// object) means the service changed, not that the user did something wrong:
+// say so instead of letting a TypeError reach them.
+function guarded(service, method) {
+  return function (req, host) {
+    try {
+      return method(req, host);
+    } catch (e) {
+      if (e instanceof ModuleError) throw e;
+      throw new ModuleError("bad_response", service + " changed its answer: " + (e && e.message ? e.message : String(e)));
+    }
+  };
+}
+dictionary = guarded("Youdao", dictionary);
