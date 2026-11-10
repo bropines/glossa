@@ -111,6 +111,12 @@ pub enum Error {
     #[error("no provider available for {0}")]
     NoProvider(&'static str),
 
+    /// A dictionary answered, and has no article for the word. Apart from
+    /// the failures so that a front end can say "no results" in its own
+    /// language instead of reading the English message.
+    #[error("no results for {query:?}")]
+    NoResults { provider: String, query: String },
+
     /// OCR ran and found no text.
     #[error("no text found in the image")]
     NoTextRecognised,

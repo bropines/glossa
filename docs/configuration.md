@@ -33,6 +33,7 @@ data: /home/me/.config/glossa  (portable: false)
 | `config.toml` | data | The settings (this page). |
 | `history.json` | data | The translation history ([below](#historyjson)). |
 | `dictionary-history.json` | data | Words looked up in the dictionary window. |
+| `update-check.json` | data | When Glossa last asked whether a newer version exists, and the answer ([`[updates]`](#updates)). Safe to delete. |
 | `themes/` | data | Your themes, `.toml` or `.json` ([theming.md](theming.md)). |
 | `locales/` | data | Interface languages and rewordings ([below](#interface-languages)). |
 | `modules/` | data | Your modules ([modules/README.md](modules/README.md)). |
@@ -554,7 +555,16 @@ Apple Vision*.
 
 | key | type | default | set in | what it does |
 |---|---|---|---|---|
-| `check_automatically` | bool | `false` | file only | Kept; there is no update server yet, so *Options → Updates* has no switch for it. |
+| `check_automatically` | bool | `false` | Options → Updates | Ask once a day, a little after the start, whether a newer version has been released, and say so when one has. |
+
+A check, automatic or from *Check now* or [`glossa-cli update`](cli.md#update),
+is one request to GitHub's list of the project's releases
+(`https://api.github.com/repos/bropines/glossa/releases`), sent through the
+proxy in [`[network.proxy]`](#networkproxy). It carries nothing about you,
+your settings or your texts; GitHub sees the request's address, as any site
+does. Glossa never downloads or installs a version itself: it names the new
+version and opens its release page in the browser when you ask. With the
+switch off (the default) nothing is asked until you press *Check now*.
 
 ### `[server]`
 

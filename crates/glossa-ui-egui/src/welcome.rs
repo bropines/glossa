@@ -810,7 +810,7 @@ fn permissions(app: &mut GlossaApp, ui: &mut egui::Ui, pal: &Palette) {
                         ui.label(RichText::new(app.t(name)).size(14.5).strong().color(pal.text));
                         ui.add_space(4.0);
                         let (text, colour) = if granted {
-                            (app.t("options.permissions.granted"), Color32::from_rgb(0x34, 0xc7, 0x59))
+                            (app.t("options.permissions.granted"), look.success())
                         } else {
                             (app.t("options.permissions.missing"), look.error())
                         };

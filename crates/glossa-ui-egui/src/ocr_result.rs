@@ -69,6 +69,9 @@ pub struct ResultWindow {
     relens: bool,
     recognising: bool,
     error: Option<String>,
+    /// The recognition ended with no text in the picture rather than with a
+    /// failure: said calmly, not as an error.
+    nothing_found: bool,
     outcome: Option<Arc<OcrOutcome>>,
     /// The text, as read and then as edited.
     text: String,
@@ -166,6 +169,7 @@ pub fn open(app: &mut GlossaApp, image: image::RgbaImage, region: GRect, lang: L
         relens: false,
         recognising: false,
         error: None,
+        nothing_found: false,
         outcome: None,
         text: String::new(),
         translation: None,
@@ -249,6 +253,7 @@ fn recognise(app: &mut GlossaApp, st: &mut ResultWindow, translate_to: Option<La
     } else {
         st.recognising = true;
         st.error = None;
+        st.nothing_found = false;
     }
 }
 
@@ -294,7 +299,10 @@ pub fn on_recognized(app: &mut GlossaApp, result: Result<Arc<OcrOutcome>, Arc<Er
             st.found = found_boxes(&o.ocr);
             st.outcome = Some(o);
         }
-        Err(_) => st.error = Some(message.unwrap_or_default()),
+        Err(e) => {
+            st.nothing_found = matches!(&*e, Error::NoTextRecognised);
+            st.error = Some(message.unwrap_or_default());
+        }
     }
 }
 
@@ -561,19 +569,22 @@ fn picture_info(app: &mut GlossaApp, ui: &mut egui::Ui, st: &mut ResultWindow, r
             ],
         );
         lines.push(RichText::new(count).small().color(weak));
-    } else if st.error.is_some() {
-        lines.push(RichText::new(app.t("ocr.result.failed")).strong().color(look.error()));
     }
+    // A recognition that failed or found nothing is reported once, in the
+    // text pane, with the way out beside it.
     let toggles = |ui: &mut egui::Ui, st: &mut ResultWindow| {
         let (icon, key) =
             if st.large { (Icon::Shrink, "ocr.result.smaller") } else { (Icon::Expand, "ocr.result.larger") };
         if icons::sized_button(ui, &look, icon, &app.t(key), 24.0, true).clicked() {
             st.large = !st.large;
         }
-        let has_boxes = !st.found.is_empty();
-        crate::widgets::icon_toggle(ui, &look, Icon::Boxes, &mut st.boxes, &app.t("ocr.result.boxes"));
-        if !has_boxes {
+        // With no boxes found there is nothing to show: the toggle is
+        // drawn disabled instead of switching on to no effect.
+        if st.found.is_empty() {
             st.boxes = false;
+            icons::sized_button(ui, &look, Icon::Boxes, &app.t("ocr.result.boxes"), 26.0, false);
+        } else {
+            crate::widgets::icon_toggle(ui, &look, Icon::Boxes, &mut st.boxes, &app.t("ocr.result.boxes"));
         }
     };
     if row {
@@ -625,7 +636,9 @@ fn text_pane(app: &mut GlossaApp, ui: &mut egui::Ui, st: &mut ResultWindow, heig
             return;
         }
         if let Some(e) = st.error.clone() {
-            ui.label(RichText::new(e).color(look.error()));
+            // A picture without text is not a fault.
+            let colour = if st.nothing_found { look.weak_text() } else { look.error() };
+            ui.label(RichText::new(e).color(colour));
             ui.add_space(6.0);
             if ui.button(app.t("ocr.result.select_again")).clicked() {
                 command = Some(Command::SelectAgain);
@@ -912,16 +925,27 @@ fn action_bar(app: &mut GlossaApp, ui: &mut egui::Ui, st: &ResultWindow) -> Opti
         };
         button(ui, Icon::Copy, named[0], Command::CopyText, has_text, labelled[0]);
         button(ui, Icon::Copy, named[1], Command::CopyTranslation, has_translation, labelled[1]);
-        button(ui, Icon::Overlay, named[2], Command::InPlace, !st.recognising, labelled[2]);
+        button(ui, Icon::Overlay, named[2], Command::InPlace, can_translate_in_place(st), labelled[2]);
         button(ui, Icon::Open, named[3], Command::ToMain, has_text, labelled[3]);
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-            button(ui, Icon::Crop, "ocr.result.select_again", Command::SelectAgain, true, false);
+            // After a failure the text pane offers "Select again" by name;
+            // a second one here would only repeat it.
+            if st.error.is_none() {
+                button(ui, Icon::Crop, "ocr.result.select_again", Command::SelectAgain, true, false);
+            }
             button(ui, Icon::Save, "ocr.save_image", Command::SaveImage, true, false);
             button(ui, Icon::Image, "ocr.copy_image", Command::CopyImage, true, false);
             button(ui, Icon::Listen, "ocr.result.read_aloud", Command::ReadAloud, has_text, false);
         });
     });
     command
+}
+
+/// Whether "Translate in place" can do anything: translations are drawn
+/// over the places text was found in, so it needs a finished recognition
+/// that reported them (an engine giving plain text has none).
+fn can_translate_in_place(st: &ResultWindow) -> bool {
+    !st.recognising && st.error.is_none() && !st.found.is_empty()
 }
 
 /// Put `text` on the clipboard and say so in the status line.
@@ -965,7 +989,7 @@ fn run(app: &mut GlossaApp, st: &mut ResultWindow, cmd: Command) -> bool {
         }
         Command::SaveImage => crate::ocr::save_image(app, &st.image),
         Command::InPlace => {
-            if !st.recognising {
+            if can_translate_in_place(st) {
                 crate::ocr::start_in_place(app, st.image.clone(), st.region, st.from);
             }
         }

@@ -14,9 +14,15 @@ pub struct HistoryState {
     pub entries: Vec<HistoryEntry>,
     pub dirty: bool,
     pub confirm_clear: bool,
+    /// The entry deleted last and when, for the "Deleted. Undo" offer in the
+    /// bottom bar, which stays for [`UNDO_FOR`].
+    deleted: Option<(HistoryEntry, std::time::Instant)>,
     /// Rows as last drawn, for laying out only the visible ones.
     rows: RowHeights,
 }
+
+/// How long a delete can be undone from the bottom bar.
+const UNDO_FOR: std::time::Duration = std::time::Duration::from_secs(8);
 
 /// The heights of the history's rows, by entry id, as last drawn: the list
 /// lays out only the rows in view (it may hold thousands) and needs the
@@ -88,6 +94,7 @@ pub fn open(app: &mut GlossaApp) {
             entries: Vec::new(),
             dirty: true,
             confirm_clear: false,
+            deleted: None,
             rows: RowHeights::default(),
         });
     }
@@ -137,7 +144,8 @@ fn body(app: &mut GlossaApp, ui: &mut egui::Ui, st: &mut HistoryState, open: &mu
                 st.favorites_only = !st.favorites_only;
                 st.dirty = true;
             }
-            ui.label(RichText::new(format!("{}", st.entries.len())).small().color(look.weak_text()));
+            let count = app.locale.fmt("history.count", &st.entries.len().to_string());
+            ui.label(RichText::new(count).small().color(look.weak_text()));
         });
         ui.add_space(4.0);
     });
@@ -153,7 +161,11 @@ fn body(app: &mut GlossaApp, ui: &mut egui::Ui, st: &mut HistoryState, open: &mu
                     let ext = path.extension().and_then(|e| e.to_str()).unwrap_or("txt").to_owned();
                     let fmt = ExportFormat::from_extension(&ext).unwrap_or(ExportFormat::Text);
                     match app.engine.export_history(&path, fmt, st.favorites_only) {
-                        Ok(n) => app.notify(format!("{n} → {}", path.display()), false),
+                        Ok(n) => {
+                            let (n, path) = (n.to_string(), path.display().to_string());
+                            let text = app.locale.fmt_args("history.exported", &[&n, &path]);
+                            app.notify(text, false);
+                        }
                         Err(e) => app.notify(e.to_string(), true),
                     }
                 }
@@ -163,6 +175,7 @@ fn body(app: &mut GlossaApp, ui: &mut egui::Ui, st: &mut HistoryState, open: &mu
                 if ui.button(app.t("msg.yes")).clicked() {
                     app.engine.clear_history(false);
                     st.confirm_clear = false;
+                    st.deleted = None;
                     st.dirty = true;
                 }
                 if ui.button(app.t("msg.no")).clicked() {
@@ -171,8 +184,26 @@ fn body(app: &mut GlossaApp, ui: &mut egui::Ui, st: &mut HistoryState, open: &mu
             } else if ui.button(app.t("history.clear")).clicked() {
                 st.confirm_clear = true;
             }
+            // A delete takes effect at once, so it can be taken back for a
+            // few seconds rather than asked about every time.
+            match st.deleted.as_ref().map(|(_, at)| UNDO_FOR.saturating_sub(at.elapsed())) {
+                Some(left) if !left.is_zero() => {
+                    ui.separator();
+                    ui.label(RichText::new(app.t("history.deleted")).color(look.weak_text()));
+                    if ui.button(app.t("edit.undo")).clicked() {
+                        if let Some((entry, _)) = st.deleted.take() {
+                            app.engine.restore_history(entry);
+                            st.dirty = true;
+                        }
+                    }
+                    // Wake once more to take the offer away.
+                    ui.ctx().request_repaint_after(left);
+                }
+                Some(_) => st.deleted = None,
+                None => {}
+            }
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                if ui.button(app.t("options.ok")).clicked() {
+                if ui.button(app.t("popup.close")).clicked() {
                     *open = false;
                 }
             });
@@ -181,6 +212,25 @@ fn body(app: &mut GlossaApp, ui: &mut egui::Ui, st: &mut HistoryState, open: &mu
     });
     egui::CentralPanel::default().show(ui, |ui| {
         let mut action: Option<(u64, &'static str)> = None;
+        if st.entries.is_empty() {
+            // Say why the list is empty: nothing translated yet, the
+            // history switched off, or a search that found nothing.
+            let filtered = !st.search.trim().is_empty() || st.favorites_only;
+            let (title, hint) = if filtered {
+                ("history.no_match", "history.no_match_hint")
+            } else if app.cfg.history.enabled {
+                ("history.empty", "history.empty_hint")
+            } else {
+                ("history.empty", "history.disabled_hint")
+            };
+            ui.vertical_centered(|ui| {
+                ui.add_space((ui.available_height() * 0.35).max(12.0));
+                ui.label(RichText::new(app.t(title)).strong());
+                ui.add_space(2.0);
+                ui.label(RichText::new(app.t(hint)).color(look.weak_text()));
+            });
+            return;
+        }
         // Row icons are the size of the main window's toolbar icons, and the
         // lines under the source start where the source does.
         let icon = 24.0;
@@ -319,6 +369,7 @@ fn body(app: &mut GlossaApp, ui: &mut egui::Ui, st: &mut HistoryState, open: &mu
                 "listen" => app.speak(&entry.source, tr.map(|r| r.from).unwrap_or(glossa_core::LangId::AUTO)),
                 "delete" => {
                     app.engine.remove_history(id);
+                    st.deleted = Some((entry, std::time::Instant::now()));
                     st.dirty = true;
                 }
                 _ => {}

@@ -28,7 +28,7 @@ glossa-cli doctor                             # what works on this machine
   [`history`](#history),
   [`import-classic`](#import-classic), [`theme`](#theme),
   [`locale`](#locale), [`config`](#config), [`serve`](#serve),
-  [`action`](#action), [`doctor`](#doctor)
+  [`action`](#action), [`doctor`](#doctor), [`update`](#update)
 - [Environment variables](#environment-variables)
 - [The desktop program's own flags](#the-desktop-programs-own-flags)
 
@@ -133,6 +133,7 @@ $ glossa-cli translate -t ru "Hello"
 | [`serve`](#serve) | Run the control API in the foreground. |
 | [`action`](#action) | Ask a running Glossa to perform an action. |
 | [`doctor`](#doctor) | Show what works on this machine and what does not. |
+| [`update`](#update) | Ask whether a newer Glossa has been released. |
 
 ### translate
 
@@ -919,6 +920,36 @@ D-Bus service
 Desktop portal
   global shortcuts yes (version 1)
   screenshot       yes (version 2)
+```
+
+### update
+
+```
+glossa-cli [--json] update
+```
+
+Asks GitHub whether a version newer than this one has been released and
+prints the answer. Nothing is downloaded or installed: when there is a
+newer version, the address of its release page is printed for you to open.
+
+It is the check behind *Options → Updates → Check now*: one `GET` to
+`https://api.github.com/repos/bropines/glossa/releases`, through the proxy
+in `[network.proxy]`, carrying nothing about you or your settings. Only
+tags of the form `v1.2.3` count (module bundles released from the same
+repository are skipped), versions compare as semantic versions
+(`0.1.0-beta.2` is older than `0.1.0`), and pre-releases are offered only to
+a pre-release. The answer and its time go to `update-check.json` in the data
+folder, which the desktop program shows and its daily check
+([`[updates]`](configuration.md#updates)) goes by.
+
+The exit code is 0 whether or not there is a newer version, and 1 when
+GitHub could not be asked.
+
+```console
+$ glossa-cli update
+Glossa 0.2.0 is available (this is 0.1.0): https://github.com/bropines/glossa/releases/tag/v0.2.0
+$ glossa-cli --json update
+{"current":"0.1.0","latest":"0.2.0","up_to_date":false,"url":"https://github.com/bropines/glossa/releases/tag/v0.2.0"}
 ```
 
 ## Environment variables

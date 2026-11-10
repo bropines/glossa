@@ -15,12 +15,22 @@ pub struct DictState {
     pub job: u64,
     pub article: Option<Arc<Article>>,
     pub error: Option<String>,
+    /// The word the dictionary had no article for, when that is how the
+    /// last lookup ended: told from the failures by the error's kind, and
+    /// said in the interface language.
+    no_results: Option<String>,
+    /// The lookup history as it was before "Clear history", and when it was
+    /// cleared: the clear can be undone for [`UNDO_FOR`].
+    cleared: Option<(Vec<String>, std::time::Instant)>,
     pub busy: bool,
     pub service: Option<String>,
     pub from: LangId,
     pub to: LangId,
     focus: bool,
 }
+
+/// How long "Clear history" can be undone.
+const UNDO_FOR: std::time::Duration = std::time::Duration::from_secs(8);
 
 pub fn open(app: &mut GlossaApp, word: Option<String>) {
     if app.dictionary.is_some() {
@@ -32,6 +42,8 @@ pub fn open(app: &mut GlossaApp, word: Option<String>) {
         job: 0,
         article: None,
         error: None,
+        no_results: None,
+        cleared: None,
         busy: false,
         service: Some(app.cfg.services.dictionary_active.clone()).filter(|s| !s.is_empty()),
         from,
@@ -55,6 +67,7 @@ fn lookup(app: &mut GlossaApp, st: &mut DictState) {
     app.fonts.ensure(&app.ctx, &q);
     st.busy = true;
     st.error = None;
+    st.no_results = None;
     st.job = app.engine.dictionary_async(Slot::Dictionary, q, LangPair::new(st.from, st.to), st.service.clone());
 }
 
@@ -70,14 +83,21 @@ impl DictState {
             return;
         }
         self.busy = false;
+        self.no_results = None;
         match result {
             Ok(a) => {
                 self.article = Some(a);
                 self.error = None;
             }
-            Err(_) => {
+            Err(e) => {
                 self.article = None;
-                self.error = message;
+                match &*e {
+                    Error::NoResults { query, .. } => {
+                        self.error = None;
+                        self.no_results = Some(query.clone());
+                    }
+                    _ => self.error = message,
+                }
             }
         }
     }
@@ -123,7 +143,9 @@ fn body(app: &mut GlossaApp, ui: &mut egui::Ui, st: &mut DictState) {
                 st.focus = false;
             }
             let enter = r.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
-            if enter || crate::icons::sized_button(ui, &look, crate::icons::Icon::Search, "", 26.0, true).clicked() {
+            let search_tip = app.t("dict.search");
+            let search = crate::icons::sized_button(ui, &look, crate::icons::Icon::Search, &search_tip, 26.0, true);
+            if enter || search.clicked() {
                 lookup(app, st);
             }
             let disabled = app.cfg.languages.disabled.clone();
@@ -148,7 +170,8 @@ fn body(app: &mut GlossaApp, ui: &mut egui::Ui, st: &mut DictState) {
                 let _ = app.engine.update_config(move |c| c.dictionary.language = l);
                 lookup(app, st);
             }
-            let menu = crate::icons::sized_button(ui, &look, crate::icons::Icon::Menu, "", 24.0, true);
+            let menu_tip = app.t("dict.menu");
+            let menu = crate::icons::sized_button(ui, &look, crate::icons::Icon::Menu, &menu_tip, 24.0, true);
             crate::dropdown::menu(ui, &menu, |ui| {
                 let mut exact = app.cfg.dictionary.exact_search;
                 if ui.checkbox(&mut exact, app.t("dict.exact_search")).changed() {
@@ -159,7 +182,13 @@ fn body(app: &mut GlossaApp, ui: &mut egui::Ui, st: &mut DictState) {
                     let _ = app.engine.update_config(move |c| c.dictionary.show_services_pane = pane);
                 }
                 if ui.button(app.t("dict.clear_history")).clicked() {
+                    // Cleared at once, and offered back under the search
+                    // box for a few seconds: a menu has no room to ask.
+                    let words = app.engine.dictionary_history();
                     app.engine.clear_dictionary_history();
+                    if !words.is_empty() {
+                        st.cleared = Some((words, std::time::Instant::now()));
+                    }
                     ui.close();
                 }
                 if ui.button(app.t("dict.options")).clicked() {
@@ -168,6 +197,22 @@ fn body(app: &mut GlossaApp, ui: &mut egui::Ui, st: &mut DictState) {
                 }
             });
         });
+        match st.cleared.as_ref().map(|(_, at)| UNDO_FOR.saturating_sub(at.elapsed())) {
+            Some(left) if !left.is_zero() => {
+                ui.horizontal(|ui| {
+                    ui.label(RichText::new(app.t("dict.history_cleared")).color(look.weak_text()));
+                    if ui.button(app.t("edit.undo")).clicked() {
+                        if let Some((words, _)) = st.cleared.take() {
+                            app.engine.restore_dictionary_history(words);
+                        }
+                    }
+                });
+                // Wake once more to take the offer away.
+                ui.ctx().request_repaint_after(left);
+            }
+            Some(_) => st.cleared = None,
+            None => {}
+        }
         ui.add_space(4.0);
     });
     if app.cfg.dictionary.show_services_pane {
@@ -206,10 +251,15 @@ fn body(app: &mut GlossaApp, ui: &mut egui::Ui, st: &mut DictState) {
             if st.busy {
                 ui.add_space(20.0);
                 ui.vertical_centered(|ui| ui.add(egui::Spinner::new().size(24.0)));
+            } else if let Some(word) = &st.no_results {
+                // Not a failure: the dictionary answered, it has no such
+                // word. Said calmly, where the article would be.
+                ui.add_space(30.0);
+                ui.vertical_centered(|ui| {
+                    ui.label(RichText::new(app.locale.fmt("dict.no_results", word)).color(look.weak_text()));
+                });
             } else if let Some(e) = &st.error {
-                let msg =
-                    if e.contains("no results") { app.locale.fmt("dict.no_results", &st.query) } else { e.clone() };
-                ui.label(RichText::new(msg).color(look.error()));
+                ui.label(RichText::new(e).color(look.error()));
             } else if let Some(a) = st.article.clone() {
                 app.fonts.ensure(&app.ctx, &a.to_plain_text());
                 if let Some(h) = &a.html {
@@ -217,20 +267,26 @@ fn body(app: &mut GlossaApp, ui: &mut egui::Ui, st: &mut DictState) {
                 }
                 click = crate::rich::article(ui, &look, &a, zoom);
                 ui.add_space(8.0);
+                // The dictionary by its name, as the history window shows
+                // services; the id only when it is no longer installed.
+                let provider = app
+                    .engine
+                    .registry()
+                    .get(&a.provider_id)
+                    .map(|p| p.info().name.clone())
+                    .unwrap_or_else(|| a.provider_id.clone());
                 ui.label(
-                    RichText::new(format!(
-                        "{} · {}",
-                        a.provider_id,
-                        app.locale.fmt("msg.ms", &a.elapsed_ms.to_string())
-                    ))
-                    .small()
-                    .color(look.weak_text()),
+                    RichText::new(format!("{} · {}", provider, app.locale.fmt("msg.ms", &a.elapsed_ms.to_string())))
+                        .small()
+                        .color(look.weak_text()),
                 );
             } else {
                 ui.add_space(30.0);
                 ui.vertical_centered(|ui| {
                     let (r, _) = ui.allocate_exact_size(vec2(48.0, 48.0), egui::Sense::hover());
                     crate::icons::paint(ui.painter(), r, crate::icons::Icon::Dictionary, look.weak_text());
+                    ui.add_space(6.0);
+                    ui.label(RichText::new(app.t("dict.empty")).color(look.weak_text()));
                 });
             }
         });

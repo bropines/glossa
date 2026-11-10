@@ -31,9 +31,21 @@ pub fn installed() -> &'static [FontFace] {
     FACES.get_or_init(scan)
 }
 
-/// The installed family names, sorted, each once.
+/// The installed family names a person would pick from, sorted, each once.
 pub fn families() -> Vec<String> {
-    let mut names: Vec<String> = installed().iter().map(|f| f.family.clone()).collect();
+    pickable_families(installed().iter().map(|f| f.family.clone()))
+}
+
+/// `names` sorted, each once, without the families the systems keep for
+/// themselves: macOS hides its interface fonts behind a leading dot
+/// (`.SF NS`, `.Keyboard`), and Windows lists an `@` twin of every CJK
+/// font for vertical text (`@MS Gothic`), which sets Latin text sideways.
+/// Neither appears in the systems' own font pickers.
+fn pickable_families(names: impl Iterator<Item = String>) -> Vec<String> {
+    let mut names: Vec<String> = names
+        .map(|n| n.trim().to_owned())
+        .filter(|n| !n.is_empty() && !n.starts_with('.') && !n.starts_with('@'))
+        .collect();
     names.sort_by_key(|n| n.to_lowercase());
     names.dedup();
     names
@@ -325,6 +337,16 @@ pub fn parse_name_table(t: &[u8]) -> Option<(String, String)> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn hidden_system_fonts_and_vertical_twins_are_not_offered() {
+        let names =
+            [".SF NS", "Helvetica", "@MS Gothic", "MS Gothic", ".Keyboard", "arial", "Helvetica", " ", "Zapfino"];
+        assert_eq!(
+            pickable_families(names.iter().map(|n| (*n).to_owned())),
+            ["arial", "Helvetica", "MS Gothic", "Zapfino"]
+        );
+    }
 
     /// A `name` table with the given (platform, encoding, language, id, text)
     /// records, UTF-16BE except on platform 1.

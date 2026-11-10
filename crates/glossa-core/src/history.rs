@@ -130,6 +130,23 @@ impl History {
         before != self.entries.len()
     }
 
+    /// Put back an entry that [`History::remove`] took out (an undone
+    /// delete), with its id, where its time places it among the others.
+    /// Refused when the id is in use, or when the same text has been
+    /// translated again since: that newer entry is the one to keep.
+    pub fn restore(&mut self, entry: HistoryEntry) -> bool {
+        if entry.id == 0 || self.entries.iter().any(|e| e.id == entry.id || e.source == entry.source) {
+            return false;
+        }
+        // Ids are never reused, so one taken out and put back stays below
+        // the counter; this guards a history loaded in between.
+        self.next_id = self.next_id.max(entry.id + 1);
+        let at = self.entries.iter().position(|e| e.created < entry.created).unwrap_or(self.entries.len());
+        self.entries.insert(at, entry);
+        self.trim();
+        true
+    }
+
     /// Clear the history. Favourites survive unless `including_favorites`.
     pub fn clear(&mut self, including_favorites: bool) {
         if including_favorites {
@@ -244,6 +261,28 @@ mod tests {
 
     fn res(provider: &str, text: &str) -> HistoryResult {
         HistoryResult { provider_id: provider.into(), from: LangId::RUSSIAN, to: LangId::ENGLISH, text: text.into() }
+    }
+
+    #[test]
+    fn a_removed_entry_goes_back_where_it_was() {
+        let mut h = History::new(10);
+        let a = h.record("one", res("g", "1"), 100);
+        let b = h.record("two", res("g", "2"), 200);
+        let c = h.record("three", res("g", "3"), 300);
+        h.set_favorite(b, true);
+        let taken = h.get(b).unwrap().clone();
+        assert!(h.remove(b));
+        assert!(h.restore(taken.clone()));
+        assert_eq!(h.iter().map(|e| e.id).collect::<Vec<_>>(), vec![c, b, a]);
+        assert!(h.get(b).unwrap().favorite, "with everything it had");
+        assert!(!h.restore(taken.clone()), "not twice");
+        // Translated again since it was deleted: the new entry stays.
+        assert!(h.remove(b));
+        let again = h.record("two", res("g", "2"), 400);
+        assert!(!h.restore(taken));
+        assert_eq!(h.iter().map(|e| e.id).collect::<Vec<_>>(), vec![again, c, a]);
+        // A new entry never takes a restored one's id.
+        assert!(h.record("four", res("g", "4"), 500) > again);
     }
 
     #[test]
