@@ -49,7 +49,10 @@ anyhow = "1"
 thiserror = "2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
-toml = "0.9"
+# preserve_order: a settings file written back through a document (to keep a
+# newer version's keys) keeps the order of the settings; indexmap is in the
+# tree already.
+toml = { version = "0.9", features = ["preserve_order"] }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 parking_lot = "0.12"

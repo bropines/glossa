@@ -286,17 +286,36 @@ const MAX_BODY: u64 = 32 * 1024 * 1024;
 const SLOW: Duration = Duration::from_secs(2);
 
 impl HttpClient {
+    /// A client for `settings`. Fails when the proxy they name cannot be
+    /// used (a scheme nothing here speaks, an address that is not one); the
+    /// error names the proxy without its credentials.
     pub fn new(settings: &Network) -> Result<HttpClient, Error> {
+        match HttpClient::new_or_direct(settings) {
+            (client, None) => Ok(client),
+            (_, Some(e)) => Err(e),
+        }
+    }
+
+    /// [`HttpClient::new`] for starting the program, which must not fail
+    /// over a proxy: when the proxy cannot be used, the client connects
+    /// directly and the error is returned beside it for the user to be
+    /// told. A system proxy is still followed, so the client takes it up
+    /// once the system names one that works.
+    pub fn new_or_direct(settings: &Network) -> (HttpClient, Option<Error>) {
         let spec = proxy_spec(settings);
-        let agent = build_agent(settings, spec.clone())?;
-        Ok(HttpClient {
+        let (agent, problem) = match build_agent(settings, spec.clone()) {
+            Ok(agent) => (agent, None),
+            Err(e) => (build_agent(settings, None).expect("a proxy-less client always builds"), Some(e)),
+        };
+        let client = HttpClient {
             agent: RwLock::new(agent),
             settings: settings.clone(),
             system: follows_system(settings).then(|| Mutex::new((spec, Instant::now()))),
             timeout: Duration::from_secs(settings.timeout_secs.max(1)),
             max_retries: settings.max_retries,
             user_agent: settings.user_agent.clone(),
-        })
+        };
+        (client, problem)
     }
 
     /// The agent to use now. Following the system proxy, it is rebuilt when
@@ -673,10 +692,38 @@ fn system_store_has_roots() -> bool {
     }
 }
 
-/// Strip the query string from a URL before it reaches a log, since keys and
-/// the user's text travel there.
-pub fn redact(url: &str) -> &str {
-    url.split(['?', '#']).next().unwrap_or(url)
+/// Strip the query string and any `user:password@` from a URL before it
+/// reaches a log or an error message, since keys, passwords and the user's
+/// text travel there.
+pub fn redact(url: &str) -> String {
+    let url = url.split(['?', '#']).next().unwrap_or(url);
+    let (scheme, rest) = match url.split_once("://") {
+        Some((scheme, rest)) => (Some(scheme), rest),
+        None => (None, url),
+    };
+    // The credentials end at the last `@` before the path.
+    let authority_len = rest.find('/').unwrap_or(rest.len());
+    let rest = match rest[..authority_len].rfind('@') {
+        Some(at) => &rest[at + 1..],
+        None => rest,
+    };
+    match scheme {
+        Some(scheme) => format!("{scheme}://{rest}"),
+        None => rest.to_owned(),
+    }
+}
+
+/// Whether the proxy `settings` call for can be used, without building a
+/// client: for checking settings before they are saved. The error names
+/// the proxy without its credentials.
+pub fn check_proxy(settings: &Network) -> Result<(), Error> {
+    make_proxy(proxy_spec(settings)).map(drop)
+}
+
+/// Whether the proxy is the user's own entry in the settings (rather than
+/// the system's, which the settings cannot correct).
+pub fn proxy_is_manual(settings: &Network) -> bool {
+    settings.proxy.mode == ProxyMode::Manual
 }
 
 /// Hosts that never go through a proxy: a local server (a self-hosted DeepLX
@@ -722,7 +769,8 @@ pub fn uses_system_certificates() -> bool {
     system_store_has_roots()
 }
 
-/// A proxy's address without any credentials in it, for the log.
+/// A proxy's address without any credentials in it, for the log and for
+/// error messages.
 fn describe_proxy(spec: Option<&ProxySpec>) -> String {
     match spec {
         None => "none".to_owned(),
@@ -733,6 +781,23 @@ fn describe_proxy(spec: Option<&ProxySpec>) -> String {
     }
 }
 
+/// `text` with the proxy's credentials taken out, however a library chose
+/// to quote the address in its error.
+fn without_credentials(text: &str, proxy_url: &str) -> String {
+    let safe = describe_proxy(Some(&(proxy_url.to_owned(), Vec::new())));
+    let mut out = text.replace(proxy_url, &safe);
+    let rest = proxy_url.split_once("://").map_or(proxy_url, |(_, rest)| rest);
+    if let Some((userinfo, _)) = rest.rsplit_once('@') {
+        out = out.replace(userinfo, "***");
+        if let Some((_, password)) = userinfo.split_once(':') {
+            if !password.is_empty() {
+                out = out.replace(password, "***");
+            }
+        }
+    }
+    out
+}
+
 #[cfg(test)]
 fn resolve_proxy(settings: &Network) -> Result<Option<ureq::Proxy>, Error> {
     make_proxy(proxy_spec(settings))
@@ -740,7 +805,12 @@ fn resolve_proxy(settings: &Network) -> Result<Option<ureq::Proxy>, Error> {
 
 fn make_proxy(spec: Option<ProxySpec>) -> Result<Option<ureq::Proxy>, Error> {
     let Some((u, bypass)) = spec else { return Ok(None) };
-    let bad = |e: ureq::Error| Error::Config(format!("proxy {u:?}: {e}"));
+    // The address goes into the message without its credentials: this
+    // error is printed, logged and shown in a dialog.
+    let bad = |e: ureq::Error| {
+        let shown = describe_proxy(Some(&(u.clone(), Vec::new())));
+        Error::Config(format!("the proxy {shown} cannot be used: {}", without_credentials(&e.to_string(), &u)))
+    };
     // Parsed once for its parts, then rebuilt with the bypass list, which
     // only the builder takes.
     let parsed = ureq::Proxy::new(&u).map_err(bad)?;
@@ -994,6 +1064,11 @@ mod tests {
     fn urls_are_redacted_for_logs() {
         assert_eq!(redact("https://api.x/v1?key=secret&q=hi"), "https://api.x/v1");
         assert_eq!(redact("https://api.x/v1#frag"), "https://api.x/v1");
+        // Credentials in the address itself go too, wherever an `@` is.
+        assert_eq!(redact("https://user:pw@api.x/v1?key=secret"), "https://api.x/v1");
+        assert_eq!(redact("http://user:p@ss@host.test:8080/a@b"), "http://host.test:8080/a@b");
+        assert_eq!(redact("https://api.x/users/me@example.com"), "https://api.x/users/me@example.com");
+        assert_eq!(redact("user:pw@host.test/path"), "host.test/path");
     }
 
     #[test]
@@ -1021,6 +1096,61 @@ mod tests {
             };
             assert!(HttpClient::new(&settings).is_ok(), "{mode:?}");
         }
+    }
+
+    /// The audit's case: `HTTPS_PROXY="ftp://x:secretpw@proxy:1"` printed
+    /// the password and stopped the program from starting.
+    #[test]
+    fn an_unusable_proxy_is_an_error_without_its_password_and_never_stops_a_start() {
+        let spec = Some(("ftp://x:secretpw@proxy.test:1".to_owned(), Vec::new()));
+        let message = make_proxy(spec.clone()).unwrap_err().to_string();
+        assert!(message.contains("ftp://proxy.test:1"), "{message}");
+        assert!(!message.contains("secretpw") && !message.contains("x:"), "{message}");
+        let message = build_agent(&Network::default(), spec).unwrap_err().to_string();
+        assert!(!message.contains("secretpw"), "{message}");
+        // The same through the settings: a manual proxy whose host is not one.
+        use glossa_core::config::{Proxy, ProxyScheme};
+        let settings = Network {
+            proxy: Proxy {
+                mode: ProxyMode::Manual,
+                scheme: ProxyScheme::Http,
+                host: "not a host".into(),
+                port: 8080,
+                username: "x".into(),
+                password: "secretpw".into(),
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        let strict = HttpClient::new(&settings).map(drop).unwrap_err().to_string();
+        assert!(!strict.contains("secretpw"), "{strict}");
+        assert!(check_proxy(&settings).is_err() && proxy_is_manual(&settings));
+        // At start: a client that connects directly, and the problem to show.
+        let (client, problem) = HttpClient::new_or_direct(&settings);
+        let problem = problem.expect("reported").to_string();
+        assert!(!problem.contains("secretpw"), "{problem}");
+        assert!(client.system.is_none());
+        // A proxy that works is no problem.
+        let fine = Network {
+            proxy: Proxy { host: "127.0.0.1".into(), ..settings.proxy.clone() },
+            ..Default::default()
+        };
+        assert!(check_proxy(&fine).is_ok());
+        assert!(HttpClient::new_or_direct(&fine).1.is_none());
+    }
+
+    #[test]
+    fn whatever_a_library_quotes_the_credentials_are_taken_out() {
+        let url = "socks5://user:p%40ss@proxy.test:1080";
+        for text in [
+            "bad uri socks5://user:p%40ss@proxy.test:1080",
+            "cannot parse \"user:p%40ss@proxy.test\"",
+            "password p%40ss rejected",
+        ] {
+            let out = without_credentials(text, url);
+            assert!(!out.contains("p%40ss"), "{out}");
+        }
+        assert_eq!(without_credentials("no such host proxy.test", url), "no such host proxy.test");
     }
 
     #[test]

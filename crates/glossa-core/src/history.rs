@@ -1,6 +1,6 @@
 //! Translation history and favourites.
 
-use std::collections::VecDeque;
+use std::collections::{HashMap, VecDeque};
 use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
@@ -48,11 +48,42 @@ pub struct History {
     next_id: u64,
     #[serde(skip)]
     max_entries: usize,
+    /// What the file held when it was last read or written here; see
+    /// [`History::save_merged`].
+    #[serde(skip)]
+    synced: Synced,
+}
+
+/// Each text in the file as this program last saw it (a fingerprint of its
+/// entry), to tell what another program has added or changed since. It is
+/// bookkeeping, not content: two histories with the same entries are equal
+/// whatever they remember of the file.
+#[derive(Debug, Clone, Default)]
+struct Synced(HashMap<String, u64>);
+
+impl PartialEq for Synced {
+    fn eq(&self, _: &Synced) -> bool {
+        true
+    }
+}
+
+impl Eq for Synced {}
+
+/// An entry's content apart from its id, which is each program's own.
+fn fingerprint(e: &HistoryEntry) -> u64 {
+    use std::hash::{Hash, Hasher};
+    let mut h = std::collections::hash_map::DefaultHasher::new();
+    e.favorite.hash(&mut h);
+    e.created.hash(&mut h);
+    for r in &e.results {
+        (r.provider_id.as_str(), r.from.0, r.to.0, r.text.as_str()).hash(&mut h);
+    }
+    h.finish()
 }
 
 impl History {
     pub fn new(max_entries: usize) -> Self {
-        Self { entries: VecDeque::new(), next_id: 1, max_entries }
+        Self { entries: VecDeque::new(), next_id: 1, max_entries, synced: Synced::default() }
     }
 
     pub fn set_max_entries(&mut self, max: usize) {
@@ -173,8 +204,7 @@ impl History {
         match std::fs::read_to_string(path) {
             Ok(text) => {
                 let mut h: History = serde_json::from_str(&text)?;
-                h.next_id = h.next_id.max(h.entries.iter().map(|e| e.id).max().unwrap_or(0) + 1);
-                h.set_max_entries(max_entries);
+                h.loaded(max_entries);
                 Ok(h)
             }
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(History::new(max_entries)),
@@ -196,8 +226,7 @@ impl History {
         };
         match serde_json::from_slice::<History>(&bytes) {
             Ok(mut h) => {
-                h.next_id = h.next_id.max(h.entries.iter().map(|e| e.id).max().unwrap_or(0) + 1);
-                h.set_max_entries(max_entries);
+                h.loaded(max_entries);
                 Ok((h, None))
             }
             Err(parse) => {
@@ -208,7 +237,7 @@ impl History {
                     backup = path.with_file_name(format!("{name}.corrupt-{}-{n}", crate::now_unix()));
                     n += 1;
                 }
-                std::fs::write(&backup, &bytes).map_err(|e| {
+                crate::fsio::write_atomic(&backup, &bytes).map_err(|e| {
                     crate::Error::Config(format!(
                         "{} cannot be read ({parse}) and could not be copied aside ({e})",
                         path.display()
@@ -219,14 +248,133 @@ impl History {
         }
     }
 
+    /// Fresh from the file: ids continue after the file's, the file's
+    /// entries are remembered as seen, and the limit of today applies.
+    fn loaded(&mut self, max_entries: usize) {
+        self.next_id = self.next_id.max(self.entries.iter().map(|e| e.id).max().unwrap_or(0) + 1);
+        self.remember_synced();
+        self.set_max_entries(max_entries);
+    }
+
+    fn remember_synced(&mut self) {
+        self.synced = Synced(self.entries.iter().map(|e| (e.source.clone(), fingerprint(e))).collect());
+    }
+
+    /// Replace the file with this history, whatever it holds: atomically,
+    /// durably and for the user alone (see [`crate::fsio`]). A program that
+    /// shares the file with others uses [`History::save_merged`].
     pub fn save(&self, path: &Path) -> crate::Result<()> {
-        if let Some(dir) = path.parent() {
-            std::fs::create_dir_all(dir)?;
-        }
-        let tmp = path.with_extension("json.tmp");
-        std::fs::write(&tmp, serde_json::to_vec(self)?)?;
-        std::fs::rename(&tmp, path)?;
+        crate::fsio::write_atomic(path, &serde_json::to_vec(self)?)?;
         Ok(())
+    }
+
+    /// Write the history without losing what another program wrote to the
+    /// same file since this one last read or wrote it (the desktop program
+    /// and `glossa-cli translate --save-history` share one history).
+    ///
+    /// Under a lock beside the file (`history.json.lock`), the file is read
+    /// again and compared with what it held last time: a text another
+    /// program added comes in (by its time, with an id of this history's
+    /// own); one it changed replaces an entry untouched here, or adds its
+    /// translations to one changed here too; everything else is as this
+    /// history has it, deletions included. Then the file is replaced. A
+    /// file that can no longer be parsed is copied aside first, as on
+    /// loading. Returns whether anything came in.
+    pub fn save_merged(&mut self, path: &Path) -> crate::Result<bool> {
+        let name = path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+        if let Some(dir) = path.parent().filter(|d| !d.is_dir()) {
+            crate::fsio::create_private_dir(dir)?;
+        }
+        let _lock = crate::fsio::FileLock::acquire(&path.with_file_name(format!("{name}.lock")));
+        let mut changed = false;
+        match std::fs::read(path) {
+            Ok(bytes) => match serde_json::from_slice::<History>(&bytes) {
+                Ok(disk) => changed = self.merge_from(disk),
+                Err(_) if bytes.iter().all(u8::is_ascii_whitespace) => {}
+                Err(parse) => {
+                    let backup = path.with_file_name(format!("{name}.corrupt-{}", crate::now_unix()));
+                    crate::fsio::write_atomic(&backup, &bytes).map_err(|e| {
+                        crate::Error::Config(format!(
+                            "{} cannot be read ({parse}) and could not be copied aside ({e})",
+                            path.display()
+                        ))
+                    })?;
+                }
+            },
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+            Err(e) => return Err(e.into()),
+        }
+        self.save(path)?;
+        self.remember_synced();
+        Ok(changed)
+    }
+
+    /// After a copy of this history (taken a moment ago) was written with
+    /// [`History::save_merged`] away from the lock this one lives under:
+    /// take in what the copy took from the file, and remember the file as
+    /// the copy left it. What happened here in that moment stands. Returns
+    /// whether anything came in.
+    pub fn adopt_saved(&mut self, saved: History) -> bool {
+        let synced = saved.synced.clone();
+        let changed = self.merge_from(saved);
+        self.synced = synced;
+        changed
+    }
+
+    /// Take in what `disk` (the file as it is now) has that the file did
+    /// not have when it was last seen. Returns whether anything changed.
+    fn merge_from(&mut self, disk: History) -> bool {
+        let mut changed = false;
+        // Oldest first, so entries of the same second keep their order.
+        for theirs in disk.entries.into_iter().rev() {
+            let seen = self.synced.0.get(&theirs.source).copied();
+            let print = fingerprint(&theirs);
+            if seen == Some(print) {
+                // As this program last saw it: whatever happened to it here
+                // since (a new translation, a star, its removal) stands.
+                continue;
+            }
+            if self.entries.iter().any(|e| e.source == theirs.source && fingerprint(e) == print) {
+                continue; // the same here already
+            }
+            let mut entry = match self.entries.iter().position(|e| e.source == theirs.source) {
+                Some(i) => {
+                    let mut ours = self.entries.remove(i).expect("index from position");
+                    if seen == Some(fingerprint(&ours)) {
+                        // Untouched here: theirs is simply the newer state.
+                        HistoryEntry { id: ours.id, ..theirs }
+                    } else {
+                        // Changed in both: keep ours and add what it lacks.
+                        let same = |a: &HistoryResult, b: &HistoryResult| {
+                            a.provider_id == b.provider_id && a.from == b.from && a.to == b.to
+                        };
+                        let missing: Vec<HistoryResult> =
+                            theirs.results.into_iter().filter(|t| !ours.results.iter().any(|o| same(o, t))).collect();
+                        if theirs.created > ours.created {
+                            ours.results.extend(missing);
+                        } else {
+                            ours.results.splice(0..0, missing);
+                        }
+                        ours.favorite |= theirs.favorite;
+                        ours.created = ours.created.max(theirs.created);
+                        ours
+                    }
+                }
+                None => {
+                    let id = self.next_id.max(1);
+                    self.next_id = id + 1;
+                    HistoryEntry { id, ..theirs }
+                }
+            };
+            entry.source = entry.source.trim().to_owned();
+            let at = self.entries.iter().position(|e| e.created <= entry.created).unwrap_or(self.entries.len());
+            self.entries.insert(at, entry);
+            changed = true;
+        }
+        if changed {
+            self.trim();
+        }
+        changed
     }
 
     /// Insert an already-built entry at the bottom (oldest end). Used by the
@@ -549,5 +697,125 @@ mod tests {
         assert_ne!(old_id, a, "the file's id is replaced");
         assert!(h.get(old_id).unwrap().favorite, "the rest is kept");
         assert!(h.record("b", res("g", "b"), 2) > old_id);
+    }
+
+    fn scratch(tag: &str) -> PathBuf {
+        let dir = std::env::temp_dir().join(format!("glossa-hist-{tag}-{}", std::process::id()));
+        std::fs::remove_dir_all(&dir).ok();
+        std::fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    #[test]
+    fn two_programs_saving_one_history_lose_nothing() {
+        let dir = scratch("merge");
+        let path = dir.join("history.json");
+        // The desktop program starts and translates.
+        let mut app = History::load(&path, 100).unwrap();
+        app.record("app one", res("g", "1"), 10);
+        assert!(!app.save_merged(&path).unwrap(), "nothing came in");
+        // The command line reads the file, adds its own, and writes.
+        let mut cli = History::load(&path, 100).unwrap();
+        cli.record("cli one", res("g", "c1"), 20);
+        cli.save_merged(&path).unwrap();
+        // The program, which knows nothing of that, goes on and saves: before
+        // the fix this save wrote the command line's entry out of existence.
+        let app_two = app.record("app two", res("g", "2"), 30);
+        assert!(app.save_merged(&path).unwrap(), "the command line's entry came in");
+        assert_eq!(sources(&app), ["app two", "cli one", "app one"], "placed by its time");
+        let back = History::load(&path, 100).unwrap();
+        assert_eq!(sources(&back), ["app two", "cli one", "app one"]);
+        // Ids stay unique in the merged history: both programs counted from
+        // the same number.
+        let mut ids: Vec<u64> = app.iter().map(|e| e.id).collect();
+        ids.sort_unstable();
+        ids.dedup();
+        assert_eq!(ids.len(), 3);
+        assert!(app.get(app_two).is_some_and(|e| e.source == "app two"));
+        // Saving again changes nothing.
+        assert!(!app.save_merged(&path).unwrap());
+        // The way the engine saves: a copy is written off the lock, and
+        // the live history, which moved on meanwhile, takes in the rest.
+        cli.record("cli two", res("g", "c2"), 40);
+        cli.save_merged(&path).unwrap();
+        let mut copy = app.clone();
+        let removed = app.search("app one", false)[0].id;
+        app.remove(removed);
+        app.record("app three", res("g", "3"), 50);
+        assert!(copy.save_merged(&path).unwrap());
+        assert!(app.adopt_saved(copy));
+        assert_eq!(sources(&app), ["app three", "cli two", "app two", "cli one"]);
+        assert!(!app.save_merged(&path).unwrap(), "nothing more to take in");
+        assert_eq!(sources(&History::load(&path, 100).unwrap()), sources(&app));
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn what_was_removed_here_stays_removed_and_what_changed_there_comes_in() {
+        let dir = scratch("merge-rules");
+        let path = dir.join("history.json");
+        let mut app = History::new(100);
+        let gone = app.record("removed here", res("g", "x"), 1);
+        app.record("starred there", res("g", "s"), 2);
+        app.record("both", res("g", "ours"), 3);
+        app.save_merged(&path).unwrap();
+
+        let mut other = History::load(&path, 100).unwrap();
+        let starred = other.search("starred there", false)[0].id;
+        other.set_favorite(starred, true);
+        other.record("both", res("d", "theirs"), 40);
+        other.save_merged(&path).unwrap();
+
+        app.remove(gone);
+        app.record("both", res("y", "ours too"), 50);
+        assert!(app.save_merged(&path).unwrap());
+        assert_eq!(sources(&app), ["both", "starred there"], "the removal stands");
+        assert!(app.search("starred there", false)[0].favorite, "an entry untouched here takes their state");
+        let both = app.search("both", false)[0];
+        let providers: Vec<&str> = both.results.iter().map(|r| r.provider_id.as_str()).collect();
+        assert_eq!(providers, ["d", "g", "y"], "changed in both: their translation joins ours, ours newest");
+        // Clearing the history clears it in the file too.
+        app.clear(true);
+        app.save_merged(&path).unwrap();
+        assert!(History::load(&path, 100).unwrap().is_empty());
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn a_file_that_went_bad_meanwhile_is_copied_aside_not_destroyed() {
+        let dir = scratch("merge-corrupt");
+        let path = dir.join("history.json");
+        let mut h = History::new(100);
+        h.record("a", res("g", "a"), 1);
+        h.save_merged(&path).unwrap();
+        std::fs::write(&path, b"{\"entries\": [ {\"id\": 1,").unwrap();
+        h.save_merged(&path).unwrap();
+        assert_eq!(History::load(&path, 100).unwrap().len(), 1);
+        let copies: Vec<_> = std::fs::read_dir(&dir)
+            .unwrap()
+            .flatten()
+            .filter(|e| e.file_name().to_string_lossy().starts_with("history.json.corrupt-"))
+            .collect();
+        assert_eq!(copies.len(), 1);
+        assert_eq!(std::fs::read(copies[0].path()).unwrap(), b"{\"entries\": [ {\"id\": 1,");
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn the_history_file_is_the_users_alone() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = scratch("modes");
+        let path = dir.join("data").join("history.json");
+        let mut h = History::new(100);
+        h.record("a", res("g", "a"), 1);
+        h.save(&path).unwrap();
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o644)).unwrap();
+        h.save_merged(&path).unwrap();
+        for entry in std::fs::read_dir(path.parent().unwrap()).unwrap().flatten() {
+            let mode = entry.metadata().unwrap().permissions().mode() & 0o777;
+            assert_eq!(mode, 0o600, "{:?}", entry.file_name());
+        }
+        std::fs::remove_dir_all(&dir).ok();
     }
 }

@@ -91,6 +91,48 @@ impl Paths {
         self.cache_dir.join("glossa.log")
     }
 
+    /// Where temporary files go (a screenshot for an OCR program, speech
+    /// from the system voice): a folder of Glossa's own, private, instead
+    /// of the temporary folder every user of the machine shares.
+    pub fn temp_dir(&self) -> PathBuf {
+        self.cache_dir.join("tmp")
+    }
+
+    /// Make what is already on disk the user's alone, and clear out what a
+    /// killed process left behind. Files written by earlier versions were
+    /// readable by every user of the machine, the settings with their API
+    /// keys among them; this runs at every start, so they are private from
+    /// the first start of a version that knows better. Nothing is created,
+    /// and on Windows nothing is changed (see [`crate::fsio`]).
+    pub fn secure(&self) {
+        use crate::fsio::{make_private, sweep_stale};
+        use std::time::Duration;
+        for dir in [&self.data_dir, &self.cache_dir] {
+            if !dir.is_dir() {
+                continue;
+            }
+            make_private(dir);
+            // The files directly inside: settings, their backups and kept
+            // copies, the histories, the portal token, the logs. Modules,
+            // themes and downloads in the folders below hold no secrets.
+            for entry in std::fs::read_dir(dir).into_iter().flatten().flatten() {
+                if entry.file_type().is_ok_and(|t| t.is_file()) {
+                    make_private(&entry.path());
+                }
+            }
+            // Ten minutes: far longer than any write, so another running
+            // copy's file in the making is never taken from under it.
+            sweep_stale(dir, Duration::from_secs(600), false);
+        }
+        let tmp = self.temp_dir();
+        if tmp.is_dir() {
+            make_private(&tmp);
+            // An hour: longer than any OCR or speech call still running in
+            // another copy of the program.
+            sweep_stale(&tmp, Duration::from_secs(3600), true);
+        }
+    }
+
     /// Directories to search for themes, lowest priority first.
     pub fn theme_dirs(&self) -> Vec<PathBuf> {
         self.resource_dirs("themes")
@@ -195,11 +237,12 @@ impl Paths {
     /// Returns the new data folder.
     pub fn make_portable(&self) -> std::io::Result<PathBuf> {
         let target = self.exe_dir.join("data");
-        std::fs::create_dir_all(&target)?;
+        crate::fsio::create_private_dir(&target)?;
         for file in ["config.toml", "history.json", "dictionary-history.json"] {
             let from = self.data_dir.join(file);
             if from.is_file() {
                 std::fs::copy(&from, target.join(file))?;
+                crate::fsio::make_private(&target.join(file));
             }
         }
         for dir in ["modules", "themes"] {
@@ -269,6 +312,57 @@ mod tests {
         std::fs::remove_dir_all(&p).ok();
         std::fs::create_dir_all(&p).unwrap();
         p
+    }
+
+    /// The audit's finding: an installation from before, with the settings
+    /// (API keys, the proxy password, the control token) readable by
+    /// every user of the machine.
+    #[cfg(unix)]
+    #[test]
+    fn an_existing_installation_is_made_private_at_start() {
+        use std::os::unix::fs::PermissionsExt;
+        let mode = |p: &Path| std::fs::metadata(p).unwrap().permissions().mode() & 0o777;
+        let dir = temp("secure");
+        let paths = Paths::for_exe_dir(dir.join("app"), Some(dir.join("home")));
+        std::fs::create_dir_all(paths.data_dir.join("modules")).unwrap();
+        std::fs::create_dir_all(paths.temp_dir()).unwrap();
+        let files = [
+            paths.config_file(),
+            paths.data_dir.join("config.toml.broken-1700000000"),
+            paths.data_dir.join("config.toml.bak"),
+            paths.history_file(),
+            paths.dictionary_history_file(),
+            paths.log_file(),
+        ];
+        let leftovers = [paths.data_dir.join("config.toml.tmp"), paths.temp_dir().join("glossa-ocr-1-0-0.png")];
+        let module = paths.data_dir.join("modules").join("module.toml");
+        for file in files.iter().chain(&leftovers).chain([&module]) {
+            std::fs::write(file, "x").unwrap();
+            std::fs::set_permissions(file, std::fs::Permissions::from_mode(0o644)).unwrap();
+        }
+        for folder in [&paths.data_dir, &paths.cache_dir] {
+            std::fs::set_permissions(folder, std::fs::Permissions::from_mode(0o755)).unwrap();
+        }
+        // Left by a process killed long ago.
+        let long_ago = std::time::SystemTime::now() - std::time::Duration::from_secs(86_400);
+        for file in &leftovers {
+            std::fs::File::options().write(true).open(file).unwrap().set_modified(long_ago).unwrap();
+        }
+        paths.secure();
+        assert_eq!(mode(&paths.data_dir), 0o700);
+        assert_eq!(mode(&paths.cache_dir), 0o700);
+        for file in &files {
+            assert_eq!(mode(file), 0o600, "{}", file.display());
+        }
+        assert_eq!(mode(&module), 0o644, "a module's files are not secrets and stay as they were");
+        for file in &leftovers {
+            assert!(!file.exists(), "{} is swept", file.display());
+        }
+        // A fresh installation: nothing is created by looking.
+        let fresh = Paths::for_exe_dir(dir.join("app"), Some(dir.join("fresh")));
+        fresh.secure();
+        assert!(!fresh.data_dir.exists());
+        std::fs::remove_dir_all(&dir).ok();
     }
 
     #[test]
