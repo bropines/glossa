@@ -1,0 +1,9 @@
+# Russian text for the settings page. A key missing here falls back to
+# module.toml (English). See docs/modules/README.md#translations.
+#
+# Only module.toml and main.js of a bundled module are compiled into Glossa,
+# so this file reaches a user when the folder is copied into a modules
+# folder; the built-in copy shows the English labels.
+
+[options.max_entries]
+label = "Сколько словарей показывать"
