@@ -327,6 +327,13 @@ impl GlossaApp {
         self.locale.get(key).to_owned()
     }
 
+    /// [`GlossaApp::t`] for a string some systems word differently (the tray
+    /// is the menu bar on macOS): this system's variant of `key` when the
+    /// strings have one (`key_mac`, `key_win`, `key_linux`), else `key`.
+    pub fn t_os(&self, key: &str) -> String {
+        self.locale.get_variant(key, glossa_platform::shell::SHELL.string_variant)
+    }
+
     pub fn register_hotkeys(&mut self) {
         let Some(h) = self.hotkeys.as_mut() else { return };
         h.unregister_all();

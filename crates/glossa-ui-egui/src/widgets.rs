@@ -483,15 +483,41 @@ pub fn hotkey_label(hotkey: &Hotkey) -> String {
     hotkey_parts(hotkey).join("+")
 }
 
-/// A hotkey field: shows the chord; click, then press a combination.
-/// Escape cancels, Backspace clears. Returns `Some(new)` when it changed
-/// (`Some(None)` for cleared).
-pub fn hotkey_field(ui: &mut Ui, id_salt: &str, current: Option<&Hotkey>, prompt: &str) -> Option<Option<Hotkey>> {
+/// Whether `hotkey` may be bound system-wide as it is. A global hotkey
+/// takes its keys away from every program, so a key people type or edit
+/// with (a letter, a digit, Space, Enter, the arrows…) needs Ctrl, Alt or
+/// the Cmd/Win key with it; Shift alone only makes it the capital letter.
+/// Keys that type nothing and are rarely used alone (the function keys,
+/// Print Screen, Pause, Scroll Lock, Insert) may stand by themselves.
+pub fn hotkey_needs_modifier(hotkey: &Hotkey) -> bool {
+    let m = &hotkey.mods;
+    if m.ctrl || m.alt || m.meta {
+        return false;
+    }
+    let key = hotkey.key.0.as_str();
+    let function_key =
+        key.strip_prefix('F').is_some_and(|n| !n.is_empty() && n.chars().all(|c| c.is_ascii_digit()));
+    !(function_key || matches!(key, "PrintScreen" | "Pause" | "ScrollLock" | "Insert"))
+}
+
+/// A hotkey field: shows the chord, or `unset` in quiet text when there is
+/// none; click, then press a combination. Escape cancels, Backspace
+/// clears. Returns `Some(new)` when it changed (`Some(None)` for cleared).
+pub fn hotkey_field(
+    ui: &mut Ui,
+    id_salt: &str,
+    current: Option<&Hotkey>,
+    prompt: &str,
+    unset: &str,
+) -> Option<Option<Hotkey>> {
     let id = hotkey_capture_id(ui, id_salt);
     let capturing = ui.data(|d| d.get_temp::<bool>(id).unwrap_or(false));
-    let text =
-        if capturing { prompt.to_owned() } else { current.map(|h| hotkey_parts(h).join(" + ")).unwrap_or_default() };
-    let resp = ui.add(egui::Button::new(RichText::new(text).italics_if(capturing)).min_size(vec2(170.0, 0.0)));
+    let text = match (capturing, current) {
+        (true, _) => RichText::new(prompt).italics(),
+        (false, Some(h)) => RichText::new(hotkey_parts(h).join(" + ")),
+        (false, None) => RichText::new(unset).color(ui.visuals().weak_text_color()),
+    };
+    let resp = ui.add(egui::Button::new(text).min_size(vec2(170.0, 0.0)));
     if resp.clicked() {
         ui.data_mut(|d| d.insert_temp(id, !capturing));
     }
@@ -511,7 +537,7 @@ pub fn hotkey_capture(ui: &mut Ui, id: egui::Id) -> Option<Option<Hotkey>> {
         return None;
     }
     let mut out = None;
-    ui.input(|i| {
+    ui.input_mut(|i| {
         for e in &i.events {
             if let egui::Event::Key { key, physical_key, pressed: true, modifiers, .. } = e {
                 // The key itself, not what it types: Shift turns 1 into "!"
@@ -543,6 +569,10 @@ pub fn hotkey_capture(ui: &mut Ui, id: egui::Id) -> Option<Option<Hotkey>> {
                 }
             }
         }
+        // The keys pressed while waiting are the field's: taken out of the
+        // frame's input, so Escape does not also close the window and Enter
+        // does not press its default button.
+        i.events.retain(|e| !matches!(e, egui::Event::Key { .. }));
     });
     match out {
         Some(result) => {
@@ -550,20 +580,6 @@ pub fn hotkey_capture(ui: &mut Ui, id: egui::Id) -> Option<Option<Hotkey>> {
             result
         }
         None => None,
-    }
-}
-
-trait ItalicsIf {
-    fn italics_if(self, on: bool) -> Self;
-}
-
-impl ItalicsIf for RichText {
-    fn italics_if(self, on: bool) -> Self {
-        if on {
-            self.italics()
-        } else {
-            self
-        }
     }
 }
 
@@ -615,6 +631,47 @@ mod tests {
         assert_eq!(hk, Some(Some("Ctrl+Shift+Q".parse().unwrap())));
         // Escape still cancels: no change.
         assert_eq!(capture(egui::Key::Escape, egui::Key::Escape, egui::Modifiers::NONE), None);
+    }
+
+    #[test]
+    fn a_global_hotkey_on_a_typing_key_needs_a_modifier() {
+        let needs = |s: &str| hotkey_needs_modifier(&s.parse::<Hotkey>().unwrap());
+        // A bare letter would be swallowed in every program; Shift only
+        // makes it the capital.
+        for bare in ["Q", "Shift+Q", "1", "Space", "Enter", "Left", "Delete", "Shift+Tab", "Home"] {
+            assert!(needs(bare), "{bare}");
+        }
+        for fine in ["Ctrl+Q", "Alt+Q", "Meta+Space", "Ctrl+Shift+1", "Alt+Shift+Left"] {
+            assert!(!needs(fine), "{fine}");
+        }
+        // Keys that type nothing may stand alone.
+        for alone in ["F1", "F12", "Shift+F5", "PrintScreen", "Pause", "ScrollLock", "Insert"] {
+            assert!(!needs(alone), "{alone}");
+        }
+        // "F" is a letter, not a function key.
+        assert!(needs("F"));
+    }
+
+    #[test]
+    fn a_waiting_hotkey_field_keeps_its_keys_from_the_window() {
+        let ctx = egui::Context::default();
+        let mut input = egui::RawInput::default();
+        input.events.push(egui::Event::Key {
+            key: egui::Key::Escape,
+            physical_key: Some(egui::Key::Escape),
+            pressed: true,
+            repeat: false,
+            modifiers: egui::Modifiers::NONE,
+        });
+        let mut seen_after = true;
+        let mut frame = ctx.run_ui(input, |ui| {
+            let id = hotkey_capture_id(ui, "test");
+            ui.data_mut(|d| d.insert_temp(id, true));
+            hotkey_capture(ui, id);
+            seen_after = ui.input(|i| i.key_pressed(egui::Key::Escape));
+        });
+        frame.textures_delta.clear();
+        assert!(!seen_after, "Escape cancelled the capture and must not close the dialog too");
     }
 
     #[test]

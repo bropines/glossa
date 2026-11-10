@@ -30,6 +30,8 @@ pub const SHELL: Shell = Shell {
     window_classes: false,
     program_example: "Safari",
     tray_clicks: true,
+    default_button_last: true,
+    string_variant: "mac",
 };
 
 pub fn open(target: &str) -> std::io::Result<()> {

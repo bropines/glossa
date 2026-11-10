@@ -16,7 +16,9 @@ use glossa_core::{Action, Capabilities, Config, LangId};
 use glossa_platform::shell::SHELL;
 
 use crate::app::GlossaApp;
+use crate::dialogs;
 use crate::icons::Icon;
+use crate::settings_check::{self, Listen, Problem};
 use crate::widgets::{group, row};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -197,6 +199,74 @@ pub struct OptionsState {
     /// The Presets tab of the Services page is showing, and its state.
     presets_tab: bool,
     pub presets: crate::presets::PresetsPage,
+    /// Closing was asked for with changes that are not saved: the bar at
+    /// the bottom asks what to do with them.
+    confirm_close: bool,
+    /// What the last Apply refused to save, shown next to each field.
+    problems: Vec<Problem>,
+    /// Whether the paths typed into the settings exist, looked up on a
+    /// worker.
+    paths: PathChecks,
+    /// A running "Test connection" and what the last one said.
+    proxy_test: Option<std::sync::mpsc::Receiver<Result<glossa_engine::net_check::ConnectionTest, String>>>,
+    proxy_status: Option<(String, bool)>,
+    /// When a command of the Control API page was copied, and which one,
+    /// for the "Copied" that shows beside it for a moment.
+    copied: Option<(usize, std::time::Instant)>,
+    /// A classic import, a module install or a reload running on a worker.
+    module_job: Option<std::sync::mpsc::Receiver<ModuleJob>>,
+    /// What the last of those said, shown on the Modules page.
+    module_note: Option<(String, bool)>,
+    /// A hotkey the Hotkeys page refused a moment ago (it needs a
+    /// modifier), by the row it was pressed in.
+    refused_hotkey: Option<String>,
+}
+
+/// What a worker of the Modules page came back with.
+enum ModuleJob {
+    Imported(Result<glossa_engine::ImportReport, String>),
+    Installed(Result<(), String>),
+    Reloaded,
+}
+
+/// Whether paths typed into the settings exist. Asking the disk can take
+/// long (a network drive that is gone), so each path is looked up once on a
+/// worker and the answer kept; until it comes the path counts as unknown.
+#[derive(Default)]
+struct PathChecks {
+    known: std::collections::HashMap<std::path::PathBuf, bool>,
+    asked: std::collections::HashSet<std::path::PathBuf>,
+    answers: Option<(std::sync::mpsc::Sender<(std::path::PathBuf, bool)>, std::sync::mpsc::Receiver<(std::path::PathBuf, bool)>)>,
+}
+
+impl PathChecks {
+    /// `Some(false)` when `value` is an absolute path that is not there;
+    /// `None` while that is not known, or for a bare command.
+    fn exists(&mut self, ctx: &egui::Context, value: &str) -> Option<bool> {
+        let path = crate::settings_check::path_to_check(value)?;
+        let (tx, rx) = self.answers.get_or_insert_with(std::sync::mpsc::channel);
+        for (p, there) in rx.try_iter() {
+            self.known.insert(p, there);
+        }
+        if let Some(there) = self.known.get(&path) {
+            return Some(*there);
+        }
+        if self.asked.insert(path.clone()) {
+            let (tx, ctx) = (tx.clone(), ctx.clone());
+            std::thread::spawn(move || {
+                let there = path.exists();
+                let _ = tx.send((path, there));
+                ctx.request_repaint();
+            });
+        }
+        None
+    }
+
+    /// Forget the answers, so a file made since is found.
+    fn forget(&mut self) {
+        self.known.clear();
+        self.asked.clear();
+    }
 }
 
 impl OptionsState {
@@ -404,6 +474,15 @@ pub fn open(app: &mut GlossaApp) {
             fonts: FontList::default(),
             presets_tab: false,
             presets: Default::default(),
+            confirm_close: false,
+            problems: Vec::new(),
+            paths: PathChecks::default(),
+            proxy_test: None,
+            proxy_status: None,
+            copied: None,
+            module_job: None,
+            module_note: None,
+            refused_hotkey: None,
         });
     }
     app.ctx.request_repaint();
@@ -417,12 +496,39 @@ pub fn show(app: &mut GlossaApp, ctx: &egui::Context) {
     let mut open = true;
     let custom = crate::chrome::custom(&app.cfg);
     ctx.show_viewport_immediate(crate::chrome::viewport(crate::chrome::OPTIONS), builder, |ui, _| {
-        if ui.input(|i| i.viewport().close_requested()) {
-            open = false;
-        }
+        let keys = crate::chrome::DialogKeys::begin(ui.ctx());
+        let mut close = ui.input(|i| i.viewport().close_requested());
         let _trace = crate::frametrace::begin(ui.ctx(), "options");
         crate::chrome::frame(ui, &app.look, custom, &crate::chrome::Caption::new(&title));
-        open &= body(app, ui, &mut st);
+        match body(app, ui, &mut st) {
+            Asked::Nothing => {}
+            Asked::Close => close = true,
+            // Saved, or thrown away on purpose: nothing left to ask about.
+            Asked::CloseNow => open = false,
+        }
+        if keys.escape(ui.ctx()) {
+            if st.confirm_close {
+                // Escape answers the question the way it answers any: no.
+                st.confirm_close = false;
+            } else {
+                close = true;
+            }
+        } else if keys.enter(ui.ctx()) && !st.confirm_close {
+            // OK, the default button.
+            if !apply(app, &mut st) {
+                open = false;
+            }
+        }
+        if close && open {
+            if is_dirty(app, &st) {
+                // The window stays until the question at its bottom is
+                // answered, also when the system's close button asked.
+                ui.ctx().send_viewport_cmd(egui::ViewportCommand::CancelClose);
+                st.confirm_close = true;
+            } else {
+                open = false;
+            }
+        }
     });
     app.child_backdrop(&title, false);
     if open {

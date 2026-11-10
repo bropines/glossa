@@ -395,6 +395,102 @@ fn resize_cursor(dir: egui::viewport::ResizeDirection) -> CursorIcon {
     }
 }
 
+/// What the keyboard asks of a dialog: Escape closes it and Enter presses
+/// its default button, as in any settings window. Shared by the tool
+/// windows so they answer the same way.
+///
+/// Made before the window's contents are drawn and asked after them. Where
+/// the focus was when the key went down decides whose key it is, and a
+/// text field gives its focus up on Enter in the very frame it handles it,
+/// so the focus is noted first; a widget that takes a key for itself (a
+/// hotkey field waiting for a combination) consumes it while drawing, so
+/// the keys are read last.
+pub struct DialogKeys {
+    focused: bool,
+    dropdown: bool,
+}
+
+impl DialogKeys {
+    pub fn begin(ctx: &egui::Context) -> Self {
+        DialogKeys {
+            focused: ctx.memory(|m| m.focused().is_some()),
+            dropdown: crate::dropdown::recently_open(ctx),
+        }
+    }
+
+    /// Escape was pressed for the window: close it (the caller asks about
+    /// unsaved changes first, where it has any).
+    pub fn escape(&self, ctx: &egui::Context) -> bool {
+        let pressed = ctx.input(|i| i.key_pressed(egui::Key::Escape));
+        let dropdown = self.dropdown || crate::dropdown::recently_open(ctx);
+        dialog_key(pressed, false, true, self.focused, dropdown) == Some(DialogKey::Close)
+    }
+
+    /// Enter was pressed for the window: press the default button.
+    pub fn enter(&self, ctx: &egui::Context) -> bool {
+        let (pressed, plain) = ctx.input(|i| (i.key_pressed(egui::Key::Enter), i.modifiers.is_none()));
+        let dropdown = self.dropdown || crate::dropdown::recently_open(ctx);
+        dialog_key(false, pressed, plain, self.focused, dropdown) == Some(DialogKey::Default)
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum DialogKey {
+    Close,
+    Default,
+}
+
+/// Whose key it is. An open dropdown takes both keys (Escape closes the
+/// list, Enter picks from it). Enter belongs to whatever has the focus: a
+/// text field takes it as typing, a focused button as a click. Escape
+/// closes the window from anywhere else.
+fn dialog_key(escape: bool, enter: bool, plain: bool, focused: bool, dropdown: bool) -> Option<DialogKey> {
+    if dropdown {
+        None
+    } else if escape {
+        Some(DialogKey::Close)
+    } else if enter && plain && !focused {
+        Some(DialogKey::Default)
+    } else {
+        None
+    }
+}
+
+/// The order a dialog's `count` buttons stand in from left to right, as
+/// indices into a list that names the default button first (OK, Cancel,
+/// Apply). Windows and Linux keep that order; macOS puts the default
+/// button last, at the right end (Apply, Cancel, OK).
+fn button_order(count: usize, default_last: bool) -> Vec<usize> {
+    if default_last {
+        (0..count).rev().collect()
+    } else {
+        (0..count).collect()
+    }
+}
+
+/// A dialog's buttons at the right end of the row, in this system's order.
+/// `buttons` names them default first, each with whether it can be pressed
+/// now; the default one is outlined in the accent colour. Returns the index
+/// of the one clicked.
+pub fn dialog_buttons(ui: &mut Ui, look: &Look, buttons: &[(String, bool)]) -> Option<usize> {
+    let mut clicked = None;
+    let order = button_order(buttons.len(), glossa_platform::shell::SHELL.default_button_last);
+    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+        // Laid out from the right, so the last of the row comes first.
+        for &i in order.iter().rev() {
+            let (text, enabled) = &buttons[i];
+            let mut button = egui::Button::new(text.as_str()).min_size(vec2(100.0, 28.0));
+            if i == 0 && *enabled {
+                button = button.stroke(Stroke::new(1.5, look.accent()));
+            }
+            if ui.add_enabled(*enabled, button).clicked() {
+                clicked = Some(i);
+            }
+        }
+    });
+    clicked
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -416,6 +512,28 @@ mod tests {
         assert_eq!(resize_direction(s, pos2(3.0, 292.0)), Some(R::SouthWest));
         // Inside the corner square but away from both sides: not an edge.
         assert_eq!(resize_direction(s, pos2(10.0, 10.0)), None);
+    }
+
+    #[test]
+    fn escape_closes_and_enter_presses_the_default_button_only_when_nothing_else_wants_it() {
+        // Escape closes from anywhere, a focused text field included.
+        assert_eq!(dialog_key(true, false, true, false, false), Some(DialogKey::Close));
+        assert_eq!(dialog_key(true, false, true, true, false), Some(DialogKey::Close));
+        // Enter is the default button only with nothing focused and no modifier.
+        assert_eq!(dialog_key(false, true, true, false, false), Some(DialogKey::Default));
+        assert_eq!(dialog_key(false, true, true, true, false), None, "typed into a field");
+        assert_eq!(dialog_key(false, true, false, false, false), None, "Ctrl+Enter is not Enter");
+        // An open dropdown takes both.
+        assert_eq!(dialog_key(true, false, true, false, true), None);
+        assert_eq!(dialog_key(false, true, true, false, true), None);
+        assert_eq!(dialog_key(false, false, true, false, false), None);
+    }
+
+    #[test]
+    fn the_default_button_is_first_or_last_by_system() {
+        assert_eq!(button_order(3, false), [0, 1, 2], "OK, Cancel, Apply");
+        assert_eq!(button_order(3, true), [2, 1, 0], "Apply, Cancel, OK");
+        assert!(button_order(0, true).is_empty());
     }
 
     #[test]
