@@ -22,3 +22,22 @@ ready_to_use = true
 
 [permissions]
 network = ["oneshot-free.www.deepl.com"]
+
+# DeepL has no plain "English" or "Portuguese" as a target: each is one of
+# two variants. Which one Glossa's English and Portuguese mean is the user's
+# choice.
+[[options]]
+key = "english_variant"
+type = "select"
+label = "English as a target"
+help = "DeepL translates into American or British English, not into English as such."
+default = "en-US"
+choices = [{ value = "en-US", label = "American (en-US)" }, { value = "en-GB", label = "British (en-GB)" }]
+
+[[options]]
+key = "portuguese_variant"
+type = "select"
+label = "Portuguese as a target"
+help = "DeepL translates into Brazilian or European Portuguese, not into Portuguese as such."
+default = "pt-BR"
+choices = [{ value = "pt-BR", label = "Brazilian (pt-BR)" }, { value = "pt-PT", label = "European (pt-PT)" }]

@@ -1,0 +1,25 @@
+# Russian text for the settings page. A key missing here falls back to
+# module.toml (English). See docs/modules/README.md#translations.
+#
+# Only module.toml and main.js of a bundled module are compiled into Glossa,
+# so this file reaches a user when the folder is copied into a modules
+# folder; the built-in copy shows the English labels.
+
+[module]
+description = "Перевод DeepL без ключа и учётной записи, через бесплатный сервис мобильного приложения DeepL. С ограничением: после многих запросов подряд делает паузу."
+
+[options.english_variant]
+label = "Английский как язык перевода"
+help = "DeepL переводит на американский или британский английский, а не на английский вообще."
+
+[options.english_variant.choices]
+"en-US" = "Американский (en-US)"
+"en-GB" = "Британский (en-GB)"
+
+[options.portuguese_variant]
+label = "Португальский как язык перевода"
+help = "DeepL переводит на бразильский или европейский португальский, а не на португальский вообще."
+
+[options.portuguese_variant.choices]
+"pt-BR" = "Бразильский (pt-BR)"
+"pt-PT" = "Европейский (pt-PT)"
