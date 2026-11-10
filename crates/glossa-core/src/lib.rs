@@ -61,6 +61,17 @@ pub fn long_version() -> String {
     }
 }
 
+/// The version as shown to the user (the about box): the commit without
+/// the `-dirty` mark. That mark says the build had uncommitted changes,
+/// which matters in a log or a bug report ([`long_version`]) and reads as
+/// a fault to everyone else.
+pub fn display_version() -> String {
+    match COMMIT.strip_suffix("-dirty").unwrap_or(COMMIT) {
+        "" => VERSION.to_owned(),
+        commit => format!("{VERSION} ({commit})"),
+    }
+}
+
 /// Seconds since the Unix epoch, for timestamps in history and logs.
 pub fn now_unix() -> i64 {
     std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs() as i64).unwrap_or(0)
