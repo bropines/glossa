@@ -53,6 +53,14 @@ the notes of its GitHub release.
   instead of ending silently. `tiny_http` and its three dependencies are
   gone.
 
+- On a Wayland desktop with neither the PRIMARY selection nor the
+  RemoteDesktop portal, the selection hotkeys no longer take the clipboard
+  in place of the selection without being asked: the clipboard may hold
+  anything, and what is captured goes to a translation service. They now
+  say that the selection cannot be read and to use "Translate clipboard";
+  `[advanced] clipboard_as_selection = true` brings the old behaviour
+  back. Not tried on real Linux hardware yet.
+
 ### Added
 
 - `glossa-cli doctor` says whether the Glossa answering on the control

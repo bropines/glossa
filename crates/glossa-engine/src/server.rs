@@ -315,9 +315,7 @@ const POT_ROUTES: &[&str] =
 /// peer is on this machine. (A request with an `Origin` header never gets
 /// this far.)
 fn pot_route_open(engine: &Engine, req: &Request, path: &str) -> bool {
-    POT_ROUTES.contains(&path)
-        && engine.config().server.pot_routes_without_token
-        && is_loopback_peer(req.peer().ip())
+    POT_ROUTES.contains(&path) && engine.config().server.pot_routes_without_token && is_loopback_peer(req.peer().ip())
 }
 
 /// Routes that change the program itself rather than use it: approving
@@ -1419,7 +1417,9 @@ mod tests {
         let announce = |path: &str, len: u64| {
             request(
                 server.addr,
-                &format!("POST {path} HTTP/1.1\r\nHost: 127.0.0.1\r\nContent-Length: {len}\r\nConnection: close\r\n\r\n"),
+                &format!(
+                    "POST {path} HTTP/1.1\r\nHost: 127.0.0.1\r\nContent-Length: {len}\r\nConnection: close\r\n\r\n"
+                ),
             )
         };
         // Announced only: the refusal comes from the length, at once.

@@ -316,7 +316,8 @@ fn read_head(stream: TcpStream, peer: SocketAddr) -> Result<Request, (TcpStream,
         return Err((stream, fail(400, "malformed request line")));
     }
     // Method names are case-sensitive; only the ones a route could take.
-    let Some(method) = Some(method).filter(|m| m.bytes().all(|b| b.is_ascii_uppercase())).and_then(Method::parse) else {
+    let Some(method) = Some(method).filter(|m| m.bytes().all(|b| b.is_ascii_uppercase())).and_then(Method::parse)
+    else {
         return Err((stream, fail(501, "unknown method")));
     };
     let mut headers = Vec::with_capacity(lines.len() - 1);
@@ -347,7 +348,15 @@ fn read_head(stream: TcpStream, peer: SocketAddr) -> Result<Request, (TcpStream,
         }
     }
     drop(stream);
-    Ok(Request { method, url: url.to_owned(), headers, peer, declared: declared.unwrap_or(0), stream: reader, consumed: 0 })
+    Ok(Request {
+        method,
+        url: url.to_owned(),
+        headers,
+        peer,
+        declared: declared.unwrap_or(0),
+        stream: reader,
+        consumed: 0,
+    })
 }
 
 /// A place among the connections being served, given back when dropped.
@@ -458,8 +467,14 @@ mod tests {
                             }
                             Reply {
                                 status: 200,
-                                body: format!("{} {} {} {}", req.method().as_str(), req.url(), req.peer().ip(), body.len())
-                                    .into_bytes(),
+                                body: format!(
+                                    "{} {} {} {}",
+                                    req.method().as_str(),
+                                    req.url(),
+                                    req.peer().ip(),
+                                    body.len()
+                                )
+                                .into_bytes(),
                                 content_type: "text/plain",
                                 allow: None,
                                 retry_after: None,
@@ -581,9 +596,8 @@ mod tests {
     #[test]
     fn connections_beyond_the_cap_are_turned_away_and_the_cap_frees_up() {
         let (addr, _stop) = echo(1024, 2);
-        let slow: Vec<_> = (0..2)
-            .map(|_| std::thread::spawn(move || exchange(addr, b"GET /slow HTTP/1.1\r\n\r\n")))
-            .collect();
+        let slow: Vec<_> =
+            (0..2).map(|_| std::thread::spawn(move || exchange(addr, b"GET /slow HTTP/1.1\r\n\r\n"))).collect();
         std::thread::sleep(Duration::from_millis(200));
         let out = exchange(addr, b"GET /third HTTP/1.1\r\n\r\n");
         assert!(out.starts_with("HTTP/1.1 503 "), "{out}");

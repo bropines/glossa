@@ -1134,10 +1134,8 @@ mod tests {
             let _ = s.read(&mut buf);
             let after = if HITS.fetch_add(1, Ordering::SeqCst) < 2 { 1 } else { 3600 };
             let _ = s.write_all(
-                format!(
-                    "HTTP/1.1 503 Busy\r\nRetry-After: {after}\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
-                )
-                .as_bytes(),
+                format!("HTTP/1.1 503 Busy\r\nRetry-After: {after}\r\nContent-Length: 0\r\nConnection: close\r\n\r\n")
+                    .as_bytes(),
             );
         });
         // Cancelled during the second's wait: over at once, nothing more sent.
