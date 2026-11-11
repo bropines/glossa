@@ -58,6 +58,10 @@ impl Engine {
     fn assets_of(&self, id: &str) -> Result<Arc<ModuleAssets>> {
         let registry = self.registry();
         let entry = registry.entry(id).ok_or_else(|| Error::NoSuchModule(id.to_owned()))?;
+        // A module waiting for approval is not read far enough to know.
+        if entry.pending {
+            return Err(Error::Config(format!("module {id} is not approved yet (glossa-cli module approve {id})")));
+        }
         entry.assets.clone().ok_or_else(|| Error::Config(format!("module {id} declares no files to download")))
     }
 

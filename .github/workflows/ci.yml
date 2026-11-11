@@ -169,10 +169,12 @@ jobs:
           # README.md, "Releasing the binary"); its protocol tests run in
           # .github/workflows/local-llm.yml.
           # `assets download` looks the module up among the installed ones,
-          # so link it into a data folder both commands share.
+          # so link it into a data folder both commands share, and approve
+          # it there: a module nobody approved has no files to fetch.
           export GLOSSA_HOME="$RUNNER_TEMP/glossa-home"
           mkdir -p "$GLOSSA_HOME/modules"
           ln -s "$PWD/modules/process/paddle-ocr" "$GLOSSA_HOME/modules/paddle-ocr"
+          target/debug/glossa-cli module approve paddle-ocr --local
           target/debug/glossa-cli assets download paddle-ocr rec-latin.onnx rec-eslav.onnx rec-ch.onnx
           mapfile -t dirs < <(find modules -name module.toml -not -path 'modules/process/local-llm/*' -exec dirname {} \; | sort)
           target/debug/glossa-cli module test --strict --require-runtimes --download "${dirs[@]}"
