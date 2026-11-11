@@ -1232,7 +1232,10 @@ mod tests {
         assert!(matches!(err, Error::Network(ref m) if m.contains("nothing arrived")), "{err:?}");
         assert_eq!((statuses, got.as_slice()), (vec![200], &b"half"[..]), "what did arrive was handed over");
         let took = started.elapsed();
-        assert!(took >= http.download_stall() && took < http.download_stall() + Duration::from_secs(2), "took {took:?}");
+        assert!(
+            took >= http.download_stall() && took < http.download_stall() + Duration::from_secs(2),
+            "took {took:?}"
+        );
     }
 
     #[test]

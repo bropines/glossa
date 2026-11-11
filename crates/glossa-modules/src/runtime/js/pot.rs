@@ -241,7 +241,6 @@ impl Transport for PotTransport {
 impl PotTransport {
     /// The call itself, with the bridge to the host in place.
     fn run(&self, method: &str, params: serde_json::Value) -> Result<serde_json::Value, ModuleError> {
-
         let os = if cfg!(windows) {
             "Windows_NT"
         } else if cfg!(target_os = "macos") {

@@ -592,7 +592,11 @@ impl Provider for Google {
 
     fn speak(&self, host: &Host, req: &SpeakRequest) -> Result<Audio> {
         if !req.lang.is_language() {
-            return Err(Error::SourceLanguageUnsupported { provider: self.info.name.clone(), lang: req.lang, detail: String::new() });
+            return Err(Error::SourceLanguageUnsupported {
+                provider: self.info.name.clone(),
+                lang: req.lang,
+                detail: String::new(),
+            });
         }
         self.domain.remember(host);
         let chunks = split_text(&req.text, TTS_CHUNK);

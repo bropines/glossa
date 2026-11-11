@@ -862,7 +862,11 @@ mod tests {
             transport.call_with("ping", Value::Null, &host, &CallControl { cancel: &cancel, timeout: None })
         });
         assert_eq!(outcome, Err(CallError::Cancelled));
-        assert!(started.elapsed() < Duration::from_millis(300), "it did not wait for the module: {:?}", started.elapsed());
+        assert!(
+            started.elapsed() < Duration::from_millis(300),
+            "it did not wait for the module: {:?}",
+            started.elapsed()
+        );
 
         // The abandoned reply is dropped, not taken for the next call's,
         // and the process was not restarted for it.
@@ -876,7 +880,8 @@ mod tests {
         let host = |_: &str, _: Value| Reply::ok(Value::Null);
         let limit = Duration::from_millis(150);
         let never = crate::provider::CancelToken::new();
-        let outcome = transport.call_with("ping", Value::Null, &host, &CallControl { cancel: &never, timeout: Some(limit) });
+        let outcome =
+            transport.call_with("ping", Value::Null, &host, &CallControl { cancel: &never, timeout: Some(limit) });
         assert_eq!(outcome, Err(CallError::Timeout(limit)));
     }
 }

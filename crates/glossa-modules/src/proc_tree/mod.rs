@@ -198,6 +198,10 @@ mod tests {
             std::thread::sleep(Duration::from_millis(5));
         }
         assert!(tree.has_exited(&mut child) && tree.has_exited(&mut child), "asking twice still works");
-        assert_eq!(kill_now(&mut child, &tree).and_then(|s| s.code()), Some(3), "the status was still there to collect");
+        assert_eq!(
+            kill_now(&mut child, &tree).and_then(|s| s.code()),
+            Some(3),
+            "the status was still there to collect"
+        );
     }
 }

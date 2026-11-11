@@ -43,7 +43,11 @@ pub(crate) fn check_pair(info: &ProviderInfo, from: LangId, to: LangId) -> Resul
         from.is_language() && listed(from)
     };
     if !from_ok {
-        return Err(Error::SourceLanguageUnsupported { provider: info.name.clone(), lang: from, detail: String::new() });
+        return Err(Error::SourceLanguageUnsupported {
+            provider: info.name.clone(),
+            lang: from,
+            detail: String::new(),
+        });
     }
     Ok(())
 }

@@ -67,7 +67,9 @@ impl CallError {
     pub fn into_module_error(self, method: &str) -> ModuleError {
         match self {
             CallError::Module(e) => e,
-            CallError::Timeout(limit) => ModuleError::other(format!("{method} timed out after {} ms", limit.as_millis())),
+            CallError::Timeout(limit) => {
+                ModuleError::other(format!("{method} timed out after {} ms", limit.as_millis()))
+            }
             CallError::Cancelled => ModuleError::other(format!("{method} was cancelled")),
         }
     }
@@ -256,7 +258,7 @@ impl<T: Transport> ProtocolProvider<T> {
                         }
                     }
                     _ => from_module_error(&self.info.id, &self.info.name, e),
-                })
+                });
             }
         };
         serde_json::from_value(value).map_err(|e| Error::bad_response(&self.info.name, format!("{method} reply: {e}")))
