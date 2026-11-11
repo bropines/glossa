@@ -41,7 +41,7 @@ xcap = { workspace = true }
 [target.'cfg(target_os = "linux")'.dependencies]
 arboard = { workspace = true, features = ["wayland-data-control"] }
 enigo = { version = "0.6", default-features = false, features = ["x11rb"] }
-x11rb = { version = "0.13", features = ["randr"] }
+x11rb = { version = "0.14", features = ["randr"] }
 xcap-linux = { package = "xcap", version = "0.9", optional = true }
 
 # The desktop portals (`portal`): global shortcuts and screenshots on
