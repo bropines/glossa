@@ -5,7 +5,10 @@
 #   glossa-cli assets download local-llm hy-mt2-1.8b-q4_k_m.gguf
 #   glossa-cli module test --strict modules/process/local-llm
 #
-# Without them the harness skips the module. The protocol itself is tested
+# Without them the harness skips the module. Until the program is released,
+# though, its `bin` hashes in module.toml are all-zero placeholders and the
+# harness fails the module before any case runs (README.md, "Testing a local
+# build"). The protocol itself is tested
 # without any model by `cargo test` in this folder (tests/protocol.rs, with
 # a stand-in for llama-server). A model's wording can vary between
 # llama.cpp builds and machines, so the expectations are loose.

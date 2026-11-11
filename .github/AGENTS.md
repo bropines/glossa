@@ -99,6 +99,9 @@ the Linux tray icon carry one). An advisory that does not apply goes into
   it, the notes are that version's section of `CHANGELOG.md`
   (`## [<version>]`) with a fixed *Downloads* list from the workflow. Rename
   *Unreleased* to the version before tagging either way.
+- In the commit that bumps the workspace version past 0.1.0-beta.2, put
+  `min_glossa = "0.1.0-beta.3"` back into the `paddle-ocr`, `local-llm`,
+  `example-idna` and `lens-ocr` manifests (each has a comment saying so).
 - The packaging scripts it calls are in `packaging/`
   ([packaging/AGENTS.md](../packaging/AGENTS.md)). File names are listed at
   the top of `release.yml`; they must match `docs/install.md`,
