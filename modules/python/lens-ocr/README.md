@@ -38,8 +38,8 @@ library loaded, and an example of a Python module with dependencies.
    to this module alone: about 24 MB, from wheels only. Nothing is
    installed into your system Python, and there is no `pip` step.
 
-It needs Glossa 0.1.0-beta.3 or newer (the first with Python packages for
-modules).
+It needs a Glossa newer than 0.1.0-beta.2 (the first with Python packages
+for modules comes after it).
 
 ## Testing
 
