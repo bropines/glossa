@@ -2,8 +2,9 @@
 
 An alternative to Glossa's built-in `lens` provider, which talks to the
 chrome-lens-py daemon or CLI: this module imports the library directly into
-its own (warm) Python process. It needs `pip install chrome-lens-py` in the
-interpreter Glossa runs modules with.
+its own (warm) Python process. The package is named in module.toml
+(`requirements`), so Glossa installs it into an environment of this module's
+own; nothing is installed by hand.
 
 The traffic to Google is chrome-lens-py's own; it does not pass through
 Glossa, which is why the manifest asks for no network permissions.
@@ -11,7 +12,6 @@ Glossa, which is why the manifest asks for no network permissions.
 
 import asyncio
 import base64
-import sys
 
 from glossa_module import Module, ModuleError
 
@@ -31,8 +31,9 @@ def _lens_api(proxy):
     except ImportError:
         raise ModuleError(
             "other",
-            "the chrome-lens-py package is not installed for %s; run: %s -m pip install chrome-lens-py"
-            % (sys.executable, sys.executable),
+            "the chrome-lens-py package is missing from this module's Python environment; "
+            "download the module's packages on its settings page, or run: "
+            "glossa-cli python install lens-ocr-python",
         )
     if _loop is None:
         _loop = asyncio.new_event_loop()
@@ -72,8 +73,10 @@ def recognize(req, host):
         name = type(e).__name__
         if "RateLimit" in name:
             raise ModuleError("rate_limited", str(e))
-        if "Connection" in name or "Timeout" in name:
-            raise ModuleError("network", str(e))
+        # httpx names its failures ConnectError, ConnectTimeout, ProxyError,
+        # ReadTimeout…; chrome-lens-py passes them on or wraps their text.
+        if any(word in name or word in str(e) for word in ("Connect", "Timeout", "Proxy", "Network")):
+            raise ModuleError("network", "Google Lens could not be reached: %s" % (str(e) or name))
         raise ModuleError("other", "%s: %s" % (name, e))
 
     text = result.get("ocr_text") or ""

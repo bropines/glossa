@@ -30,3 +30,61 @@ error_contains = "qwzxv"
 url = "https://en.wikipedia.org/"
 status = 404
 body = '{"status":404}'
+
+# -- errors: other statuses, and answers in a shape the module does not know --
+
+[[case]]
+name = "a rate limit is typed"
+op = "dictionary"
+text = "lamp"
+from = "en"
+to = "ru"
+[case.expect]
+error = "rate_limited"
+
+[[case.http]]
+url = "https://en.wikipedia.org/api/rest_v1/page/summary/"
+status = 429
+body = '{}'
+
+[[case]]
+name = "a server error is an http error"
+op = "dictionary"
+text = "lamp"
+from = "en"
+to = "ru"
+[case.expect]
+error = "module"
+error_contains = "Wikipedia answered 503"
+
+[[case.http]]
+url = "https://en.wikipedia.org/api/rest_v1/page/summary/"
+status = 503
+body = '<html><body>Bad gateway</body></html>'
+
+[[case]]
+name = "a page instead of JSON is a bad response"
+op = "dictionary"
+text = "lamp"
+from = "en"
+to = "ru"
+[case.expect]
+error = "bad_response"
+
+[[case.http]]
+url = "https://en.wikipedia.org/api/rest_v1/page/summary/"
+body = '<html><body>Bad gateway</body></html>'
+
+[[case]]
+name = "a summary in another shape is a bad response"
+op = "dictionary"
+text = "lamp"
+from = "en"
+to = "ru"
+[case.expect]
+error = "bad_response"
+error_contains = "changed its answer"
+
+[[case.http]]
+url = "https://en.wikipedia.org/api/rest_v1/page/summary/"
+body = '"moved"'

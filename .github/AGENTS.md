@@ -155,6 +155,24 @@ own releases; this workflow does not touch them.
 - The toolchain is pinned to the module's `rust-version`.
 - The main release workflow (tags `v*`) does not build this program.
 
+## modules-live.yml
+
+Weekly (Monday 05:17 UTC) and by hand: builds `glossa-cli` and runs the
+live-only cases of the bundled modules and the JavaScript examples
+(`glossa-cli module test --live --case "live:" modules/bundled modules/js`,
+see [testing.md](../docs/modules/testing.md#live-health-checks)) against
+the real services. A module that fails is tried once more after a pause.
+
+- It keeps **one** open issue labelled `modules-live`: created on the first
+  failing run, its title and body rewritten by later ones, closed with a
+  comment by the first run in which everything answers. It needs
+  `issues: write` and nothing else.
+- A service that refuses GitHub's runners by address or country fails here
+  while working for users. The issue quotes what each module answered; if
+  one is refused for good, take its case out of the run rather than leave
+  the issue open for ever.
+- Scheduled runs are skipped in forks.
+
 ## Templates
 
 `ISSUE_TEMPLATE/` and `PULL_REQUEST_TEMPLATE.md` are user-facing text:

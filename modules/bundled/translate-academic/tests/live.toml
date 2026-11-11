@@ -1,0 +1,15 @@
+# A health check against the real translate.academic.ru. The cases in basic.toml assert
+# recorded answers and so cannot pass against the live service; these ask
+# for something ordinary and check only the shape of what comes back (the
+# harness itself refuses an empty translation or article). Marked `live`:
+# an offline run skips them, and
+#   glossa-cli module test --live --case "live:" modules/bundled/translate-academic
+# runs them. See docs/modules/testing.md#live-health-checks.
+
+[[case]]
+name = "live: finds entries for a word"
+op = "dictionary"
+live = true
+text = "house"
+from = "en"
+to = "ru"

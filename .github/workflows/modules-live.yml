@@ -1,0 +1,140 @@
+# A weekly health check of the keyless modules against their real services.
+#
+# The fixtures CI runs are recorded answers, so they keep passing after a
+# service changes its endpoint or its page. Each network module therefore
+# has live-only cases (named "live: …", `live = true`, in tests/live.toml)
+# that ask for something ordinary and check only the shape of the answer.
+# This workflow runs them and keeps ONE open issue, labelled `modules-live`,
+# naming the modules that failed: opened on the first failure, rewritten on
+# later ones, closed when everything answers again. No issue per run.
+#
+# A service that refuses GitHub's runners (by address or by country) shows
+# up here as a failure although it works for users; the issue says what each
+# module answered, which tells the two apart.
+name: modules-live
+
+on:
+  schedule:
+    # Mondays, 05:17 UTC: off the hour, when scheduled runs start late.
+    - cron: "17 5 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  issues: write
+
+concurrency:
+  group: modules-live
+  cancel-in-progress: false
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  live:
+    name: live smoke cases
+    # Scheduled runs belong to the main repository, not to every fork.
+    if: github.event_name == 'workflow_dispatch' || github.repository == 'bropines/glossa'
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends libgtk-3-dev libasound2-dev
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Build glossa-cli
+        run: cargo build --locked -p glossa-cli
+
+      # Only the bundled modules and the JavaScript examples: everything
+      # there is keyless. A module without a "live:" case runs nothing and
+      # passes. A module that fails is tried once more after a pause, so a
+      # single dropped connection opens no issue.
+      - name: Run the live cases
+        id: run
+        env:
+          GLOSSA_HOME: ${{ runner.temp }}/glossa-home
+        run: |
+          cli=target/debug/glossa-cli
+          set +e
+          "$cli" --json module test --live --case "live:" modules/bundled modules/js > first.json
+          set -e
+          jq -e '.modules' first.json > /dev/null
+          jq -r '.modules[] | select(.status == "fail") | .dir' first.json > retry.txt
+          cp first.json report.json
+          if [ -s retry.txt ]; then
+            echo "Failed on the first try:"; cat retry.txt
+            sleep 90
+            set +e
+            xargs "$cli" --json module test --live --case "live:" < retry.txt > second.json
+            set -e
+            jq -e '.modules' second.json > /dev/null
+            cp second.json report.json
+          fi
+          "$cli" --version
+          jq -r '.modules[] | select(.cases | length > 0) | "\(.status)\t\(.id)"' first.json
+          failed=$(jq -r '[.modules[] | select(.status == "fail") | .id] | join(", ")' report.json)
+          echo "failed=$failed" >> "$GITHUB_OUTPUT"
+          {
+            echo "## Live module checks"
+            echo
+            if [ -n "$failed" ]; then echo "Failing: $failed"; else echo "Every module answered."; fi
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Open, update or close the tracking issue
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          FAILED: ${{ steps.run.outputs.failed }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          gh label create modules-live --color D93F0B \
+            --description "A bundled module failed its weekly live check" --force
+          issue=$(gh issue list --state open --label modules-live --limit 1 --json number --jq '.[0].number // empty')
+
+          if [ -z "$FAILED" ]; then
+            if [ -n "$issue" ]; then
+              gh issue close "$issue" --comment "Every module answered in [this run]($RUN_URL). Closing."
+            fi
+            exit 0
+          fi
+
+          {
+            echo "The weekly live check (\`.github/workflows/modules-live.yml\`) asked each keyless module's real service for something ordinary. These did not give a usable answer, twice in a row:"
+            echo
+            jq -r '
+              .modules[] | select(.status == "fail")
+              | "### `\(.id)`\n",
+                (.findings[]? | select(.severity != "note") | "- \(.severity): \(.message)"),
+                (.cases[] | select(.status == "fail")
+                 | "- **\(.name)** (`\(.requests // [] | join("`, `"))`)",
+                   (.problems[]? | "  - " + (gsub("[\r\n]+"; " ") | .[0:600]))),
+                ""
+            ' report.json
+            echo "Last run: $RUN_URL ($(date -u +%Y-%m-%d))."
+            echo
+            echo "A failure means the service changed, is down, or refuses GitHub's runners. To look at one from your machine:"
+            echo
+            echo '```'
+            echo 'glossa-cli -v module test --live --case "live:" modules/bundled/<id>'
+            echo '```'
+            echo
+            echo "This issue is rewritten by every failing run and closed by the first run in which everything answers."
+          } > body.md
+
+          title="Live module check failing: $FAILED"
+          if [ -n "$issue" ]; then
+            gh issue edit "$issue" --title "$title" --body-file body.md
+          else
+            gh issue create --title "$title" --label modules-live --body-file body.md
+          fi
+
+      - name: Fail the run when a module failed
+        if: steps.run.outputs.failed != ''
+        env:
+          FAILED: ${{ steps.run.outputs.failed }}
+        run: |
+          echo "::error::Live module checks failed: $FAILED"
+          exit 1

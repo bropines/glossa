@@ -1,0 +1,15 @@
+# A health check against the real Wikipedia. The cases in basic.toml assert
+# recorded answers and so cannot pass against the live service; these ask
+# for something ordinary and check only the shape of what comes back (the
+# harness itself refuses an empty translation or article). Marked `live`:
+# an offline run skips them, and
+#   glossa-cli module test --live --case "live:" modules/bundled/wikipedia
+# runs them. See docs/modules/testing.md#live-health-checks.
+
+[[case]]
+name = "live: reads an article's opening"
+op = "dictionary"
+live = true
+text = "Berlin"
+from = "en"
+to = "ru"

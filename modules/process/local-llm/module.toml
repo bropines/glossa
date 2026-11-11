@@ -27,6 +27,9 @@ description = "Offline translation with a small language model (Hy-MT2 or Qwen3)
 homepage = "https://github.com/bropines/glossa/tree/main/modules/process/local-llm"
 author = "Glossa contributors"
 license = "MIT OR Apache-2.0 (llama.cpp MIT, models Apache-2.0)"
+# [[assets]] came after 0.1.0-beta.2. Set `min_glossa` to the next version in
+# the commit that bumps the workspace version: a value above the build's own
+# makes that build, the tests included, refuse the module.
 # The settings page uses `file` and [ui.settings].
 min_glossa = "0.1.0-beta.2"
 

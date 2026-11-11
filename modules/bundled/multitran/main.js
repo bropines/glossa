@@ -16,6 +16,10 @@
 // reference ("⇒ full house") and goes into the related words. A word
 // Multitran does not know comes back as a page with no such rows.
 
+// Well under Glossa's own budget for a call (30 s), so a stalled service
+// fails with its name on the error instead of the call being abandoned.
+var TIMEOUT = 15000;
+
 function text(html) {
   return html
     .replace(/<[^>]*>/g, "")
@@ -38,10 +42,10 @@ function dictionary(req, host) {
   var l2 = req.to === "auto" || req.to === l1 ? (l1 === "2" ? "1" : "2") : req.to;
   var url = "https://www.multitran.com/m.exe?l1=" + l1 + "&l2=" + l2 + "&s=" + encodeURIComponent(word) +
     "&SHL=" + (req.options.labels === "ru" ? "2" : "1");
-  var r = host.fetch(url);
+  var r = host.fetch(url, { timeout: TIMEOUT });
   if (r.status === 429) throw new ModuleError("rate_limited", "Multitran asks to slow down");
   if (!r.ok) throw new ModuleError("http", "Multitran answered " + r.status);
-  var page = r.body;
+  var page = String(r.body || "");
 
   var limit = Number(req.options.max_rows) || 30;
   var article = { headword: word, pronunciations: [], explanations: [], examples: [], associations: [], link: url };
@@ -84,3 +88,18 @@ function dictionary(req, host) {
   if (!article.explanations.length) throw new ModuleError("not_found", word);
   return article;
 }
+
+// A surprise in the shape of an answer (a field gone, a list that became an
+// object) means the service changed, not that the user did something wrong:
+// say so instead of letting a TypeError reach them.
+function guarded(service, method) {
+  return function (req, host) {
+    try {
+      return method(req, host);
+    } catch (e) {
+      if (e instanceof ModuleError) throw e;
+      throw new ModuleError("bad_response", service + " changed its answer: " + (e && e.message ? e.message : String(e)));
+    }
+  };
+}
+dictionary = guarded("Multitran", dictionary);

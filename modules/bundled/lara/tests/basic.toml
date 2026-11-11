@@ -29,3 +29,65 @@ method = "POST"
 url = "https://webapi.laratranslate.com/translate"
 status = 400
 body = '{"status":400,"error":{"type":"UnsupportedLanguageError","message":"Unsupported language: tt"}}'
+
+# -- errors: other statuses, and answers in a shape the module does not know --
+
+[[case]]
+name = "a rate limit is typed"
+op = "translate"
+text = "Hello"
+from = "en"
+to = "ru"
+[case.expect]
+error = "rate_limited"
+
+[[case.http]]
+method = "POST"
+url = "https://webapi.laratranslate.com/translate"
+status = 429
+body = '{"status":429,"error":{"type":"TooManyRequests","message":"Too many requests"}}'
+
+[[case]]
+name = "an error page is an http error"
+op = "translate"
+text = "Hello"
+from = "en"
+to = "ru"
+[case.expect]
+error = "module"
+error_contains = "Lara answered 502"
+
+[[case.http]]
+method = "POST"
+url = "https://webapi.laratranslate.com/translate"
+status = 502
+body = '<html><body>Bad gateway</body></html>'
+
+[[case]]
+name = "an answer without a translation is a bad response"
+op = "translate"
+text = "Hello"
+from = "en"
+to = "ru"
+[case.expect]
+error = "bad_response"
+error_contains = "changed its answer"
+
+[[case.http]]
+method = "POST"
+url = "https://webapi.laratranslate.com/translate"
+body = '{"status":200,"content":{"source_language":"en"}}'
+
+[[case]]
+name = "an answer that is not an object is a bad response"
+op = "translate"
+text = "Hello"
+from = "en"
+to = "ru"
+[case.expect]
+error = "bad_response"
+
+[[case.http]]
+method = "POST"
+url = "https://webapi.laratranslate.com/translate"
+body = 'null'

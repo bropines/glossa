@@ -11,6 +11,8 @@ entry = "main.js"
 description = "English definitions, phonetics and examples from dictionaryapi.dev."
 homepage = "https://dictionaryapi.dev"
 license = "MIT"
+# One word at a time; the longest English words are well under this.
+max_input_chars = 100
 # No key needed: Glossa switches it on when it first appears.
 ready_to_use = true
 

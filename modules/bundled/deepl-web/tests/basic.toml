@@ -29,3 +29,97 @@ method = "POST"
 url = "https://oneshot-free.www.deepl.com/v1/translate"
 status = 429
 body = '{ "code": 429, "message": "Too many requests. Please slow down and try again later." }'
+
+# -- errors: other statuses, and answers in a shape the module does not know --
+
+[[case]]
+name = "translates with the British and European variants chosen"
+op = "translate"
+text = "Bom dia"
+from = "pt"
+to = "en"
+options = { english_variant = "en-GB", portuguese_variant = "pt-PT" }
+[case.expect]
+text = "Good morning"
+
+[[case.http]]
+method = "POST"
+url = "https://oneshot-free.www.deepl.com/v1/translate"
+body = '{"translations":[{"detected_source_language":"PT","text":"Good morning"}]}'
+
+[[case]]
+name = "a region DeepL does not serve is said in words"
+op = "translate"
+text = "Hello"
+from = "en"
+to = "ru"
+[case.expect]
+error = "module"
+error_contains = "does not offer its free service in this region"
+
+[[case.http]]
+method = "POST"
+url = "https://oneshot-free.www.deepl.com/v1/translate"
+status = 451
+body = 'Unavailable For Legal Reasons'
+
+[[case]]
+name = "a refusal names what may be out of date"
+op = "translate"
+text = "Hello"
+from = "en"
+to = "ru"
+[case.expect]
+error = "module"
+error_contains = "HTTP 403"
+
+[[case.http]]
+method = "POST"
+url = "https://oneshot-free.www.deepl.com/v1/translate"
+status = 403
+body = '{"message":"Forbidden"}'
+
+[[case]]
+name = "another status is an http error"
+op = "translate"
+text = "Hello"
+from = "en"
+to = "ru"
+[case.expect]
+error = "module"
+error_contains = "DeepL answered 502"
+
+[[case.http]]
+method = "POST"
+url = "https://oneshot-free.www.deepl.com/v1/translate"
+status = 502
+body = '<html><body>Bad gateway</body></html>'
+
+[[case]]
+name = "an answer without translations is a bad response"
+op = "translate"
+text = "Hello"
+from = "en"
+to = "ru"
+[case.expect]
+error = "bad_response"
+error_contains = "changed its answer"
+
+[[case.http]]
+method = "POST"
+url = "https://oneshot-free.www.deepl.com/v1/translate"
+body = '{"translations":{"text":"Привет"}}'
+
+[[case]]
+name = "an empty translation is a bad response"
+op = "translate"
+text = "Hello"
+from = "en"
+to = "ru"
+[case.expect]
+error = "bad_response"
+
+[[case.http]]
+method = "POST"
+url = "https://oneshot-free.www.deepl.com/v1/translate"
+body = '{"translations":[{"detected_source_language":"EN","text":""}]}'

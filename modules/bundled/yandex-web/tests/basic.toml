@@ -95,3 +95,93 @@ error_contains = "qwzxv"
 [[case.http]]
 url = "https://translate.yandex.net/dicservice.json/lookup"
 body = '{"def":[]}'
+
+# -- errors: other statuses, and answers in a shape the module does not know --
+
+[[case]]
+name = "a rate limit is typed"
+op = "translate"
+text = "here is a long sentence"
+from = "en"
+to = "ru"
+[case.expect]
+error = "rate_limited"
+
+[[case.http]]
+method = "POST"
+url = "https://translate.yandex.net/api/v1/tr.json/translate"
+status = 429
+body = '{"code":429,"message":"Too many requests"}'
+
+[[case]]
+name = "text in another shape is a bad response"
+op = "translate"
+text = "here is a long sentence"
+from = "en"
+to = "ru"
+[case.expect]
+error = "bad_response"
+error_contains = "changed its answer"
+
+[[case.http]]
+method = "POST"
+url = "https://translate.yandex.net/api/v1/tr.json/translate"
+body = '{"code":200,"lang":"en-ru","text":"здесь"}'
+
+[[case]]
+name = "an answer that is not an object is a bad response"
+op = "translate"
+text = "here is a long sentence"
+from = "en"
+to = "ru"
+[case.expect]
+error = "bad_response"
+
+[[case.http]]
+method = "POST"
+url = "https://translate.yandex.net/api/v1/tr.json/translate"
+body = 'null'
+
+[[case]]
+name = "an empty translation is a bad response"
+op = "translate"
+text = "here is a long sentence"
+from = "en"
+to = "ru"
+[case.expect]
+error = "bad_response"
+error_contains = "empty translation"
+
+[[case.http]]
+method = "POST"
+url = "https://translate.yandex.net/api/v1/tr.json/translate"
+body = '{"code":200,"lang":"en-ru","text":[""]}'
+
+[[case]]
+name = "a dictionary answer in another shape is a bad response"
+op = "dictionary"
+text = "Haus"
+from = "de"
+to = "ru"
+[case.expect]
+error = "bad_response"
+error_contains = "changed its dictionary answer"
+
+[[case.http]]
+url = "https://translate.yandex.net/dicservice.json/lookup"
+body = '{"def":{"text":"Haus"}}'
+
+[[case]]
+name = "a dictionary server error is an http error"
+op = "dictionary"
+text = "Haus"
+from = "de"
+to = "ru"
+[case.expect]
+error = "module"
+error_contains = "Yandex dictionary answered 502"
+
+[[case.http]]
+url = "https://translate.yandex.net/dicservice.json/lookup"
+status = 502
+body = '<html><body>Bad gateway</body></html>'

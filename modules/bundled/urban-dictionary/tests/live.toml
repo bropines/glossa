@@ -1,0 +1,15 @@
+# A health check against the real Urban Dictionary. The cases in basic.toml assert
+# recorded answers and so cannot pass against the live service; these ask
+# for something ordinary and check only the shape of what comes back (the
+# harness itself refuses an empty translation or article). Marked `live`:
+# an offline run skips them, and
+#   glossa-cli module test --live --case "live:" modules/bundled/urban-dictionary
+# runs them. See docs/modules/testing.md#live-health-checks.
+
+[[case]]
+name = "live: looks up a word"
+op = "dictionary"
+live = true
+text = "yeet"
+from = "en"
+to = "ru"

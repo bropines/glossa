@@ -18,10 +18,18 @@ function dictionary(req, host) {
   var cacheKey = "entry:" + word;
   var entries = host.cache.get(cacheKey);
   if (!entries) {
-    var r = host.fetch("https://api.dictionaryapi.dev/api/v2/entries/en/" + encodeURIComponent(word));
+    // A timeout under Glossa's own 30 s for a call, so a stall is reported
+    // by the service's name.
+    var r = host.fetch("https://api.dictionaryapi.dev/api/v2/entries/en/" + encodeURIComponent(word), { timeout: 15000 });
     if (r.status === 404) throw new ModuleError("not_found", word);
+    if (r.status === 429) throw new ModuleError("rate_limited", "dictionaryapi.dev asks to slow down");
     if (!r.ok) throw new ModuleError("http", "dictionaryapi.dev answered " + r.status);
     entries = r.json();
+    // Check the shape before using it: a changed answer should say so, not
+    // fail with a TypeError further down.
+    if (!Array.isArray(entries) || !entries.length || !entries[0] || typeof entries[0] !== "object") {
+      throw new ModuleError("bad_response", "dictionaryapi.dev changed its answer: not a list of entries");
+    }
     host.cache.set(cacheKey, entries, 24 * 3600);
   }
 
@@ -30,6 +38,7 @@ function dictionary(req, host) {
   var seenSymbols = {};
 
   entries.forEach(function (entry) {
+    if (!entry) return;
     (entry.phonetics || []).forEach(function (p) {
       if (!p.text || seenSymbols[p.text]) return;
       seenSymbols[p.text] = true;

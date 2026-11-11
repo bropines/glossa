@@ -7,12 +7,19 @@ version = "1.0.0"
 api = 1
 runtime = "python"
 entry = "main.py"
-description = "Google Lens OCR through the chrome-lens-py package installed in the Python that Glossa runs, without its daemon or CLI."
+description = "Google Lens OCR through the chrome-lens-py package, which Glossa installs for this module. No key; pictures are sent to Google."
 homepage = "https://github.com/bropines/chrome-lens-py"
 license = "MIT"
 # Each warm process holds Pillow, protobuf and httpx in memory; let it go
 # sooner than the default when unused.
 idle_timeout_secs = 180
+# Installed by Glossa into this module's own environment (about 24 MB), from
+# wheels only. Pinned: the environment is rebuilt only when this line
+# changes. 4.0.0 needs Python 3.10 or newer, which the managed Python is.
+requirements = ["chrome-lens-py==4.0.0"]
+# `requirements` came after 0.1.0-beta.2. Set `min_glossa` to the next version in
+# the commit that bumps the workspace version: a value above the build's own
+# makes that build, the tests included, refuse the module.
 
 # Empty on purpose: this module talks to Google itself through chrome-lens-py,
 # not through Glossa's HTTP. Permissions only govern host-proxied requests;

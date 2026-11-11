@@ -47,3 +47,109 @@ error_contains = "qwzxv"
 [[case.http]]
 url = "https://dict.youdao.com/"
 body = '{"input":"qwzxv","meta":{}}'
+
+# -- errors: other statuses, and answers in a shape the module does not know --
+
+# One side of Youdao is always Chinese. Asked for anything else, the module
+# refuses before (or, for an unknown source, right after) asking the service.
+
+[[case]]
+name = "an English word into Russian is an unsupported target"
+op = "dictionary"
+text = "lamp"
+from = "en"
+to = "ru"
+[case.expect]
+error = "target_language"
+
+[[case]]
+name = "a Chinese word into Russian is an unsupported target"
+op = "dictionary"
+text = "灯"
+from = "zh-Hans"
+to = "ru"
+[case.expect]
+error = "target_language"
+
+[[case]]
+name = "an unknown source is judged by the dictionary that answered"
+op = "dictionary"
+text = "lamp"
+from = "auto"
+to = "ru"
+[case.expect]
+error = "target_language"
+
+[[case.http]]
+url = "https://dict.youdao.com/jsonapi"
+body = '{"ec":{"word":[{"trs":[{"tr":[{"l":{"i":["n. 灯；台灯"]}}]}],"return-phrase":{"l":{"i":"lamp"}}}]}}'
+
+[[case]]
+name = "an unknown source into Chinese is answered"
+op = "dictionary"
+text = "lamp"
+from = "auto"
+to = "zh-Hant"
+[case.expect]
+headword = "lamp"
+contains = ["台灯"]
+
+[[case.http]]
+url = "https://dict.youdao.com/jsonapi"
+body = '{"ec":{"word":[{"trs":[{"tr":[{"l":{"i":["n. 灯；台灯"]}}]}],"return-phrase":{"l":{"i":"lamp"}}}]}}'
+
+[[case]]
+name = "a rate limit is typed"
+op = "dictionary"
+text = "lamp"
+from = "en"
+to = "zh-Hans"
+[case.expect]
+error = "rate_limited"
+
+[[case.http]]
+url = "https://dict.youdao.com/jsonapi"
+status = 429
+body = ''
+
+[[case]]
+name = "a server error is an http error"
+op = "dictionary"
+text = "lamp"
+from = "en"
+to = "zh-Hans"
+[case.expect]
+error = "module"
+error_contains = "Youdao answered 502"
+
+[[case.http]]
+url = "https://dict.youdao.com/jsonapi"
+status = 502
+body = '<html><body>Bad gateway</body></html>'
+
+[[case]]
+name = "a page instead of JSON is a bad response"
+op = "dictionary"
+text = "lamp"
+from = "en"
+to = "zh-Hans"
+[case.expect]
+error = "bad_response"
+
+[[case.http]]
+url = "https://dict.youdao.com/jsonapi"
+body = '<html><body>Bad gateway</body></html>'
+
+[[case]]
+name = "an entry in another shape is a bad response, not a crash"
+op = "dictionary"
+text = "lamp"
+from = "en"
+to = "zh-Hans"
+[case.expect]
+error = "bad_response"
+error_contains = "changed its answer"
+
+[[case.http]]
+url = "https://dict.youdao.com/jsonapi"
+body = '{"ec":{"word":[{"trs":"n. 灯"}]}}'

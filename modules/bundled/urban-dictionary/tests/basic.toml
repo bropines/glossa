@@ -31,3 +31,62 @@ error_contains = "qwzxv"
 [[case.http]]
 url = "https://api.urbandictionary.com/"
 body = '{"list":[]}'
+
+# -- errors: other statuses, and answers in a shape the module does not know --
+
+[[case]]
+name = "a rate limit is typed"
+op = "dictionary"
+text = "yeet"
+from = "en"
+to = "ru"
+[case.expect]
+error = "rate_limited"
+
+[[case.http]]
+url = "https://api.urbandictionary.com/v0/define"
+status = 429
+body = '{}'
+
+[[case]]
+name = "a server error is an http error"
+op = "dictionary"
+text = "yeet"
+from = "en"
+to = "ru"
+[case.expect]
+error = "module"
+error_contains = "Urban Dictionary answered 500"
+
+[[case.http]]
+url = "https://api.urbandictionary.com/v0/define"
+status = 500
+body = '<html><body>Bad gateway</body></html>'
+
+[[case]]
+name = "an answer without a list is a bad response"
+op = "dictionary"
+text = "yeet"
+from = "en"
+to = "ru"
+[case.expect]
+error = "bad_response"
+error_contains = "changed its answer"
+
+[[case.http]]
+url = "https://api.urbandictionary.com/v0/define"
+body = '{"list":{"word":"yeet"}}'
+
+[[case]]
+name = "a list of something else is a bad response, not a crash"
+op = "dictionary"
+text = "yeet"
+from = "en"
+to = "ru"
+[case.expect]
+error = "bad_response"
+error_contains = "changed its answer"
+
+[[case.http]]
+url = "https://api.urbandictionary.com/v0/define"
+body = '{"list":[null,null]}'

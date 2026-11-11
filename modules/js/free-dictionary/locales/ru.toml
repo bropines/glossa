@@ -1,0 +1,8 @@
+# Russian text for the settings page. A key missing here falls back to
+# module.toml (English). See docs/modules/README.md#translations.
+
+[module]
+description = "Английские определения, транскрипция и примеры с dictionaryapi.dev."
+
+[options.max_definitions]
+label = "Определений на часть речи"

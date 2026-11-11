@@ -52,3 +52,44 @@ method = "POST"
 url = "https://api.ocr.space/parse/image"
 status = 200
 body = "You may only perform this action upto maximum number of 500 times within 86400 seconds"
+
+[[case]]
+name = "an outage is an http error"
+op = "ocr"
+image = { width = 200, height = 60 }
+expect = { error = "module", error_contains = "HTTP 502" }
+[[case.http]]
+method = "POST"
+url = "https://api.ocr.space/parse/image"
+status = 502
+body = "Bad Gateway"
+
+[[case]]
+name = "a page instead of JSON is a bad response"
+op = "ocr"
+image = { width = 200, height = 60 }
+expect = { error = "bad_response" }
+[[case.http]]
+method = "POST"
+url = "https://api.ocr.space/parse/image"
+body = "<html>Maintenance</html>"
+
+[[case]]
+name = "a picture the service cannot process is a bad response"
+op = "ocr"
+image = { width = 200, height = 60 }
+expect = { error = "bad_response", error_contains = "Unable to recognize the file type" }
+[[case.http]]
+method = "POST"
+url = "https://api.ocr.space/parse/image"
+body = '{"OCRExitCode": 3, "IsErroredOnProcessing": true, "ErrorMessage": ["Unable to recognize the file type"]}'
+
+[[case]]
+name = "results in another shape are a bad response"
+op = "ocr"
+image = { width = 200, height = 60 }
+expect = { error = "bad_response", error_contains = "changed its answer" }
+[[case.http]]
+method = "POST"
+url = "https://api.ocr.space/parse/image"
+body = '{"ParsedResults": ["text"], "IsErroredOnProcessing": false}'

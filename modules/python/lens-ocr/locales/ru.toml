@@ -1,0 +1,10 @@
+# Russian text for the settings page. A key missing here falls back to
+# module.toml (English). See docs/modules/README.md#translations.
+
+[module]
+name = "Google Lens (модуль на Python)"
+description = "Распознавание текста через Google Lens пакетом chrome-lens-py, который Glossa устанавливает для этого модуля. Ключ не нужен; картинки отправляются в Google."
+
+[options.proxy]
+label = "Прокси для Lens"
+help = "Передаётся в chrome-lens-py. Настройка прокси самой Glossa на трафик этого модуля не действует."

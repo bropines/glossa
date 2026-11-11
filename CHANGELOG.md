@@ -252,6 +252,17 @@ the notes of its GitHub release.
   permissions), `URL`, `URLSearchParams`, `Headers`, `AbortController` and
   `queueMicrotask`; pot-app plugins get the same except `fetch`, which they
   already had in pot's own form.
+- DeepL (web): Options choose the English (American or British) and
+  Portuguese (Brazilian or European) variant; it used to be en-US and
+  pt-BR with no choice. A refusal by region (451), a block (403) and a
+  rate limit (429) are now said in words.
+- Every bundled module and the keyed examples (Google Vision OCR,
+  OCR.space, Lens OCR) have a README saying how the module gets its
+  answers, what leaves the machine, the limits and, where one is needed,
+  how to get a key. Russian labels for the modules' options.
+- `tests/live.toml` in each bundled module: opt-in smoke cases against the
+  real service (`glossa-cli module test --live --case "live:"`); a weekly
+  CI job runs them and keeps one issue labelled `modules-live`.
 
 ### Changed
 
@@ -414,6 +425,17 @@ the notes of its GitHub release.
   breaks between paragraphs and list items, so the translation ran them
   together. Selections in web content are now read with Cmd+C, which keeps
   them.
+- Wiktionary: a word capitalised only because it began a sentence no
+  longer answers with the surname page ("Lamp": "A surname"); the
+  lower-case page's senses come first.
+- Youdao showed Chinese explanations whatever target was asked. It now
+  declines targets it cannot explain in, so the next dictionary is tried.
+- Bundled modules and the JavaScript and Python examples: every request
+  has a timeout under the call's budget, and a service that changed its
+  answer is reported as "changed its answer" instead of a script error.
+- Lens OCR (Python module): Glossa installs chrome-lens-py into the
+  module's own environment; the `pip install` step, which Homebrew and
+  Debian Pythons refuse, is gone. A failed connection is a network error.
 
 ## [0.1.0-beta.2] - 2026-11-02
 

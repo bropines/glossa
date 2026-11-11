@@ -32,3 +32,34 @@ error_contains = "lammp"
 [[case.http]]
 url = "https://www.oxfordlearnersdictionaries.com/"
 body = '<html><div id="spellcheck">Did you mean: <a>lamb</a></div></html>'
+
+# -- errors: other statuses, and answers in a shape the module does not know --
+
+[[case]]
+name = "a rate limit is typed"
+op = "dictionary"
+text = "lamp"
+from = "en"
+to = "ru"
+[case.expect]
+error = "rate_limited"
+
+[[case.http]]
+url = "https://www.oxfordlearnersdictionaries.com/search/english/"
+status = 429
+body = ''
+
+[[case]]
+name = "a server error is an http error"
+op = "dictionary"
+text = "lamp"
+from = "en"
+to = "ru"
+[case.expect]
+error = "module"
+error_contains = "Oxford answered 503"
+
+[[case.http]]
+url = "https://www.oxfordlearnersdictionaries.com/search/english/"
+status = 503
+body = '<html><body>Bad gateway</body></html>'

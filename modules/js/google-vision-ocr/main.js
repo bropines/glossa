@@ -34,7 +34,8 @@ function recognize(req, host) {
   var r = host.fetch("https://vision.googleapis.com/v1/images:annotate?key=" + encodeURIComponent(key), {
     method: "POST",
     json: { requests: [request] },
-    timeout: 30000
+    // Under Glossa's own 30 s for a call, so a stall is reported by name.
+    timeout: 25000
   });
   if (r.status === 429) throw new ModuleError("rate_limited", errorMessage(r));
   if (r.status === 400 || r.status === 401 || r.status === 403) {
@@ -46,13 +47,17 @@ function recognize(req, host) {
   }
   if (!r.ok) throw new ModuleError("http", "HTTP " + r.status + ": " + errorMessage(r));
 
-  var res = (r.json().responses || [])[0] || {};
+  var answer = r.json();
+  if (!answer || !Array.isArray(answer.responses)) {
+    throw new ModuleError("bad_response", "Vision changed its answer: no responses in it");
+  }
+  var res = answer.responses[0] || {};
   if (res.error) throw new ModuleError("bad_response", res.error.message || "Vision reported an error");
   var doc = res.fullTextAnnotation;
   if (!doc || !doc.text) throw new ModuleError("not_found", "no text in the picture");
   var page = (doc.pages || [])[0] || {};
   return {
-    text: doc.text.replace(/\n+$/, ""),
+    text: String(doc.text).replace(/\n+$/, ""),
     detected_lang: language(page),
     blocks: (page.blocks || []).map(block),
     // The boxes are in the prepared copy's pixels.

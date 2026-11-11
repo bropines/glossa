@@ -27,6 +27,11 @@ without reshaping its data.
 
 ## Your first module
 
+To start a module in a repository of its own, the
+[Glossa module kit](https://github.com/bropines/glossa-module-kit) has a template for every
+runtime, editor types for the JavaScript API and a GitHub Action that runs
+the test harness; the rest of this page is the reference it follows.
+
 A JavaScript module needs nothing installed. Make a folder `hello` in your
 modules folder ([where](#where-modules-live)) with two files.
 
@@ -798,20 +803,23 @@ Some services ship inside Glossa as ordinary JavaScript modules. Their
 sources live in [`modules/bundled/<id>/`](../../modules/bundled) in the
 repository and are compiled into the executable (`include_str!` in
 `crates/glossa-engine/src/bundled/`), so they need no files on disk. Each
-`main.js` opens with a description of the service's protocol. All of them
-work without a key or account and are switched on when they first appear.
+`main.js` opens with a description of the service's protocol, and a
+`README.md` beside it says how the module gets its answers (an official
+API, an endpoint the service does not document, or its HTML pages), what
+it sends and the limits. All of them work without a key or account and are
+switched on when they first appear.
 
 | id | name | does | service |
 |---|---|---|---|
 | `yandex-web` | Yandex | translate, detect, dictionary | translate.yandex.net, the endpoint Yandex's browser clients use |
-| `deepl-web` | DeepL | translate | the free endpoint of DeepL's iOS app (rate-limited after a burst) |
+| `deepl-web` | DeepL | translate | the free endpoint of DeepL's iOS app (rate-limited after a burst, not offered in every country); settings pick American or British English and Brazilian or European Portuguese |
 | `lara` | Lara | translate | laratranslate.com's web API |
 | `modernmt` | ModernMT | translate | the form behind modernmt.com/translate |
 | `multitran` | Multitran | dictionary | multitran.com result pages |
 | `lingvo-live` | ABBYY Lingvo Live | dictionary | Lingvo Live's word-card JSON |
 | `oxford-learners` | Oxford Learner's Dictionary | dictionary (English) | oxfordlearnersdictionaries.com entry pages |
 | `wiktionary` | Wiktionary | dictionary | English Wiktionary's REST definitions |
-| `youdao` | Youdao | dictionary (English, French, Chinese) | dict.youdao.com's JSON |
+| `youdao` | Youdao | dictionary (English and French into Chinese, Chinese into English; other targets are refused) | dict.youdao.com's JSON |
 | `dic-academic` | Academic | dictionary | dic.academic.ru search |
 | `translate-academic` | Academic Translations | dictionary | translate.academic.ru entries, as HTML |
 | `wikipedia` | Wikipedia | dictionary | the Wikimedia REST page summary |

@@ -14,6 +14,9 @@ description = "Turns internationalised domain names into their ASCII (punycode) 
 license = "MIT"
 idle_timeout_secs = 60
 requirements = ["idna==3.10"]
+# `requirements` came after 0.1.0-beta.2. Set `min_glossa` to the next version in
+# the commit that bumps the workspace version: a value above the build's own
+# makes that build, the tests included, refuse the module.
 
 [permissions]
 network = []

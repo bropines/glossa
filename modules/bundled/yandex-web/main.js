@@ -20,6 +20,10 @@
 // One request carries at most about 10 000 characters, so longer input is cut
 // into pieces at line or sentence ends and sent one piece at a time.
 
+// Well under Glossa's own budget for a call (30 s), so a stalled service
+// fails with its name on the error instead of the call being abandoned.
+var TIMEOUT = 15000;
+
 var BASE = "https://translate.yandex.net";
 var SRV = "browser_video_translation";
 var PIECE = 4000;
@@ -41,6 +45,7 @@ function call(r) {
     if (!r.ok) fail(null, r.status);
     throw new ModuleError("bad_response", "Yandex: not JSON: " + String(r.body).substring(0, 120));
   }
+  if (!body || typeof body !== "object") throw new ModuleError("bad_response", "Yandex changed its answer: not an object");
   if (!r.ok || (body.code && body.code !== 200)) fail(body, r.status);
   return body;
 }
@@ -77,14 +82,16 @@ function translate(req, host) {
   pieces(req.text, PIECE).forEach(function (p) {
     var body = call(host.fetch(url, {
       method: "POST",
+      timeout: TIMEOUT,
       headers: { Referer: "https://translate.yandex.com/" },
       form: { text: p.text }
     }));
-    if (!body.text) throw new ModuleError("bad_response", "Yandex: no text in the answer");
+    if (!Array.isArray(body.text)) throw new ModuleError("bad_response", "Yandex changed its answer: no text in it");
     out += body.text.join("") + p.gap;
     if (!detected && body.lang) detected = String(body.lang).split("-")[0];
   });
 
+  if (!out.trim() && req.text.trim()) throw new ModuleError("bad_response", "Yandex answered with an empty translation");
   var result = { text: out, detected_from: detected };
   // A word or two: add Yandex's dictionary entry, as the popup shows under
   // the translation. Its failure never spoils the translation itself.
@@ -109,7 +116,7 @@ function translate(req, host) {
 
 function detect(req, host) {
   var url = BASE + "/api/v1/tr.json/detect?srv=" + SRV + "&text=" + encodeURIComponent(req.text.slice(0, 256));
-  var body = call(host.fetch(url, { headers: { Referer: "https://translate.yandex.com/" } }));
+  var body = call(host.fetch(url, { timeout: TIMEOUT, headers: { Referer: "https://translate.yandex.com/" } }));
   if (!body.lang) throw new ModuleError("bad_response", "Yandex did not name a language");
   return { lang: body.lang, confidence: 1 };
 }
@@ -117,15 +124,19 @@ function detect(req, host) {
 function lookup(host, word, from, to) {
   var url = BASE + "/dicservice.json/lookup?srv=" + SRV + "&lang=" + encodeURIComponent(from + "-" + to) +
     "&text=" + encodeURIComponent(word);
-  var r = host.fetch(url);
+  var r = host.fetch(url, { timeout: TIMEOUT });
   var body;
   try {
     body = JSON.parse(r.body);
   } catch (e) {
     throw new ModuleError(r.ok ? "bad_response" : "http", "Yandex dictionary answered " + r.status);
   }
+  if (!body || typeof body !== "object") throw new ModuleError("bad_response", "Yandex changed its dictionary answer: not an object");
   if (body.code === 501) throw new ModuleError("source_language", body.message || "pair not in the dictionary");
   if (!r.ok) fail(body, r.status);
+  if (body.def !== undefined && !Array.isArray(body.def)) {
+    throw new ModuleError("bad_response", "Yandex changed its dictionary answer: no list of entries in it");
+  }
   return body.def || [];
 }
 
@@ -165,3 +176,20 @@ function dictionary(req, host) {
   });
   return article;
 }
+
+// A surprise in the shape of an answer (a field gone, a list that became an
+// object) means the service changed, not that the user did something wrong:
+// say so instead of letting a TypeError reach them.
+function guarded(service, method) {
+  return function (req, host) {
+    try {
+      return method(req, host);
+    } catch (e) {
+      if (e instanceof ModuleError) throw e;
+      throw new ModuleError("bad_response", service + " changed its answer: " + (e && e.message ? e.message : String(e)));
+    }
+  };
+}
+translate = guarded("Yandex", translate);
+detect = guarded("Yandex", detect);
+dictionary = guarded("Yandex", dictionary);

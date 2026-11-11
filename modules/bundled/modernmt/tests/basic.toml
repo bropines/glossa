@@ -28,3 +28,79 @@ error = "target_language"
 method = "POST"
 url = "https://www.modernmt.com/translate"
 body = '{"status":"error","error":{"":["Language pair not supported: en > eu"]}}'
+
+# -- errors: other statuses, and answers in a shape the module does not know --
+
+[[case]]
+name = "a rate limit is typed"
+op = "translate"
+text = "Hello"
+from = "en"
+to = "ru"
+[case.expect]
+error = "rate_limited"
+
+[[case.http]]
+method = "POST"
+url = "https://www.modernmt.com/translate"
+status = 429
+body = 'Too Many Requests'
+
+[[case]]
+name = "an error page is an http error"
+op = "translate"
+text = "Hello"
+from = "en"
+to = "ru"
+[case.expect]
+error = "module"
+error_contains = "ModernMT answered 500"
+
+[[case.http]]
+method = "POST"
+url = "https://www.modernmt.com/translate"
+status = 500
+body = '<html><body>Bad gateway</body></html>'
+
+[[case]]
+name = "a page instead of the route data is a bad response"
+op = "translate"
+text = "Hello"
+from = "en"
+to = "ru"
+[case.expect]
+error = "bad_response"
+
+[[case.http]]
+method = "POST"
+url = "https://www.modernmt.com/translate"
+body = '<html><body>Bad gateway</body></html>'
+
+[[case]]
+name = "an answer without a translation is a bad response"
+op = "translate"
+text = "Hello"
+from = "en"
+to = "ru"
+[case.expect]
+error = "bad_response"
+error_contains = "changed its answer"
+
+[[case.http]]
+method = "POST"
+url = "https://www.modernmt.com/translate"
+body = '{"status":"success","value":{"detectedLanguage":"en"}}'
+
+[[case]]
+name = "an answer that is not an object is a bad response"
+op = "translate"
+text = "Hello"
+from = "en"
+to = "ru"
+[case.expect]
+error = "bad_response"
+
+[[case.http]]
+method = "POST"
+url = "https://www.modernmt.com/translate"
+body = 'null'

@@ -50,3 +50,116 @@ error_contains = "qwzxv"
 url = "https://en.wiktionary.org/api/rest_v1/page/definition/"
 status = 404
 body = "{}"
+
+# -- errors: other statuses, and answers in a shape the module does not know --
+
+# "Lamp" at the start of a sentence: both pages exist, and the capitalised one
+# is a surname. The lower-case page (the file's answer above) leads.
+[[case]]
+name = "a capitalised word shows the lower-case page first"
+op = "dictionary"
+text = "Lamp"
+from = "en"
+to = "ru"
+[case.expect]
+headword = "lamp"
+contains = ["A device producing light.", "A surname."]
+result = { link = "https://en.wiktionary.org/wiki/lamp", explanations = [{ trait = "noun", explains = ["A device producing light."] }, { trait = "proper noun", explains = ["A surname."] }] }
+
+[[case.http]]
+url = "https://en.wiktionary.org/api/rest_v1/page/definition/Lamp"
+body = '''{"en":[{"partOfSpeech":"Proper noun","language":"English","definitions":[{"definition":"A <a href=\"/wiki/surname\">surname</a>."}]}]}'''
+
+[[case]]
+name = "German keeps the noun as written first"
+op = "dictionary"
+text = "Essen"
+from = "de"
+to = "ru"
+[case.expect]
+headword = "Essen"
+result = { link = "https://en.wiktionary.org/wiki/Essen", explanations = [{ trait = "noun", explains = ["meal"] }, { trait = "verb", explains = ["to eat"] }] }
+
+[[case.http]]
+url = "https://en.wiktionary.org/api/rest_v1/page/definition/Essen"
+body = '{"de":[{"partOfSpeech":"Noun","language":"German","definitions":[{"definition":"meal"}]}]}'
+
+[[case.http]]
+url = "https://en.wiktionary.org/api/rest_v1/page/definition/essen"
+body = '{"de":[{"partOfSpeech":"Verb","language":"German","definitions":[{"definition":"to eat"}]}]}'
+
+[[case]]
+name = "a capitalised page alone still answers"
+op = "dictionary"
+text = "Berlin"
+from = "en"
+to = "ru"
+[case.expect]
+headword = "Berlin"
+contains = ["The capital of Germany."]
+
+[[case.http]]
+url = "https://en.wiktionary.org/api/rest_v1/page/definition/Berlin"
+body = '{"en":[{"partOfSpeech":"Proper noun","language":"English","definitions":[{"definition":"The capital of Germany."}]}]}'
+
+[[case.http]]
+url = "https://en.wiktionary.org/api/rest_v1/page/definition/berlin"
+status = 404
+body = "{}"
+
+[[case]]
+name = "a rate limit is typed"
+op = "dictionary"
+text = "qwzxv"
+from = "en"
+to = "ru"
+[case.expect]
+error = "rate_limited"
+
+[[case.http]]
+url = "https://en.wiktionary.org/api/rest_v1/page/definition/"
+status = 429
+body = '{}'
+
+[[case]]
+name = "a server error is an http error"
+op = "dictionary"
+text = "qwzxv"
+from = "en"
+to = "ru"
+[case.expect]
+error = "module"
+error_contains = "Wiktionary answered 503"
+
+[[case.http]]
+url = "https://en.wiktionary.org/api/rest_v1/page/definition/"
+status = 503
+body = '<html><body>Bad gateway</body></html>'
+
+[[case]]
+name = "a page that is not language sections is a bad response"
+op = "dictionary"
+text = "qwzxv"
+from = "en"
+to = "ru"
+[case.expect]
+error = "bad_response"
+error_contains = "changed its answer"
+
+[[case.http]]
+url = "https://en.wiktionary.org/api/rest_v1/page/definition/"
+body = '["lamp"]'
+
+[[case]]
+name = "sections in another shape are a bad response, not a crash"
+op = "dictionary"
+text = "qwzxv"
+from = "en"
+to = "ru"
+[case.expect]
+error = "bad_response"
+error_contains = "changed its answer"
+
+[[case.http]]
+url = "https://en.wiktionary.org/api/rest_v1/page/definition/"
+body = '{"en":[{"partOfSpeech":"Noun","definitions":"A device."}]}'
