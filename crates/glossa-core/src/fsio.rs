@@ -215,6 +215,7 @@ pub fn temp_dir() -> io::Result<PathBuf> {
     let mut last = None;
     for _ in 0..8 {
         let dir = std::env::temp_dir().join(unique("glossa-tmp-", ""));
+        #[cfg_attr(not(unix), allow(unused_mut))]
         let mut builder = std::fs::DirBuilder::new();
         #[cfg(unix)]
         {
