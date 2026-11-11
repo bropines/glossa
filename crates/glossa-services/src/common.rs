@@ -35,7 +35,7 @@ pub(crate) fn check_pair(info: &ProviderInfo, from: LangId, to: LangId) -> Resul
     let from = if from == LangId::UNKNOWN { LangId::AUTO } else { from };
     let listed = |l: LangId| info.languages.is_empty() || info.languages.contains(&l);
     if !to.is_language() || !listed(to) {
-        return Err(Error::TargetLanguageUnsupported { provider: info.name.clone(), lang: to });
+        return Err(Error::TargetLanguageUnsupported { provider: info.name.clone(), lang: to, detail: String::new() });
     }
     let from_ok = if from == LangId::AUTO {
         info.languages.is_empty() || info.languages.contains(&LangId::AUTO)
@@ -43,7 +43,11 @@ pub(crate) fn check_pair(info: &ProviderInfo, from: LangId, to: LangId) -> Resul
         from.is_language() && listed(from)
     };
     if !from_ok {
-        return Err(Error::SourceLanguageUnsupported { provider: info.name.clone(), lang: from });
+        return Err(Error::SourceLanguageUnsupported {
+            provider: info.name.clone(),
+            lang: from,
+            detail: String::new(),
+        });
     }
     Ok(())
 }

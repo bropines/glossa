@@ -81,7 +81,7 @@ pub fn load(dir: &Path, manifest: Manifest, ctx: &RuntimeContext) -> Result<Arc<
     let path = resolve_library(dir, stem)?;
     let transport = NativeTransport::open(&path, ctx.call_timeout)?;
     tracing::debug!(module = %manifest.module.id, path = %path.display(), "native module loaded");
-    Ok(Arc::new(ProtocolProvider::new(manifest, transport, ctx.cache.clone())))
+    Ok(Arc::new(ProtocolProvider::new(manifest, transport, ctx.cache.clone()).configured(ctx)))
 }
 
 // -- finding the library --------------------------------------------------------
@@ -279,11 +279,35 @@ fn parse_reply(bytes: &[u8]) -> Result<serde_json::Value, ModuleError> {
 }
 
 impl Transport for NativeTransport {
-    fn call(
+    /// Native code cannot be interrupted, so neither the cancel token nor
+    /// the time limit can end a call; a cancelled call's host calls are
+    /// refused (see `HostApi::handle`), which is what brings it back sooner.
+    fn call_with(
         &self,
         method: &str,
         params: serde_json::Value,
         host: &dyn Fn(&str, serde_json::Value) -> Reply,
+        control: &crate::protocol::CallControl,
+    ) -> Result<serde_json::Value, crate::protocol::CallError> {
+        Ok(self.run(method, params, host, control.timeout.unwrap_or(self.call_timeout))?)
+    }
+
+    /// Nothing to free. Unloading a library while it might still be in use —
+    /// another thread mid-`call`, a module thread still running, a callback
+    /// pointer handed to the OS — would leave code pointers dangling into
+    /// unmapped memory, and on some platforms (Rust cdylibs with thread-local
+    /// destructors under glibc) `dlclose` is not even honoured. Unlike a
+    /// Python child process, a loaded library also costs little while idle.
+    fn suspend(&self) {}
+}
+
+impl NativeTransport {
+    fn run(
+        &self,
+        method: &str,
+        params: serde_json::Value,
+        host: &dyn Fn(&str, serde_json::Value) -> Reply,
+        limit: Duration,
     ) -> Result<serde_json::Value, ModuleError> {
         let method_c =
             CString::new(method).map_err(|_| ModuleError::new(ErrorKind::BadRequest, "method contains NUL"))?;
@@ -315,7 +339,7 @@ impl Transport for NativeTransport {
         drop(guard);
 
         let elapsed = started.elapsed();
-        if elapsed > self.call_timeout {
+        if elapsed > limit {
             tracing::warn!(
                 path = %self.path.display(),
                 method,
@@ -328,14 +352,6 @@ impl Transport for NativeTransport {
             None => Err(ModuleError::bad_response(format!("module returned no reply to {method}"))),
         }
     }
-
-    /// Nothing to free. Unloading a library while it might still be in use —
-    /// another thread mid-`call`, a module thread still running, a callback
-    /// pointer handed to the OS — would leave code pointers dangling into
-    /// unmapped memory, and on some platforms (Rust cdylibs with thread-local
-    /// destructors under glibc) `dlclose` is not even honoured. Unlike a
-    /// Python child process, a loaded library also costs little while idle.
-    fn suspend(&self) {}
 }
 
 // -- host callbacks -------------------------------------------------------------

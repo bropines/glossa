@@ -7,7 +7,7 @@
 //! calls under its permissions, translating its errors — is done once, here.
 
 use std::sync::Arc;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use glossa_core::dict::{Example, Explanation, Pronunciation};
 use glossa_core::ocr::{parse, Baseline, OcrBlock, OcrGranularity, OcrLevel, Rect, WritingDirection};
@@ -20,18 +20,84 @@ use glossa_module_sdk::wire::{self, ModuleError, Reply};
 
 use crate::host_api::{from_module_error, HostApi, ModuleCache, ScopedHttp};
 use crate::manifest::Manifest;
-use crate::provider::{Host, OptionSpec, Provider};
+use crate::provider::{CancelToken, Host, OptionSpec, Provider};
+
+/// The longest `call_timeout_secs` a manifest may ask for.
+pub const MAX_CALL_TIMEOUT_SECS: u64 = 600;
+
+/// What a transport is told about one call besides its message.
+pub struct CallControl<'a> {
+    /// Set when the user cancels or a newer request supersedes this one.
+    /// A transport that can stop waiting does, and answers
+    /// [`CallError::Cancelled`].
+    pub cancel: &'a CancelToken,
+    /// The time limit for this call: the manifest's `call_timeout_secs`,
+    /// else the program's `[modules] call_timeout_ms`. `None` leaves the
+    /// transport its own default.
+    pub timeout: Option<Duration>,
+}
+
+impl CallControl<'static> {
+    /// No cancellation and the transport's default time limit.
+    pub fn none() -> CallControl<'static> {
+        static NEVER: std::sync::LazyLock<CancelToken> = std::sync::LazyLock::new(CancelToken::new);
+        CallControl { cancel: &NEVER, timeout: None }
+    }
+}
+
+/// Why a call into a module brought no result.
+#[derive(Debug, Clone, PartialEq)]
+pub enum CallError {
+    /// The module, or the transport on its behalf, reported an error.
+    Module(ModuleError),
+    /// The call ran into its time limit.
+    Timeout(Duration),
+    /// [`CallControl::cancel`] was set and the transport stopped waiting.
+    Cancelled,
+}
+
+impl From<ModuleError> for CallError {
+    fn from(e: ModuleError) -> Self {
+        CallError::Module(e)
+    }
+}
+
+impl CallError {
+    /// As a module error, for callers without a use for the difference.
+    pub fn into_module_error(self, method: &str) -> ModuleError {
+        match self {
+            CallError::Module(e) => e,
+            CallError::Timeout(limit) => {
+                ModuleError::other(format!("{method} timed out after {} ms", limit.as_millis()))
+            }
+            CallError::Cancelled => ModuleError::other(format!("{method} was cancelled")),
+        }
+    }
+}
 
 /// Carries one call to a module and its reply back.
 pub trait Transport: Send + Sync {
     /// Send `method(params)`. While the module works it may call back into
     /// the host; `host` answers those calls and must be used for every one.
+    /// `control` carries the call's cancel token and time limit.
+    fn call_with(
+        &self,
+        method: &str,
+        params: serde_json::Value,
+        host: &dyn Fn(&str, serde_json::Value) -> Reply,
+        control: &CallControl,
+    ) -> std::result::Result<serde_json::Value, CallError>;
+
+    /// [`Transport::call_with`] with nothing to cancel it and the default
+    /// time limit.
     fn call(
         &self,
         method: &str,
         params: serde_json::Value,
         host: &dyn Fn(&str, serde_json::Value) -> Reply,
-    ) -> std::result::Result<serde_json::Value, ModuleError>;
+    ) -> std::result::Result<serde_json::Value, ModuleError> {
+        self.call_with(method, params, host, &CallControl::none()).map_err(|e| e.into_module_error(method))
+    }
 
     /// Free whatever the transport holds (a child process). The next call
     /// starts it again.
@@ -46,6 +112,13 @@ pub struct ProtocolProvider<T: Transport> {
     /// The module's assets, for the `assets` host call.
     assets: Option<crate::assets::ModuleAssets>,
     page: crate::settings::PageCache,
+    /// The program's time limit for a call (`[modules] call_timeout_ms`);
+    /// the manifest's `call_timeout_secs` goes before it.
+    call_timeout: Option<Duration>,
+    /// Leave the module alone for a while after it reports a rate limit
+    /// (see [`crate::backoff`]). Off in the module tester, which runs one
+    /// case after another on purpose.
+    cooldown: bool,
 }
 
 impl<T: Transport> ProtocolProvider<T> {
@@ -57,7 +130,21 @@ impl<T: Transport> ProtocolProvider<T> {
             .as_ref()
             .and_then(|dir| dir.parent())
             .and_then(|models| crate::assets::ModuleAssets::for_manifest(&manifest, models).ok().flatten());
-        Self { manifest, info, transport, cache, assets, page: Default::default() }
+        Self { manifest, info, transport, cache, assets, page: Default::default(), call_timeout: None, cooldown: true }
+    }
+
+    /// Take the call time limit and the rate-limit cool-down from the
+    /// program's settings.
+    pub fn configured(mut self, ctx: &crate::registry::RuntimeContext) -> Self {
+        self.call_timeout = Some(ctx.call_timeout);
+        self.cooldown = ctx.rate_limit_cooldown;
+        self
+    }
+
+    /// The time limit one call into this module gets, when anything sets
+    /// one: what the manifest asks for, else the program's setting.
+    pub fn call_timeout(&self) -> Option<Duration> {
+        self.manifest.call_timeout().or(self.call_timeout)
     }
 
     pub fn manifest(&self) -> &Manifest {
@@ -110,6 +197,20 @@ impl<T: Transport> ProtocolProvider<T> {
         params: impl FnOnce(&HostApi) -> P,
     ) -> Result<R> {
         host.check_cancelled()?;
+        // A module that said "rate limited" is not asked again until its
+        // cooling-off period is over: asking a keyless service on every
+        // keystroke only prolongs the block. Buttons on its settings page
+        // (actions) are the user's own doing and always go through.
+        let id = self.info.id.as_str();
+        let cooled = self.cooldown && method != "action";
+        if cooled {
+            if let Some(wait) = self.cache.limits.cooling(id, Instant::now()) {
+                return Err(Error::RateLimited {
+                    provider: self.info.name.clone(),
+                    retry_after_secs: Some(crate::backoff::ceil_secs(wait)),
+                });
+            }
+        }
         let api = HostApi::new(
             ScopedHttp {
                 inner: host.http,
@@ -118,24 +219,68 @@ impl<T: Transport> ProtocolProvider<T> {
             },
             &self.cache,
         )
+        .with_cancel(Some(host.cancel))
         .with_assets(self.assets.as_ref())
         .with_strings(strings)
         .with_ui_update(updates);
         let params = serde_json::to_value(params(&api)).map_err(|e| Error::module(&self.info.id, e))?;
         let started = Instant::now();
-        let value = self.transport.call(method, params, &|m, p| api.handle(m, p)).map_err(|e| match e.kind {
-            // "Not found" means no text in an image only for recognition;
-            // for a lookup it is the module's own "no article" message.
-            wire::ErrorKind::NotFound if method != "recognize" => Error::module(&self.info.id, e.message),
-            _ => from_module_error(&self.info.id, &self.info.name, e),
-        })?;
+        let control = CallControl { cancel: host.cancel, timeout: self.call_timeout() };
+        let outcome = self.transport.call_with(method, params, &|m, p| api.handle(m, p), &control);
         tracing::debug!(module = %self.info.id, method, ms = started.elapsed().as_millis() as u64, "module call");
+        // Whatever a cancelled call came back with (a refused host call
+        // turned into an error, say), the answer is "cancelled".
         host.check_cancelled()?;
+        let value = match outcome {
+            Ok(value) => {
+                if cooled {
+                    self.cache.limits.ok(id);
+                }
+                value
+            }
+            Err(CallError::Cancelled) => return Err(Error::Cancelled),
+            Err(CallError::Timeout(limit)) => {
+                return Err(Error::ModuleTimeout { module: self.info.id.clone(), limit_ms: limit.as_millis() as u64 })
+            }
+            Err(CallError::Module(e)) => {
+                return Err(match e.kind {
+                    // "Not found" means no text in an image only for
+                    // recognition; for a lookup the dictionary has no
+                    // article, and the message says for what.
+                    wire::ErrorKind::NotFound if method != "recognize" => {
+                        Error::NoResults { provider: self.info.name.clone(), query: e.message }
+                    }
+                    wire::ErrorKind::RateLimited if cooled => {
+                        let wait = self.cache.limits.limited(id, e.retry_after_secs, Instant::now());
+                        Error::RateLimited {
+                            provider: self.info.name.clone(),
+                            retry_after_secs: Some(crate::backoff::ceil_secs(wait)),
+                        }
+                    }
+                    _ => from_module_error(&self.info.id, &self.info.name, e),
+                });
+            }
+        };
         serde_json::from_value(value).map_err(|e| Error::bad_response(&self.info.name, format!("{method} reply: {e}")))
     }
 
     fn code(&self, lang: glossa_core::LangId) -> String {
         self.manifest.code_for(lang)
+    }
+}
+
+/// Put the languages of the request into a module's "language not
+/// supported" error. The module says only which side it cannot do (and,
+/// in its message, why); which language that was is ours to add.
+fn with_languages(e: Error, from: LangId, to: LangId) -> Error {
+    match e {
+        Error::SourceLanguageUnsupported { provider, lang, detail } if lang == LangId::UNKNOWN => {
+            Error::SourceLanguageUnsupported { provider, lang: from, detail }
+        }
+        Error::TargetLanguageUnsupported { provider, lang, detail } if lang == LangId::UNKNOWN => {
+            Error::TargetLanguageUnsupported { provider, lang: to, detail }
+        }
+        other => other,
     }
 }
 
@@ -169,7 +314,8 @@ impl<T: Transport> Provider for ProtocolProvider<T> {
                 .collect(),
             options: host.options.clone(),
         };
-        let r: wire::TranslateResult = self.invoke(host, "translate", params)?;
+        let r: wire::TranslateResult =
+            self.invoke(host, "translate", params).map_err(|e| with_languages(e, req.from, req.to))?;
         Ok(Translation {
             text: r.text,
             detected_from: r.detected_from.as_deref().and_then(|c| self.manifest.lang_for(c)),
@@ -202,31 +348,35 @@ impl<T: Transport> Provider for ProtocolProvider<T> {
     }
 
     fn dictionary(&self, host: &Host, req: &DictRequest) -> Result<Article> {
-        let r: wire::ArticleResult = self.invoke(
-            host,
-            "dictionary",
-            wire::DictionaryParams {
-                text: req.text.clone(),
-                from: self.code(req.from),
-                to: self.code(req.to),
-                exact: req.exact,
-                options: host.options.clone(),
-            },
-        )?;
+        let r: wire::ArticleResult = self
+            .invoke(
+                host,
+                "dictionary",
+                wire::DictionaryParams {
+                    text: req.text.clone(),
+                    from: self.code(req.from),
+                    to: self.code(req.to),
+                    exact: req.exact,
+                    options: host.options.clone(),
+                },
+            )
+            .map_err(|e| with_languages(e, req.from, req.to))?;
         Ok(article_from_wire(r, &req.text))
     }
 
     fn speak(&self, host: &Host, req: &SpeakRequest) -> Result<Audio> {
-        let r: wire::SpeakResult = self.invoke(
-            host,
-            "speak",
-            wire::SpeakParams {
-                text: req.text.clone(),
-                lang: self.code(req.lang),
-                slow: req.slow,
-                options: host.options.clone(),
-            },
-        )?;
+        let r: wire::SpeakResult = self
+            .invoke(
+                host,
+                "speak",
+                wire::SpeakParams {
+                    text: req.text.clone(),
+                    lang: self.code(req.lang),
+                    slow: req.slow,
+                    options: host.options.clone(),
+                },
+            )
+            .map_err(|e| with_languages(e, req.lang, req.lang))?;
         use base64::Engine;
         let bytes = base64::engine::general_purpose::STANDARD
             .decode(r.audio_base64.as_bytes())
@@ -239,15 +389,17 @@ impl<T: Transport> Provider for ProtocolProvider<T> {
         let bytes = req.image.to_bytes()?;
         let size = image_dimensions(&bytes);
         let image_base64 = base64::engine::general_purpose::STANDARD.encode(&bytes);
-        let r: wire::RecognizeResult = self.invoke_with(host, "recognize", |api| wire::RecognizeParams {
-            image_base64,
-            lang: self.code(req.lang),
-            translate_to: req.translate_to.map(|l| self.code(l)),
-            preserve_line_breaks: req.preserve_line_breaks,
-            options: host.options.clone(),
-            granularity: Some(granularity_name(req.granularity).to_owned()),
-            image_handle: api.register_image(bytes),
-        })?;
+        let r: wire::RecognizeResult = self
+            .invoke_with(host, "recognize", |api| wire::RecognizeParams {
+                image_base64,
+                lang: self.code(req.lang),
+                translate_to: req.translate_to.map(|l| self.code(l)),
+                preserve_line_breaks: req.preserve_line_breaks,
+                options: host.options.clone(),
+                granularity: Some(granularity_name(req.granularity).to_owned()),
+                image_handle: api.register_image(bytes),
+            })
+            .map_err(|e| with_languages(e, req.lang, req.translate_to.unwrap_or(LangId::UNKNOWN)))?;
         let mut out = ocr_from_wire(r, &|c| self.manifest.lang_for(c))
             .map_err(|e| Error::bad_response(&self.info.name, format!("recognize reply: {e}")))?;
         if out.image_size.is_none() {
@@ -584,12 +736,13 @@ mod tests {
     struct Echo;
 
     impl Transport for Echo {
-        fn call(
+        fn call_with(
             &self,
             method: &str,
             params: serde_json::Value,
             host: &dyn Fn(&str, serde_json::Value) -> Reply,
-        ) -> std::result::Result<serde_json::Value, ModuleError> {
+            _: &CallControl,
+        ) -> std::result::Result<serde_json::Value, CallError> {
             match method {
                 "translate" => {
                     let fetched = host("http", serde_json::json!({"url": "https://api.test/x"})).into_result()?;
@@ -601,7 +754,7 @@ mod tests {
                 }
                 "detect" => Ok(serde_json::json!({ "lang": "ru", "confidence": 0.9 })),
                 "dictionary" => Ok(serde_json::json!({ "explanations": [{ "trait": "n", "explains": ["x"] }] })),
-                _ => Err(ModuleError::unsupported(method)),
+                _ => Err(ModuleError::unsupported(method).into()),
             }
         }
     }
@@ -663,12 +816,13 @@ mod tests {
     struct OcrEcho;
 
     impl Transport for OcrEcho {
-        fn call(
+        fn call_with(
             &self,
             method: &str,
             params: serde_json::Value,
             host: &dyn Fn(&str, serde_json::Value) -> Reply,
-        ) -> std::result::Result<serde_json::Value, ModuleError> {
+            _: &CallControl,
+        ) -> std::result::Result<serde_json::Value, CallError> {
             assert_eq!(method, "recognize");
             assert_eq!(params["granularity"], "words");
             let handle = params["image_handle"].clone();

@@ -364,7 +364,11 @@ impl OpenAi {
 
     fn chat_request(&self, host: &Host, req: &TranslateRequest, stream: bool) -> Result<HttpRequest> {
         if !req.to.is_language() {
-            return Err(Error::TargetLanguageUnsupported { provider: self.name().to_owned(), lang: req.to });
+            return Err(Error::TargetLanguageUnsupported {
+                provider: self.name().to_owned(),
+                lang: req.to,
+                detail: String::new(),
+            });
         }
         let model = model_for(host, self.preset);
         let mut body = json!({

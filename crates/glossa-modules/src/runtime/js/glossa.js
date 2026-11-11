@@ -18,7 +18,9 @@
 // Each may be `async`. Return what the Glossa Module Protocol specifies for
 // the method (a plain string is accepted for translate, and as the notice of
 // an action; nothing at all is a fine answer to an action). Throw
-// `new ModuleError(kind, message)` for a typed failure.
+// `new ModuleError(kind, message)` for a typed failure; for "rate_limited",
+// `new ModuleError("rate_limited", message, seconds)` also says when to ask
+// again (a 429 response's `retry_after_secs`, when the service gave one).
 //
 // `host` is synchronous on purpose: `host.fetch(url)` returns the response
 // directly, so a module reads top to bottom with no callback plumbing.
@@ -58,6 +60,8 @@ var host = {
       status: r.status,
       ok: r.status >= 200 && r.status < 300,
       headers: r.headers || {},
+      // Seconds from a 429's or 503's Retry-After header, else undefined.
+      retry_after_secs: r.retry_after_secs,
       body: r.body,
       body_base64: r.body_base64,
       text: function () { return r.body; },

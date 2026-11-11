@@ -13,10 +13,14 @@
 //! JavaScript value the closure touches borrows from it, so no value can
 //! outlive the runtime it belongs to.
 //!
-//! Every call gets a heap limit ([`MEMORY_LIMIT`]) and a time limit
-//! ([`TIME_LIMIT`], enforced by the interrupt handler). Time spent inside host
-//! calls (a network request) does not count: the limit is on the script's own
-//! work, and the network has its own timeouts.
+//! Every call gets a heap limit ([`MEMORY_LIMIT`]) and two time limits, both
+//! enforced by the interrupt handler. [`TIME_LIMIT`] is on the script's own
+//! work: time spent inside host calls (a network request) does not count.
+//! The call's time limit ([`CallControl::timeout`], [`DEFAULT_CALL_TIMEOUT`]
+//! without one) is on the clock, host calls included: once it has passed,
+//! further host calls are refused and the script is stopped, and a network
+//! request made near the end gets only the time that is left. The same
+//! checks stop a call whose request was cancelled.
 //!
 //! Scripts reach the host through one native function, `__host_call(method,
 //! json)`, which returns a JSON reply envelope; the friendlier APIs each
@@ -35,6 +39,9 @@ use std::time::{Duration, Instant};
 
 use base64::Engine as _;
 use glossa_module_sdk::wire::{ErrorKind, ModuleError, Reply};
+
+use crate::protocol::{CallControl, CallError};
+use crate::provider::CancelToken;
 use rquickjs::context::EvalOptions;
 use rquickjs::function::{Args, Rest};
 use rquickjs::{qjs, Context, Ctx, Exception, Function, Runtime, Value};
@@ -48,6 +55,10 @@ pub const MEMORY_LIMIT: usize = 128 << 20;
 /// How long a script may compute in one call, not counting the time it waits
 /// for the host.
 pub const TIME_LIMIT: Duration = Duration::from_secs(10);
+
+/// How long one call may take in all, host calls included, when the caller
+/// sets no limit of its own (a module compiled into the program, a test).
+pub const DEFAULT_CALL_TIMEOUT: Duration = Duration::from_secs(30);
 
 /// Each call runs on a stack of its own, this big, rather than on whatever
 /// thread called it: scripts run on engine workers (8 MB), UI threads (2 MB),
@@ -81,8 +92,48 @@ thread_local! {
     /// Set by the interrupt handler when it stops a script, so the uncatchable
     /// "interrupted" error can be told apart and reported as the time limit.
     static TIMED_OUT: Cell<bool> = const { Cell::new(false) };
+    /// The current call's time limit and cancel token, set by
+    /// [`Bridge::install_with`] for the duration of the call.
+    static LIMITS: RefCell<Option<Limits>> = const { RefCell::new(None) };
+    /// Why the current call was stopped from outside, if it was. Unlike
+    /// `TIMED_OUT` it outlives the runtime, for [`Bridge::finish`] to read.
+    static STOPPED: Cell<Option<Stop>> = const { Cell::new(None) };
     /// A panic caught in a native, to be resumed once control is back in Rust.
     static PANIC: RefCell<Option<Box<dyn std::any::Any + Send>>> = const { RefCell::new(None) };
+}
+
+/// What bounds one call from outside the script.
+struct Limits {
+    deadline: Instant,
+    limit: Duration,
+    cancel: CancelToken,
+}
+
+/// Why a call was stopped from outside.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Stop {
+    /// The call's time limit passed.
+    Deadline(Duration),
+    /// The request was cancelled.
+    Cancelled,
+}
+
+/// Whether the current call has to stop now, and why. Remembers the answer
+/// for [`Bridge::finish`].
+fn must_stop() -> Option<Stop> {
+    let stop = LIMITS.with(|l| {
+        let limits = l.borrow();
+        let limits = limits.as_ref()?;
+        if limits.cancel.is_cancelled() {
+            Some(Stop::Cancelled)
+        } else if Instant::now() >= limits.deadline {
+            Some(Stop::Deadline(limits.limit))
+        } else {
+            None
+        }
+    })?;
+    STOPPED.with(|s| s.set(Some(stop)));
+    Some(stop)
 }
 
 /// Run a native's body, turning a panic into a JavaScript exception and
@@ -123,21 +174,78 @@ impl<'a> Bridge<'a> {
         let ptr: *const HostFn<'static> =
             unsafe { std::mem::transmute::<*const HostFn<'a>, *const HostFn<'static>>(host as *const HostFn<'a>) };
         BRIDGE.with(|b| *b.borrow_mut() = Some(ptr));
+        STOPPED.with(|s| s.set(None));
         Bridge { _host: std::marker::PhantomData }
+    }
+
+    /// [`Bridge::install`], with the call bounded by `control`: its cancel
+    /// token, and its time limit counted from now.
+    pub fn install_with(host: &'a HostFn<'a>, control: &CallControl) -> Bridge<'a> {
+        let bridge = Bridge::install(host);
+        let limit = control.timeout.unwrap_or(DEFAULT_CALL_TIMEOUT);
+        LIMITS.with(|l| {
+            *l.borrow_mut() = Some(Limits { deadline: Instant::now() + limit, limit, cancel: control.cancel.clone() })
+        });
+        bridge
+    }
+
+    /// The call's outcome: `result`, unless the call failed because it was
+    /// stopped from outside, which is then what is reported. A script that
+    /// produced its result anyway keeps it.
+    pub fn finish<T>(self, result: Result<T, ModuleError>) -> Result<T, CallError> {
+        match (result, STOPPED.with(Cell::get)) {
+            (Ok(v), _) => Ok(v),
+            (Err(_), Some(Stop::Cancelled)) => Err(CallError::Cancelled),
+            (Err(_), Some(Stop::Deadline(limit))) => Err(CallError::Timeout(limit)),
+            (Err(e), None) => Err(CallError::Module(e)),
+        }
     }
 }
 
 impl Drop for Bridge<'_> {
     fn drop(&mut self) {
         BRIDGE.with(|b| *b.borrow_mut() = None);
+        LIMITS.with(|l| *l.borrow_mut() = None);
+        STOPPED.with(|s| s.set(None));
     }
 }
 
-fn host_call(method: &str, params: serde_json::Value) -> Reply {
+/// Keep a network request inside what is left of the call's time limit.
+fn bound_http(params: &mut serde_json::Value) {
+    let Some(left) = LIMITS.with(|l| l.borrow().as_ref().map(|l| l.deadline.saturating_duration_since(Instant::now())))
+    else {
+        return;
+    };
+    let left_ms = (left.as_millis() as u64).max(1);
+    let asked = params.get("timeout_ms").and_then(serde_json::Value::as_u64).filter(|t| *t > 0);
+    // A request without a timeout of its own gets the network setting's,
+    // which is not known here; it is only cut when little time is left.
+    let cut = match asked {
+        Some(t) => t > left_ms,
+        None => left < Duration::from_secs(15),
+    };
+    if cut {
+        if let Some(obj) = params.as_object_mut() {
+            obj.insert("timeout_ms".into(), left_ms.into());
+        }
+    }
+}
+
+fn host_call(method: &str, mut params: serde_json::Value) -> Reply {
     let ptr = BRIDGE.with(|b| *b.borrow());
     let Some(ptr) = ptr else {
         return Reply::err(ModuleError::other("host call outside of a module call"));
     };
+    match must_stop() {
+        Some(Stop::Cancelled) => return Reply::err(crate::host_api::cancelled_error()),
+        Some(Stop::Deadline(limit)) => {
+            return Reply::err(ModuleError::other(format!("the call ran past its {} s time limit", limit.as_secs())))
+        }
+        None => {}
+    }
+    if method == "http" {
+        bound_http(&mut params);
+    }
     let started = Instant::now();
     // SAFETY: see `Bridge::install` — the pointer is valid while set. The
     // borrow of BRIDGE is released first, so a host callback that itself
@@ -179,7 +287,7 @@ fn run_on_this_stack<R>(prelude: bool, f: impl for<'js> FnOnce(&Ctx<'js>) -> R) 
         if stop {
             TIMED_OUT.with(|t| t.set(true));
         }
-        stop
+        stop || must_stop().is_some()
     })));
 
     let result = (|| {
@@ -445,6 +553,9 @@ pub fn settle<'js>(ctx: &Ctx<'js>, value: Value<'js>) -> Result<Value<'js>, Stri
                     if TIMED_OUT.with(Cell::get) {
                         return Err(time_limit_message());
                     }
+                    if let Some(stop) = STOPPED.with(Cell::get) {
+                        return Err(stop_message(stop));
+                    }
                     return Err("the script's promise never settled".into());
                 }
             }
@@ -502,6 +613,15 @@ fn time_limit_message() -> String {
     format!("the script ran for more than {} s and was stopped", TIME_LIMIT.as_secs())
 }
 
+/// What a script stopped from outside is described as, until
+/// [`Bridge::finish`] turns it into the proper error.
+fn stop_message(stop: Stop) -> String {
+    match stop {
+        Stop::Cancelled => "the request was cancelled".into(),
+        Stop::Deadline(limit) => format!("the call ran past its {} s time limit and was stopped", limit.as_secs()),
+    }
+}
+
 /// A readable message for a script error: the thrown message, or the thrown
 /// value itself when it is not an Error object. Hitting a limit is reported
 /// as such, and a syntax error carries its line.
@@ -511,6 +631,13 @@ pub fn describe(ctx: &Ctx<'_>, err: rquickjs::Error) -> String {
         // Clear the uncatchable "interrupted" exception.
         let _ = ctx.catch();
         return time_limit_message();
+    }
+    if let (rquickjs::Error::Exception, Some(stop)) = (&err, STOPPED.with(Cell::get)) {
+        // The interrupt handler's doing. A script cannot catch it, so
+        // whatever is pending is that exception or one that no longer
+        // matters.
+        let _ = ctx.catch();
+        return stop_message(stop);
     }
     let rquickjs::Error::Exception = err else {
         return err.to_string();
@@ -593,12 +720,19 @@ pub fn split_location(message: &str) -> (&str, Option<glossa_module_sdk::wire::E
 /// harness), while the message is what a user sees in a popup.
 pub fn script_error(message: String) -> ModuleError {
     let (bare, location) = split_location(&message);
-    // The prelude encodes typed errors as "glossa:<kind>:<message>".
+    // The prelude encodes typed errors as "glossa:<kind>:<message>", or
+    // "glossa:<kind>@<seconds>:<message>" with a retry-after.
     if let Some(rest) = bare.split("glossa:").nth(1) {
         if let Some((kind, msg)) = rest.split_once(':') {
+            let (kind, retry) = match kind.split_once('@') {
+                Some((k, secs)) => (k, secs.parse::<u64>().ok()),
+                None => (kind, None),
+            };
             let kind: Option<ErrorKind> = serde_json::from_value(serde_json::Value::String(kind.to_owned())).ok();
             if let Some(kind) = kind {
-                return ModuleError::new(kind, msg.trim().to_owned()).at(location);
+                let mut e = ModuleError::new(kind, msg.trim().to_owned()).at(location);
+                e.retry_after_secs = retry;
+                return e;
             }
         }
     }

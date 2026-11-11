@@ -12,7 +12,7 @@ use std::sync::Arc;
 use glossa_module_sdk::wire::{ErrorKind, ModuleError, Reply};
 
 use super::engine::{self, Bridge};
-use crate::protocol::Transport;
+use crate::protocol::{CallControl, CallError, Transport};
 
 pub const GLOSSA_JS: &str = include_str!("glossa.js");
 
@@ -35,18 +35,86 @@ impl GlossaScript {
     }
 }
 
+/// The function a capability is served by.
+fn entry_for(capability: &str) -> Option<&'static str> {
+    use glossa_core::Capabilities as C;
+    let cap = C::from_name(capability)?;
+    [
+        (C::TRANSLATE, "translate"),
+        (C::DETECT_LANGUAGE, "detect"),
+        (C::DICTIONARY, "dictionary"),
+        (C::LISTEN, "speak"),
+        (C::OCR, "recognize"),
+    ]
+    .into_iter()
+    .find_map(|(c, name)| (c == cap).then_some(name))
+}
+
+/// Check, when the module loads, that the script defines a function for
+/// every capability the manifest declares and for every action it runs
+/// itself. Without this a missing or misspelt function shows only when the
+/// user first asks for it, as "translate is not supported by this module".
+///
+/// The script is evaluated once with no call in progress. One whose top
+/// level cannot run that way (it calls the host while loading) is let
+/// through unchecked rather than refused: it worked before this check.
+pub fn check_entries(manifest: &crate::manifest::Manifest, script: &GlossaScript) -> Result<(), String> {
+    let mut wanted: Vec<(String, String)> = manifest
+        .capabilities
+        .iter()
+        .filter_map(|c| Some((entry_for(c)?.to_owned(), format!("the capability {c:?}"))))
+        .collect();
+    for a in manifest.actions.iter().filter(|a| a.kind() == crate::actions::ActionKind::Handler) {
+        wanted.push((a.handler_name().to_owned(), format!("the action {:?}", a.id)));
+    }
+    let missing = engine::with_context(|ctx| -> Result<Vec<(String, String)>, String> {
+        engine::shared::WEB.eval(ctx)?;
+        engine::shared::GLOSSA.eval(ctx)?;
+        script.script.eval(ctx)?;
+        let mut missing = Vec::new();
+        for (name, why) in wanted {
+            let entry = engine::call_global(ctx, "__glossaEntry", &[engine::str(ctx, &name)])?;
+            if !entry.is_function() {
+                missing.push((name, why));
+            }
+        }
+        Ok(missing)
+    })?;
+    let file = &script.script.name;
+    match missing {
+        Err(e) => {
+            tracing::debug!("{file}: its functions were not checked, the script does not run outside a call: {e}");
+            Ok(())
+        }
+        Ok(missing) if missing.is_empty() => Ok(()),
+        Ok(missing) => Err(missing
+            .iter()
+            .map(|(name, why)| format!("{file} defines no function `{name}`, which module.toml needs for {why}"))
+            .collect::<Vec<_>>()
+            .join("; ")),
+    }
+}
+
 pub struct GlossaTransport {
     pub script: Arc<GlossaScript>,
 }
 
 impl Transport for GlossaTransport {
-    fn call(
+    fn call_with(
         &self,
         method: &str,
         params: serde_json::Value,
         host: &dyn Fn(&str, serde_json::Value) -> Reply,
-    ) -> Result<serde_json::Value, ModuleError> {
-        let _bridge = Bridge::install(host);
+        control: &CallControl,
+    ) -> Result<serde_json::Value, CallError> {
+        let bridge = Bridge::install_with(host, control);
+        bridge.finish(self.run(method, params))
+    }
+}
+
+impl GlossaTransport {
+    /// The call itself, with the bridge to the host in place.
+    fn run(&self, method: &str, params: serde_json::Value) -> Result<serde_json::Value, ModuleError> {
         let value = engine::with_context(|ctx| -> Result<serde_json::Value, ModuleError> {
             engine::shared::WEB.eval(ctx).map_err(ModuleError::other)?;
             engine::shared::GLOSSA.eval(ctx).map_err(ModuleError::other)?;

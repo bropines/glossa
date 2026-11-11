@@ -53,6 +53,60 @@ const TRANSFER_BUDGET: std::time::Duration = std::time::Duration::from_secs(6 * 
 /// The folder beside the assets holding partial downloads and markers.
 const STATE_DIR: &str = ".glossa";
 
+/// How many times in a row one mirror may fail without the partial file
+/// growing before the next mirror gets its turn. An attempt that brought
+/// more bytes starts the count over: a flaky connection that keeps making
+/// headway finishes a large model however often it drops.
+const ATTEMPTS_PER_MIRROR: u32 = 5;
+
+/// The most requests one mirror gets for one file, headway or not, so a
+/// server that sends a few bytes and hangs up every time cannot keep a
+/// download going forever.
+const MAX_REQUESTS_PER_MIRROR: u32 = 200;
+
+/// The longest pause between two attempts, whether it comes from the
+/// doubling or from the server's `Retry-After`.
+const MAX_RETRY_PAUSE: std::time::Duration = std::time::Duration::from_secs(120);
+
+/// The pause before retry number `attempt` (1 for the first): one second
+/// doubling to thirty, scaled by a random 50-100 % so several clients do not
+/// retry in step, or what the server asked for when that is longer.
+fn retry_pause(attempt: u32, retry_after_secs: Option<u64>) -> std::time::Duration {
+    use std::hash::{BuildHasher, Hasher};
+    let mut h = std::collections::hash_map::RandomState::new().build_hasher();
+    h.write_u32(attempt);
+    let jitter = 0.5 + 0.5 * (h.finish() % 1000) as f64 / 1000.0;
+    let doubled = 2f64.powi(attempt.saturating_sub(1).min(5) as i32).min(30.0);
+    let own = std::time::Duration::from_secs_f64(doubled * jitter);
+    let asked = std::time::Duration::from_secs(retry_after_secs.unwrap_or(0));
+    own.max(asked).min(MAX_RETRY_PAUSE)
+}
+
+/// Whether asking the same mirror again could work: the network failed, the
+/// server was busy or told us to slow down. A 404 or a 403 will not change.
+fn worth_retrying(e: &Error) -> bool {
+    match e {
+        Error::Network(_) | Error::Timeout(_) | Error::RateLimited { .. } => true,
+        Error::HttpStatus { status, .. } => matches!(status, 408 | 425 | 429) || (500..600).contains(status),
+        _ => false,
+    }
+}
+
+/// Wait `pause`, waking early when the download is cancelled.
+fn cancellable_pause(pause: std::time::Duration, cancel: &CancelToken) -> Result<()> {
+    let until = std::time::Instant::now() + pause;
+    loop {
+        if cancel.is_cancelled() {
+            return Err(Error::Cancelled);
+        }
+        let left = until.saturating_duration_since(std::time::Instant::now());
+        if left.is_zero() {
+            return Ok(());
+        }
+        std::thread::sleep(left.min(std::time::Duration::from_millis(100)));
+    }
+}
+
 // -- the manifest side ----------------------------------------------------------
 
 /// One `[[assets]]` entry of `module.toml`.
@@ -247,6 +301,15 @@ struct Marker {
     files: Vec<(String, u64)>,
 }
 
+/// How one request for a file ended, when it did not fail.
+enum Transfer {
+    /// The response brought the file to its full size, continuing a partial
+    /// file (`resumed`) or sending all of it.
+    Whole { resumed: bool },
+    /// The partial file was whole already; nothing was asked for.
+    AlreadyWhole,
+}
+
 /// Download progress over all of a module's assets.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Progress {
@@ -269,6 +332,9 @@ pub struct ModuleAssets {
     /// sits directly below it.
     models_dir: PathBuf,
     pub specs: Vec<AssetSpec>,
+    /// How a download waits between two attempts ([`cancellable_pause`]);
+    /// the tests put a recorder here so they need not sleep.
+    pause: fn(std::time::Duration, &CancelToken) -> Result<()>,
 }
 
 /// One writer at a time per module folder, across every [`ModuleAssets`]
@@ -360,14 +426,26 @@ impl ModuleAssets {
         if !one_component || id.chars().all(|c| c == '.') {
             return Err(format!("module id {id:?} cannot name a folder for its files"));
         }
-        Ok(Some(Self { module: id.clone(), root: models_dir.join(id), models_dir: models_dir.to_owned(), specs }))
+        Ok(Some(Self {
+            module: id.clone(),
+            root: models_dir.join(id),
+            models_dir: models_dir.to_owned(),
+            specs,
+            pause: cancellable_pause,
+        }))
     }
 
     /// Files that belong to no module (the managed Python, `uv`): `specs`
     /// under `<parent>/<name>`, with the same checks, locking and unpacking.
     /// `specs` should already be the ones for this system.
     pub fn new(name: &str, parent: &Path, specs: Vec<AssetSpec>) -> Self {
-        Self { module: name.to_owned(), root: parent.join(name), models_dir: parent.to_owned(), specs }
+        Self {
+            module: name.to_owned(),
+            root: parent.join(name),
+            models_dir: parent.to_owned(),
+            specs,
+            pause: cancellable_pause,
+        }
     }
 
     /// Where `name` is (or will be) once ready: the file, or the folder it
@@ -625,26 +703,33 @@ impl ModuleAssets {
         fs::create_dir_all(self.state_dir())?;
         self.drop_stale_parts(&spec.name);
         let part = self.part_path(&spec.name);
-        let mut last_err = None;
-        for url in spec.url.list() {
-            match self.transfer(spec, url, &part, http, cancel, progress) {
-                Ok(()) => {
-                    last_err = None;
-                    break;
-                }
-                Err(Error::Cancelled) => return Err(Error::Cancelled),
-                Err(e) => {
-                    tracing::warn!(module = %self.module, asset = %spec.name, url = %glossa_net::redact(url), "asset download failed: {e}");
-                    last_err = Some(e);
-                }
+        // What the user sees never goes backwards: when a server cannot
+        // resume and the file starts over, the bar waits where it was until
+        // the new copy has caught up.
+        let shown = std::cell::Cell::new(None::<u64>);
+        let progress = |have: u64| {
+            if shown.get().is_none_or(|s| have > s) {
+                shown.set(Some(have));
+                progress(have);
             }
-        }
-        if let Some(e) = last_err {
-            return Err(e);
-        }
-        let actual = sha256_file(&part)?;
-        if !actual.eq_ignore_ascii_case(&spec.sha256) {
+        };
+        // A file put together from several responses that fails its check
+        // gets one more go from nothing: a mirror that changed the file
+        // between two pieces is not a damaged download.
+        let mut fresh_start_left = true;
+        loop {
+            let pieces = self.fetch_from_mirrors(spec, &part, http, cancel, &progress)?;
+            let actual = sha256_file(&part)?;
+            if actual.eq_ignore_ascii_case(&spec.sha256) {
+                return self.install(spec, &part);
+            }
+            // Never keep, resume or install a file with the wrong hash.
             let _ = fs::remove_file(&part);
+            if pieces > 1 && fresh_start_left {
+                fresh_start_left = false;
+                tracing::warn!(module = %self.module, asset = %spec.name, "a resumed download failed its check; downloading it again from the start");
+                continue;
+            }
             return Err(Error::AssetCorrupt {
                 module: self.module.clone(),
                 asset: spec.name.clone(),
@@ -652,7 +737,67 @@ impl ModuleAssets {
                 actual,
             });
         }
-        self.install(spec, &part)
+    }
+
+    /// Bring `part` to its full size from the first mirror that manages it,
+    /// retrying each one and resuming where the file ends; see
+    /// [`ATTEMPTS_PER_MIRROR`]. Returns how many pieces the file was put
+    /// together from (1 for a download in one go, more when it was resumed,
+    /// in this run or after an earlier one).
+    fn fetch_from_mirrors(
+        &self,
+        spec: &AssetSpec,
+        part: &Path,
+        http: &dyn Http,
+        cancel: &CancelToken,
+        progress: &dyn Fn(u64),
+    ) -> Result<u32> {
+        let size_of = |p: &Path| fs::metadata(p).map(|m| m.len()).unwrap_or(0);
+        let mut pieces = u32::from(size_of(part) > 0);
+        let mut last_err = None;
+        for url in spec.url.list() {
+            let mut stalled = 0;
+            for request in 1..=MAX_REQUESTS_PER_MIRROR {
+                if cancel.is_cancelled() {
+                    return Err(Error::Cancelled);
+                }
+                let before = size_of(part);
+                let outcome = self.transfer(spec, url, part, http, cancel, progress);
+                let after = size_of(part);
+                let e = match outcome {
+                    Ok(Transfer::Whole { resumed: true }) => return Ok(pieces + 1),
+                    Ok(Transfer::Whole { resumed: false }) => return Ok(1),
+                    Ok(Transfer::AlreadyWhole) => return Ok(pieces.max(1)),
+                    Err(Error::Cancelled) => return Err(Error::Cancelled),
+                    Err(e) => e,
+                };
+                if after > before {
+                    // Headway: this mirror works, however shakily.
+                    pieces += 1;
+                    stalled = 0;
+                } else if after < before {
+                    // The server sent the file from its start (or the part
+                    // was dropped): what was there before is gone.
+                    pieces = u32::from(after > 0);
+                }
+                stalled += 1;
+                let again = worth_retrying(&e) && stalled < ATTEMPTS_PER_MIRROR && request < MAX_REQUESTS_PER_MIRROR;
+                tracing::warn!(
+                    module = %self.module, asset = %spec.name, url = %glossa_net::redact(url), have = after,
+                    "asset download failed{}: {e}", if again { "; trying again" } else { "" }
+                );
+                if !again {
+                    last_err = Some(e);
+                    break;
+                }
+                let asked = match &e {
+                    Error::RateLimited { retry_after_secs, .. } => *retry_after_secs,
+                    _ => None,
+                };
+                (self.pause)(retry_pause(stalled, asked), cancel)?;
+            }
+        }
+        Err(last_err.unwrap_or_else(|| Error::Network(format!("{} has no download address", spec.name))))
     }
 
     /// One attempt from one URL, appending to `part` when the server can
@@ -665,14 +810,14 @@ impl ModuleAssets {
         http: &dyn Http,
         cancel: &CancelToken,
         progress: &dyn Fn(u64),
-    ) -> Result<()> {
+    ) -> Result<Transfer> {
         let mut have = fs::metadata(part).map(|m| m.len()).unwrap_or(0);
         if have > spec.size {
             fs::remove_file(part)?;
             have = 0;
         }
         if have == spec.size {
-            return Ok(());
+            return Ok(Transfer::AlreadyWhole);
         }
         let provider = format!("{} assets", self.module);
         let mut request = HttpRequest::get(url).provider(provider.clone()).timeout(TRANSFER_BUDGET);
@@ -681,12 +826,14 @@ impl ModuleAssets {
         }
         let mut file: Option<File> = None;
         let mut written = have;
+        let mut resumed = false;
         let mut failure: Option<Error> = None;
         let response = http.send_download(request, &mut |event| match event {
             DownloadEvent::Status(status) => {
                 // 206: the server resumes where the partial file ends.
                 // Anything else: it sends the whole file, so start over.
                 let opened = if status == 206 && have > 0 {
+                    resumed = true;
                     fs::OpenOptions::new().append(true).open(part)
                 } else {
                     written = 0;
@@ -737,6 +884,16 @@ impl ModuleAssets {
             return Err(e);
         }
         let response = response?;
+        if response.status == 416 && have > 0 {
+            // The server will not continue from where the partial file
+            // ends (it is not the file we began, or it never was): drop
+            // the part, and the next attempt asks for the whole file.
+            let _ = fs::remove_file(part);
+            return Err(Error::Network(format!(
+                "the server cannot resume {} from byte {have}; downloading it again from the start",
+                spec.name
+            )));
+        }
         if !response.is_success() {
             return match response.error_for_status(&provider) {
                 Err(e) => Err(e),
@@ -745,13 +902,14 @@ impl ModuleAssets {
         }
         if written < spec.size {
             // The connection closed early. The partial file stays, and the
-            // next attempt (another mirror, or the next download) resumes.
+            // next attempt (this mirror again, another one, or the next
+            // download) resumes.
             return Err(Error::Network(format!(
                 "the download of {} stopped after {written} of {} bytes; downloading again resumes it",
                 spec.name, spec.size
             )));
         }
-        Ok(())
+        Ok(Transfer::Whole { resumed })
     }
 
     /// Put a verified download in place and write its marker.
@@ -1292,7 +1450,241 @@ mod tests {
     }
 
     fn assets(tmp: &Temp, toml: &str) -> ModuleAssets {
-        ModuleAssets::for_manifest(&manifest(toml), &tmp.0).unwrap().expect("assets apply")
+        let mut a = ModuleAssets::for_manifest(&manifest(toml), &tmp.0).unwrap().expect("assets apply");
+        a.pause = record_pause;
+        a
+    }
+
+    thread_local! {
+        /// The pauses the download on this thread asked for.
+        static PAUSES: std::cell::RefCell<Vec<std::time::Duration>> = const { std::cell::RefCell::new(Vec::new()) };
+    }
+
+    /// Stands in for [`cancellable_pause`]: notes the pause instead of
+    /// sleeping through it.
+    fn record_pause(pause: std::time::Duration, cancel: &CancelToken) -> Result<()> {
+        PAUSES.with(|p| p.borrow_mut().push(pause));
+        if cancel.is_cancelled() {
+            return Err(Error::Cancelled);
+        }
+        Ok(())
+    }
+
+    fn pauses() -> Vec<std::time::Duration> {
+        PAUSES.with(|p| std::mem::take(&mut *p.borrow_mut()))
+    }
+
+    /// What a [`Scripted`] server does with one request.
+    enum Step {
+        /// Answer with this status, these headers and this body.
+        Reply(u16, &'static [(&'static str, &'static str)], &'static str),
+        /// Start a 200 or 206 answer, send this much of the body, and drop
+        /// the connection.
+        Cut(u16, &'static str),
+        /// Never answer: the connection fails.
+        Refuse,
+    }
+
+    /// An `Http` playing a script, one step per request, for what
+    /// `MockHttp` cannot do: a connection that dies in the middle of a
+    /// body, and response headers.
+    struct Scripted {
+        steps: Mutex<std::collections::VecDeque<Step>>,
+        seen: Mutex<Vec<HttpRequest>>,
+    }
+
+    impl Scripted {
+        fn new(steps: Vec<Step>) -> Self {
+            Self { steps: Mutex::new(steps.into()), seen: Mutex::new(Vec::new()) }
+        }
+
+        fn ranges(&self) -> Vec<Option<String>> {
+            self.seen
+                .lock()
+                .iter()
+                .map(|r| r.headers.iter().find(|(n, _)| n == "Range").map(|(_, v)| v.clone()))
+                .collect()
+        }
+    }
+
+    impl Http for Scripted {
+        fn send(&self, _: HttpRequest) -> Result<glossa_net::HttpResponse> {
+            unreachable!("assets are fetched with send_download")
+        }
+
+        fn send_download(
+            &self,
+            request: HttpRequest,
+            on_event: &mut dyn FnMut(DownloadEvent<'_>) -> bool,
+        ) -> Result<glossa_net::HttpResponse> {
+            self.seen.lock().push(request);
+            let step = self.steps.lock().pop_front().expect("a request the script does not expect");
+            match step {
+                Step::Refuse => Err(Error::Network("connection refused".into())),
+                Step::Cut(status, sent) => {
+                    if on_event(DownloadEvent::Status(status)) {
+                        on_event(DownloadEvent::Chunk(sent.as_bytes()));
+                    }
+                    Err(Error::Network("reading body: connection reset by peer".into()))
+                }
+                Step::Reply(status, headers, body) => {
+                    let headers = headers.iter().map(|(n, v)| ((*n).to_owned(), (*v).to_owned())).collect();
+                    if (200..300).contains(&status) {
+                        if on_event(DownloadEvent::Status(status)) {
+                            on_event(DownloadEvent::Chunk(body.as_bytes()));
+                        }
+                        return Ok(glossa_net::HttpResponse { status, headers, ..Default::default() });
+                    }
+                    Ok(glossa_net::HttpResponse { status, headers, body: body.as_bytes().to_vec(), codepage: None })
+                }
+            }
+        }
+    }
+
+    fn hello(tmp: &Temp, urls: &str) -> ModuleAssets {
+        assets(tmp, &one(urls, HELLO_SHA, HELLO.len(), ""))
+    }
+
+    #[test]
+    fn a_connection_cut_in_the_middle_of_the_body_is_resumed_in_the_same_download() {
+        let tmp = Temp::new("cut");
+        let a = hello(&tmp, "\"https://dl.test/data.bin\"");
+        let http = Scripted::new(vec![Step::Cut(200, "hello "), Step::Refuse, Step::Reply(206, &[], "world")]);
+        let seen = Mutex::new(Vec::new());
+        pauses();
+        a.download(&http, &CancelToken::new(), &|p| seen.lock().push(p.done)).unwrap();
+        assert_eq!(fs::read_to_string(a.path("data.bin")).unwrap(), HELLO);
+        assert_eq!(http.ranges(), [None, Some("bytes=6-".into()), Some("bytes=6-".into())]);
+        assert_eq!(pauses().len(), 2, "one pause before each new attempt");
+        let seen = seen.lock();
+        assert!(seen.windows(2).all(|w| w[0] <= w[1]), "progress never goes back: {seen:?}");
+        assert_eq!(seen.last(), Some(&(HELLO.len() as u64)));
+    }
+
+    #[test]
+    fn a_server_without_range_support_starts_over_and_the_progress_does_not_go_back() {
+        let tmp = Temp::new("norange-retry");
+        let a = hello(&tmp, "\"https://dl.test/data.bin\"");
+        // Six bytes, a dropped connection, and then the whole file again
+        // with a 200 although a range was asked for.
+        let http = Scripted::new(vec![Step::Cut(200, "hello "), Step::Cut(200, "hel"), Step::Reply(200, &[], HELLO)]);
+        let seen = Mutex::new(Vec::new());
+        a.download(&http, &CancelToken::new(), &|p| seen.lock().push(p.done)).unwrap();
+        assert_eq!(fs::read_to_string(a.path("data.bin")).unwrap(), HELLO, "no piece of the first try is left in it");
+        assert_eq!(http.ranges(), [None, Some("bytes=6-".into()), Some("bytes=3-".into())]);
+        let seen = seen.lock();
+        assert!(seen.windows(2).all(|w| w[0] <= w[1]), "progress never goes back: {seen:?}");
+        assert_eq!(seen.last(), Some(&(HELLO.len() as u64)));
+    }
+
+    #[test]
+    fn a_rate_limit_waits_as_long_as_the_server_asks_and_then_goes_on() {
+        let tmp = Temp::new("limited");
+        let a = hello(&tmp, "\"https://dl.test/data.bin\"");
+        let http = Scripted::new(vec![
+            Step::Reply(429, &[("Retry-After", "7")], "slow down"),
+            Step::Reply(503, &[], "busy"),
+            Step::Reply(200, &[], HELLO),
+        ]);
+        pauses();
+        a.download(&http, &CancelToken::new(), &|_| {}).unwrap();
+        assert!(a.ready());
+        let waited = pauses();
+        assert_eq!(waited.len(), 2);
+        assert!(waited[0] >= std::time::Duration::from_secs(7), "Retry-After is honoured: {waited:?}");
+        assert!(waited[1] <= std::time::Duration::from_secs(2), "a plain failure backs off from a second: {waited:?}");
+    }
+
+    #[test]
+    fn pauses_double_with_jitter_and_stay_bounded() {
+        for attempt in 1..=40 {
+            let p = retry_pause(attempt, None).as_secs_f64();
+            let nominal = 2f64.powi((attempt - 1).min(5) as i32).min(30.0);
+            assert!(p >= nominal * 0.5 && p <= nominal, "attempt {attempt}: {p}");
+        }
+        assert_eq!(retry_pause(1, Some(40)), std::time::Duration::from_secs(40));
+        assert_eq!(retry_pause(1, Some(86_400)), MAX_RETRY_PAUSE, "a server cannot park a download for a day");
+    }
+
+    #[test]
+    fn a_wrong_hash_after_a_resume_is_downloaded_afresh_once_and_never_accepted() {
+        // The two pieces do not make the file the manifest names (the
+        // mirror changed it in between); a clean third request does.
+        let tmp = Temp::new("resume-hash");
+        let a = hello(&tmp, "\"https://dl.test/data.bin\"");
+        let http =
+            Scripted::new(vec![Step::Cut(200, "HELLO "), Step::Reply(206, &[], "world"), Step::Reply(200, &[], HELLO)]);
+        a.download(&http, &CancelToken::new(), &|_| {}).unwrap();
+        assert_eq!(fs::read_to_string(a.path("data.bin")).unwrap(), HELLO);
+        assert_eq!(http.ranges(), [None, Some("bytes=6-".into()), None], "the last request asks for the whole file");
+
+        // Still wrong when fetched in one go: refused, deleted, not retried again.
+        let tmp = Temp::new("resume-hash-bad");
+        let a = hello(&tmp, "\"https://dl.test/data.bin\"");
+        let http = Scripted::new(vec![
+            Step::Cut(200, "HELLO "),
+            Step::Reply(206, &[], "world"),
+            Step::Reply(200, &[], "HELLO WORLD"),
+        ]);
+        let err = a.download(&http, &CancelToken::new(), &|_| {}).unwrap_err();
+        assert!(matches!(err, Error::AssetCorrupt { ref actual, .. } if *actual == sha_hex(b"HELLO WORLD")), "{err:?}");
+        assert!(!a.path("data.bin").exists() && !a.part_path("data.bin").exists());
+        assert_eq!(a.status()[0].state, AssetState::Missing);
+        assert!(http.steps.lock().is_empty());
+    }
+
+    #[test]
+    fn a_mirror_that_keeps_failing_gives_way_to_the_next_and_a_refusal_is_not_retried() {
+        let tmp = Temp::new("giveup");
+        let a = hello(&tmp, "[\"https://one.test/d\", \"https://two.test/d\"]");
+        let mut steps: Vec<Step> = (0..ATTEMPTS_PER_MIRROR).map(|_| Step::Refuse).collect();
+        steps.push(Step::Reply(200, &[], HELLO));
+        let http = Scripted::new(steps);
+        pauses();
+        a.download(&http, &CancelToken::new(), &|_| {}).unwrap();
+        let urls: Vec<String> = http.seen.lock().iter().map(|r| r.url.clone()).collect();
+        assert_eq!(urls.iter().filter(|u| u.contains("one.test")).count(), ATTEMPTS_PER_MIRROR as usize);
+        assert_eq!(urls.last().map(String::as_str), Some("https://two.test/d"));
+        assert_eq!(pauses().len(), ATTEMPTS_PER_MIRROR as usize - 1);
+
+        // 404 and 403 will not change by asking again.
+        let tmp = Temp::new("giveup-404");
+        let a = hello(&tmp, "\"https://one.test/d\"");
+        let http = Scripted::new(vec![Step::Reply(404, &[], "gone")]);
+        let err = a.download(&http, &CancelToken::new(), &|_| {}).unwrap_err();
+        assert!(matches!(err, Error::HttpStatus { status: 404, .. }), "{err:?}");
+        assert!(pauses().is_empty());
+    }
+
+    #[test]
+    fn a_server_that_cannot_continue_the_part_gets_asked_for_the_whole_file() {
+        let tmp = Temp::new("416");
+        let a = hello(&tmp, "\"https://dl.test/data.bin\"");
+        fs::create_dir_all(a.state_dir()).unwrap();
+        fs::write(a.part_path("data.bin"), "junk!").unwrap();
+        let http = Scripted::new(vec![Step::Reply(416, &[], ""), Step::Reply(200, &[], HELLO)]);
+        a.download(&http, &CancelToken::new(), &|_| {}).unwrap();
+        assert_eq!(fs::read_to_string(a.path("data.bin")).unwrap(), HELLO);
+        assert_eq!(http.ranges(), [Some("bytes=5-".into()), None]);
+    }
+
+    #[test]
+    fn cancelling_while_waiting_to_retry_stops_the_download_and_keeps_the_part() {
+        let tmp = Temp::new("cancel-wait");
+        let mut a = hello(&tmp, "\"https://dl.test/data.bin\"");
+        a.pause = cancellable_pause;
+        let cancel = CancelToken::new();
+        let http = Scripted::new(vec![Step::Cut(200, "hello ")]);
+        let started = std::time::Instant::now();
+        std::thread::scope(|s| {
+            s.spawn(|| {
+                std::thread::sleep(std::time::Duration::from_millis(40));
+                cancel.cancel();
+            });
+            assert!(matches!(a.download(&http, &cancel, &|_| {}), Err(Error::Cancelled)));
+        });
+        assert!(started.elapsed() < std::time::Duration::from_millis(450), "the pause ended early");
+        assert_eq!(a.status()[0].state, AssetState::Partial { have: 6 });
     }
 
     /// An `Http` serving binary bodies, which `MockHttp` (text only) cannot.
@@ -1353,9 +1745,7 @@ mod tests {
             206,
             "world",
         );
-        let err = a.download(&http, &CancelToken::new(), &|_| {}).unwrap_err();
-        assert!(matches!(err, Error::Network(ref m) if m.contains("6 of 11")), "{err}");
-        assert_eq!(a.status()[0].state, AssetState::Partial { have: 6 });
+        // One download now sees it through: the short answer is retried.
         a.download(&http, &CancelToken::new(), &|_| {}).unwrap();
         assert_eq!(fs::read_to_string(a.path("data.bin")).unwrap(), HELLO);
         let requests = http.requests();

@@ -239,7 +239,11 @@ pub fn language_arg(lang: LangId, vertical: VerticalTextMode, auto: &str) -> Res
         let list: Vec<&str> = auto.split(['+', ',', ' ']).map(str::trim).filter(|s| !s.is_empty()).collect();
         return Ok(if list.is_empty() { "eng".to_owned() } else { list.join("+") });
     }
-    let code = tesseract_code(lang).ok_or_else(|| Error::SourceLanguageUnsupported { provider: NAME.into(), lang })?;
+    let code = tesseract_code(lang).ok_or_else(|| Error::SourceLanguageUnsupported {
+        provider: NAME.into(),
+        lang,
+        detail: String::new(),
+    })?;
     if vertical == VerticalTextMode::Keep && matches!(code, "jpn" | "chi_sim" | "chi_tra" | "kor") {
         return Ok(format!("{code}_vert+{code}"));
     }

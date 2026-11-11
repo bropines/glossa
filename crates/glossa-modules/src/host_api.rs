@@ -50,6 +50,11 @@ impl Http for ScopedHttp<'_> {
 #[derive(Default)]
 pub struct ModuleCache {
     entries: Mutex<HashMap<CacheKey, CacheEntry>>,
+    /// Which modules reported a rate limit and until when they are left
+    /// alone, by module id. Kept here because the cache is the one thing
+    /// that lives across reloads of the modules: applying the settings
+    /// must not make a refusing service fair game again.
+    pub limits: crate::backoff::Backoff,
 }
 
 /// (module id, key).
@@ -105,6 +110,10 @@ pub struct HostApi<'a> {
     /// state, applied to the panel at once. `None` outside one, where the
     /// call is accepted and dropped.
     pub ui_update: Option<&'a (dyn Fn(crate::provider::OptionValues) + Sync)>,
+    /// The call's cancel token: once it is set, host calls are refused, so
+    /// a module still working for a superseded request stops sending
+    /// requests on its behalf and comes back sooner.
+    pub cancel: Option<&'a crate::provider::CancelToken>,
 }
 
 impl<'a> HostApi<'a> {
@@ -117,7 +126,14 @@ impl<'a> HostApi<'a> {
             assets: None,
             strings: None,
             ui_update: None,
+            cancel: None,
         }
+    }
+
+    /// Refuse host calls once `cancel` is set.
+    pub fn with_cancel(mut self, cancel: Option<&'a crate::provider::CancelToken>) -> Self {
+        self.cancel = cancel;
+        self
     }
 
     /// Answer the `assets` host call from `assets`.
@@ -162,7 +178,11 @@ impl<'a> HostApi<'a> {
     fn image_op(&self, _op: &str, _params: serde_json::Value) -> Result<serde_json::Value, ModuleError> {
         Err(ModuleError::new(ErrorKind::Unsupported, "this Glossa was built without the image API"))
     }
+
     pub fn handle(&self, method: &str, params: serde_json::Value) -> Reply {
+        if self.cancel.is_some_and(|c| c.is_cancelled()) {
+            return Reply::err(cancelled_error());
+        }
         match self.dispatch(method, params) {
             Ok(v) => Reply::ok(v),
             Err(e) => Reply::err(e),
@@ -243,6 +263,11 @@ impl<'a> HostApi<'a> {
     }
 }
 
+/// What a host call made for a cancelled request is answered with.
+pub fn cancelled_error() -> ModuleError {
+    ModuleError::other("the request was cancelled")
+}
+
 pub fn to_net_request(req: wire::HttpRequest) -> Result<HttpRequest, ModuleError> {
     let method = Method::parse(&req.method)
         .ok_or_else(|| ModuleError::new(ErrorKind::BadRequest, format!("unknown method {:?}", req.method)))?;
@@ -262,6 +287,10 @@ pub fn to_net_request(req: wire::HttpRequest) -> Result<HttpRequest, ModuleError
         body,
         timeout: req.timeout_ms.map(Duration::from_millis),
         codepage: None,
+        // A 429 goes straight back to the module, which knows what its
+        // service means by it (and can report `rate_limited`); a silent
+        // second request from here would only prolong the block.
+        no_retry_when_limited: true,
         ..Default::default()
     })
 }
@@ -279,15 +308,21 @@ pub fn from_net_response(resp: HttpResponse, binary: bool) -> wire::HttpResponse
             })
             .or_insert_with(|| v.clone());
     }
+    // `Retry-After` in seconds, read for the module (an HTTP date, which
+    // few services send, is left to the header).
+    let retry_after_secs = matches!(resp.status, 429 | 503)
+        .then(|| headers.get("retry-after").and_then(|v| v.lines().next()?.trim().parse::<u64>().ok()))
+        .flatten();
     if binary {
         wire::HttpResponse {
             status: resp.status,
             headers,
             body: String::new(),
             body_base64: Some(base64::engine::general_purpose::STANDARD.encode(&resp.body)),
+            retry_after_secs,
         }
     } else {
-        wire::HttpResponse { status: resp.status, headers, body: resp.text(), body_base64: None }
+        wire::HttpResponse { status: resp.status, headers, body: resp.text(), body_base64: None, retry_after_secs }
     }
 }
 
@@ -304,7 +339,14 @@ pub fn to_module_error(e: Error) -> ModuleError {
         Error::RateLimited { retry_after_secs, .. } => *retry_after_secs,
         _ => None,
     };
-    ModuleError { kind, message: e.to_string(), retry_after_secs, location: None }
+    // A refusal of ours already names the module ("module x failed: …");
+    // the module's own failure will say so again, so only the reason
+    // travels.
+    let message = match e {
+        Error::Module { detail, .. } | Error::ModuleAt { detail, .. } => detail,
+        other => other.to_string(),
+    };
+    ModuleError { kind, message, retry_after_secs, location: None }
 }
 
 /// A module's error, as the engine sees it.
@@ -318,12 +360,19 @@ pub fn from_module_error(module: &str, name: &str, e: ModuleError) -> Error {
         ErrorKind::Network => Error::Network(format!("{name}: {}", e.message)),
         ErrorKind::BadResponse => Error::BadResponse { provider: name.to_owned(), detail: e.message },
         ErrorKind::NotFound => Error::NoTextRecognised,
-        ErrorKind::SourceLanguage => {
-            Error::SourceLanguageUnsupported { provider: name.to_owned(), lang: glossa_core::LangId::UNKNOWN }
-        }
-        ErrorKind::TargetLanguage => {
-            Error::TargetLanguageUnsupported { provider: name.to_owned(), lang: glossa_core::LangId::UNKNOWN }
-        }
+        // The language is not known here; `ProtocolProvider` puts the
+        // request's in. What the module said about it is kept: often the
+        // one useful part ("download rec-ch.onnx for Chinese").
+        ErrorKind::SourceLanguage => Error::SourceLanguageUnsupported {
+            provider: name.to_owned(),
+            lang: glossa_core::LangId::UNKNOWN,
+            detail: e.message,
+        },
+        ErrorKind::TargetLanguage => Error::TargetLanguageUnsupported {
+            provider: name.to_owned(),
+            lang: glossa_core::LangId::UNKNOWN,
+            detail: e.message,
+        },
         _ => match e.location {
             Some(l) if !l.file.is_empty() => Error::ModuleAt {
                 module: module.to_owned(),

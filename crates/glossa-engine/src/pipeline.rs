@@ -369,7 +369,12 @@ impl Pipeline<'_> {
             if !info.supports_language(pair.to) {
                 failed.push((
                     info.id.clone(),
-                    Error::TargetLanguageUnsupported { provider: info.name.clone(), lang: pair.to }.to_string(),
+                    Error::TargetLanguageUnsupported {
+                        provider: info.name.clone(),
+                        lang: pair.to,
+                        detail: String::new(),
+                    }
+                    .to_string(),
                 ));
                 continue;
             }
@@ -382,7 +387,12 @@ impl Pipeline<'_> {
             } else {
                 failed.push((
                     info.id.clone(),
-                    Error::SourceLanguageUnsupported { provider: info.name.clone(), lang: pair.from }.to_string(),
+                    Error::SourceLanguageUnsupported {
+                        provider: info.name.clone(),
+                        lang: pair.from,
+                        detail: String::new(),
+                    }
+                    .to_string(),
                 ));
                 continue;
             };
@@ -439,7 +449,11 @@ impl Pipeline<'_> {
             }
         }
         Err(last_err.unwrap_or_else(|| match candidates.first() {
-            Some(p) => Error::TargetLanguageUnsupported { provider: p.info().name.clone(), lang: pair.to },
+            Some(p) => Error::TargetLanguageUnsupported {
+                provider: p.info().name.clone(),
+                lang: pair.to,
+                detail: String::new(),
+            },
             None => Error::NoProvider("translation"),
         }))
     }

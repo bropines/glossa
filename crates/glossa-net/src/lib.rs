@@ -374,6 +374,13 @@ impl HttpClient {
         self.agent.read().unwrap_or_else(|e| e.into_inner()).clone()
     }
 
+    /// How long a download's body may send nothing before the transfer is
+    /// given up as stalled: three network timeouts, at most a minute and a
+    /// half. Slow is fine, silent is not.
+    fn download_stall(&self) -> Duration {
+        self.timeout.saturating_mul(3).min(Duration::from_secs(90))
+    }
+
     /// A client with default settings and no proxy, for tools and tests.
     pub fn plain() -> HttpClient {
         let settings = Network {
@@ -606,21 +613,58 @@ impl Http for HttpClient {
         if !on_event(DownloadEvent::Status(status)) {
             return Ok(HttpResponse { status, headers, body: Vec::new(), codepage: None });
         }
-        let mut reader = response.body_mut().with_config().limit(u64::MAX).reader();
-        let mut buf = vec![0u8; 64 * 1024];
+        // The body is read on a thread of its own, so that a connection
+        // gone silent (a laptop that slept, a Wi-Fi network that changed:
+        // no reset ever arrives) is noticed after `stall` instead of when
+        // the whole transfer's budget of hours runs out. The caller can
+        // then ask again for the rest with `Range`.
+        let stall = self.download_stall();
+        let (tx, rx) = std::sync::mpsc::sync_channel::<std::io::Result<Vec<u8>>>(4);
+        let reader = std::thread::Builder::new().name("download-body".into()).spawn(move || {
+            let mut reader = response.body_mut().with_config().limit(u64::MAX).reader();
+            loop {
+                let mut buf = vec![0u8; 64 * 1024];
+                let piece = match reader.read(&mut buf) {
+                    Ok(n) => {
+                        buf.truncate(n);
+                        Ok(buf)
+                    }
+                    Err(e) if e.kind() == std::io::ErrorKind::Interrupted => continue,
+                    Err(e) => Err(e),
+                };
+                // An empty piece is the end of the body. The receiver going
+                // away (it stopped, or gave up on a stall) ends the thread
+                // and closes the connection with it.
+                let last = !matches!(&piece, Ok(b) if !b.is_empty());
+                if tx.send(piece).is_err() || last {
+                    return;
+                }
+            }
+        });
+        if let Err(e) = reader {
+            return Err(Error::Network(format!("{provider}: cannot start reading the body: {e}")));
+        }
         loop {
-            match reader.read(&mut buf) {
-                Ok(0) => break,
-                Ok(n) => {
-                    if !on_event(DownloadEvent::Chunk(&buf[..n])) {
+            match rx.recv_timeout(stall) {
+                Ok(Ok(chunk)) if chunk.is_empty() => break,
+                Ok(Ok(chunk)) => {
+                    if !on_event(DownloadEvent::Chunk(&chunk)) {
                         break;
                     }
                 }
-                Err(e) if e.kind() == std::io::ErrorKind::Interrupted => continue,
-                Err(e) if e.kind() == std::io::ErrorKind::TimedOut => {
+                Ok(Err(e)) if e.kind() == std::io::ErrorKind::TimedOut => {
                     return Err(Error::Timeout(whole.as_millis() as u64));
                 }
-                Err(e) => return Err(Error::Network(format!("{provider}: reading body: {e}"))),
+                Ok(Err(e)) => return Err(Error::Network(format!("{provider}: reading body: {e}"))),
+                Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
+                    return Err(Error::Network(format!(
+                        "{provider}: reading body: nothing arrived for {} s",
+                        stall.as_secs()
+                    )));
+                }
+                Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => {
+                    return Err(Error::Network(format!("{provider}: reading body: the reader stopped")));
+                }
             }
         }
         Ok(HttpResponse { status, headers, body: Vec::new(), codepage: None })
@@ -1483,6 +1527,71 @@ mod tests {
         let err = client(1, 0).send(HttpRequest::get(&url)).unwrap_err();
         assert!(matches!(err, Error::Timeout(_) | Error::Network(_)), "{err:?}");
         assert!(started.elapsed() < Duration::from_millis(2500), "took {:?}", started.elapsed());
+    }
+
+    #[test]
+    fn a_download_that_goes_silent_is_given_up_and_keeps_what_arrived() {
+        let url = stalling_server(|mut s| {
+            use std::io::{Read as _, Write as _};
+            let mut buf = [0u8; 1024];
+            let _ = s.read(&mut buf);
+            let _ = s.write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 100\r\n\r\nhalf");
+            let _ = s.flush();
+            std::thread::sleep(Duration::from_secs(30));
+        });
+        let http = client(1, 0);
+        let started = Instant::now();
+        let mut got = Vec::new();
+        let mut statuses = Vec::new();
+        // The transfer as a whole is allowed an hour; the silence is what ends it.
+        let err = http
+            .send_download(HttpRequest::get(&url).timeout(Duration::from_secs(3600)), &mut |event| {
+                match event {
+                    DownloadEvent::Status(s) => statuses.push(s),
+                    DownloadEvent::Chunk(c) => got.extend_from_slice(c),
+                }
+                true
+            })
+            .unwrap_err();
+        assert!(matches!(err, Error::Network(ref m) if m.contains("nothing arrived")), "{err:?}");
+        assert_eq!((statuses, got.as_slice()), (vec![200], &b"half"[..]), "what did arrive was handed over");
+        let took = started.elapsed();
+        assert!(
+            took >= http.download_stall() && took < http.download_stall() + Duration::from_secs(2),
+            "took {took:?}"
+        );
+    }
+
+    #[test]
+    fn a_download_arrives_whole_and_can_be_stopped() {
+        let url = stalling_server(|mut s| {
+            use std::io::{Read as _, Write as _};
+            let mut buf = [0u8; 1024];
+            let _ = s.read(&mut buf);
+            let body = vec![b'x'; 300_000];
+            let _ = s.write_all(format!("HTTP/1.1 200 OK\r\nContent-Length: {}\r\n\r\n", body.len()).as_bytes());
+            let _ = s.write_all(&body);
+            let _ = s.flush();
+        });
+        let http = client(5, 0);
+        let mut got = 0usize;
+        let r = http
+            .send_download(HttpRequest::get(&url), &mut |event| {
+                if let DownloadEvent::Chunk(c) = event {
+                    assert!(c.iter().all(|b| *b == b'x'));
+                    got += c.len();
+                }
+                true
+            })
+            .unwrap();
+        assert_eq!((r.status, got), (200, 300_000));
+        let mut chunks = 0;
+        http.send_download(HttpRequest::get(&url), &mut |event| {
+            chunks += usize::from(matches!(event, DownloadEvent::Chunk(_)));
+            false
+        })
+        .unwrap();
+        assert_eq!(chunks, 0, "stopped at the status, before any of the body");
     }
 
     #[test]

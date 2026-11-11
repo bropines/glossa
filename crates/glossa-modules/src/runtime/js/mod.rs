@@ -29,11 +29,11 @@ use crate::registry::RuntimeContext;
 pub fn load_glossa(dir: &Path, manifest: Manifest, ctx: &RuntimeContext) -> Result<Arc<dyn Provider>, String> {
     let script = glossa::GlossaScript::from_dir(dir, &manifest.module.entry)?;
     script.script.check()?;
-    Ok(Arc::new(ProtocolProvider::new(
-        manifest,
-        glossa::GlossaTransport { script: Arc::new(script) },
-        ctx.cache.clone(),
-    )))
+    glossa::check_entries(&manifest, &script)?;
+    Ok(Arc::new(
+        ProtocolProvider::new(manifest, glossa::GlossaTransport { script: Arc::new(script) }, ctx.cache.clone())
+            .configured(ctx),
+    ))
 }
 
 /// A Glossa JavaScript module whose `module.toml` and script are compiled
@@ -59,21 +59,27 @@ pub fn load_qtranslate(dir: &Path, ctx: &RuntimeContext) -> Result<Arc<dyn Provi
     let script = legacy::LegacyScript::from_dir(dir)?;
     let meta = script.probe()?;
     let manifest = meta.manifest(&script.folder);
-    Ok(Arc::new(ProtocolProvider::new(
-        manifest,
-        legacy::LegacyTransport {
-            script: Arc::new(script),
-            ui_language_code: ctx.ui_language_code.clone(),
-            preferred_domain: ctx.preferred_domain.clone(),
-        },
-        ctx.cache.clone(),
-    )))
+    Ok(Arc::new(
+        ProtocolProvider::new(
+            manifest,
+            legacy::LegacyTransport {
+                script: Arc::new(script),
+                ui_language_code: ctx.ui_language_code.clone(),
+                preferred_domain: ctx.preferred_domain.clone(),
+            },
+            ctx.cache.clone(),
+        )
+        .configured(ctx),
+    ))
 }
 
 pub fn load_pot(dir: &Path, ctx: &RuntimeContext) -> Result<Arc<dyn Provider>, String> {
     let plugin = pot::PotPlugin::from_dir(dir)?;
     let manifest = plugin.manifest.clone();
-    Ok(Arc::new(ProtocolProvider::new(manifest, pot::PotTransport { plugin: Arc::new(plugin) }, ctx.cache.clone())))
+    Ok(Arc::new(
+        ProtocolProvider::new(manifest, pot::PotTransport { plugin: Arc::new(plugin) }, ctx.cache.clone())
+            .configured(ctx),
+    ))
 }
 
 #[cfg(test)]

@@ -42,12 +42,24 @@ if (typeof unescape !== "function") {
   };
 }
 
-/** Thrown by a module to report a typed error to Glossa. */
-function ModuleError(kind, message) {
+/**
+ * Thrown by a module to report a typed error to Glossa. For "rate_limited"
+ * a third argument says when asking again may work: seconds, or
+ * `{ retry_after_secs: n }` (a response's `retry_after_secs` fits).
+ */
+function ModuleError(kind, message, retryAfter) {
   this.name = "ModuleError";
   this.kind = kind;
-  // Encoded so the kind survives the trip through the engine's error text.
-  this.message = "glossa:" + kind + ":" + (message || "");
+  if (retryAfter && typeof retryAfter === "object") retryAfter = retryAfter.retry_after_secs;
+  var secs = Math.ceil(Number(retryAfter));
+  var retry = "";
+  if (secs > 0 && isFinite(secs)) {
+    this.retry_after_secs = secs;
+    retry = "@" + secs;
+  }
+  // Encoded so the kind (and the wait) survive the trip through the
+  // engine's error text.
+  this.message = "glossa:" + kind + retry + ":" + (message || "");
   // Where it was thrown, for the error's location.
   this.stack = new Error().stack;
 }
@@ -59,7 +71,7 @@ function __call(method, params) {
   var reply = JSON.parse(__host_call(method, JSON.stringify(params === undefined ? null : params)));
   if (reply && Object.prototype.hasOwnProperty.call(reply, "error")) {
     var e = reply.error || {};
-    throw new ModuleError(e.kind || "other", e.message || "host call failed");
+    throw new ModuleError(e.kind || "other", e.message || "host call failed", e.retry_after_secs);
   }
   return reply ? reply.result : null;
 }

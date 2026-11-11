@@ -48,7 +48,7 @@ pub fn load(
         env,
         auto_download: ctx.auto_download_assets,
         installing: Mutex::new(()),
-        inner: Arc::new(ProtocolProvider::new(manifest, transport, ctx.cache.clone())),
+        inner: Arc::new(ProtocolProvider::new(manifest, transport, ctx.cache.clone()).configured(ctx)),
     };
     Ok(Arc::new(gate))
 }

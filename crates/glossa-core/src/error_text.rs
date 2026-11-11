@@ -77,9 +77,11 @@ impl Error {
     pub fn detail(&self) -> Option<String> {
         let raw = match self {
             Error::Network(d) | Error::Config(d) | Error::Platform(d) | Error::Internal(d) => d.clone(),
-            Error::BadResponse { detail, .. } | Error::Module { detail, .. } | Error::ModuleAt { detail, .. } => {
-                detail.clone()
-            }
+            Error::BadResponse { detail, .. }
+            | Error::Module { detail, .. }
+            | Error::ModuleAt { detail, .. }
+            | Error::SourceLanguageUnsupported { detail, .. }
+            | Error::TargetLanguageUnsupported { detail, .. } => detail.clone(),
             Error::HttpStatus { body, .. } => body.clone(),
             Error::Unsupported { capability, .. } => (*capability).to_owned(),
             Error::NoProvider(what) => (*what).to_owned(),
@@ -114,8 +116,8 @@ impl Locale {
             Error::Unsupported { provider, .. }
             | Error::BadResponse { provider, .. }
             | Error::RateLimited { provider, retry_after_secs: None } => vec![provider.clone()],
-            Error::SourceLanguageUnsupported { provider, lang }
-            | Error::TargetLanguageUnsupported { provider, lang } => {
+            Error::SourceLanguageUnsupported { provider, lang, .. }
+            | Error::TargetLanguageUnsupported { provider, lang, .. } => {
                 vec![provider.clone(), self.language_name(*lang).to_owned()]
             }
             Error::Timeout(ms) => vec![seconds(*ms)],
@@ -185,8 +187,8 @@ pub fn samples() -> Vec<Error> {
         Error::EmptyInput,
         Error::OfflineOnly("translate.googleapis.com".into()),
         Error::Unsupported { provider: "DeepL".into(), capability: "speech" },
-        Error::SourceLanguageUnsupported { provider: "DeepL".into(), lang: LangId::RUSSIAN },
-        Error::TargetLanguageUnsupported { provider: "DeepL".into(), lang: LangId::RUSSIAN },
+        Error::SourceLanguageUnsupported { provider: "DeepL".into(), lang: LangId::RUSSIAN, detail: String::new() },
+        Error::TargetLanguageUnsupported { provider: "DeepL".into(), lang: LangId::RUSSIAN, detail: String::new() },
         Error::LanguageNotDetected,
         Error::SameLanguage,
         Error::Network("connection reset".into()),
@@ -276,7 +278,11 @@ mod tests {
         let e = Error::MissingCredential { provider: "DeepL".into(), what: "api_key".into() };
         assert_eq!(en.describe_error(&e), "DeepL needs an API key. Enter it in Options → Services.");
         assert_eq!(ru.describe_error(&e), "DeepL: не указан ключ API. Введите его в разделе Настройки → Сервисы.");
-        let e = Error::TargetLanguageUnsupported { provider: "DeepL".into(), lang: crate::LangId::RUSSIAN };
+        let e = Error::TargetLanguageUnsupported {
+            provider: "DeepL".into(),
+            lang: crate::LangId::RUSSIAN,
+            detail: String::new(),
+        };
         assert_eq!(en.describe_error(&e), "DeepL does not translate into Russian.");
         assert_eq!(ru.describe_error(&e), "DeepL не поддерживает язык перевода (Русский).");
         let e = Error::HttpStatus { provider: "Bing".into(), status: 503, body: String::new() };

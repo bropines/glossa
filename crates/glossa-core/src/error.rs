@@ -20,11 +20,14 @@ pub enum Error {
     Unsupported { provider: String, capability: &'static str },
 
     /// The provider works, but not for this language.
-    #[error("{provider} does not support {} as a source language", lang.english_name())]
-    SourceLanguageUnsupported { provider: String, lang: LangId },
+    /// `detail` is what the provider itself said about it, when it said
+    /// anything (a module's hint about which model to download for the
+    /// language); empty otherwise.
+    #[error("{provider} does not support {} as a source language{}", lang.english_name(), detail_suffix(detail))]
+    SourceLanguageUnsupported { provider: String, lang: LangId, detail: String },
 
-    #[error("{provider} does not support {} as a target language", lang.english_name())]
-    TargetLanguageUnsupported { provider: String, lang: LangId },
+    #[error("{provider} does not support {} as a target language{}", lang.english_name(), detail_suffix(detail))]
+    TargetLanguageUnsupported { provider: String, lang: LangId, detail: String },
 
     /// Detection ran and came back with nothing usable.
     #[error("cannot detect the source language; please choose it manually")]
@@ -111,15 +114,15 @@ pub enum Error {
     #[error("no provider available for {0}")]
     NoProvider(&'static str),
 
-    /// A dictionary answered, and has no article for the word. Apart from
-    /// the failures so that a front end can say "no results" in its own
-    /// language instead of reading the English message.
-    #[error("no results for {query:?}")]
-    NoResults { provider: String, query: String },
-
     /// OCR ran and found no text.
     #[error("no text found in the image")]
     NoTextRecognised,
+
+    /// A lookup ran and the dictionary has nothing for the word: not a
+    /// failure of the provider, and worth trying the next dictionary.
+    /// `query` is what the provider said was not found, normally the word.
+    #[error("{provider}: no results{}", query_suffix(query))]
+    NoResults { provider: String, query: String },
 
     /// Something in the user's configuration does not make sense.
     #[error("configuration error: {0}")]
@@ -266,6 +269,20 @@ fn context_suffix(body: &str) -> String {
     format!(": {short}")
 }
 
+/// ": detail" for what a provider said about its own refusal, cut to a
+/// sentence or two; nothing when it said nothing.
+fn detail_suffix(detail: &str) -> String {
+    context_suffix(detail)
+}
+
+/// " for "word"" when the provider named what it did not find.
+fn query_suffix(query: &str) -> String {
+    match query.trim() {
+        "" => String::new(),
+        q => format!(" for {q:?}"),
+    }
+}
+
 fn retry_suffix(after: &Option<u64>) -> String {
     match after {
         Some(secs) => format!("; retry in {secs} s"),
@@ -326,8 +343,22 @@ mod tests {
 
     #[test]
     fn language_errors_name_the_language_in_english() {
-        let e = Error::TargetLanguageUnsupported { provider: "DeepL".into(), lang: crate::lang::LangId::RUSSIAN };
+        let e = Error::TargetLanguageUnsupported {
+            provider: "DeepL".into(),
+            lang: crate::lang::LangId::RUSSIAN,
+            detail: String::new(),
+        };
         assert_eq!(e.to_string(), "DeepL does not support Russian as a target language");
+        let e = Error::SourceLanguageUnsupported {
+            provider: "Paddle".into(),
+            lang: crate::lang::LangId::RUSSIAN,
+            detail: "get rec-ru.onnx".into(),
+        };
+        assert_eq!(e.to_string(), "Paddle does not support Russian as a source language: get rec-ru.onnx");
+        let e = Error::NoResults { provider: "Wiktionary".into(), query: "qwzxv".into() };
+        assert_eq!(e.to_string(), "Wiktionary: no results for \"qwzxv\"");
+        assert!(e.should_try_next_provider());
+        assert_eq!(Error::NoResults { provider: "W".into(), query: String::new() }.to_string(), "W: no results");
     }
 
     #[test]

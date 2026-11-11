@@ -651,6 +651,10 @@ pub struct HttpResponse {
     /// The body base64-encoded, when the request set `binary`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub body_base64: Option<String>,
+    /// For a 429 or 503: the response's `Retry-After` in seconds, when it
+    /// gave one. Pass it on in a `rate_limited` error's `retry_after_secs`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub retry_after_secs: Option<u64>,
 }
 
 impl HttpResponse {

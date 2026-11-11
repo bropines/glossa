@@ -148,6 +148,16 @@ version, `1`) in the module's environment, and for a module with
   (`[modules] call_timeout_ms`, 30 s by default); the clock stops while
   Glossa works on a host call. A module that overruns it is killed, and the
   next call starts a fresh process.
+  `call_timeout_secs` (1 to 600) in the manifest's `[module]` section sets
+  the budget for a module that is slow by nature.
+- Stopping closes stdin first; a second later whatever is left of the
+  process, and of the processes it started (its process group on Unix, a
+  job object on Windows), is killed. A module over its time budget is
+  killed at once.
+- A request the user no longer waits for is abandoned, not killed: host
+  calls made for it fail, its reply is discarded, and the next request is
+  sent only once that reply has come. A module still busy three seconds
+  later is restarted.
 - A process that exits on its own is reported with its exit code and the
   last lines of its stderr, then started again on the next call.
 
