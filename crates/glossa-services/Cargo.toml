@@ -25,4 +25,4 @@ windows = { workspace = true, features = [
     "Storage_Streams",
     "Win32_System_Com",
 ] }
-windows-future = "0.3"
+windows-future = "0.100"
