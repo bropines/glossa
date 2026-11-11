@@ -83,7 +83,7 @@ arboard = "3"
 global-hotkey = "0.9"
 tray-icon = "0.26"
 xcap = "0.9"
-rfd = "0.17"
+rfd = "0.18"
 windows = "0.62"
 # D-Bus on Linux and the BSDs: Glossa's own service and the desktop portals.
 # The blocking API over zbus's async-io executor (one thread per
