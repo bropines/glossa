@@ -172,8 +172,8 @@ jobs:
           mkdir -p "$GLOSSA_HOME/modules"
           ln -s "$PWD/modules/process/paddle-ocr" "$GLOSSA_HOME/modules/paddle-ocr"
           target/debug/glossa-cli assets download paddle-ocr rec-latin.onnx rec-eslav.onnx rec-ch.onnx
-          target/debug/glossa-cli module test --strict --require-runtimes --download \
-            $(find modules -name module.toml -not -path 'modules/process/local-llm/*' -exec dirname {} \; | sort)
+          mapfile -t dirs < <(find modules -name module.toml -not -path 'modules/process/local-llm/*' -exec dirname {} \; | sort)
+          target/debug/glossa-cli module test --strict --require-runtimes --download "${dirs[@]}"
       # Every window drawn to a PNG under Xvfb, with Mesa's llvmpipe as the
       # OpenGL driver: no GPU on the runner, and none needed.
       - name: Screenshot smoke test

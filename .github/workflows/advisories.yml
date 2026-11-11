@@ -50,4 +50,6 @@ jobs:
         with:
           command: check advisories
           manifest-path: ${{ matrix.manifest }}
-          command-arguments: --config deny.toml
+          # `--config` belongs to cargo-deny itself, not to `check`; the
+          # first word is the action's default for this input.
+          arguments: --all-features --config deny.toml
