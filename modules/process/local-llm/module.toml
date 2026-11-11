@@ -1,3 +1,8 @@
+# NOT RELEASED YET: the program's archives are not published and the `bin`
+# hashes below are all-zero placeholders, which Glossa refuses, so this
+# module does not load and cannot be installed. README.md, "Testing a local
+# build", says how to try it with your own build.
+#
 # Offline translation with a small language model on llama.cpp. A process
 # module: `local-llm` is a small Rust program (src/), downloaded as an
 # asset, that Glossa starts on the first translation. It starts llama-server
