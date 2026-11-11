@@ -1433,6 +1433,7 @@ pub static STRINGS: &[(&str, &str, Option<&str>)] = &[
     ("options.modules.trust.hint", "These modules were installed by hand. They do not run until you approve what they ask for.", None),
     ("options.modules.trust.new", "new module", None),
     ("options.modules.trust.widened", "asks for more than you approved", None),
+    ("options.modules.trust.changed", "its files changed since you approved it", None),
     ("options.modules.trust.sandboxed", "Runs sandboxed: no access to your files or programs", None),
     ("options.modules.trust.program", "Runs a program on your computer with your rights, so it can read and change your files: %s", None),
     ("options.modules.trust.native", "Loads a native library into Glossa: full trust, it runs inside Glossa (%s)", None),

@@ -9,6 +9,22 @@ the notes of its GitHub release.
 
 ### Security
 
+- Module approvals are tied to the module's files and a fresh install
+  approves nothing. Before, the first start with no settings file (or one
+  from before approvals, or after deleting `config.toml`) approved every
+  module found in your modules folder without asking, and an approved
+  module kept running after its script or program was replaced, as long as
+  `module.toml` asked for nothing new. Now only what is inside the build
+  runs unasked; anything else in your folders waits until you approve it
+  once, the approval records a SHA-256 over the module's files
+  (`[modules.granted.<id>] content`), and any change to them asks again
+  ("its files changed since you approved it"). Upgrading keeps what you
+  had: modules an earlier version had running are approved as they are
+  now, and existing approvals are bound to the current files on the next
+  start. **A module that writes into its own folder will ask again at
+  every start**; module authors, see docs/modules/README.md, *Permissions
+  and trust*. `GET /v1/trust` and `glossa-cli module pending` say when
+  files are the reason (`changed`).
 - `glossa-cli` and a second launch of `glossa` send the control API token
   only to the Glossa that owns their data folder. They used to send it to
   whatever answered `/health` with "glossa" on the port named in

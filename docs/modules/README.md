@@ -755,13 +755,16 @@ and every call fails with "module … is waiting for your approval".
 
 What you approved is kept in `config.toml` as `[modules.granted.<id>]`
 ([configuration.md](../configuration.md#modulesgrantedid)), with a hash of
-the approved set. When an update changes `module.toml`:
+the approved set and a hash of the module's files. An approval is for the
+module as it was when you gave it:
 
-- asking for **less or the same** (fewer hosts, a download removed) keeps it
-  running;
-- asking for **more** (a new host, a new or changed download, another
-  program or command line, a new package or action) stops it until you
-  approve again; the prompt says what is new.
+- **any change to its files** (the script, the program, a library, a data
+  file, `module.toml` itself, a file added or removed) stops it until you
+  approve again; the prompt says "its files changed since you approved it";
+- when the change also makes it ask for **more** (a new host, a new or
+  changed download, another program or command line, a new package or
+  action), the prompt says what is new;
+- putting the approved files back makes it run again without asking.
 
 Classic QTranslate scripts and pot-app plugins in your own folders are
 asked about too, as "can reach any website", since they always had that.
@@ -795,29 +798,59 @@ No approval is needed for:
 it, approved or not: running it on a folder is the developer's explicit
 choice.
 
-**What is checked.** Trust covers what `module.toml` (and a Python module's
-`requirements.txt` or `pyproject.toml`) declares, nothing more. The scripts,
-programs and libraries themselves are not hashed: an update that changes
-`main.js` or the executable but asks for nothing new keeps running. The
-declared limits still hold for JavaScript (no files, only the approved
-hosts); a program or library can do anything you can, which is why the
-prompt says so.
+**What is checked.** What `module.toml` (and a Python module's
+`requirements.txt` or `pyproject.toml`) declares, and the files themselves:
+a SHA-256 over every file in the module's folder, through its sub-folders,
+by relative path, length and bytes. A link counts as where it points and
+is not followed. Left out are only `.DS_Store`, `Thumbs.db` and
+`desktop.ini` (written by the system when you look at the folder) and a
+`.git` folder at the top. For a `.potext` it is the unpacked copy that is
+hashed; for a classic script, its folder (a `Common.js` one level up is
+not part of it).
 
-**Upgrading.** The first time a version with approvals runs, it grants every
-module already installed what it declares at that moment, and records
-`[modules] trust_initialised = true`, so nothing that worked stops working.
-Only modules added or widened afterwards ask. When a broken `config.toml`
-is set aside and the defaults are used, this migration does not run: the
-approvals went with the old file, and every hand-installed module asks
-again, so nothing that was waiting or declined is approved by accident.
+**For module authors**, this means a module must not write into its own
+folder: a cache, a log or a `__pycache__` there changes the hash, and the
+module asks again at the next start. Keep state in the host cache, in the
+module's downloads folder or in the system's temporary folder. (Glossa
+starts Python modules with `PYTHONDONTWRITEBYTECODE=1`; a `process` module
+that runs Python itself should do the same.) While you develop with an
+editor of your own, every edit asks again: approve it again, write the
+module in the module editor, whose saves approve what you made there, or
+use `glossa-cli module test DIR`, which asks nothing. In the module editor,
+after changing a module you approved but did not create in this session,
+*Reload* before *Test*: the reload is what approves your change.
+
+**A fresh install approves nothing.** Only what is inside the build runs
+unasked: the modules compiled into the program and the installer's folders
+listed above, recognised by where they are, not by anything in your
+settings. A module found in your own modules folder waits for approval
+however it got there and whatever `config.toml` says or lacks: no settings
+file, an empty one, one with no approvals in it. Deleting `config.toml`
+does not approve anything either.
+
+**Upgrading.** Versions before approvals ran every module they found. The
+first time a version with approvals reads such a settings file (one
+without `[modules] trust_initialised`), it approves the modules that
+version is known to have had running, the ids under `[services] seen`
+that are not Glossa's own, for what they declare and the files they hold
+at that moment, and records `trust_initialised = true`. A module that
+appeared in the folder since, or that claims the id of a built-in service,
+waits like any other. When a broken `config.toml` is set aside and the
+defaults are used, nothing is approved: the approvals went with the old
+file, and every hand-installed module asks again. An approval written
+before files were hashed (no `content`) keeps its module running and is
+bound to the files it holds the next time Glossa loads it.
 
 From the command line, `glossa-cli module pending` lists what waits and
 what each asks for, and `glossa-cli module approve|revoke|decline ID`
 approves, withdraws or declines ([cli.md](../cli.md#module)). The control
 API has the same under [`/v1/trust`](../control-api.md#v1trust).
 
-Approval is about what a module may do, not who wrote it: Glossa does not
-sign or verify modules.
+Approval is about what a module may do and that it is still the module
+you approved, not who wrote it: Glossa does not sign or verify modules.
+Approvals live in `config.toml`, which you can write: they keep a module
+from running unseen, not a program that already runs as you from editing
+your settings.
 
 ## Bundled modules
 

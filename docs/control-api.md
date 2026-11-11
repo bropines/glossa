@@ -581,8 +581,8 @@ installed by hand wait for approval before they run
 
 | method | path | what it does |
 |---|---|---|
-| GET | `/v1/trust` | Every loaded module that needs approval: `{id, name, dir, pending, first_time, request, new, hash}`. `request` is what it asks for (`runtime`, `reach`: `sandboxed`/`program`/`native`, `program`, `network`, `assets` with `name`, `size`, `hosts`, `sha256`, `optional`, `packages`, `actions`); `new` is the part beyond its current approval. `?pending=1` lists only those waiting. |
-| POST | `/v1/trust/<id>/approve` | Approve what it asks for now and load it. Send `{"hash": …}` from the listing to approve only what was shown: a module changed since answers 400. |
+| GET | `/v1/trust` | Every loaded module that needs approval: `{id, name, dir, pending, first_time, changed, request, new, hash}`. `changed` is true for a module that waits only because its files are not the ones approved (`new` is then empty). `request` is what it asks for (`runtime`, `reach`: `sandboxed`/`program`/`native`, `program`, `network`, `assets` with `name`, `size`, `hosts`, `sha256`, `optional`, `packages`, `actions`); `new` is the part beyond its current approval. `?pending=1` lists only those waiting. |
+| POST | `/v1/trust/<id>/approve` | Approve what it asks for now, with the files it holds now, and load it. Send `{"hash": …}` from the listing to approve only what was shown: a module changed since answers 400. |
 | POST | `/v1/trust/<id>/revoke` | Withdraw the approval; the module waits again. |
 | POST | `/v1/trust/<id>/decline` | Switch the module off. |
 

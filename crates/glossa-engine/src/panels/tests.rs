@@ -103,7 +103,7 @@ fn engine(tag: &str) -> (Engine, std::path::PathBuf) {
     std::fs::write(module.join("module.toml"), MANIFEST).unwrap();
     std::fs::write(module.join("main.js"), SCRIPT).unwrap();
     let paths = Paths::for_exe_dir(dir.clone(), Some(dir.join("home")));
-    (Engine::with_config(paths, Config::default()).unwrap(), dir)
+    (Engine::approving(paths, Config::default()), dir)
 }
 
 /// Poll until the kept keys are read and no action runs.

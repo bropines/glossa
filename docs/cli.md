@@ -488,7 +488,7 @@ These go through the control API of a running Glossa when it answers, and
 otherwise change `config.toml`, refusing while a Glossa that cannot be
 reached holds the data folder (as `preset` does: `--local` skips the
 running Glossa, `--force` changes the file anyway). `--json` prints
-`pending` as a list of `{id, name, dir, pending, first_time, request, new,
+`pending` as a list of `{id, name, dir, pending, first_time, changed, request, new,
 hash}`.
 
 `module panel` without a name lists the panels the loaded modules declare

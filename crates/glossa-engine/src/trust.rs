@@ -1,7 +1,9 @@
 //! Approving modules installed by hand, from the engine's side: which
 //! modules wait, what they ask for, approving, revoking and declining, the
 //! policy the registry loads with, and the one-time migration that grants
-//! modules installed before approvals existed. The desktop app,
+//! the modules an earlier version is known to have run. A settings file
+//! without approvals approves nothing by itself: on a fresh install every
+//! module found in the user's folders waits. The desktop app,
 //! `glossa-cli module approve|revoke|pending` and the control API's
 //! `/v1/trust` all come through here. The decision itself is
 //! [`glossa_modules::trust`].
@@ -30,6 +32,9 @@ pub struct ModuleTrust {
     /// Never approved before (a new module), as opposed to an update that
     /// asks for more.
     pub first_time: bool,
+    /// Waiting only because its files are not the ones approved: it asks
+    /// for nothing new, so `new` is empty.
+    pub changed: bool,
     /// Everything it asks for.
     pub request: TrustRequest,
     /// What it asks for beyond its current grant (all of it the first
@@ -56,16 +61,41 @@ impl Engine {
             .filter(|d| *d != user && !extra.contains(d))
             .collect();
         let trusted_script_dirs = cfg.classic.services_dir().into_iter().collect();
-        // Before the migration has run, everything loads as it did, so the
-        // migration can record what each module declares.
-        let granted = cfg.modules.trust_initialised.then(|| Arc::new(cfg.modules.granted.clone()));
-        TrustPolicy { granted, trusted_dirs, trusted_script_dirs }
+        // Before the migration has run, only the modules an earlier version
+        // recorded as seen (`[services] seen`) load without a grant, so the
+        // migration can record what each declares. A missing or empty
+        // settings file names none: a fresh install approves nothing, and
+        // neither does deleting the file. An id Glossa itself provides is
+        // never one of them, so a folder cannot claim a built-in's id here.
+        let legacy = if cfg.modules.trust_initialised {
+            Vec::new()
+        } else {
+            let own = self.own_provider_ids(cfg);
+            cfg.services.seen.iter().filter(|id| !own.contains(id)).cloned().collect()
+        };
+        TrustPolicy { granted: Some(Arc::new(cfg.modules.granted.clone())), legacy, trusted_dirs, trusted_script_dirs }
     }
 
-    /// The first time this version runs with a settings file: grant every
-    /// module now loaded what it declares, so updating Glossa does not stop
-    /// modules that were working. Called by `reload_modules` while the
-    /// policy still approves everything.
+    /// The ids of the providers compiled into the program or made from the
+    /// settings: none of them is a module installed by hand.
+    fn own_provider_ids(&self, cfg: &Config) -> Vec<String> {
+        let ocr = self.inner.ocr_builtins.lock().1.clone();
+        self.inner
+            .builtins
+            .iter()
+            .chain(&self.inner.bundled)
+            .chain(&ocr)
+            .map(|p| p.info().id.clone())
+            .chain(cfg.services.ai_endpoints.iter().map(|e| e.id.clone()))
+            .collect()
+    }
+
+    /// The first time this version runs with a settings file: grant the
+    /// modules an earlier version had running what they declare, with the
+    /// files they hold now, so updating Glossa does not stop modules that
+    /// were working. Called by `reload_modules` after a load under the
+    /// policy that lets exactly those through; everything else found in
+    /// the folders is listed as waiting.
     pub(crate) fn initialise_trust(&self) {
         let registry = self.registry();
         let snapshot = {
@@ -87,6 +117,49 @@ impl Engine {
         }
     }
 
+    /// Bind approvals from before files were hashed to the files their
+    /// modules hold now: such a grant let its module load, and from here on
+    /// a change to those files asks again. Called by `reload_modules`.
+    pub(crate) fn bind_grants(&self) {
+        let registry = self.registry();
+        let unbound: Vec<(String, PathBuf)> = {
+            let cfg = self.inner.config.read();
+            registry
+                .entries()
+                .iter()
+                .filter_map(|e| match (&e.trust, e.pending, &e.origin) {
+                    (Some(_), false, Origin::Module { dir, .. }) => {
+                        let id = &e.info().id;
+                        cfg.modules
+                            .granted
+                            .get(id)
+                            .is_some_and(|g| g.content.is_empty())
+                            .then(|| (id.clone(), dir.clone()))
+                    }
+                    _ => None,
+                })
+                .collect()
+        };
+        if unbound.is_empty() {
+            return;
+        }
+        // Hashed outside the lock: a module folder can be large.
+        let hashed: Vec<(String, String)> =
+            unbound.into_iter().map(|(id, dir)| (id, glossa_modules::trust::content_hash(&dir))).collect();
+        let snapshot = {
+            let mut cfg = self.inner.config.write();
+            for (id, content) in hashed {
+                if let Some(g) = cfg.modules.granted.get_mut(&id).filter(|g| g.content.is_empty()) {
+                    g.content = content;
+                }
+            }
+            cfg.clone()
+        };
+        if let Err(e) = self.write_config(&snapshot) {
+            tracing::warn!("could not save the module approvals: {e}");
+        }
+    }
+
     /// Every module loaded that needs approval, approved or not, with those
     /// held back because a trusted provider has their id.
     pub fn module_trust(&self) -> Vec<ModuleTrust> {
@@ -99,6 +172,18 @@ impl Engine {
             .filter_map(|e| {
                 let request = e.trust.as_deref()?.clone();
                 let grant = cfg.get(&e.info().id);
+                let dir = match &e.origin {
+                    Origin::Module { dir, .. } => Some(dir.as_path()),
+                    _ => None,
+                };
+                // Waiting although the grant covers the request and the
+                // folder: only the files can be the reason.
+                let changed = e.pending
+                    && grant.is_some_and(|g| {
+                        request.within(g)
+                            && !g.content.is_empty()
+                            && dir.is_some_and(|d| g.dir.is_empty() || Path::new(&g.dir) == canonical(d))
+                    });
                 Some(ModuleTrust {
                     id: e.info().id.clone(),
                     name: e.info().name.clone(),
@@ -108,6 +193,7 @@ impl Engine {
                     },
                     pending: e.pending,
                     first_time: grant.is_none(),
+                    changed,
                     new: request.beyond(grant),
                     hash: request.hash(),
                     request,
@@ -121,7 +207,8 @@ impl Engine {
         self.module_trust().into_iter().filter(|m| m.pending).collect()
     }
 
-    /// Approve what module `id` asks for now and load it. With `hash`, only
+    /// Approve what module `id` asks for now, with the files it holds now,
+    /// and load it. With `hash`, only
     /// if the request is still the one with that hash (what the user was
     /// shown), so a manifest changed in the meantime is not approved
     /// unseen.
@@ -246,6 +333,17 @@ impl Engine {
         self.reload_module(dir)
     }
 
+    /// An engine for tests of what approved modules do: every module found
+    /// waiting at the start is approved as the user would.
+    #[cfg(test)]
+    pub(crate) fn approving(paths: glossa_core::Paths, cfg: Config) -> Engine {
+        let e = Engine::with_config(paths, cfg).unwrap();
+        for m in e.pending_modules() {
+            e.approve_module(&m.id, Some(&m.hash)).unwrap();
+        }
+        e
+    }
+
     /// Whether the module loaded from `dir` is listed as waiting.
     fn waits_for_approval_listed(&self, dir: &Path) -> bool {
         let registry = self.registry();
@@ -315,15 +413,21 @@ mod tests {
         assert_eq!(translate(&e, "fresh").unwrap(), "ok");
         assert!(e.config().modules.granted.contains_key("fresh"));
 
-        // An update with fewer hosts runs; one with more asks again.
+        // An update asks again, whatever it asks for: its files changed.
         module(&user, "fresh", "");
         e.reload_modules();
-        assert!(e.pending_modules().is_empty(), "narrowing does not ask");
+        let narrowed = e.pending_modules();
+        assert!(narrowed[0].changed, "the files are not the approved ones");
+        assert!(narrowed[0].new.network.is_empty(), "though it asks for nothing new");
+        // Put back as approved, it runs again without asking.
+        module(&user, "fresh", "\"api.test\"");
+        e.reload_modules();
+        assert!(e.pending_modules().is_empty());
         module(&user, "fresh", "\"api.test\", \"more.test\"");
         e.reload_modules();
         let again = e.pending_modules();
         assert_eq!(again.len(), 1);
-        assert!(!again[0].first_time);
+        assert!(!again[0].first_time && !again[0].changed);
         assert_eq!(again[0].new.network, ["more.test"], "points out what is new");
 
         // Revoking puts it back to waiting; declining switches it off.
@@ -340,20 +444,139 @@ mod tests {
     fn modules_installed_before_approvals_keep_working() {
         let (root, paths) = home("migrate");
         module(&paths.user_module_dir(), "old", "\"api.test\"");
-        // An older settings file has no `trust_initialised`.
-        let cfg: Config = toml::from_str("[modules]\ndisabled = []\n").unwrap();
+        // Dropped into the folder since the old version last ran: it never
+        // ran, so the upgrade does not approve it.
+        module(&paths.user_module_dir(), "planted", "\"evil.test\"");
+        // An older settings file has no `trust_initialised`, and lists the
+        // modules that version had running under `[services] seen`.
+        let cfg: Config = toml::from_str("[modules]\ndisabled = []\n[services]\nseen = [\"old\"]\n").unwrap();
         assert!(!cfg.modules.trust_initialised);
         let e = Engine::with_config(paths.clone(), cfg).unwrap();
-        assert!(e.pending_modules().is_empty());
+        assert_eq!(e.pending_modules().iter().map(|m| m.id.as_str()).collect::<Vec<_>>(), ["planted"]);
         assert_eq!(translate(&e, "old").unwrap(), "ok");
+        assert!(matches!(translate(&e, "planted"), Err(Error::NeedsApproval { .. })));
         let saved = Config::load(&paths.config_file()).unwrap();
         assert!(saved.modules.trust_initialised);
         assert_eq!(saved.modules.granted["old"].network, ["api.test"]);
+        assert!(!saved.modules.granted.contains_key("planted"));
+        let dir = paths.user_module_dir().join("old");
+        assert_eq!(saved.modules.granted["old"].content, glossa_modules::trust::content_hash(&dir));
+        e.decline_module("planted").unwrap();
 
         // A module added after the migration waits.
         module(&paths.user_module_dir(), "later", "\"api.test\"");
         e.reload_modules();
         assert_eq!(e.pending_modules().iter().map(|m| m.id.as_str()).collect::<Vec<_>>(), ["later"]);
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn a_fresh_install_approves_nothing_it_finds() {
+        // No settings file at all, and a module already in the user's
+        // folder (unpacked there by something else before the first start).
+        let (root, paths) = home("fresh-install");
+        module(&paths.user_module_dir(), "planted", "\"api.test\"");
+        assert!(!paths.config_file().exists());
+        let e = Engine::start(paths.clone()).unwrap();
+        assert_eq!(e.pending_modules().iter().map(|m| m.id.as_str()).collect::<Vec<_>>(), ["planted"]);
+        let err = translate(&e, "planted").unwrap_err();
+        assert!(matches!(&err, Error::NeedsApproval { module } if module == "planted"), "{err:?}");
+        assert!(e.config().modules.granted.is_empty());
+        assert!(e.config().modules.trust_initialised, "the migration is over, having granted nothing");
+        assert!(!e.config().services.enabled.contains(&"planted".to_owned()), "nor switched on");
+        // What ships inside the build runs all the same.
+        assert!(e.registry().entries().iter().any(|x| x.origin == Origin::Bundled && !x.pending));
+
+        // Nor does an existing file with no approvals in it, whatever else
+        // it holds, or the same Glossa started again.
+        drop(e);
+        let (root2, paths2) = home("fresh-install-2");
+        module(&paths2.user_module_dir(), "planted", "\"api.test\"");
+        let e = Engine::with_config(paths2, Config::default()).unwrap();
+        assert_eq!(e.pending_modules().len(), 1);
+        e.reload_modules();
+        assert_eq!(e.pending_modules().len(), 1);
+        std::fs::remove_dir_all(&root).ok();
+        std::fs::remove_dir_all(&root2).ok();
+    }
+
+    #[test]
+    fn the_upgrade_does_not_let_a_folder_take_a_built_in_id() {
+        let (root, paths) = home("upgrade-builtin");
+        let probe = Engine::with_config(paths.clone(), initialised()).unwrap();
+        let Some(id) =
+            probe.registry().entries().iter().find(|x| x.origin == Origin::Bundled).map(|x| x.info().id.clone())
+        else {
+            return;
+        };
+        drop(probe);
+        std::fs::remove_file(paths.config_file()).ok();
+        // Every built-in is in `seen` in an older file; a folder with that
+        // id must not ride on it.
+        module(&paths.user_module_dir(), &id, "\"evil.test\"");
+        let mut cfg = Config::default();
+        cfg.services.seen = vec![id.clone()];
+        let e = Engine::with_config(paths, cfg).unwrap();
+        assert_eq!(e.registry().entry(&id).unwrap().origin, Origin::Bundled, "the built-in keeps its place");
+        assert_eq!(e.pending_modules().iter().map(|m| m.id.as_str()).collect::<Vec<_>>(), [id.as_str()]);
+        assert!(!e.config().modules.granted.contains_key(&id));
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn changed_files_ask_again_with_the_same_manifest() {
+        let (root, paths) = home("content");
+        let user = paths.user_module_dir();
+        module(&user, "mod", "\"api.test\"");
+        let e = Engine::with_config(paths.clone(), initialised()).unwrap();
+        e.approve_module("mod", None).unwrap();
+        assert_eq!(translate(&e, "mod").unwrap(), "ok");
+        e.reload_modules();
+        assert!(e.pending_modules().is_empty(), "unchanged files stay approved");
+
+        // Same `module.toml`, other code.
+        std::fs::write(user.join("mod").join("main.js"), "function translate(req) { return 'evil:' + req.text; }")
+            .unwrap();
+        e.reload_modules();
+        let waiting = e.pending_modules();
+        assert_eq!(waiting.len(), 1);
+        assert!(waiting[0].changed && !waiting[0].first_time);
+        assert!(waiting[0].new.network.is_empty(), "it asks for nothing new");
+        assert!(matches!(translate(&e, "mod"), Err(Error::NeedsApproval { .. })));
+        // Reloading the one module is no way round it.
+        e.reload_module(&user.join("mod")).unwrap();
+        assert!(matches!(translate(&e, "mod"), Err(Error::NeedsApproval { .. })));
+        assert!(e.waits_for_approval(&user.join("mod")));
+
+        // A file added beside the code counts too; approving takes it in.
+        e.approve_module("mod", Some(&waiting[0].hash)).unwrap();
+        assert_eq!(translate(&e, "mod").unwrap(), "evil");
+        std::fs::write(user.join("mod").join("helper.js"), "1").unwrap();
+        e.reload_modules();
+        assert!(e.pending_modules()[0].changed);
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn approvals_from_before_files_were_hashed_keep_working_and_are_bound() {
+        let (root, paths) = home("unbound");
+        let user = paths.user_module_dir();
+        module(&user, "kept", "\"api.test\"");
+        // As an earlier version wrote it: no `content`.
+        let text =
+            "[modules]\ntrust_initialised = true\n[modules.granted.kept]\nruntime = \"js\"\nnetwork = [\"api.test\"]\n";
+        let cfg: Config = toml::from_str(text).unwrap();
+        assert!(cfg.modules.granted["kept"].content.is_empty());
+        let e = Engine::with_config(paths.clone(), cfg).unwrap();
+        assert!(e.pending_modules().is_empty());
+        assert_eq!(translate(&e, "kept").unwrap(), "ok");
+        let bound = e.config().modules.granted["kept"].content.clone();
+        assert_eq!(bound, glossa_modules::trust::content_hash(&user.join("kept")));
+        assert_eq!(Config::load(&paths.config_file()).unwrap().modules.granted["kept"].content, bound);
+
+        std::fs::write(user.join("kept").join("main.js"), "function translate() { return 'x'; }").unwrap();
+        e.reload_modules();
+        assert!(e.pending_modules()[0].changed, "from then on a change asks");
         std::fs::remove_dir_all(&root).ok();
     }
 

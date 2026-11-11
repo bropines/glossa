@@ -858,6 +858,7 @@ impl Engine {
         if !cfg.modules.trust_initialised {
             self.initialise_trust();
         }
+        self.bind_grants();
         self.adopt_providers();
         self.emit(Event::ModulesReloaded);
     }

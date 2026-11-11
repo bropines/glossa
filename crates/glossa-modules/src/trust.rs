@@ -10,15 +10,19 @@
 //!
 //! What the user approved is a [`ModuleGrant`] in `config.toml`
 //! (`[modules.granted.<id>]`), keyed by module id and carrying a hash of the
-//! approved request. A module whose request is [`within`](TrustRequest::within)
-//! its grant runs: an unchanged manifest (same hash) or a narrower one. A
-//! wider one (a new host, a new download, a different program) waits for
-//! approval again: the registry lists it behind a [`PendingApproval`]
-//! provider whose every call fails with [`Error::NeedsApproval`].
+//! approved request and a hash of the module's files ([`content_hash`]). A
+//! module whose request is [`within`](TrustRequest::within) its grant and
+//! whose files are the approved ones runs. A wider request (a new host, a
+//! new download, a different program) or a changed file waits for approval
+//! again: the registry lists it behind a [`PendingApproval`] provider whose
+//! every call fails with [`Error::NeedsApproval`].
 //!
 //! Modules shipped with Glossa (compiled in, or in the folders beside the
 //! program) and the services of a classic installation the user pointed
 //! Glossa at are trusted and never asked about ([`TrustPolicy::trusted_dirs`]).
+//! Nothing else is: a module found in a folder the user can write to waits
+//! however empty the list of approvals is, so a first start approves
+//! nothing by itself.
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -251,7 +255,8 @@ impl TrustRequest {
     }
 
     /// The grant that approves exactly this request for the module in
-    /// `dir` (see [`canonical`]).
+    /// `dir` (see [`canonical`]) with the files it holds now
+    /// ([`content_hash`]).
     pub fn to_grant(&self, dir: &Path) -> ModuleGrant {
         ModuleGrant {
             hash: self.hash(),
@@ -263,6 +268,7 @@ impl TrustRequest {
             actions: self.actions.clone(),
             extra: self.extra.clone(),
             dir: canonical(dir).to_string_lossy().into_owned(),
+            content: content_hash(dir),
         }
     }
 
@@ -334,6 +340,70 @@ pub fn canonical(path: &Path) -> PathBuf {
     std::fs::canonicalize(path).unwrap_or_else(|_| path.to_owned())
 }
 
+/// Files the system writes into a folder the user merely looked at; never
+/// read by a module runtime, so they do not count as the module's content.
+const IGNORED_FILES: &[&str] = &[".DS_Store", "Thumbs.db", "desktop.ini"];
+
+/// SHA-256, in hex, over every file in the module folder `dir`: each
+/// file's path relative to the folder, its length and its bytes, in path
+/// order, through sub-folders. A link counts as where it points, without
+/// being followed, and a file that cannot be read as that fact, so
+/// swapping either changes the hash. Left out are only the files in
+/// [`IGNORED_FILES`] and a `.git` folder, which no runtime executes.
+///
+/// This is what binds an approval to what was approved: the manifest says
+/// what a module may do, the files are what does it.
+pub fn content_hash(dir: &Path) -> String {
+    let mut files = Vec::new();
+    collect_files(dir, "", &mut files);
+    files.sort();
+    let mut hasher = Sha256::new();
+    let mut buf = vec![0u8; 64 * 1024];
+    for (rel, path) in files {
+        let meta = std::fs::symlink_metadata(&path);
+        if meta.as_ref().is_ok_and(|m| m.file_type().is_symlink()) {
+            let target = std::fs::read_link(&path).unwrap_or_default();
+            hasher.update(format!("link {rel}\0{}\n", target.display()).as_bytes());
+            continue;
+        }
+        let opened = std::fs::File::open(&path).and_then(|f| Ok((f.metadata()?.len(), f)));
+        let Ok((len, mut file)) = opened else {
+            hasher.update(format!("unreadable {rel}\0\n").as_bytes());
+            continue;
+        };
+        hasher.update(format!("file {rel}\0{len}\n").as_bytes());
+        loop {
+            match std::io::Read::read(&mut file, &mut buf) {
+                Ok(0) => break,
+                Ok(n) => hasher.update(&buf[..n]),
+                Err(_) => {
+                    hasher.update(b"\0unreadable\n");
+                    break;
+                }
+            }
+        }
+    }
+    hex(&hasher.finalize())
+}
+
+/// Every file under `dir` as (path relative to the module folder with `/`
+/// between its parts, full path). Links are listed, not followed.
+fn collect_files(dir: &Path, prefix: &str, out: &mut Vec<(String, PathBuf)>) {
+    let Ok(read) = std::fs::read_dir(dir) else { return };
+    for item in read.flatten() {
+        let name = item.file_name().to_string_lossy().into_owned();
+        let rel = if prefix.is_empty() { name.clone() } else { format!("{prefix}/{name}") };
+        let is_dir = item.file_type().is_ok_and(|t| t.is_dir());
+        if is_dir {
+            if !(prefix.is_empty() && name == ".git") {
+                collect_files(&item.path(), &rel, out);
+            }
+        } else if !IGNORED_FILES.contains(&name.as_str()) {
+            out.push((rel, item.path()));
+        }
+    }
+}
+
 fn hex(bytes: &[u8]) -> String {
     bytes.iter().map(|b| format!("{b:02x}")).collect()
 }
@@ -361,9 +431,14 @@ fn host_covered(wanted: &str, granted: &[String]) -> bool {
 #[derive(Clone, Default)]
 pub struct TrustPolicy {
     /// What the user approved, by module id. `None` approves everything:
-    /// for tools that test one module, and for the one-time migration that
-    /// grants modules installed before approvals existed.
+    /// only for tools that test one module the developer pointed them at.
+    /// An empty map approves nothing.
     pub granted: Option<Arc<BTreeMap<String, ModuleGrant>>>,
+    /// Ids of modules known to have run before approvals existed, for the
+    /// one-time upgrade: a module with one of these ids and no grant loads
+    /// once more, and the program then records its grant. Empty otherwise,
+    /// and always on a fresh install.
+    pub legacy: Vec<String>,
     /// Module folders whose modules need no approval: the ones shipped with
     /// Glossa. Compared canonically.
     pub trusted_dirs: Vec<PathBuf>,
@@ -386,16 +461,44 @@ impl TrustPolicy {
     }
 
     /// Whether module `id` in `dir` asking for `request` may run: its grant
-    /// covers the request and was given to this folder.
+    /// covers the request, was given to this folder, and the folder holds
+    /// the files it held then.
     pub fn allows(&self, id: &str, dir: &Path, request: &TrustRequest) -> bool {
-        match &self.granted {
-            None => true,
-            Some(g) => g.get(id).is_some_and(|grant| {
+        self.verdict(id, dir, request) == Verdict::Allowed
+    }
+
+    /// [`Self::allows`], with why not. The files are only hashed for a
+    /// module whose grant otherwise covers it.
+    pub fn verdict(&self, id: &str, dir: &Path, request: &TrustRequest) -> Verdict {
+        let Some(granted) = &self.granted else { return Verdict::Allowed };
+        match granted.get(id) {
+            Some(grant) => {
                 let same_folder = grant.dir.is_empty() || Path::new(&grant.dir) == canonical(dir);
-                same_folder && request.within(grant)
-            }),
+                if !(same_folder && request.within(grant)) {
+                    Verdict::Unapproved
+                } else if grant.content.is_empty() || grant.content == content_hash(dir) {
+                    // An empty hash: a grant from before files were hashed,
+                    // kept working; the engine binds it on this load.
+                    Verdict::Allowed
+                } else {
+                    Verdict::Changed
+                }
+            }
+            None if self.legacy.iter().any(|l| l == id) => Verdict::Allowed,
+            None => Verdict::Unapproved,
         }
     }
+}
+
+/// What [`TrustPolicy::verdict`] found.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Verdict {
+    Allowed,
+    /// No grant, a grant for another folder, or a request beyond the grant.
+    Unapproved,
+    /// The grant covers the request, but the module's files are not the
+    /// ones approved.
+    Changed,
 }
 
 fn in_any(path: &Path, dirs: &[PathBuf]) -> bool {
@@ -606,6 +709,7 @@ mod tests {
             granted: Some(Arc::new(granted.clone())),
             trusted_dirs: vec![PathBuf::from("/opt/glossa/modules")],
             trusted_script_dirs: vec![PathBuf::from("/classic/Services")],
+            legacy: Vec::new(),
         };
         assert!(!policy.allows("m", Path::new("/m"), &r));
         assert!(policy.is_trusted(Path::new("/opt/glossa/modules/m")));
@@ -618,5 +722,92 @@ mod tests {
         assert!(policy.is_trusted_script(Path::new("/classic/Services/Bing")));
         assert!(!policy.is_trusted(Path::new("/classic/Services/acme")), "manifest modules there are asked about");
         assert!(TrustPolicy::default().allows("m", Path::new("/m"), &r), "no policy approves everything");
+    }
+
+    #[test]
+    fn an_empty_list_of_approvals_approves_nothing() {
+        let r = request("");
+        let empty = TrustPolicy { granted: Some(Arc::new(BTreeMap::new())), ..Default::default() };
+        assert_eq!(empty.verdict("m", Path::new("/m"), &r), Verdict::Unapproved);
+        // Only an id known from before approvals existed loads without one.
+        let upgrading = TrustPolicy { legacy: vec!["m".into()], ..empty };
+        assert!(upgrading.allows("m", Path::new("/m"), &r));
+        assert!(!upgrading.allows("other", Path::new("/m"), &r));
+    }
+
+    fn scratch(tag: &str) -> PathBuf {
+        let dir = std::env::temp_dir().join(format!("glossa-content-{tag}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(dir.join("lib")).unwrap();
+        std::fs::write(dir.join("module.toml"), "x").unwrap();
+        std::fs::write(dir.join("main.js"), "function translate() {}").unwrap();
+        std::fs::write(dir.join("lib").join("util.js"), "1").unwrap();
+        dir
+    }
+
+    #[test]
+    fn the_content_hash_covers_every_file_and_nothing_the_system_writes() {
+        let dir = scratch("hash");
+        let before = content_hash(&dir);
+        assert_eq!(before.len(), 64);
+        assert_eq!(before, content_hash(&dir), "stable");
+        std::fs::write(dir.join(".DS_Store"), "finder").unwrap();
+        std::fs::create_dir_all(dir.join(".git")).unwrap();
+        std::fs::write(dir.join(".git").join("HEAD"), "ref").unwrap();
+        assert_eq!(before, content_hash(&dir), "looking at the folder changes nothing");
+
+        std::fs::write(dir.join("lib").join("util.js"), "2").unwrap();
+        let edited = content_hash(&dir);
+        assert_ne!(before, edited, "a changed file in a sub-folder");
+        std::fs::write(dir.join("lib").join("util.js"), "1").unwrap();
+        assert_eq!(before, content_hash(&dir), "and back");
+        std::fs::write(dir.join("extra.js"), "").unwrap();
+        assert_ne!(before, content_hash(&dir), "a new file, even an empty one");
+        std::fs::remove_file(dir.join("extra.js")).unwrap();
+        std::fs::rename(dir.join("main.js"), dir.join("main2.js")).unwrap();
+        assert_ne!(before, content_hash(&dir), "a renamed file");
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn file_boundaries_cannot_be_shifted() {
+        // Moving bytes from the end of one file to the start of the next
+        // must not hash the same.
+        let a = scratch("shift-a");
+        let b = scratch("shift-b");
+        std::fs::write(a.join("a.js"), "one").unwrap();
+        std::fs::write(a.join("b.js"), "two").unwrap();
+        std::fs::write(b.join("a.js"), "on").unwrap();
+        std::fs::write(b.join("b.js"), "etwo").unwrap();
+        assert_ne!(content_hash(&a), content_hash(&b));
+        std::fs::remove_dir_all(&a).ok();
+        std::fs::remove_dir_all(&b).ok();
+    }
+
+    #[test]
+    fn changed_files_ask_again_and_older_grants_keep_working() {
+        let dir = scratch("verdict");
+        let r = request("[permissions]\nnetwork = [\"api.example.com\"]");
+        let grant = r.to_grant(&dir);
+        assert_eq!(grant.content, content_hash(&dir));
+        let policy = |g: &ModuleGrant| TrustPolicy {
+            granted: Some(Arc::new(BTreeMap::from([("m".to_owned(), g.clone())]))),
+            ..Default::default()
+        };
+        assert_eq!(policy(&grant).verdict("m", &dir, &r), Verdict::Allowed);
+
+        // The manifest asks for nothing new, but the code is another.
+        std::fs::write(dir.join("main.js"), "function translate() { steal(); }").unwrap();
+        assert_eq!(policy(&grant).verdict("m", &dir, &r), Verdict::Changed);
+        assert!(!policy(&grant).allows("m", &dir, &r));
+
+        // A grant written before files were hashed has no content hash.
+        let old = ModuleGrant { content: String::new(), ..grant };
+        assert_eq!(policy(&old).verdict("m", &dir, &r), Verdict::Allowed);
+        let text = toml::to_string(&old).unwrap();
+        assert!(!text.contains("content ="), "{text}");
+        let back: ModuleGrant = toml::from_str(&text).unwrap();
+        assert_eq!(back, old);
+        std::fs::remove_dir_all(&dir).ok();
     }
 }

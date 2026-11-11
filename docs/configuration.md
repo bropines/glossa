@@ -616,15 +616,15 @@ Set in *Options → Modules*, except `disabled`. See
 | `call_timeout_ms` | integer | `30000` | Time limit for one call into a module, 1000–600 000 ms. |
 | `disabled` | array of ids | `[]` | Ids not to load at all: modules, and also built-in and bundled services, built-in OCR engines and AI endpoints (`"lens"`, `"google"`, `"lara"`…). A listed id is absent from every list and is never used as a fallback. File only. |
 | `auto_download_assets` | bool | `false` | Download the files a module declares (models, dictionaries), and the managed Python and packages a Python module needs, on its first use without asking. Off, a module missing them fails with a message and its settings offer the download. See [modules/README.md](modules/README.md#assets). |
-| `trust_initialised` | bool | `false` | Written by the program once it has granted the modules installed before approvals existed what they declared then (see below). A settings file without it starts that one-time migration, except a broken one set aside for the defaults: then every hand-installed module asks again. File only. |
+| `trust_initialised` | bool | `false` | Written by the program once the upgrade from a version without approvals is over. A settings file without it starts that one-time migration, which approves only the modules that version had running (the ids under `[services] seen` that are not Glossa's own); a missing or empty file therefore approves nothing, and neither does a broken one set aside for the defaults. File only. |
 
 #### `[modules.granted.<id>]`
 
 What you approved for a module you installed by hand, written by the
 program when you approve it in *Options → Modules* or with `glossa-cli
-module approve`. A module whose `module.toml` asks for more than this (a
-new host, a new download, another program) waits for approval again; one
-that asks for less keeps running. See
+module approve`. A module whose files changed since (see `content`), or whose
+`module.toml` asks for more than this (a new host, a new download, another
+program), waits for approval again. See
 [modules/README.md](modules/README.md#permissions-and-trust). Editing a
 table by hand approves whatever it then says; deleting one withdraws the
 approval.
@@ -640,6 +640,7 @@ approval.
 | `actions` | array of strings | Its action ids. |
 | `extra` | array of strings | Permission lines other features contribute (panels, tray entries, hotkeys); left out when empty. |
 | `dir` | string | The module's folder, canonical. Another folder claiming the id waits for its own approval. Empty applies to the id in any folder. |
+| `content` | string | SHA-256 over the files in the module's folder when approved. A module whose files changed since waits for approval again. Left out in an approval from before files were hashed; the program fills it in the next time it loads the module. |
 
 ```toml
 [modules.granted.my-translator]
