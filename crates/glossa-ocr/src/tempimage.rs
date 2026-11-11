@@ -1,32 +1,39 @@
 //! An image written to a temporary file for a program that wants a path.
 
+use std::io::Write;
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicU64, Ordering};
 
-use glossa_core::{Error, Result};
+use glossa_core::{fsio, Error, Result};
 
 /// Deleted when dropped, whatever happened in between.
 pub struct TempImage {
     path: PathBuf,
 }
 
-static COUNTER: AtomicU64 = AtomicU64::new(0);
-
 impl TempImage {
-    /// Write `bytes` under the system temp directory, named after their
-    /// format so tools that go by the extension are happy.
+    /// Write `bytes` to a new file in Glossa's own temporary folder
+    /// ([`fsio::temp_dir`]: private, under the cache folder, swept at
+    /// start), named after their format so tools that go by the extension
+    /// are happy. A screenshot holds whatever was on the screen, so it is
+    /// not put where every user of the machine can read it.
     pub fn write(bytes: &[u8]) -> Result<TempImage> {
-        Self::write_in(&std::env::temp_dir(), bytes)
+        let dir = fsio::temp_dir().map_err(|e| Error::Platform(format!("no folder for temporary files: {e}")))?;
+        Self::write_in(&dir, bytes)
     }
 
+    /// The same in `dir`. The file is created new and for the user alone:
+    /// a name that exists already (a link someone planted) is never
+    /// written through.
     pub fn write_in(dir: &Path, bytes: &[u8]) -> Result<TempImage> {
-        let n = COUNTER.fetch_add(1, Ordering::Relaxed);
-        let nanos =
-            std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.subsec_nanos()).unwrap_or(0);
-        let name = format!("glossa-ocr-{}-{n}-{nanos:x}.{}", std::process::id(), extension_for(bytes));
-        let path = dir.join(name);
-        std::fs::write(&path, bytes).map_err(|e| Error::Platform(format!("cannot write {}: {e}", path.display())))?;
-        Ok(TempImage { path })
+        let suffix = format!(".{}", extension_for(bytes));
+        let (path, mut file) = fsio::create_temp_in(dir, "glossa-ocr-", &suffix)
+            .map_err(|e| Error::Platform(format!("cannot create a temporary file in {}: {e}", dir.display())))?;
+        // From here on the file is removed whatever happens.
+        let image = TempImage { path };
+        file.write_all(bytes)
+            .and_then(|()| file.flush())
+            .map_err(|e| Error::Platform(format!("cannot write {}: {e}", image.path.display())))?;
+        Ok(image)
     }
 
     pub fn path(&self) -> &Path {
@@ -79,5 +86,17 @@ mod tests {
         assert_eq!(p.extension().unwrap(), "bmp");
         drop(t);
         assert!(!p.exists());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn the_file_is_the_users_alone_and_outside_the_shared_temp_folder() {
+        use std::os::unix::fs::PermissionsExt;
+        let t = TempImage::write(b"BMxx").unwrap();
+        let mode = |p: &Path| std::fs::metadata(p).unwrap().permissions().mode() & 0o777;
+        assert_eq!(mode(t.path()), 0o600);
+        let dir = t.path().parent().unwrap();
+        assert_eq!(mode(dir), 0o700);
+        assert_ne!(dir, std::env::temp_dir(), "a folder of its own");
     }
 }

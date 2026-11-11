@@ -36,11 +36,11 @@ use std::sync::mpsc::{self, Receiver, Sender};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use glossa_core::config::OcrTranslateWith;
+use glossa_core::config::{ConfigSource, OcrTranslateWith};
 use glossa_core::error::catch_panic;
 use glossa_core::history::{HistoryEntry, HistoryResult};
 use glossa_core::ocr::{ImageSource, OcrGranularity, OcrRequest};
-use glossa_core::secrets::{SecretSlot, SecretStorage, SecretStore, SecretSync, IN_STORE};
+use glossa_core::secrets::{SecretSlot, SecretStorage, SecretStore, SecretSync};
 use glossa_core::{
     Action, Article, Audio, Capabilities, Config, Detection, DictRequest, Error, History, LangId, LangPair, Locale,
     OcrResult, Paths, ProviderInfo, Result, SpeakRequest, Theme,
@@ -273,6 +273,16 @@ struct Inner {
     /// aside: saving would destroy the only copy of the user's entries.
     history_writable: AtomicBool,
     dictionary_history: Mutex<Vec<String>>,
+    /// What changed since the histories were last written, and whether a
+    /// worker is on its way to write them (see [`Engine::history_touched`]).
+    saver: Mutex<Saver>,
+    /// How long after a change the histories are written.
+    save_delay: Mutex<Duration>,
+    /// One writer of `history.json` at a time in this process.
+    history_io: Mutex<()>,
+    /// The settings file could not be read at start and is still on disk
+    /// as it was: where to copy it before the first save replaces it.
+    damaged_config: Mutex<Option<PathBuf>>,
     themes: RwLock<ThemeCatalog>,
     locales: RwLock<LocaleCatalog>,
     locale: RwLock<Arc<Locale>>,
@@ -345,6 +355,20 @@ impl SessionOverrides {
     }
 }
 
+/// What the history worker has to write.
+#[derive(Debug, Default)]
+struct Saver {
+    history: bool,
+    dictionary: bool,
+    /// A worker is waiting to write.
+    scheduled: bool,
+}
+
+/// How long after a change the histories are written to disk: long enough
+/// that a run of translations is one write, short enough that a crash or a
+/// power cut loses seconds, not the session.
+const HISTORY_SAVE_DELAY: Duration = Duration::from_secs(3);
+
 /// Something that went wrong at start without stopping it
 /// ([`Engine::startup_warnings`]).
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -369,24 +393,73 @@ pub struct Engine {
 }
 
 impl Engine {
-    /// Start with the settings found under `paths`. A `config.toml` that
-    /// cannot be parsed does not stop the start: it is moved aside, the
-    /// defaults are used, and [`Engine::startup_warnings`] says so.
+    /// Start with the settings found under `paths`. Nothing in the
+    /// settings file stops the start, and reading it changes nothing on
+    /// disk (a command that only reads must leave the file alone):
+    ///
+    /// * a value this version cannot use takes its default, the rest of
+    ///   the file is kept, and a warning names the value;
+    /// * a file that is empty or not TOML at all is left where it is; the
+    ///   last good copy (`config.toml.bak`) is used, or the defaults, and
+    ///   the first save copies the unreadable file aside before replacing
+    ///   it.
+    ///
+    /// [`Engine::startup_warnings`] says what happened. What earlier
+    /// versions left readable by other users is made private, and what a
+    /// killed process left behind is swept ([`Paths::secure`]).
     pub fn start(paths: Paths) -> Result<Engine> {
-        let (mut config, recovered) = Config::load_or_recover(&paths.config_file())?;
-        if recovered.is_some() {
-            // The approvals went with the broken file. Granting everything
-            // installed (the upgrade migration) would approve what was
-            // waiting or declined, so every hand-installed module asks again.
-            config.modules.trust_initialised = true;
+        paths.secure();
+        // Not in this crate's tests, whose engines share one process and
+        // delete their folders when they are done.
+        #[cfg(not(test))]
+        glossa_core::fsio::set_temp_dir(paths.temp_dir());
+        let file = paths.config_file();
+        let loaded = Config::load_checked(&file)?;
+        let mut config = loaded.config;
+        let mut warnings = Vec::new();
+        let keep = Config::damaged_path(&file, glossa_core::now_unix());
+        let mut damaged = None;
+        match loaded.source {
+            ConfigSource::File | ConfigSource::Missing => {}
+            ConfigSource::Backup { error } if error.is_empty() => {
+                warnings.push(StartupWarning { key: "startup.config_empty", args: Vec::new() });
+                // Nothing in it to keep, but nothing is written at start either.
+                damaged = Some(keep);
+            }
+            ConfigSource::Backup { error } => {
+                warnings.push(StartupWarning {
+                    key: "startup.config_restored",
+                    args: vec![keep.display().to_string(), error],
+                });
+                damaged = Some(keep);
+            }
+            ConfigSource::Defaults { error } => {
+                // The approvals went with the broken file. Granting everything
+                // installed (the upgrade migration) would approve what was
+                // waiting or declined, so every hand-installed module asks again.
+                config.modules.trust_initialised = true;
+                warnings.push(StartupWarning {
+                    key: "startup.config_broken",
+                    args: vec![keep.display().to_string(), error],
+                });
+                damaged = Some(keep);
+            }
         }
-        let engine = Engine::with_config(paths, config)?;
-        if let Some(r) = recovered {
-            engine.inner.startup_warnings.lock().push(StartupWarning {
-                key: "startup.config_broken",
-                args: vec![r.backup.display().to_string(), r.error],
+        for issue in loaded.issues.iter().take(MAX_VALUE_WARNINGS) {
+            tracing::warn!("{}: {}: {}; the default is used", file.display(), issue.path, issue.problem);
+            warnings.push(StartupWarning {
+                key: "startup.config_value",
+                args: vec![issue.path.clone(), issue.problem.clone()],
             });
         }
+        if loaded.issues.len() > MAX_VALUE_WARNINGS {
+            warnings.push(StartupWarning {
+                key: "startup.config_more_values",
+                args: vec![(loaded.issues.len() - MAX_VALUE_WARNINGS).to_string()],
+            });
+        }
+        let engine = Engine::build(paths, config, damaged)?;
+        engine.inner.startup_warnings.lock().splice(0..0, warnings);
         Ok(engine)
     }
 
@@ -398,16 +471,33 @@ impl Engine {
     }
 
     /// Start with explicit settings (tests, `--config`).
-    pub fn with_config(paths: Paths, mut config: Config) -> Result<Engine> {
+    pub fn with_config(paths: Paths, config: Config) -> Result<Engine> {
+        Engine::build(paths, config, None)
+    }
+
+    /// `damaged`: the settings file on disk is not where `config` came from
+    /// and must be copied there before anything replaces it.
+    fn build(paths: Paths, mut config: Config, damaged: Option<PathBuf>) -> Result<Engine> {
         config.sanitise();
-        if ensure_token(&mut config) {
+        // With an unreadable file on disk nothing is written at start; the
+        // token is saved with the first change of settings.
+        if ensure_token(&mut config) && damaged.is_none() {
             // Other programs (glossa-cli among them) read the token from the
             // file, so it has to be there from the first run.
             if let Err(e) = config.save(&paths.config_file()) {
                 tracing::warn!("could not save the new control API token: {e}");
             }
         }
-        let http = Arc::new(HttpClient::new(&config.network)?);
+        // A proxy that cannot be used (a scheme nothing here speaks, in the
+        // settings or in HTTPS_PROXY) must not keep the program from
+        // starting, least of all the window where it would be corrected.
+        let (http, proxy_problem) = HttpClient::new_or_direct(&config.network);
+        let http = Arc::new(http);
+        let mut startup_warnings = Vec::new();
+        if let Some(e) = proxy_problem {
+            tracing::warn!("{e}; connecting without a proxy");
+            startup_warnings.push(StartupWarning { key: "startup.proxy_unusable", args: vec![e.to_string()] });
+        }
         let (history, history_writable) = if config.history.enabled {
             load_history(&paths.history_file(), config.history.max_entries)
         } else {
@@ -436,6 +526,10 @@ impl Engine {
             history: Mutex::new(history),
             history_writable: AtomicBool::new(history_writable),
             dictionary_history: Mutex::new(dictionary_history),
+            saver: Mutex::new(Saver::default()),
+            save_delay: Mutex::new(HISTORY_SAVE_DELAY),
+            history_io: Mutex::new(()),
+            damaged_config: Mutex::new(damaged),
             themes: RwLock::new(ThemeCatalog::default()),
             locales: RwLock::new(LocaleCatalog::default()),
             locale: RwLock::new(Arc::new(Locale::english())),
@@ -451,7 +545,7 @@ impl Engine {
             builtins,
             ocr_builtins,
             bundled,
-            startup_warnings: Mutex::new(Vec::new()),
+            startup_warnings: Mutex::new(startup_warnings),
             secret_store: RwLock::new(None),
             system_dark: RwLock::new(None),
             secret_sync: Mutex::new(SecretSync::new()),
@@ -500,21 +594,44 @@ impl Engine {
     }
 
     /// Change settings, save them, and apply whatever the change affects.
+    ///
+    /// Network settings are checked first: a proxy entered in the settings
+    /// that cannot be used is an error (naming the proxy, for the front end
+    /// to show at the field), and nothing is changed or saved, so a wrong
+    /// entry cannot reach the file and meet the user at every later start.
     pub fn update_config(&self, change: impl FnOnce(&mut Config)) -> Result<()> {
-        let (before, after) = {
+        let (before, after, http) = {
             let mut cfg = self.inner.config.write();
             let before = cfg.clone();
-            change(&mut cfg);
-            cfg.sanitise();
+            let mut after = before.clone();
+            change(&mut after);
+            after.sanitise();
             // The token is always required, so clearing it (an emptied
             // field in the options) means "make a new one", saved below.
-            ensure_token(&mut cfg);
-            (before, cfg.clone())
+            ensure_token(&mut after);
+            let http = if before.network != after.network {
+                // This run's overrides stay in force for the new client.
+                let mut effective = after.clone();
+                self.inner.session.read().apply(&mut effective);
+                let (client, problem) = HttpClient::new_or_direct(&effective.network);
+                match problem {
+                    Some(e) if glossa_net::proxy_is_manual(&after.network) => return Err(e),
+                    // The system's proxy is not the settings' to correct:
+                    // go without, as at start, until the system names one
+                    // that works.
+                    Some(e) => tracing::warn!("{e}; connecting without a proxy"),
+                    None => {}
+                }
+                Some(client)
+            } else {
+                None
+            };
+            *cfg = after.clone();
+            (before, after, http)
         };
         self.write_config(&after)?;
-        if before.network != after.network {
-            // This run's overrides stay in force for the new client.
-            *self.inner.http.write() = Arc::new(HttpClient::new(&self.config().network)?);
+        if let Some(http) = http {
+            *self.inner.http.write() = Arc::new(http);
         }
         if before.modules != after.modules
             || before.services.ai_endpoints != after.services.ai_endpoints
@@ -556,30 +673,44 @@ impl Engine {
 
     /// Write `cfg` to the settings file, with its secrets moved to the
     /// system keychain when the settings say so (see
-    /// [`glossa_core::secrets`]).
+    /// [`glossa_core::secrets`]). A file that could not be read at start is
+    /// copied aside first; if that fails nothing is written, so the user's
+    /// text is never the price of a save.
     fn write_config(&self, cfg: &Config) -> Result<()> {
+        let file = self.inner.paths.config_file();
+        {
+            let mut damaged = self.inner.damaged_config.lock();
+            if let Some(keep) = damaged.as_ref() {
+                Config::keep_damaged(&file, keep)?;
+                *damaged = None;
+            }
+        }
         let store = self.inner.secret_store.read().clone();
         let slots = self.secret_slots(cfg);
         let (out, errors) = self.inner.secret_sync.lock().prepare(cfg, &slots, store.as_deref());
         for e in errors {
             tracing::warn!("keychain: {e}; kept in the settings file instead");
         }
-        out.save(&self.inner.paths.config_file())
+        out.save(&file)
     }
 
-    /// Every place in `cfg` that holds a secret: the services' options of
-    /// the secret kind (and any option a service no longer loaded left in
-    /// the keychain), the proxy password, the Lens token.
+    /// Every place in `cfg` known now to hold a secret: the loaded
+    /// services' options of the secret kind, any option the file marks as
+    /// kept in the keychain, the proxy password, the Lens token, the
+    /// control API's token. The secret sync adds those it has seen in the
+    /// keychain before, so a service that is no longer loaded (a module
+    /// removed or failing) does not turn its key into plain text.
     fn secret_slots(&self, cfg: &Config) -> Vec<SecretSlot> {
         let registry = self.registry();
-        let mut slots = Vec::new();
+        let mut slots = SecretSlot::marked(cfg);
         for (service, values) in &cfg.services.options {
             let specs = registry.get(service).map(|p| p.options().to_vec()).unwrap_or_default();
-            for (key, value) in values {
-                let secret = specs.iter().any(|s| &s.key == key && s.kind == OptionKind::Secret)
-                    || value.as_str() == Some(IN_STORE);
-                if secret {
-                    slots.push(SecretSlot::ServiceOption { service: service.clone(), key: key.clone() });
+            for key in values.keys() {
+                if specs.iter().any(|s| &s.key == key && s.kind == OptionKind::Secret) {
+                    let slot = SecretSlot::ServiceOption { service: service.clone(), key: key.clone() };
+                    if !slots.contains(&slot) {
+                        slots.push(slot);
+                    }
                 }
             }
         }
@@ -589,24 +720,51 @@ impl Engine {
 
     /// Attach the system keychain (`None` where there is none) and fetch the
     /// secrets the settings file keeps there. Call it right after start,
-    /// before anything is translated: until then those settings read as
-    /// the placeholder.
+    /// before anything is translated or the control API is served: until
+    /// then those settings read as the placeholder.
+    ///
+    /// A secret the keychain does not give (it is locked, refuses, or is
+    /// not there) reads as empty from here on, so its service says a key is
+    /// missing rather than sending the placeholder as one, and a start-up
+    /// warning names the keychain. The file keeps its placeholder, so the
+    /// secret is back when the keychain answers.
     pub fn attach_secret_store(&self, store: Option<Arc<dyn SecretStore>>) {
         *self.inner.secret_store.write() = store.clone();
-        let wanted = self.inner.config.read().general.secret_storage == SecretStorage::System;
-        let Some(store) = store else {
-            if wanted {
+        let (wanted, problems, unresolved, new_token) = {
+            let mut cfg = self.inner.config.write();
+            let slots = self.secret_slots(&cfg);
+            let mut sync = self.inner.secret_sync.lock();
+            let problems = sync.resolve(&mut cfg, &slots, store.as_deref());
+            // A token the keychain does not hold is replaced like any
+            // missing one. One it holds but would not give is left empty
+            // (the control API then refuses everything): writing a new one
+            // would put this program at odds with a running Glossa that
+            // did get the old one.
+            let new_token = !sync.is_unresolved(&SecretSlot::ControlToken) && ensure_token(&mut cfg);
+            (cfg.general.secret_storage == SecretStorage::System, problems, sync.has_unresolved(), new_token)
+        };
+        for problem in &problems {
+            tracing::warn!("keychain: {problem}");
+        }
+        match &store {
+            None if wanted || unresolved => {
                 self.inner
                     .startup_warnings
                     .lock()
                     .push(StartupWarning { key: "startup.no_keychain", args: Vec::new() });
             }
-            return;
-        };
-        let mut cfg = self.inner.config.write();
-        let slots = self.secret_slots(&cfg);
-        for problem in self.inner.secret_sync.lock().resolve(&mut cfg, &slots, store.as_ref()) {
-            tracing::warn!("keychain: {problem}");
+            Some(store) if unresolved => {
+                self.inner
+                    .startup_warnings
+                    .lock()
+                    .push(StartupWarning { key: "startup.keychain_error", args: vec![store.name().to_owned()] });
+            }
+            _ => {}
+        }
+        if new_token {
+            if let Err(e) = self.save_config() {
+                tracing::warn!("could not save the new control API token: {e}");
+            }
         }
     }
 
@@ -1721,16 +1879,104 @@ impl Engine {
         self.record_history(out)
     }
 
-    /// Write the history to `history.json` now, rather than at
-    /// [`Engine::shutdown`]: for front ends that may be killed instead of
-    /// shut down (`glossa-cli`, `glossa-cli serve`). Nothing is written when
-    /// the history is off, or when the file could not be read at start and
+    /// Write the history to `history.json` now. A worker does this a few
+    /// seconds after every change ([`Engine::history_touched`]) and
+    /// [`Engine::shutdown`] does it at the end; a front end that is about
+    /// to exit calls it itself (`glossa-cli`). Nothing is written when the
+    /// history is off, or when the file could not be read at start and
     /// could not be copied aside.
+    ///
+    /// The file is shared with other programs (the desktop program and
+    /// `glossa-cli translate --save-history`): what they wrote since this
+    /// one last looked is merged in rather than written over (see
+    /// [`History::save_merged`]). The writing happens on a copy, so a
+    /// window reading the history never waits for the disk.
     pub fn save_history(&self) -> Result<()> {
         if !self.config().history.enabled || !self.inner.history_writable.load(Ordering::SeqCst) {
             return Ok(());
         }
-        self.inner.history.lock().save(&self.inner.paths.history_file())
+        let _one_writer = self.inner.history_io.lock();
+        self.inner.saver.lock().history = false;
+        let mut copy = self.inner.history.lock().clone();
+        copy.save_merged(&self.inner.paths.history_file())?;
+        if self.inner.history.lock().adopt_saved(copy) {
+            self.emit(Event::HistoryChanged);
+        }
+        Ok(())
+    }
+
+    /// Write the dictionary's recent words now.
+    fn save_dictionary_history(&self) -> Result<()> {
+        self.inner.saver.lock().dictionary = false;
+        let words = self.dictionary_history();
+        let json = serde_json::to_vec(&words)?;
+        glossa_core::fsio::write_atomic(&self.inner.paths.dictionary_history_file(), &json)?;
+        Ok(())
+    }
+
+    /// The history (or the dictionary's recent words) changed: have a
+    /// worker write it in a few seconds, so that a crash, a kill or a power
+    /// cut loses those seconds and not the whole session. Changes in the
+    /// meantime ride along with the same write. Never on the caller's
+    /// thread, which may be drawing.
+    fn history_touched(&self, dictionary: bool) {
+        let mut saver = self.inner.saver.lock();
+        if dictionary {
+            saver.dictionary = true;
+        } else {
+            saver.history = true;
+        }
+        if saver.scheduled {
+            return;
+        }
+        // The worker holds the engine only while it writes: an engine
+        // nobody else holds any more is not kept alive (or written for).
+        let weak = Arc::downgrade(&self.inner);
+        let delay = *self.inner.save_delay.lock();
+        let spawned = std::thread::Builder::new().name("glossa-history-save".into()).spawn(move || loop {
+            std::thread::sleep(delay);
+            let Some(inner) = weak.upgrade() else { return };
+            let engine = Engine { inner };
+            let (history, dictionary) = {
+                let mut saver = engine.inner.saver.lock();
+                if !saver.history && !saver.dictionary {
+                    saver.scheduled = false;
+                    return;
+                }
+                (saver.history, saver.dictionary)
+            };
+            engine.save_touched(history, dictionary);
+        });
+        saver.scheduled = spawned.is_ok();
+    }
+
+    fn save_touched(&self, history: bool, dictionary: bool) {
+        // With "clear the history on exit" the session's history is not
+        // meant to outlive the session, so it is not put on disk during it
+        // (a kill would leave it there); `shutdown` writes what remains.
+        if history && !self.config().history.clear_on_exit {
+            if let Err(e) = self.save_history() {
+                tracing::warn!("history not saved: {e}");
+            }
+        } else {
+            self.inner.saver.lock().history = false;
+        }
+        if dictionary {
+            if let Err(e) = self.save_dictionary_history() {
+                tracing::warn!("dictionary history not saved: {e}");
+            }
+        }
+    }
+
+    /// Write whatever of the histories is waiting to be written, now: for
+    /// a front end that has been told the session is ending (a signal, the
+    /// system shutting down) and may not get to [`Engine::shutdown`].
+    pub fn flush_history(&self) {
+        let (history, dictionary) = {
+            let saver = self.inner.saver.lock();
+            (saver.history, saver.dictionary)
+        };
+        self.save_touched(history, dictionary);
     }
 
     fn record_history(&self, out: &TranslationOutcome) -> bool {
@@ -1749,6 +1995,7 @@ impl Engine {
             glossa_core::now_unix(),
         );
         if id != 0 {
+            self.history_touched(false);
             self.emit(Event::HistoryChanged);
         }
         id != 0
@@ -1769,12 +2016,14 @@ impl Engine {
 
     pub fn set_favorite(&self, id: u64, favorite: bool) {
         if self.inner.history.lock().set_favorite(id, favorite) {
+            self.history_touched(false);
             self.emit(Event::HistoryChanged);
         }
     }
 
     pub fn remove_history(&self, id: u64) {
         if self.inner.history.lock().remove(id) {
+            self.history_touched(false);
             self.emit(Event::HistoryChanged);
         }
     }
@@ -1792,6 +2041,7 @@ impl Engine {
 
     pub fn clear_history(&self, including_favorites: bool) {
         self.inner.history.lock().clear(including_favorites);
+        self.history_touched(false);
         self.emit(Event::HistoryChanged);
     }
 
@@ -1803,10 +2053,13 @@ impl Engine {
     }
 
     fn remember_lookup(&self, word: &str) {
-        let mut h = self.inner.dictionary_history.lock();
-        h.retain(|w| w != word);
-        h.insert(0, word.to_owned());
-        h.truncate(200);
+        {
+            let mut h = self.inner.dictionary_history.lock();
+            h.retain(|w| w != word);
+            h.insert(0, word.to_owned());
+            h.truncate(200);
+        }
+        self.history_touched(true);
     }
 
     pub fn dictionary_history(&self) -> Vec<String> {
@@ -1815,6 +2068,7 @@ impl Engine {
 
     pub fn clear_dictionary_history(&self) {
         self.inner.dictionary_history.lock().clear();
+        self.history_touched(true);
     }
 
     /// Put the looked-up words back as they were before
@@ -1876,6 +2130,7 @@ impl Engine {
                 }
                 Err(e) => report.notes.push(format!("History.json: {e}")),
             }
+            self.history_touched(false);
             self.emit(Event::HistoryChanged);
         }
         Ok(report)
@@ -1888,14 +2143,18 @@ impl Engine {
     pub fn shutdown(&self) {
         let cfg = self.config();
         if cfg.history.clear_on_exit {
+            // What another program added meanwhile comes in first, so that
+            // clearing clears it too rather than leaving it for next time.
+            if let Err(e) = self.save_history() {
+                tracing::warn!("history not saved: {e}");
+            }
             self.inner.history.lock().clear(false);
         }
         if let Err(e) = self.save_history() {
             tracing::warn!("history not saved: {e}");
         }
-        let words = self.dictionary_history();
-        if let Ok(json) = serde_json::to_string(&words) {
-            let _ = std::fs::write(self.inner.paths.dictionary_history_file(), json);
+        if let Err(e) = self.save_dictionary_history() {
+            tracing::warn!("dictionary history not saved: {e}");
         }
         if let Err(e) = self.save_config() {
             tracing::warn!("settings not saved: {e}");
@@ -1945,24 +2204,31 @@ fn load_history(path: &Path, max_entries: usize) -> (History, bool) {
     }
 }
 
-/// A random token for the control API.
+/// A random token for the control API: 256 bits from the operating
+/// system's random source, in hex. Anything that can guess it can drive
+/// Glossa, so nothing weaker (the clock, the process id, a hash seed) goes
+/// into it.
 pub fn random_token() -> String {
-    use std::collections::hash_map::RandomState;
-    use std::hash::{BuildHasher, Hasher};
-    // Two independently seeded SipHash states mixed with the time and the
-    // process id: unguessable enough for a loopback API key, without pulling
-    // in a random number crate.
-    let mut out = String::new();
-    for i in 0..4u64 {
-        let mut h = RandomState::new().build_hasher();
-        h.write_u64(i);
-        h.write_u128(
-            std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_nanos()).unwrap_or(0),
-        );
-        h.write_u32(std::process::id());
-        out.push_str(&format!("{:016x}", h.finish()));
+    let mut bytes = [0u8; 32];
+    getrandom::fill(&mut bytes).expect("the operating system's random source");
+    bytes.iter().map(|b| format!("{b:02x}")).collect()
+}
+
+/// How many unusable values in the settings file are each named at start;
+/// the rest are counted.
+const MAX_VALUE_WARNINGS: usize = 5;
+
+/// The settings file as a front end needs it before (or without) starting
+/// an engine: to find a running Glossa's control API, say. Read like
+/// [`Config::load`], with the proxy password, the Lens token and the
+/// control API's token fetched from `store` where the file keeps them
+/// there. One the keychain does not give reads as empty.
+pub fn stored_config(paths: &Paths, store: Option<&dyn SecretStore>) -> Result<Config> {
+    let mut config = Config::load(&paths.config_file())?;
+    for problem in SecretSync::new().resolve(&mut config, &SecretSlot::fixed(), store) {
+        tracing::warn!("keychain: {problem}");
     }
-    out
+    Ok(config)
 }
 
 /// Whether OCR should try the next engine after `e`. Unlike translation, an
@@ -1997,6 +2263,7 @@ fn ocr_image_name(unix_secs: i64) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use glossa_core::secrets::IN_STORE;
 
     thread_local! {
         /// Makes [`Engine::start_thread`] fail on this test's thread.

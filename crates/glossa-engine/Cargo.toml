@@ -37,6 +37,9 @@ sha2 = "0.10"
 # languages, about 0.6 MB in the binary, one dependency Glossa already has
 # (hashbrown). MIT.
 whatlang = "0.18"
+# The control API's token comes from the system's random source; already in
+# the tree through the Lens client.
+getrandom = "0.3"
 
 [target.'cfg(windows)'.dependencies]
 winreg = "0.55"

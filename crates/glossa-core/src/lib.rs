@@ -12,6 +12,7 @@ pub mod config;
 pub mod dict;
 pub mod error;
 pub mod error_text;
+pub mod fsio;
 pub mod history;
 pub mod hotkey;
 pub mod jsonc;

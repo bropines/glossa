@@ -9,7 +9,6 @@
 use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 use std::process::Command;
-use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Mutex;
 use std::time::Duration;
 
@@ -189,15 +188,24 @@ pub fn parse_voices(text: &str) -> Vec<Voice> {
     out
 }
 
-/// A file name in the temporary folder for `say` to write, removed when
-/// dropped.
+/// An empty file in Glossa's own temporary folder for `say` to write,
+/// removed when dropped. The file is created here, new and for the user
+/// alone, rather than left for `say` to create under a name anyone could
+/// have guessed in the folder every user shares: what is spoken is the
+/// user's text.
 struct TempWav(PathBuf);
 
 impl TempWav {
     fn new() -> Self {
-        static NEXT: AtomicU64 = AtomicU64::new(0);
-        let n = NEXT.fetch_add(1, Ordering::Relaxed);
-        TempWav(std::env::temp_dir().join(format!("glossa-say-{}-{n}.wav", std::process::id())))
+        match glossa_core::fsio::create_temp("glossa-say-", ".wav") {
+            Ok((path, _file)) => TempWav(path),
+            // Nowhere private to write: a path that does not exist, so
+            // `say` fails and the caller reports it.
+            Err(e) => {
+                tracing::warn!("no temporary file for speech: {e}");
+                TempWav(PathBuf::from("/nonexistent/glossa-say.wav"))
+            }
+        }
     }
 }
 
@@ -292,6 +300,17 @@ Tingting            zh_CN    # 你好！我叫婷婷。
         assert_ne!(path, TempWav::new().0, "each call gets its own name");
         drop(t);
         assert!(!path.exists());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn the_temporary_file_is_private_and_not_in_the_shared_folder() {
+        use std::os::unix::fs::PermissionsExt;
+        let t = TempWav::new();
+        let mode = |p: &Path| std::fs::metadata(p).unwrap().permissions().mode() & 0o777;
+        assert_eq!(mode(&t.0), 0o600);
+        assert_eq!(mode(t.0.parent().unwrap()), 0o700);
+        assert_ne!(t.0.parent().unwrap(), std::env::temp_dir());
     }
 
     /// A stand-in for `say` that lists voices and writes a WAV to the file

@@ -50,6 +50,11 @@ pub struct Config {
     /// written while empty, so a file without presets has no trace of them.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub presets: Vec<crate::preset::Preset>,
+    /// What the file held that this version has no field for; see
+    /// [`Carried`]. Not a setting: it travels with the settings so that
+    /// every way of writing them writes it back.
+    #[serde(skip)]
+    pub carried: Carried,
 }
 
 /// Where a classic installation lives and which of its parts to use.
@@ -1833,82 +1838,376 @@ pub struct WindowGeometry {
 
 // -- loading and saving ---------------------------------------------------------
 
-/// A config file that could not be parsed and was moved aside
-/// ([`Config::load_or_recover`]).
+/// A value in the settings file this version could not use: the setting
+/// took its default and the rest of the file was kept.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct RecoveredConfig {
-    /// Where the unreadable file went.
-    pub backup: PathBuf,
-    /// What was wrong with it.
-    pub error: String,
+pub struct ConfigIssue {
+    /// Where it is, as it would be written (`general.results_layout`,
+    /// `services.ai_endpoints[1]`).
+    pub path: String,
+    /// What was wrong with it, in the parser's words.
+    pub problem: String,
 }
+
+/// Where the settings in use came from ([`Config::load_checked`]).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ConfigSource {
+    /// The settings file.
+    File,
+    /// There is no settings file (or an empty one and no backup): the
+    /// defaults.
+    Missing,
+    /// The file is empty or cannot be read as TOML (`error`, empty for an
+    /// empty file), and the last good copy, `config.toml.bak`, was read
+    /// instead.
+    Backup { error: String },
+    /// The file cannot be read as TOML (`error`) and there is no usable
+    /// backup: the defaults.
+    Defaults { error: String },
+}
+
+/// The settings as read at start, and everything that was wrong on the way.
+/// Reading never changes anything on disk.
+#[derive(Debug, Clone, PartialEq)]
+pub struct LoadedConfig {
+    pub config: Config,
+    pub source: ConfigSource,
+    /// Values that took their defaults.
+    pub issues: Vec<ConfigIssue>,
+}
+
+impl LoadedConfig {
+    /// Whether the settings file itself is unusable, so that the next save
+    /// replaces something the user may want back.
+    pub fn file_is_damaged(&self) -> bool {
+        matches!(&self.source, ConfigSource::Backup { .. } | ConfigSource::Defaults { .. })
+    }
+}
+
+/// One step into a TOML document.
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum Step {
+    Key(String),
+    Index(usize),
+}
+
+fn show_path(path: &[Step]) -> String {
+    let mut out = String::new();
+    for step in path {
+        match step {
+            Step::Key(k) if out.is_empty() => out.push_str(k),
+            Step::Key(k) => {
+                out.push('.');
+                out.push_str(k);
+            }
+            Step::Index(i) => out.push_str(&format!("[{i}]")),
+        }
+    }
+    out
+}
+
+fn value_at<'a>(root: &'a toml::Value, path: &[Step]) -> Option<&'a toml::Value> {
+    path.iter().try_fold(root, |v, step| match step {
+        Step::Key(k) => v.as_table()?.get(k),
+        Step::Index(i) => v.as_array()?.get(*i),
+    })
+}
+
+/// Take the value at `path` out of the document.
+fn remove_at(root: &mut toml::Value, path: &[Step]) -> Option<toml::Value> {
+    let (last, parents) = path.split_last()?;
+    let mut at = root;
+    for step in parents {
+        at = match step {
+            Step::Key(k) => at.as_table_mut()?.get_mut(k)?,
+            Step::Index(i) => at.as_array_mut()?.get_mut(*i)?,
+        };
+    }
+    match last {
+        Step::Key(k) => at.as_table_mut()?.remove(k),
+        Step::Index(i) => {
+            let array = at.as_array_mut()?;
+            (*i < array.len()).then(|| array.remove(*i))
+        }
+    }
+}
+
+/// The keys of `path`, when it goes through tables only (a place in a list
+/// has no name to find it by after the list changes).
+fn keys_only(path: &[Step]) -> Option<Vec<String>> {
+    path.iter()
+        .map(|s| match s {
+            Step::Key(k) => Some(k.clone()),
+            Step::Index(_) => None,
+        })
+        .collect()
+}
+
+/// What the settings file held that this version cannot hold in its own
+/// fields, kept so that writing the settings does not destroy it: a newer
+/// version's keys, and values this version did not understand (a layout
+/// that does not exist yet). Going back to the newer version finds them
+/// again.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct Carried {
+    /// Keys nothing here reads, with their values.
+    unknown: Vec<(Vec<String>, toml::Value)>,
+    /// Values that could not be read: what the file said, and what this
+    /// version writes for the default it used instead (`None`: nothing).
+    /// The file's value goes back for as long as the setting still has
+    /// that default; a choice made here since then wins.
+    replaced: Vec<(Vec<String>, toml::Value, Option<toml::Value>)>,
+}
+
+impl Carried {
+    pub fn is_empty(&self) -> bool {
+        self.unknown.is_empty() && self.replaced.is_empty()
+    }
+
+    /// The unknown keys, as written (`general.from_the_future`).
+    pub fn unknown_keys(&self) -> Vec<String> {
+        self.unknown.iter().map(|(path, _)| path.join(".")).collect()
+    }
+
+    /// Put everything carried back into a document about to be written.
+    fn restore(&self, root: &mut toml::Table) {
+        for (path, raw, stand_in) in &self.replaced {
+            if table_value(root, path) == stand_in.as_ref() {
+                set_in_table(root, path, raw.clone());
+            }
+        }
+        for (path, value) in &self.unknown {
+            if table_value(root, path).is_none() {
+                set_in_table(root, path, value.clone());
+            }
+        }
+    }
+}
+
+fn table_value<'a>(root: &'a toml::Table, path: &[String]) -> Option<&'a toml::Value> {
+    let (first, rest) = path.split_first()?;
+    rest.iter().try_fold(root.get(first)?, |v, key| v.as_table()?.get(key))
+}
+
+/// Set `path` in `root`, making the tables on the way; nothing is done
+/// when something other than a table is in the way.
+fn set_in_table(root: &mut toml::Table, path: &[String], value: toml::Value) {
+    let Some((last, parents)) = path.split_last() else { return };
+    let mut table = root;
+    for key in parents {
+        let next = table.entry(key.clone()).or_insert_with(|| toml::Value::Table(toml::Table::new()));
+        match next.as_table_mut() {
+            Some(t) => table = t,
+            None => return,
+        }
+    }
+    table.insert(last.clone(), value);
+}
+
+/// How many unusable values one file may have before it is treated as
+/// unreadable altogether (something other than a settings file).
+const MAX_ISSUES: usize = 200;
 
 impl Config {
     /// Read a config file. A missing file is not an error: it means "all
-    /// defaults". A malformed one is, so the user's settings are never
-    /// silently replaced.
+    /// defaults". A value this version cannot use takes its default (and is
+    /// logged); a file that is not TOML at all is an error, so the user's
+    /// settings are never silently replaced. Nothing on disk is changed.
     pub fn load(path: &Path) -> crate::Result<Config> {
         match std::fs::read_to_string(path) {
-            Ok(text) => Config::from_toml(&text),
+            Ok(text) => {
+                let (config, issues) = Config::from_toml_lenient(&text)?;
+                for issue in &issues {
+                    tracing::warn!("{}: {}: {}; the default is used", path.display(), issue.path, issue.problem);
+                }
+                Ok(config)
+            }
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(Config::default()),
             Err(e) => Err(e.into()),
         }
     }
 
-    /// [`Config::load`] for starting the program: a file that cannot be
-    /// parsed is moved aside to `config.toml.broken-<unix time>` and the
-    /// defaults are used, so a typo in a hand edit cannot keep the program
-    /// from starting. What happened is returned for the user to be told.
-    /// Errors other than parsing (a file that cannot be read) still fail.
-    pub fn load_or_recover(path: &Path) -> crate::Result<(Config, Option<RecoveredConfig>)> {
-        let text = match std::fs::read_to_string(path) {
-            Ok(text) => text,
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok((Config::default(), None)),
+    /// [`Config::load`] for starting the program, which must start whatever
+    /// the file looks like:
+    ///
+    /// * a value this version cannot use (a hand edit, a newer version's
+    ///   choice) takes its default and is reported in `issues`; everything
+    ///   else in the file is kept;
+    /// * a file that is empty or not TOML at all is left where it is, and
+    ///   the last good copy (`config.toml.bak`, see [`Config::save`]) is
+    ///   read instead, or the defaults when there is none.
+    ///
+    /// Nothing on disk is changed: a command that only reads must not move
+    /// or rewrite the user's file. The caller that goes on to save keeps the
+    /// damaged file first ([`Config::keep_damaged`]). Only a file that
+    /// cannot be read at all (no permission) is an error.
+    pub fn load_checked(path: &Path) -> crate::Result<LoadedConfig> {
+        let bytes = match std::fs::read(path) {
+            Ok(bytes) => bytes,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+                return Ok(LoadedConfig {
+                    config: Config::default(),
+                    source: ConfigSource::Missing,
+                    issues: Vec::new(),
+                })
+            }
             Err(e) => return Err(e.into()),
         };
-        match Config::from_toml(&text) {
-            Ok(c) => Ok((c, None)),
-            Err(e) => {
-                let secs = std::time::SystemTime::now()
-                    .duration_since(std::time::UNIX_EPOCH)
-                    .map(|d| d.as_secs())
-                    .unwrap_or_default();
-                let mut name = path.file_name().unwrap_or_default().to_os_string();
-                name.push(format!(".broken-{secs}"));
-                let backup = path.with_file_name(name);
-                // Moved, not copied: the next save writes a fresh file, and
-                // the user's text survives beside it.
-                std::fs::rename(path, &backup).map_err(|io| {
-                    crate::Error::Config(format!(
-                        "{e}; and the file could not be moved aside to {}: {io}",
-                        backup.display()
-                    ))
-                })?;
-                tracing::error!("{e}; moved it to {} and started with the defaults", backup.display());
-                Ok((Config::default(), Some(RecoveredConfig { backup, error: e.to_string() })))
+        let parsed = match String::from_utf8(bytes) {
+            // Nothing in it: a write that was cut short, never a choice (a
+            // file the program wrote has every setting in it).
+            Ok(text) if text.trim().is_empty() => Err(String::new()),
+            Ok(text) => Config::from_toml_lenient(&text).map_err(|e| e.to_string()),
+            Err(_) => Err("config file: not UTF-8 text".to_owned()),
+        };
+        let error = match parsed {
+            Ok((config, issues)) => return Ok(LoadedConfig { config, source: ConfigSource::File, issues }),
+            Err(error) => error,
+        };
+        let backup = std::fs::read_to_string(Config::backup_path(path))
+            .ok()
+            .filter(|text| !text.trim().is_empty())
+            .and_then(|text| Config::from_toml_lenient(&text).ok());
+        Ok(match backup {
+            Some((config, issues)) => LoadedConfig { config, source: ConfigSource::Backup { error }, issues },
+            None if error.is_empty() => {
+                LoadedConfig { config: Config::default(), source: ConfigSource::Missing, issues: Vec::new() }
             }
+            None => {
+                LoadedConfig { config: Config::default(), source: ConfigSource::Defaults { error }, issues: Vec::new() }
+            }
+        })
+    }
+
+    /// Where the last good copy of the settings file at `path` is kept.
+    pub fn backup_path(path: &Path) -> PathBuf {
+        let mut name = path.file_name().unwrap_or_default().to_os_string();
+        name.push(".bak");
+        path.with_file_name(name)
+    }
+
+    /// Where a settings file that could not be read is kept by
+    /// [`Config::keep_damaged`] when asked at `unix_secs`.
+    pub fn damaged_path(path: &Path, unix_secs: i64) -> PathBuf {
+        let mut name = path.file_name().unwrap_or_default().to_os_string();
+        name.push(format!(".broken-{unix_secs}"));
+        path.with_file_name(name)
+    }
+
+    /// Copy a settings file that could not be read to `to` (see
+    /// [`Config::damaged_path`]), for the user alone, before it is written
+    /// over: the user's text survives beside the new file. An empty or
+    /// missing file has nothing to keep.
+    pub fn keep_damaged(path: &Path, to: &Path) -> crate::Result<()> {
+        match std::fs::read(path) {
+            Ok(bytes) if !bytes.iter().all(u8::is_ascii_whitespace) => Ok(crate::fsio::write_atomic(to, &bytes)?),
+            Ok(_) => Ok(()),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
+            Err(e) => Err(e.into()),
         }
     }
 
+    /// Read settings strictly: any value that does not fit is an error.
     pub fn from_toml(text: &str) -> crate::Result<Config> {
         let mut config: Config = toml::from_str(text).map_err(|e| crate::Error::Config(format!("config file: {e}")))?;
         config.sanitise();
         Ok(config)
     }
 
+    /// Read settings field by field: a value that does not fit (a string
+    /// where a number goes, a choice this version does not have) takes its
+    /// default and is returned as a [`ConfigIssue`], and the rest of the
+    /// file is read as usual. Those values and the keys this version does
+    /// not know are remembered in [`Config::carried`], so they are written
+    /// back. Text that is not TOML is still an error.
+    pub fn from_toml_lenient(text: &str) -> crate::Result<(Config, Vec<ConfigIssue>)> {
+        let bad = |e: &dyn std::fmt::Display| crate::Error::Config(format!("config file: {e}"));
+        let table: toml::Table = toml::from_str(text).map_err(|e| bad(&e))?;
+        let original = toml::Value::Table(table);
+        let mut root = original.clone();
+        let mut issues = Vec::new();
+        let mut removed: Vec<(Vec<Step>, toml::Value)> = Vec::new();
+        let (mut config, ignored) = loop {
+            let mut ignored: Vec<Vec<Step>> = Vec::new();
+            let result = {
+                let mut note = |path: serde_ignored::Path| ignored.push(ignored_steps(&path));
+                let de = serde_ignored::Deserializer::new(root.clone(), &mut note);
+                serde_path_to_error::deserialize::<_, Config>(de)
+            };
+            match result {
+                Ok(config) => break (config, ignored),
+                Err(e) => {
+                    let mut path = error_steps(e.path());
+                    // A fault inside an entry of a list takes the whole
+                    // entry: one left half-filled with defaults (a rule
+                    // with no program, which matches every program) is
+                    // worse than one fewer.
+                    if let Some(i) = path.iter().position(|s| matches!(s, Step::Index(_))) {
+                        path.truncate(i + 1);
+                    }
+                    // Nothing to take out (the fault is in the document as a
+                    // whole), or far too many faults for a settings file.
+                    let taken = if issues.len() < MAX_ISSUES { remove_at(&mut root, &path) } else { None };
+                    let Some(raw) = taken else { return Err(bad(e.inner())) };
+                    issues.push(ConfigIssue { path: show_path(&path), problem: e.inner().to_string() });
+                    removed.push((path, raw));
+                }
+            }
+        };
+        // A storage choice from a newer version says the secrets are not in
+        // this file. Falling back to "in the file" would write them into it
+        // and take them out of the keychain; the keychain is the reading
+        // that loses nothing.
+        if removed.iter().any(|(path, _)| show_path(path) == "general.secret_storage") {
+            config.general.secret_storage = crate::secrets::SecretStorage::System;
+        }
+        config.sanitise();
+        let written = toml::Value::try_from(&config).ok();
+        for (path, raw) in removed {
+            if let (Some(keys), Some(written)) = (keys_only(&path), &written) {
+                let stand_in = value_at(written, &path).cloned();
+                config.carried.replaced.push((keys, raw, stand_in));
+            }
+        }
+        for path in ignored {
+            if let (Some(keys), Some(value)) = (keys_only(&path), value_at(&original, &path)) {
+                config.carried.unknown.push((keys, value.clone()));
+            }
+        }
+        Ok((config, issues))
+    }
+
+    /// The settings as TOML, with whatever the file held that this version
+    /// has no field for ([`Config::carried`]).
     pub fn to_toml(&self) -> String {
+        if !self.carried.is_empty() {
+            // Through a document, so that the carried keys land in their
+            // tables. A table this version writes keeps its own order; the
+            // carried keys follow.
+            if let Ok(mut root) = toml::Table::try_from(self) {
+                self.carried.restore(&mut root);
+                if let Ok(text) = toml::to_string_pretty(&root) {
+                    return text;
+                }
+            }
+        }
         toml::to_string_pretty(self).expect("config always serialises")
     }
 
-    /// Write atomically: to a sibling temp file, then rename over the
-    /// original, so a crash mid-write cannot leave half a config.
+    /// Write the settings: atomically, durably and for the user alone (see
+    /// [`crate::fsio`]), so a crash mid-write cannot leave half a file and
+    /// nobody else on the machine can read the keys in it. The file being
+    /// replaced, when it is a readable settings file, first becomes
+    /// `config.toml.bak`: the copy [`Config::load_checked`] falls back to.
     pub fn save(&self, path: &Path) -> crate::Result<()> {
-        if let Some(dir) = path.parent() {
-            std::fs::create_dir_all(dir)?;
+        if let Ok(previous) = std::fs::read_to_string(path) {
+            if !previous.trim().is_empty() && toml::from_str::<toml::Table>(&previous).is_ok() {
+                if let Err(e) = crate::fsio::write_atomic_unsynced(&Config::backup_path(path), previous.as_bytes()) {
+                    tracing::warn!("could not keep a backup of {}: {e}", path.display());
+                }
+            }
         }
-        let tmp = path.with_extension("toml.tmp");
-        std::fs::write(&tmp, self.to_toml())?;
-        std::fs::rename(&tmp, path)?;
+        crate::fsio::write_atomic(path, self.to_toml().as_bytes())?;
         Ok(())
     }
 
@@ -1984,6 +2283,43 @@ impl Config {
     }
 }
 
+fn error_steps(path: &serde_path_to_error::Path) -> Vec<Step> {
+    use serde_path_to_error::Segment;
+    let mut out = Vec::new();
+    for segment in path.iter() {
+        match segment {
+            Segment::Map { key } => out.push(Step::Key(key.clone())),
+            Segment::Seq { index } => out.push(Step::Index(*index)),
+            // Inside one value (an enum's content): the value as a whole
+            // is what cannot be read.
+            _ => break,
+        }
+    }
+    out
+}
+
+fn ignored_steps(path: &serde_ignored::Path) -> Vec<Step> {
+    use serde_ignored::Path as P;
+    let mut out = Vec::new();
+    let mut at = path;
+    loop {
+        at = match at {
+            P::Root => break,
+            P::Seq { parent, index } => {
+                out.push(Step::Index(*index));
+                parent
+            }
+            P::Map { parent, key } => {
+                out.push(Step::Key(key.clone()));
+                parent
+            }
+            P::Some { parent } | P::NewtypeStruct { parent } | P::NewtypeVariant { parent } => parent,
+        };
+    }
+    out.reverse();
+    out
+}
+
 #[cfg(test)]
 mod tests {
 
@@ -2033,26 +2369,264 @@ mod tests {
         assert_eq!(c.appearance.popup.auto_hide_secs, 5);
     }
 
-    #[test]
-    fn a_broken_file_is_moved_aside_and_defaults_are_used() {
-        let dir = std::env::temp_dir().join(format!("glossa-recover-{}", std::process::id()));
+    fn scratch(tag: &str) -> PathBuf {
+        let dir = std::env::temp_dir().join(format!("glossa-cfg-{tag}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    fn names(dir: &Path) -> Vec<String> {
+        let mut names: Vec<String> =
+            std::fs::read_dir(dir).unwrap().map(|e| e.unwrap().file_name().into_string().unwrap()).collect();
+        names.sort();
+        names
+    }
+
+    /// The audit's file: one value from a newer version among settings that
+    /// matter.
+    const ONE_BAD_VALUE: &str = r#"
+[general]
+results_layout = "grid-from-a-newer-version"
+instant_translation = true
+
+[server]
+enabled = false
+token = "tok-123"
+
+[services.options.deepl]
+api_key = "dk-123"
+"#;
+
+    #[test]
+    fn one_bad_value_takes_its_default_and_the_rest_of_the_file_is_kept() {
+        assert!(Config::from_toml(ONE_BAD_VALUE).is_err(), "the strict reader still refuses it");
+        let (c, issues) = Config::from_toml_lenient(ONE_BAD_VALUE).unwrap();
+        assert_eq!(c.general.results_layout, ResultsLayout::default());
+        assert!(c.general.instant_translation);
+        assert!(!c.server.enabled, "the control API stays off");
+        assert_eq!(c.server.token, "tok-123");
+        assert_eq!(c.services.option("deepl", "api_key"), Some(&serde_json::json!("dk-123")));
+        assert_eq!(issues.len(), 1);
+        assert_eq!(issues[0].path, "general.results_layout");
+        assert!(issues[0].problem.contains("grid-from-a-newer-version"), "{}", issues[0].problem);
+    }
+
+    #[test]
+    fn several_bad_values_of_every_kind_are_each_reported() {
+        let (c, issues) = Config::from_toml_lenient(
+            r#"
+[network]
+timeout_secs = "ten"
+max_retries = 2
+[network.proxy]
+mode = "carrier-pigeon"
+host = "proxy.test"
+[appearance]
+popup = 5
+ui_scale = 1.5
+[history]
+enabled = "yes"
+"#,
+        )
+        .unwrap();
+        let paths: Vec<&str> = issues.iter().map(|i| i.path.as_str()).collect();
+        assert_eq!(paths.len(), 4, "{issues:?}");
+        for path in ["network.timeout_secs", "network.proxy.mode", "appearance.popup", "history.enabled"] {
+            assert!(paths.contains(&path), "{path} in {paths:?}");
+        }
+        let d = Config::default();
+        assert_eq!(c.network.timeout_secs, d.network.timeout_secs);
+        assert_eq!(c.network.max_retries, 2);
+        assert_eq!(c.network.proxy.mode, d.network.proxy.mode);
+        assert_eq!(c.network.proxy.host, "proxy.test");
+        assert_eq!(c.appearance.popup, d.appearance.popup);
+        assert_eq!(c.appearance.ui_scale, 1.5);
+        assert_eq!(c.history.enabled, d.history.enabled);
+    }
+
+    #[test]
+    fn a_bad_entry_in_a_list_goes_without_taking_its_neighbours() {
+        let (c, issues) = Config::from_toml_lenient(
+            r#"
+[[exceptions.rules]]
+program = "one.exe"
+[[exceptions.rules]]
+program = 7
+window_class = "Shell"
+[[exceptions.rules]]
+program = "three.exe"
+"#,
+        )
+        .unwrap();
+        let programs: Vec<&str> = c.exceptions.rules.iter().map(|r| r.program.as_str()).collect();
+        assert!(programs.contains(&"one.exe") && programs.contains(&"three.exe"), "{programs:?}");
+        // Not kept as a rule without a program, which would match them all.
+        assert!(!c.exceptions.rules.iter().any(|r| r.window_class == "Shell"), "{:?}", c.exceptions.rules);
+        assert_eq!(issues.len(), 1);
+        assert_eq!(issues[0].path, "exceptions.rules[1]");
+    }
+
+    #[test]
+    fn text_that_is_not_toml_is_still_an_error() {
+        assert!(Config::from_toml_lenient("[general\nbroken = ").is_err());
+    }
+
+    #[test]
+    fn a_newer_versions_keys_and_values_survive_a_rewrite() {
+        let text = r#"
+top_level_from_the_future = "kept"
+
+[general]
+results_layout = "grid-from-a-newer-version"
+from_the_future = 7
+
+[tomorrow]
+feature = true
+[tomorrow.nested]
+list = [1, 2]
+"#;
+        let (mut c, _) = Config::from_toml_lenient(text).unwrap();
+        let mut keys = c.carried.unknown_keys();
+        keys.sort();
+        assert_eq!(keys, ["general.from_the_future", "tomorrow", "top_level_from_the_future"]);
+        // The settings change and are written, as the program does all day.
+        c.general.instant_translation = true;
+        let written: toml::Table = toml::from_str(&c.to_toml()).unwrap();
+        assert_eq!(written["top_level_from_the_future"].as_str(), Some("kept"));
+        assert_eq!(written["general"]["from_the_future"].as_integer(), Some(7));
+        assert_eq!(written["general"]["instant_translation"].as_bool(), Some(true));
+        assert_eq!(written["tomorrow"]["nested"]["list"].as_array().map(Vec::len), Some(2));
+        // The value this version could not read goes back as it was…
+        assert_eq!(written["general"]["results_layout"].as_str(), Some("grid-from-a-newer-version"));
+        // …and all of it survives a second round through the file.
+        let (again, issues) = Config::from_toml_lenient(&c.to_toml()).unwrap();
+        assert_eq!(issues.len(), 1);
+        assert_eq!(again.carried, c.carried);
+        // A choice made in this version wins over the value carried.
+        let other = [ResultsLayout::Tabs, ResultsLayout::Stacked]
+            .into_iter()
+            .find(|l| *l != ResultsLayout::default())
+            .expect("more than one layout");
+        c.general.results_layout = other;
+        let (chosen, issues) = Config::from_toml_lenient(&c.to_toml()).unwrap();
+        assert!(issues.is_empty());
+        assert_eq!(chosen.general.results_layout, other);
+    }
+
+    #[test]
+    fn a_file_without_surprises_is_written_exactly_as_before() {
+        let (c, issues) = Config::from_toml_lenient(&Config::default().to_toml()).unwrap();
+        assert!(issues.is_empty() && c.carried.is_empty());
+        assert_eq!(c.to_toml(), Config::default().to_toml());
+        // Through a document (as with carried keys) the settings keep
+        // their order and their values.
+        let mut carrying = c.clone();
+        carrying.carried.unknown.push((vec!["zz_future".into()], toml::Value::Boolean(true)));
+        let plain = c.to_toml();
+        let through = carrying.to_toml();
+        assert_eq!(Config::from_toml(&through).unwrap(), c, "the same settings");
+        let tables = |t: &str| t.lines().filter(|l| l.starts_with('[')).map(str::to_owned).collect::<Vec<_>>();
+        assert_eq!(tables(&through), tables(&plain), "in the same order");
+    }
+
+    #[test]
+    fn an_unknown_storage_choice_never_moves_secrets_into_the_file() {
+        let (c, issues) = Config::from_toml_lenient("[general]\nsecret_storage = \"vault\"\n").unwrap();
+        assert_eq!(issues.len(), 1);
+        assert_eq!(c.general.secret_storage, crate::secrets::SecretStorage::System);
+    }
+
+    #[test]
+    fn loading_never_changes_the_folder_and_reports_what_it_found() {
+        let dir = scratch("readonly");
         let path = dir.join("config.toml");
+        // No file: the defaults, nothing created.
+        let loaded = Config::load_checked(&path).unwrap();
+        assert_eq!(loaded.source, ConfigSource::Missing);
+        assert!(names(&dir).is_empty());
+        // One bad value: the file's settings, the file untouched.
+        std::fs::write(&path, ONE_BAD_VALUE).unwrap();
+        let loaded = Config::load_checked(&path).unwrap();
+        assert_eq!(loaded.source, ConfigSource::File);
+        assert_eq!(loaded.issues.len(), 1);
+        assert!(!loaded.file_is_damaged());
+        assert!(!loaded.config.server.enabled);
+        assert_eq!(Config::load(&path).unwrap().server.token, "tok-123");
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), ONE_BAD_VALUE);
+        assert_eq!(names(&dir), ["config.toml"]);
+        // Not TOML at all, no backup: the defaults, and still nothing moved.
         std::fs::write(&path, "[general\nbroken = ").unwrap();
-        let (c, recovered) = Config::load_or_recover(&path).unwrap();
-        assert_eq!(c, Config::default());
-        let r = recovered.expect("reported");
-        assert!(!path.exists(), "moved, so the next save starts afresh");
-        assert_eq!(std::fs::read_to_string(&r.backup).unwrap(), "[general\nbroken = ", "kept verbatim");
-        let name = r.backup.file_name().unwrap().to_string_lossy().into_owned();
-        assert!(name.starts_with("config.toml.broken-") && name[19..].parse::<u64>().is_ok(), "{name}");
-        assert!(r.error.contains("config file"), "{}", r.error);
-        // A good file, or none, is not a recovery.
-        std::fs::write(&path, "[general]\ninstant_translation = true\n").unwrap();
-        let (c, recovered) = Config::load_or_recover(&path).unwrap();
-        assert!(c.general.instant_translation && recovered.is_none());
-        std::fs::remove_file(&path).unwrap();
-        assert!(Config::load_or_recover(&path).unwrap().1.is_none());
+        let loaded = Config::load_checked(&path).unwrap();
+        assert!(matches!(&loaded.source, ConfigSource::Defaults { error } if error.contains("config file")));
+        assert!(loaded.file_is_damaged());
+        assert_eq!(loaded.config, Config::default());
+        assert!(Config::load(&path).is_err(), "the plain reader says so");
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), "[general\nbroken = ");
+        assert_eq!(names(&dir), ["config.toml"]);
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn an_unreadable_or_empty_file_is_restored_from_the_last_good_copy() {
+        let dir = scratch("backup");
+        let path = dir.join("config.toml");
+        let mut c = Config::default();
+        c.server.enabled = false;
+        c.services.set_option("deepl", "api_key", serde_json::json!("dk-123"));
+        c.save(&path).unwrap();
+        assert_eq!(names(&dir), ["config.toml"], "nothing to back up yet");
+        c.general.instant_translation = true;
+        c.save(&path).unwrap();
+        assert_eq!(names(&dir), ["config.toml", "config.toml.bak"]);
+        // A third save, so the backup holds the second file.
+        c.save(&path).unwrap();
+        for damage in ["", "   \n", "[general\nbroken = "] {
+            std::fs::write(&path, damage).unwrap();
+            let loaded = Config::load_checked(&path).unwrap();
+            assert!(matches!(loaded.source, ConfigSource::Backup { .. }), "{damage:?}: {:?}", loaded.source);
+            assert!(loaded.file_is_damaged());
+            assert!(!loaded.config.server.enabled, "{damage:?}");
+            assert!(loaded.config.general.instant_translation);
+            assert_eq!(loaded.config.services.option("deepl", "api_key"), Some(&serde_json::json!("dk-123")));
+            assert_eq!(std::fs::read_to_string(&path).unwrap(), damage, "left as it was");
+        }
+        // Saving over the damaged file does not put it in the backup's place.
+        let kept = Config::damaged_path(&path, 1700000000);
+        Config::keep_damaged(&path, &kept).unwrap();
+        assert_eq!(kept.file_name().unwrap(), "config.toml.broken-1700000000");
+        assert_eq!(std::fs::read_to_string(&kept).unwrap(), "[general\nbroken = ", "kept verbatim");
+        c.save(&path).unwrap();
+        let backup = Config::load(&Config::backup_path(&path)).unwrap();
+        assert!(backup.general.instant_translation, "the backup is still the last good file");
+        // An empty file with no backup is a fresh start, not a fault.
+        std::fs::remove_file(Config::backup_path(&path)).unwrap();
+        std::fs::write(&path, "").unwrap();
+        let loaded = Config::load_checked(&path).unwrap();
+        assert_eq!(loaded.source, ConfigSource::Missing);
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn the_settings_file_its_backup_and_a_kept_copy_are_the_users_alone() {
+        use std::os::unix::fs::PermissionsExt;
+        let mode = |p: &Path| std::fs::metadata(p).unwrap().permissions().mode() & 0o777;
+        let dir = scratch("modes");
+        let data = dir.join("data");
+        let path = data.join("config.toml");
+        let c = Config::default();
+        c.save(&path).unwrap();
+        // As an earlier version left it: readable by everyone.
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o644)).unwrap();
+        c.save(&path).unwrap();
+        assert_eq!(mode(&path), 0o600);
+        assert_eq!(mode(&Config::backup_path(&path)), 0o600);
+        assert_eq!(mode(&data), 0o700);
+        std::fs::write(&path, "not [toml").unwrap();
+        let kept = Config::damaged_path(&path, 1);
+        Config::keep_damaged(&path, &kept).unwrap();
+        assert_eq!(mode(&kept), 0o600);
         std::fs::remove_dir_all(&dir).ok();
     }
 
