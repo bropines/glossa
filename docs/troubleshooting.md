@@ -13,7 +13,7 @@ says what to collect before opening an issue. По-русски:
 - [Windows: programs running as administrator](#windows-programs-running-as-administrator)
 - [Linux and Wayland](#linux-and-wayland)
 - [Network, proxy and certificate errors](#network-proxy-and-certificate-errors)
-- ["… is rate-limiting us"](#-is-rate-limiting-us)
+- [Too many requests](#too-many-requests)
 - [Text recognition finds nothing](#text-recognition-finds-nothing)
 - [A module is waiting for approval](#a-module-is-waiting-for-approval)
 - [Module files do not download](#module-files-do-not-download)
@@ -145,7 +145,7 @@ clipboard.
 - **The popup opens and shows an error** instead of a translation: the
   service failed. The message says why; see
   [Network](#network-proxy-and-certificate-errors) and
-  [rate limiting](#-is-rate-limiting-us). Pick another service in the
+  [rate limiting](#too-many-requests). Pick another service in the
   strip at the bottom of the popup (move the pointer over the popup to see
   it).
 - **The popup appears and vanishes.** It hides after a few seconds
@@ -269,9 +269,10 @@ returned (timeout while sending data)." or a service's own error.
    DeepLX server answers at …" and the like mean the server is not
    running at that address.
 
-## "… is rate-limiting us"
+## Too many requests
 
-The service answered that too many requests came from your address
+The desktop program says "… is getting too many requests"; `glossa-cli`
+and the log say "… is rate-limiting us". The service answered that too many requests came from your address
 (HTTP 429, or a captcha page). It is the service's decision, usually
 about the address you share with others: a VPN exit, a company or
 provider's NAT.
@@ -312,7 +313,7 @@ More in [Text recognition, troubleshooting](ocr.md#troubleshooting).
 
 ## A module is waiting for approval
 
-"This module is waiting for your approval" on a call, or *needs approval*
+"Module … is waiting for your approval" on a call, or *needs approval*
 beside a module: a module you installed yourself does not run until you
 have approved what it asks for.
 
@@ -333,7 +334,7 @@ not in the strip. Details: [Permissions and trust](modules/README.md#permissions
 
 ## Module files do not download
 
-"This service needs files that have not been downloaded yet": open the
+"Module … needs files that have not been downloaded yet": open the
 service's settings (*Options → Services*) and press *Download* under
 *Files*. Nothing is downloaded on its own unless `[modules]
 auto_download_assets` is on.

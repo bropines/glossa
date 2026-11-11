@@ -192,8 +192,8 @@ Things worth knowing before relying on "I switched that service off":
   ([Working offline](#working-offline)).
 - **Text recognition falls over to other engines.** When the chosen OCR
   engine fails in a way another might not (it is not installed, not set up,
-  or the network is down), the others are tried: Google Lens first, then
-  the system's engine, Tesseract and the external command. With an offline
+  or the network is down), the others are tried in turn: Google Lens, the
+  system's engine, Tesseract, the external command. With an offline
   engine chosen, a failure can therefore send the picture to Google Lens.
   OneOCR and AI endpoints are never used as a fallback. This does not
   follow the fail-over switch. `[modules] disabled = ["lens"]` removes
