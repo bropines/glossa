@@ -9,6 +9,22 @@ the notes of its GitHub release.
 
 ### Security
 
+- **The control API token is no longer accepted in the address.**
+  `?token=…` is now a 401; send `Authorization: Bearer …` instead
+  (`curl -H "Authorization: Bearer TOKEN" …`). An address ends up in shell
+  history, the process list and logs. Key bindings made with `?token=`
+  need the header added; the commands shown in *Options* and in
+  docs/control-api.md are updated. `glossa-cli serve` no longer prints
+  the token.
+- A proxy you entered that cannot be used no longer makes Glossa connect
+  directly. Nothing is sent past this computer until the proxy is
+  corrected, and each request says why. (An unusable *system* proxy is
+  still skipped, as before.)
+- A module that declares `offline` and also asks to contact any host
+  (`permissions.network = ["*"]`) is no longer counted as offline: it is
+  refused under "offline only" and is not a local OCR engine for the
+  no-fallback rule. Named hosts (a model download site, `127.0.0.1`) keep
+  the claim.
 - Module approvals are tied to the module's files and a fresh install
   approves nothing. Before, the first start with no settings file (or one
   from before approvals, or after deleting `config.toml`) approved every
@@ -79,6 +95,11 @@ the notes of its GitHub release.
 
 ### Added
 
+- *Options → Modules → Install module…* takes a `.zip` of a module too,
+  asks plainly for a file or a folder (it used to open a second dialog
+  when the first was cancelled), copies on a worker thread, and replaces
+  an older copy whole instead of writing over it file by file. A copy
+  that fails half-way leaves the modules folder as it was.
 - Options has controls for two settings that could only be set in
   `config.toml`: *Basics → Detect the language with* (`[general] detect`:
   the built-in detector, a service, or the first and then the second) and
@@ -483,8 +504,8 @@ the notes of its GitHub release.
   written for the user alone (`0600` on Linux and macOS), and files left
   readable by others are tightened at start.
 - A proxy that cannot be used (in the settings or in `HTTPS_PROXY`) no
-  longer stops the program from starting: it starts without the proxy and
-  says so. The proxy's password is no longer printed in the error or the log.
+  longer stops the program from starting: it starts and says so (see
+  *Security* for what it then does). The proxy's password is no longer printed in the error or the log.
 - One value in `config.toml` that cannot be used no longer resets every
   setting: that value takes its default and the rest is kept. A file that
   cannot be read at all falls back to the last good copy

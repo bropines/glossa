@@ -459,8 +459,17 @@ impl Manifest {
             .map(|s| std::time::Duration::from_secs(s.clamp(1, crate::protocol::MAX_CALL_TIMEOUT_SECS)))
     }
 
+    /// What the manifest says the module can do. `offline` is its word
+    /// that nothing leaves this computer, and a permission to contact any
+    /// host at all contradicts it: such a module is not counted as offline.
+    /// Named hosts are left to it (an offline engine names where its models
+    /// are downloaded from, a local server is `127.0.0.1`).
     pub fn capabilities(&self) -> Capabilities {
-        self.capabilities.iter().filter_map(|c| Capabilities::from_name(c)).collect()
+        let caps: Capabilities = self.capabilities.iter().filter_map(|c| Capabilities::from_name(c)).collect();
+        if self.permissions.network.iter().any(|h| h.trim() == "*") {
+            return caps.without(Capabilities::OFFLINE);
+        }
+        caps
     }
 
     pub fn provider_info(&self) -> ProviderInfo {
@@ -597,6 +606,18 @@ mod tests {
         assert!(Manifest::parse(&own).is_ok());
         let future = SAMPLE.replace("[module]", "[module]\nmin_glossa = \"99.0.0\"");
         assert!(Manifest::parse(&future).unwrap_err().contains("needs Glossa 99.0.0 or newer"));
+    }
+
+    #[test]
+    fn offline_is_not_taken_on_its_word_with_the_whole_network_allowed() {
+        let offline = SAMPLE.replacen("capabilities = [", "capabilities = [\"offline\", ", 1);
+        let mut m = Manifest::parse(&offline).unwrap();
+        m.permissions.network = vec!["127.0.0.1".into(), "models.test".into()];
+        assert!(m.capabilities().contains(Capabilities::OFFLINE));
+        assert!(m.provider_info().capabilities.contains(Capabilities::OFFLINE));
+        m.permissions.network.push(" * ".into());
+        assert!(!m.capabilities().contains(Capabilities::OFFLINE));
+        assert!(!m.provider_info().capabilities.contains(Capabilities::OFFLINE));
     }
 
     #[test]

@@ -57,6 +57,7 @@ pub use assets::{AssetJobState, AssetReport};
 pub use catalog::{LocaleCatalog, LocaleEntry, ThemeCatalog, ThemeEntry};
 pub use export::ExportFormat;
 pub use glossa_modules::assets::{AssetState, AssetStatus, Progress as AssetProgress};
+pub use glossa_modules::install::InstallError;
 pub use ocr::{TranslatedBlock, TranslatedLine};
 pub use panels::{Effect, Panel, PanelId, PanelInfo, PanelNotice, PanelOutcome, PanelRequest};
 pub use pipeline::{Pipeline, Progress, TranslateOptions, TranslateReport, TranslationOutcome};
@@ -497,12 +498,20 @@ impl Engine {
         // A proxy that cannot be used (a scheme nothing here speaks, in the
         // settings or in HTTPS_PROXY) must not keep the program from
         // starting, least of all the window where it would be corrected.
+        // With the user's own proxy the client sends nothing past this
+        // computer until then; with the system's it connects directly.
         let (http, proxy_problem) = HttpClient::new_or_direct(&config.network);
         let http = Arc::new(http);
         let mut startup_warnings = Vec::new();
         if let Some(e) = proxy_problem {
-            tracing::warn!("{e}; connecting without a proxy");
-            startup_warnings.push(StartupWarning { key: "startup.proxy_unusable", args: vec![e.to_string()] });
+            let key = if glossa_net::proxy_is_manual(&config.network) {
+                tracing::warn!("{e}; nothing is sent to the network until it is corrected");
+                "startup.proxy_blocked"
+            } else {
+                tracing::warn!("{e}; connecting without a proxy");
+                "startup.proxy_unusable"
+            };
+            startup_warnings.push(StartupWarning { key, args: vec![e.to_string()] });
         }
         let (history, history_writable) = if config.history.enabled {
             load_history(&paths.history_file(), config.history.max_entries)
@@ -800,6 +809,16 @@ impl Engine {
     /// installation's services, modules installed beside the program, the
     /// user's modules, extra directories from the settings). A module with the
     /// id of an earlier provider replaces it.
+    /// Copy the module at `from` (a folder, a `.zip` of one, a pot-app
+    /// `.potext` file) into the user's modules folder and load the modules
+    /// again. It then waits for approval like any module put there by hand.
+    /// Blocks on the disk and on the reload: call it on a worker thread.
+    pub fn install_module(&self, from: &Path) -> std::result::Result<PathBuf, InstallError> {
+        let at = glossa_modules::install::install(from, &self.inner.paths.user_module_dir())?;
+        self.reload_modules();
+        Ok(at)
+    }
+
     pub fn reload_modules(&self) {
         let started = Instant::now();
         let cfg = self.config();

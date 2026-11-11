@@ -798,8 +798,8 @@ perform them:
 
 ```console
 $ glossa-cli serve
-control API on http://127.0.0.1:60828  (token: 0123456789abcdef)
-try: curl -s 'http://127.0.0.1:60828/v1/translate?text=hello&to=ru&token=0123456789abcdef'
+control API on http://127.0.0.1:60828  (the token is [server] token in config.toml)
+try: curl -s -H "Authorization: Bearer $TOKEN" 'http://127.0.0.1:60828/v1/translate?text=hello&to=ru'
 action requested: show_popup (hello world)
 action requested: show_dictionary (serendipity)
 ```

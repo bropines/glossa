@@ -350,12 +350,14 @@ endpoint's settings: [AI endpoints](ai-endpoints.md).
 ## Installing a module
 
 A module adds a translator, a dictionary, a voice or an OCR engine. It is
-a folder with a `module.toml`, or a pot-app `.potext` file.
+a folder with a `module.toml` (often handed out as a `.zip`), or a pot-app
+`.potext` file.
 
-1. *Options → Modules → Install module…*. The first dialog asks for a
-   `.potext` file; cancel it and a second one asks for a module folder.
-   (*Open my modules folder* shows where modules live, if you prefer to
-   copy the folder yourself; *Reload modules* picks it up.)
+1. *Options → Modules → Install module…*, then *From a file* (a `.zip`
+   or a `.potext`) or *From a folder*. Installing a module you already
+   have replaces it. (*Open my modules folder* shows where modules live,
+   if you prefer to copy the folder yourself; *Reload modules* picks it
+   up.)
 2. **Approve it** (next release). The module appears at the top of the
    page under *Waiting for your approval*, with what it asks for: the
    hosts it may reach, whether it runs a program on your computer or a

@@ -902,7 +902,7 @@ fn hotkeys(app: &mut GlossaApp, ui: &mut egui::Ui, st: &mut OptionsState) {
     let portal = app.hotkeys.as_ref().is_some_and(|h| h.uses_portal());
     if app.hotkeys.is_none() || (app.session.is_wayland() && !portal) {
         let token = &d.server.token;
-        let cmd = format!("curl -s 'http://{}/v1/action/show_popup?token={token}'", d.server.bind);
+        let cmd = format!("curl -s -H 'Authorization: Bearer {token}' 'http://{}/v1/action/show_popup'", d.server.bind);
         ui.label(RichText::new(app.t("options.hotkeys.wayland")).color(app.look.weak_text()));
         ui.horizontal(|ui| {
             ui.code(&cmd);
@@ -2683,21 +2683,23 @@ fn modules(app: &mut GlossaApp, ui: &mut egui::Ui, st: &mut OptionsState) {
                 let _ = std::fs::create_dir_all(&user_dir);
                 let _ = crate::app::open_with_system(&user_dir.to_string_lossy());
             }
-            if ui.button(app.t("options.modules.install")).on_hover_text(app.t("options.modules.install_tip")).clicked()
-            {
-                if let Some(path) = rfd::FileDialog::new()
-                    .add_filter(app.t("options.modules.potext_filter"), &["potext"])
-                    .pick_file()
-                    .or_else(|| rfd::FileDialog::new().pick_folder())
-                {
-                    match install(&path, &user_dir, &app.t("options.modules.not_a_module")) {
-                        Ok(()) => {
-                            app.engine.reload_modules();
-                            st.message = Some((app.t("options.modules.installed"), false));
-                        }
-                        Err(e) => st.message = Some((e, true)),
-                    }
+            let mut picked = None;
+            ui.menu_button(app.t("options.modules.install"), |ui| {
+                if ui.button(app.t("options.modules.install_file")).clicked() {
+                    picked = rfd::FileDialog::new()
+                        .add_filter(app.t("options.modules.archive_filter"), &["zip", "potext"])
+                        .pick_file();
+                    ui.close();
                 }
+                if ui.button(app.t("options.modules.install_folder")).clicked() {
+                    picked = rfd::FileDialog::new().pick_folder();
+                    ui.close();
+                }
+            })
+            .response
+            .on_hover_text(app.t("options.modules.install_tip"));
+            if let Some(path) = picked {
+                install(app, path);
             }
             if ui.button(app.t("options.modules.reload")).clicked() {
                 app.engine.reload_modules();
@@ -2967,33 +2969,22 @@ fn module_editor_group(app: &mut GlossaApp, ui: &mut egui::Ui, st: &mut OptionsS
     }
 }
 
-/// Copy a module folder or a `.potext` archive into the user's modules.
-/// `not_a_module` is the message for a folder that holds no module.
-fn install(path: &std::path::Path, user_dir: &std::path::Path, not_a_module: &str) -> Result<(), String> {
-    std::fs::create_dir_all(user_dir).map_err(|e| e.to_string())?;
-    let name = path.file_name().ok_or("no file name")?;
-    let target = user_dir.join(name);
-    if path.is_file() {
-        std::fs::copy(path, &target).map_err(|e| e.to_string())?;
-        return Ok(());
-    }
-    fn copy_dir(from: &std::path::Path, to: &std::path::Path) -> std::io::Result<()> {
-        std::fs::create_dir_all(to)?;
-        for e in std::fs::read_dir(from)? {
-            let e = e?;
-            let p = e.path();
-            if p.is_dir() {
-                copy_dir(&p, &to.join(e.file_name()))?;
-            } else {
-                std::fs::copy(&p, to.join(e.file_name()))?;
-            }
-        }
-        Ok(())
-    }
-    if !(path.join("module.toml").is_file() || path.join("Service.js").is_file() || path.join("info.json").is_file()) {
-        return Err(not_a_module.to_owned());
-    }
-    copy_dir(path, &target).map_err(|e| e.to_string())
+/// Install a module folder or archive into the user's modules, on a
+/// worker: a module can be large, and the modules are loaded again after.
+fn install(app: &mut GlossaApp, path: std::path::PathBuf) {
+    use crate::actions::Task;
+    use glossa_engine::InstallError;
+    let (engine, tx, ctx) = (app.engine.clone(), app.tasks_tx.clone(), app.ctx.clone());
+    let (installed, not_a_module) = (app.t("options.modules.installed"), app.t("options.modules.not_a_module"));
+    std::thread::spawn(move || {
+        let task = match engine.install_module(&path) {
+            Ok(_) => Task::Done { message: installed, error: false },
+            Err(InstallError::NotAModule) => Task::Done { message: not_a_module, error: true },
+            Err(InstallError::Failed(e)) => Task::Failed(e),
+        };
+        let _ = tx.send(task);
+        ctx.request_repaint();
+    });
 }
 
 fn api(app: &mut GlossaApp, ui: &mut egui::Ui, st: &mut OptionsState) {
@@ -3030,7 +3021,7 @@ fn api(app: &mut GlossaApp, ui: &mut egui::Ui, st: &mut OptionsState) {
         ("options.server.cmd_ocr_translate", "/v1/action/recognize_and_translate"),
         ("options.server.cmd_main", "/v1/action/show_main_window"),
     ] {
-        let cmd = format!("curl -s 'http://{}{path}?token={}'", s.bind, s.token);
+        let cmd = format!("curl -s -H 'Authorization: Bearer {}' 'http://{}{path}'", s.token, s.bind);
         ui.horizontal(|ui| {
             if crate::icons::sized_button(ui, &app.look, crate::icons::Icon::Copy, &app.t("edit.copy"), 18.0, true)
                 .clicked()

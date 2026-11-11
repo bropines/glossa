@@ -1412,9 +1412,13 @@ fn run(args: &Args) -> Result<(), Fail> {
                 );
             }
             let handle = glossa_engine::server::start(e.clone())?;
-            let token = e.config().server.token;
-            eprintln!("control API on http://{}  (token: {token})", handle.addr);
-            eprintln!("try: curl -s 'http://{}/v1/translate?text=hello&to=ru&token={token}'", handle.addr);
+            // The token is not printed: a terminal's scrollback and a
+            // service's log are read by more than the user.
+            eprintln!("control API on http://{}  (the token is [server] token in config.toml)", handle.addr);
+            eprintln!(
+                "try: curl -s -H \"Authorization: Bearer $TOKEN\" 'http://{}/v1/translate?text=hello&to=ru'",
+                handle.addr
+            );
             // Linux and the BSDs: the D-Bus service too, unless switched off.
             let _dbus = if glossa_engine::dbus::SUPPORTED && e.config().server.dbus {
                 match glossa_engine::dbus::start(e.clone()) {

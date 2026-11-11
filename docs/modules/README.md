@@ -120,8 +120,10 @@ Glossa scans these folders, in order. A later one wins on a duplicate id.
 
 One module is one folder with a `module.toml`.
 
-- *Options → Modules → Install module…* copies a folder or a `.potext` file
-  into the last of these.
+- *Options → Modules → Install module…* copies a folder, a `.zip` of one
+  (the module at its top, or inside its one folder) or a `.potext` file
+  into the last of these, replacing a module of the same name. Symbolic
+  links are not copied, and a `.zip` does not keep executable bits.
 - *Reload modules* on the same page picks up changes without a restart.
 - More folders can be added on the same page (`[modules] dirs` in
   `config.toml`).
@@ -218,6 +220,13 @@ They say which methods the module implements:
 | `dictionary` | `dictionary` | a dictionary (dictionary window, single words) |
 | `listen` | `speak` | text to speech |
 | `ocr` | `recognize` | text recognition for screen regions ([guide](ocr-modules.md)) |
+
+One more is a statement, not a method: `offline` says that nothing the
+module is given (text, pictures, audio) leaves this computer. Glossa then
+keeps the module usable with "offline only" on, and never falls back from
+it to an online OCR engine. The claim is not kept when the module also
+asks for `permissions.network = ["*"]`; name the hosts instead (where its
+models are downloaded from, `127.0.0.1` for a server on this machine).
 
 ### Languages
 

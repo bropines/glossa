@@ -45,7 +45,7 @@ T=0123456789abcdef…   # your token
 curl -s http://127.0.0.1:60828/health
 curl -s -H "Authorization: Bearer $T" -d '{"text":"Hello","to":"ru"}' \
     http://127.0.0.1:60828/v1/translate
-curl -s -X POST "http://127.0.0.1:60828/v1/action/show_popup?token=$T&text=Hello"
+curl -s -X POST -H "Authorization: Bearer $T" "http://127.0.0.1:60828/v1/action/show_popup?text=Hello"
 ```
 
 [`glossa-cli action`](cli.md#action) sends action requests for you: it finds
@@ -86,16 +86,17 @@ program, for scripts and for trying it out; there, actions are only printed.
 
 ## The token
 
-Every request except `/health` must carry the token, either as a header or
-in the query string (pot-app's routes can be opened to this machine without
-it; see [pot-app compatibility](#pot-app-compatibility)):
+Every request except `/health` must carry the token in a header (pot-app's
+routes can be opened to this machine without it; see
+[pot-app compatibility](#pot-app-compatibility)):
 
 ```
 Authorization: Bearer 0123456789abcdef…
-GET /v1/action/show_popup?token=0123456789abcdef…
 ```
 
-The header is matched exactly: `Bearer`, one space, the token. The token is
+The token is not accepted in the address (`?token=…` is a 401): an address
+ends up in shell history, in the process list and in logs. The header is
+matched exactly: `Bearer`, one space, the token. The token is
 64 hexadecimal characters, generated the first time the engine starts (by
 the desktop program or by any `glossa-cli` command that uses it) and stored
 in `config.toml` under `[server] token`, so other programs can read it.
@@ -269,7 +270,7 @@ keeps the file.
 | `capability` | `translate` | `translate`, `dictionary`, `listen`, `ocr`, `detect_language`, `speech_input`, `batch`, `alternatives`, `promptable`, `offline` (aliases: `dict`, `tts`, `detect`, `stt`). An unknown value is a 400. |
 
 ```console
-$ curl -s "http://127.0.0.1:60828/v1/services?capability=listen&token=$T"
+$ curl -s -H "Authorization: Bearer $T" "http://127.0.0.1:60828/v1/services?capability=listen"
 [{"capabilities":["translate","detect_language","listen"],"enabled":true,"id":"google","name":"Google Translate","needs_credentials":false,"origin":"Built-in"}]
 ```
 
@@ -292,7 +293,7 @@ GET or POST.
 | `history` | boolean | `false` | Add the translation to the history of the program serving the API (when `[history] enabled` is on), and write `history.json` at once. |
 
 ```console
-$ curl -s "http://127.0.0.1:60828/v1/translate?text=Hello%20world&to=ru&token=$T"
+$ curl -s -H "Authorization: Bearer $T" "http://127.0.0.1:60828/v1/translate?text=Hello%20world&to=ru"
 {"text":"Привет, мир","from":"en","to":"ru","service":"google","romanization":"Privet, mir","source_romanization":"həˈlō wərld","alternatives":[],"back":null,"failed":[],"elapsed_ms":155}
 
 $ curl -s -H "Authorization: Bearer $T" \
@@ -413,7 +414,7 @@ GET or POST. Asks the desktop program to perform an action, as its hotkey
 would, and returns at once:
 
 ```console
-$ curl -s -X POST "http://127.0.0.1:60828/v1/action/show_popup?token=$T&text=hello%20world"
+$ curl -s -X POST -H "Authorization: Bearer $T" "http://127.0.0.1:60828/v1/action/show_popup?text=hello%20world"
 {"accepted":"show_popup"}
 ```
 
@@ -433,7 +434,7 @@ $ curl -s -H "Authorization: Bearer $T" --data-binary 'text in the body' \
     http://127.0.0.1:60828/v1/action/show_main_window
 {"accepted":"show_main_window"}
 
-$ curl -s "http://127.0.0.1:60828/v1/action/self_destruct?token=$T"
+$ curl -s -H "Authorization: Bearer $T" "http://127.0.0.1:60828/v1/action/self_destruct"
 {"error":"no action \"self_destruct\""}
 ```
 
@@ -458,7 +459,7 @@ Glossa running with your data folder.
 declare:
 
 ```console
-$ curl -s "http://127.0.0.1:60828/v1/panels?token=$T"
+$ curl -s -H "Authorization: Bearer $T" "http://127.0.0.1:60828/v1/panels"
 [{"id":"pocket-glossary/glossary","module":"pocket-glossary","panel":"glossary","title":"Pocket Glossary: Glossary","open_from":["tray","main_menu"]}]
 ```
 
@@ -610,8 +611,8 @@ tools made for pot-app can drive it:
 They answer `202 {"accepted": "<action>"}` like `/v1/action/…`. `/translate`
 with another method is a 405.
 
-Like every route they need the token: add `?token=…` to the bindings'
-URLs. pot-app's own bindings send none, so to keep them unchanged you can
+Like every route they need the token, in the `Authorization` header.
+pot-app's own bindings send none, so to keep them unchanged you can
 open these five routes to this machine:
 
 ```toml
@@ -731,7 +732,7 @@ a command.
 | where | command | token |
 |---|---|---|
 | Linux | `gdbus call --session --dest io.github.bropines.Glossa --object-path /io/github/bropines/Glossa --method io.github.bropines.Glossa1.Action show_popup ''` | not needed |
-| everywhere (Linux, macOS, Windows) | `curl -s "http://127.0.0.1:60828/v1/action/show_popup?token=TOKEN"` | replace `TOKEN` with yours |
+| everywhere (Linux, macOS, Windows) | `curl -s -H "Authorization: Bearer TOKEN" http://127.0.0.1:60828/v1/action/show_popup` | replace `TOKEN` with yours |
 
 The examples use `show_popup`; any [action id](#v1actionaction) works.
 
@@ -745,10 +746,10 @@ PRIMARY access), pass the highlighted text yourself:
 sh -c 'gdbus call --session --dest io.github.bropines.Glossa --object-path /io/github/bropines/Glossa --method io.github.bropines.Glossa1.ShowPopup "$(wl-paste --primary --no-newline)"'
 
 # Wayland, HTTP
-sh -c 'wl-paste --primary --no-newline | curl -s --data-binary @- "http://127.0.0.1:60828/v1/action/show_popup?token=TOKEN"'
+sh -c 'wl-paste --primary --no-newline | curl -s --data-binary @- -H "Authorization: Bearer TOKEN" "http://127.0.0.1:60828/v1/action/show_popup"'
 
 # X11, HTTP
-sh -c 'xclip -o -selection primary | curl -s --data-binary @- "http://127.0.0.1:60828/v1/action/show_popup?token=TOKEN"'
+sh -c 'xclip -o -selection primary | curl -s --data-binary @- -H "Authorization: Bearer TOKEN" "http://127.0.0.1:60828/v1/action/show_popup"'
 ```
 
 ### Linux desktops
@@ -761,13 +762,13 @@ sh -c 'xclip -o -selection primary | curl -s --data-binary @- "http://127.0.0.1:
 
 ```
 # ~/.config/sway/config (i3: ~/.config/i3/config)
-bindsym Ctrl+Shift+q exec curl -s "http://127.0.0.1:60828/v1/action/show_popup?token=TOKEN"
-bindsym Ctrl+Shift+o exec curl -s "http://127.0.0.1:60828/v1/action/text_recognition?token=TOKEN"
+bindsym Ctrl+Shift+q exec curl -s -H "Authorization: Bearer TOKEN" "http://127.0.0.1:60828/v1/action/show_popup"
+bindsym Ctrl+Shift+o exec curl -s -H "Authorization: Bearer TOKEN" "http://127.0.0.1:60828/v1/action/text_recognition"
 ```
 
 ```
 # ~/.config/hypr/hyprland.conf
-bind = CTRL SHIFT, Q, exec, curl -s "http://127.0.0.1:60828/v1/action/show_popup?token=TOKEN"
+bind = CTRL SHIFT, Q, exec, curl -s -H "Authorization: Bearer TOKEN" "http://127.0.0.1:60828/v1/action/show_popup"
 ```
 
 The `gdbus` command works in the same places instead of `curl`.
@@ -780,7 +781,7 @@ With [skhd](https://github.com/koekeishiya/skhd):
 
 ```
 # ~/.config/skhd/skhdrc
-ctrl + shift - q : curl -s "http://127.0.0.1:60828/v1/action/show_popup?token=TOKEN"
+ctrl + shift - q : curl -s -H "Authorization: Bearer TOKEN" "http://127.0.0.1:60828/v1/action/show_popup"
 ```
 
 ### Windows: AutoHotkey

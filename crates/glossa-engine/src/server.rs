@@ -32,7 +32,7 @@
 //! with a text body), so key bindings made for it keep working.
 //!
 //! Security: loopback by default; every request must carry the token
-//! (`Authorization: Bearer …` or `?token=…`), which is never empty (the
+//! (`Authorization: Bearer …`; never in the address), which is never empty (the
 //! engine replaces an empty one). pot-app's routes, which pot-app's
 //! bindings call without a token, are let through without one only with
 //! `[server] pot_routes_without_token` switched on (it is off unless the
@@ -295,9 +295,10 @@ fn authorised(engine: &Engine, req: &Request) -> bool {
     if token.is_empty() {
         return false;
     }
+    // The header alone: an address ends up in shell history, process
+    // lists and logs, so a token in the query string is not accepted.
     let bearer = header(req, "Authorization").and_then(|v| v.strip_prefix("Bearer ")).map(str::trim);
-    let query = query_param(req.url(), "token");
-    constant_time_eq(bearer.unwrap_or(""), &token) || query.is_some_and(|q| constant_time_eq(&q, &token))
+    constant_time_eq(bearer.unwrap_or(""), &token)
 }
 
 fn constant_time_eq(a: &str, b: &str) -> bool {
@@ -1048,17 +1049,19 @@ mod tests {
         let (status, _) =
             request(server.addr, "GET /v1/services HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: close\r\n\r\n");
         assert_eq!(status, 401);
-        let (status, body) = request(
+        // Not in the address: that would leave the token in shell history
+        // and process lists.
+        let (status, _) = request(
             server.addr,
             "GET /v1/services?token=secret HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: close\r\n\r\n",
         );
-        assert_eq!(status, 200);
-        assert!(body.contains("\"google\""));
-        let (status, _) = request(
+        assert_eq!(status, 401);
+        let (status, body) = request(
             server.addr,
             "GET /v1/services HTTP/1.1\r\nHost: 127.0.0.1\r\nAuthorization: Bearer secret\r\nConnection: close\r\n\r\n",
         );
         assert_eq!(status, 200);
+        assert!(body.contains("\"google\""));
         server.stop();
         std::fs::remove_dir_all(&dir).ok();
     }
@@ -1069,7 +1072,7 @@ mod tests {
         let server = start(e).unwrap();
         let (status, _) = request(
             server.addr,
-            "GET /v1/services?token=secret HTTP/1.1\r\nHost: 127.0.0.1\r\nOrigin: https://evil.example\r\nConnection: close\r\n\r\n",
+            "GET /v1/services HTTP/1.1\r\nHost: 127.0.0.1\r\nAuthorization: Bearer secret\r\nOrigin: https://evil.example\r\nConnection: close\r\n\r\n",
         );
         assert_eq!(status, 403);
         std::fs::remove_dir_all(&dir).ok();
@@ -1082,7 +1085,7 @@ mod tests {
         let server = start(e).unwrap();
         let (status, _) = request(
             server.addr,
-            "GET /v1/action/show_popup?token=secret&text=hello%20world HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: close\r\n\r\n",
+            "GET /v1/action/show_popup?text=hello%20world HTTP/1.1\r\nHost: 127.0.0.1\r\nAuthorization: Bearer secret\r\nConnection: close\r\n\r\n",
         );
         assert_eq!(status, 202);
         let got = (0..50).find_map(|_| match rx.recv_timeout(Duration::from_millis(100)) {
@@ -1092,13 +1095,13 @@ mod tests {
         assert_eq!(got, Some((Action::ShowPopup, Some("hello world".into()))));
         let (status, _) = request(
             server.addr,
-            "GET /v1/action/self_destruct?token=secret HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: close\r\n\r\n",
+            "GET /v1/action/self_destruct HTTP/1.1\r\nHost: 127.0.0.1\r\nAuthorization: Bearer secret\r\nConnection: close\r\n\r\n",
         );
         assert_eq!(status, 404);
         // pot-app's endpoint maps onto the same action.
         let (status, _) = request(
             server.addr,
-            "GET /selection_translate?token=secret HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: close\r\n\r\n",
+            "GET /selection_translate HTTP/1.1\r\nHost: 127.0.0.1\r\nAuthorization: Bearer secret\r\nConnection: close\r\n\r\n",
         );
         assert_eq!(status, 202);
         std::fs::remove_dir_all(&dir).ok();
@@ -1111,19 +1114,19 @@ mod tests {
         let body = "{not json";
         let (status, resp) = request(
             server.addr,
-            &format!("POST /v1/translate?token=secret HTTP/1.1\r\nHost: 127.0.0.1\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}", body.len()),
+            &format!("POST /v1/translate HTTP/1.1\r\nHost: 127.0.0.1\r\nAuthorization: Bearer secret\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}", body.len()),
         );
         assert_eq!(status, 400);
         assert!(resp.contains("invalid JSON"));
         let (status, _) = request(
             server.addr,
-            "POST /v1/translate?token=secret HTTP/1.1\r\nHost: 127.0.0.1\r\nContent-Length: 2\r\nConnection: close\r\n\r\n{}",
+            "POST /v1/translate HTTP/1.1\r\nHost: 127.0.0.1\r\nAuthorization: Bearer secret\r\nContent-Length: 2\r\nConnection: close\r\n\r\n{}",
         );
         assert_eq!(status, 400, "text is required");
         let body = r#"{"image_base64":"iVBORw0KGgo=","format":"pdf"}"#;
         let (status, resp) = request(
             server.addr,
-            &format!("POST /v1/ocr?token=secret HTTP/1.1\r\nHost: 127.0.0.1\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}", body.len()),
+            &format!("POST /v1/ocr HTTP/1.1\r\nHost: 127.0.0.1\r\nAuthorization: Bearer secret\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}", body.len()),
         );
         assert_eq!(status, 400);
         assert!(resp.contains("unknown format"), "{resp}");
@@ -1140,12 +1143,23 @@ mod tests {
         out
     }
 
-    /// A request with a JSON body (or none).
+    /// A request with a JSON body (or none), without the token.
     fn call(addr: SocketAddr, method: &str, path: &str, body: &str) -> (u16, String) {
         request(
             addr,
             &format!(
                 "{method} {path} HTTP/1.1\r\nHost: 127.0.0.1\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                body.len()
+            ),
+        )
+    }
+
+    /// [`call`] with the token.
+    fn authed(addr: SocketAddr, method: &str, path: &str, body: &str) -> (u16, String) {
+        request(
+            addr,
+            &format!(
+                "{method} {path} HTTP/1.1\r\nHost: 127.0.0.1\r\nAuthorization: Bearer secret\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
                 body.len()
             ),
         )
@@ -1173,7 +1187,7 @@ mod tests {
         let server = start(e).unwrap();
         let (status, _) = request(
             server.addr,
-            "GET /v1/services?token=secret HTTP/1.1\r\nHost: 127.0.0.1\r\nOrigin: null\r\nConnection: close\r\n\r\n",
+            "GET /v1/services HTTP/1.1\r\nHost: 127.0.0.1\r\nAuthorization: Bearer secret\r\nOrigin: null\r\nConnection: close\r\n\r\n",
         );
         assert_eq!(status, 403);
         // Not even pot-app's open routes take a browser request.
@@ -1207,7 +1221,7 @@ mod tests {
             let (status, _) = request(
                 server.addr,
                 &format!(
-                    "GET /v1/services?token=secret HTTP/1.1\r\nHost: 127.0.0.1\r\n{extra}Connection: close\r\n\r\n"
+                    "GET /v1/services HTTP/1.1\r\nHost: 127.0.0.1\r\nAuthorization: Bearer secret\r\n{extra}Connection: close\r\n\r\n"
                 ),
             );
             assert_eq!(status, 403, "{extra}");
@@ -1229,12 +1243,12 @@ mod tests {
         ] {
             let (status, _) = request(
                 server.addr,
-                &format!("GET /v1/services?token=secret HTTP/1.1\r\nHost: {host}\r\nConnection: close\r\n\r\n"),
+                &format!("GET /v1/services HTTP/1.1\r\nHost: {host}\r\nAuthorization: Bearer secret\r\nConnection: close\r\n\r\n"),
             );
             assert_eq!(status, 200, "{host}");
         }
         // A rebinding page sends its own name; health included.
-        for path in ["/health", "/selection_translate", "/v1/services?token=secret"] {
+        for path in ["/health", "/selection_translate", "/v1/services"] {
             let (status, _) = request(
                 server.addr,
                 &format!("GET {path} HTTP/1.1\r\nHost: evil.example:{port}\r\nConnection: close\r\n\r\n"),
@@ -1276,7 +1290,7 @@ mod tests {
         let server = start(e.clone()).unwrap();
         for path in ["/selection_translate", "/input_translate", "/ocr_recognize", "/ocr_translate"] {
             assert_eq!(call(server.addr, "GET", path, "").0, 401, "{path}");
-            assert_eq!(call(server.addr, "GET", &format!("{path}?token=secret"), "").0, 202, "{path}");
+            assert_eq!(authed(server.addr, "GET", path, "").0, 202, "{path}");
         }
         assert_eq!(call(server.addr, "POST", "/translate", "hello").0, 401);
         e.update_config(|c| c.server.pot_routes_without_token = true).unwrap();
@@ -1290,7 +1304,7 @@ mod tests {
 
         e.update_config(|c| c.server.pot_routes_without_token = false).unwrap();
         assert_eq!(call(server.addr, "GET", "/selection_translate", "").0, 401);
-        assert_eq!(call(server.addr, "GET", "/selection_translate?token=secret", "").0, 202);
+        assert_eq!(authed(server.addr, "GET", "/selection_translate", "").0, 202);
         std::fs::remove_dir_all(&dir).ok();
     }
 
@@ -1420,21 +1434,21 @@ mod tests {
             request(
                 server.addr,
                 &format!(
-                    "POST {path} HTTP/1.1\r\nHost: 127.0.0.1\r\nContent-Length: {len}\r\nConnection: close\r\n\r\n"
+                    "POST {path} HTTP/1.1\r\nHost: 127.0.0.1\r\nAuthorization: Bearer secret\r\nContent-Length: {len}\r\nConnection: close\r\n\r\n"
                 ),
             )
         };
         // Announced only: the refusal comes from the length, at once.
         let started = std::time::Instant::now();
         assert_eq!(announce("/translate", MAX_POT_BODY + 1).0, 413, "pot-app's open route takes text, not megabytes");
-        assert_eq!(announce("/v1/translate?token=secret", MAX_BODY + 1).0, 413);
-        assert_eq!(announce("/v1/action/show_popup?token=secret", MAX_BODY + 1).0, 413);
-        assert_eq!(announce("/v1/presets/import?token=secret", MAX_BODY + 1).0, 413);
-        assert_eq!(announce("/v1/ocr?token=secret", MAX_IMAGE_BODY + 1).0, 413);
+        assert_eq!(announce("/v1/translate", MAX_BODY + 1).0, 413);
+        assert_eq!(announce("/v1/action/show_popup", MAX_BODY + 1).0, 413);
+        assert_eq!(announce("/v1/presets/import", MAX_BODY + 1).0, 413);
+        assert_eq!(announce("/v1/ocr", MAX_IMAGE_BODY + 1).0, 413);
         // What could end the program with the previous listener: a length no
         // memory holds, on a route that never reads its body.
         assert_eq!(announce("/health", 99_999_999_999_999).0, 200);
-        assert_eq!(announce("/v1/translate?token=secret", u64::MAX).0, 413);
+        assert_eq!(announce("/v1/translate", u64::MAX).0, 413);
         assert!(started.elapsed() < Duration::from_secs(10), "took {:?}", started.elapsed());
         assert_eq!(next_action(&rx), None, "none of them reached the interface");
 
@@ -1445,7 +1459,7 @@ mod tests {
         let (status, _) = request(
             server.addr,
             &format!(
-                "POST /v1/ocr?token=secret HTTP/1.1\r\nHost: 127.0.0.1\r\nContent-Type: image/png\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{big}",
+                "POST /v1/ocr HTTP/1.1\r\nHost: 127.0.0.1\r\nAuthorization: Bearer secret\r\nContent-Type: image/png\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{big}",
                 big.len()
             ),
         );
@@ -1594,17 +1608,21 @@ mod tests {
         let server = start(e).unwrap();
         let out = raw(
             server.addr,
-            "DELETE /v1/translate?token=secret HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: close\r\n\r\n",
+            "DELETE /v1/translate HTTP/1.1\r\nHost: 127.0.0.1\r\nAuthorization: Bearer secret\r\nConnection: close\r\n\r\n",
         );
         assert!(out.starts_with("HTTP/1.1 405"), "{out}");
         assert!(out.lines().any(|l| l.eq_ignore_ascii_case("allow: GET, POST")), "{out}");
-        let out =
-            raw(server.addr, "GET /v1/speak?token=secret HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: close\r\n\r\n");
+        let out = raw(
+            server.addr,
+            "GET /v1/speak HTTP/1.1\r\nHost: 127.0.0.1\r\nAuthorization: Bearer secret\r\nConnection: close\r\n\r\n",
+        );
         assert!(out.starts_with("HTTP/1.1 405") && out.contains("Allow: POST"), "{out}");
-        let out =
-            raw(server.addr, "GET /translate?token=secret HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: close\r\n\r\n");
+        let out = raw(
+            server.addr,
+            "GET /translate HTTP/1.1\r\nHost: 127.0.0.1\r\nAuthorization: Bearer secret\r\nConnection: close\r\n\r\n",
+        );
         assert!(out.starts_with("HTTP/1.1 405"), "{out}");
-        assert_eq!(call(server.addr, "GET", "/v1/nothing?token=secret", "").0, 404);
+        assert_eq!(authed(server.addr, "GET", "/v1/nothing", "").0, 404);
         std::fs::remove_dir_all(&dir).ok();
     }
 
@@ -1612,27 +1630,26 @@ mod tests {
     fn unknown_languages_capabilities_and_services_are_refused() {
         let (e, dir) = engine();
         let server = start(e).unwrap();
-        let (status, body) = call(server.addr, "GET", "/v1/translate?token=secret&text=hi&to=klingon", "");
+        let (status, body) = authed(server.addr, "GET", "/v1/translate?text=hi&to=klingon", "");
         assert_eq!(status, 400);
         assert!(body.contains("unknown language") && body.contains("klingon"), "{body}");
-        let (status, _) = call(server.addr, "POST", "/v1/translate?token=secret", r#"{"text":"hi","from":"xx-YY"}"#);
+        let (status, _) = authed(server.addr, "POST", "/v1/translate", r#"{"text":"hi","from":"xx-YY"}"#);
         assert_eq!(status, 400);
-        let (status, body) = call(server.addr, "GET", "/v1/services?token=secret&capability=teleport", "");
+        let (status, body) = authed(server.addr, "GET", "/v1/services?capability=teleport", "");
         assert_eq!(status, 400);
         assert!(body.contains("unknown capability"), "{body}");
-        let (status, body) =
-            call(server.addr, "POST", "/v1/translate?token=secret", r#"{"text":"hi","service":"gogle"}"#);
+        let (status, body) = authed(server.addr, "POST", "/v1/translate", r#"{"text":"hi","service":"gogle"}"#);
         assert_eq!(status, 400);
         assert!(body.contains("unknown service") && body.contains("google"), "{body}");
-        let (status, _) = call(server.addr, "GET", "/v1/dictionary?token=secret&text=hi&service=google", "");
+        let (status, _) = authed(server.addr, "GET", "/v1/dictionary?text=hi&service=google", "");
         assert_eq!(status, 400, "google is a translator, not a dictionary");
-        let (status, body) = call(server.addr, "POST", "/v1/translate?token=secret&back=maybe", r#"{"text":"hi"}"#);
+        let (status, body) = authed(server.addr, "POST", "/v1/translate?back=maybe", r#"{"text":"hi"}"#);
         assert_eq!(status, 400);
         assert!(body.contains("back must be true or false"), "{body}");
         let body = r#"{"image_base64":"iVBORw0KGgo=","engine":"nope"}"#;
-        assert_eq!(call(server.addr, "POST", "/v1/ocr?token=secret", body).0, 400);
+        assert_eq!(authed(server.addr, "POST", "/v1/ocr", body).0, 400);
         let body = r#"{"image_base64":"iVBORw0KGgo=","translate_to":"elvish"}"#;
-        assert_eq!(call(server.addr, "POST", "/v1/ocr?token=secret", body).0, 400);
+        assert_eq!(authed(server.addr, "POST", "/v1/ocr", body).0, 400);
         std::fs::remove_dir_all(&dir).ok();
     }
 
@@ -1640,7 +1657,7 @@ mod tests {
     fn services_say_which_need_credentials() {
         let (e, dir) = engine();
         let server = start(e).unwrap();
-        let (status, body) = call(server.addr, "GET", "/v1/services?token=secret", "");
+        let (status, body) = authed(server.addr, "GET", "/v1/services", "");
         assert_eq!(status, 200);
         let list: Value = serde_json::from_str(&body).unwrap();
         let deepl = list.as_array().unwrap().iter().find(|p| p["id"] == "deepl").unwrap();
@@ -1656,7 +1673,7 @@ mod tests {
         e.update_config(|c| c.ocr.tesseract.path = dir.join("no-tesseract").to_string_lossy().into_owned()).unwrap();
         let server = start(e).unwrap();
         let body = r#"{"image_base64":"iVBORw0KGgo=","engine":"tesseract"}"#;
-        let (status, resp) = call(server.addr, "POST", "/v1/ocr?token=secret", body);
+        let (status, resp) = authed(server.addr, "POST", "/v1/ocr", body);
         assert_eq!(status, 503, "{resp}");
         std::fs::remove_dir_all(&dir).ok();
     }
@@ -1677,20 +1694,19 @@ mod tests {
         let server = start(e.clone()).unwrap();
         // Dropped in after the start, it waits for approval, given here
         // through the API with the hash it showed.
-        let (status, body) = call(server.addr, "GET", "/v1/trust?token=secret&pending=1", "");
+        let (status, body) = authed(server.addr, "GET", "/v1/trust?pending=1", "");
         assert_eq!(status, 200, "{body}");
         let waiting: Value = serde_json::from_str(&body).unwrap();
         assert_eq!(waiting[0]["id"], "echo");
-        let (status, body) = call(server.addr, "GET", "/v1/translate?token=secret&text=hi&to=ru&service=echo", "");
+        let (status, body) = authed(server.addr, "GET", "/v1/translate?text=hi&to=ru&service=echo", "");
         assert!(body.contains("approval"), "{status} {body}");
         let approve = json!({ "hash": waiting[0]["hash"] }).to_string();
         let (status, body) = call(server.addr, "POST", "/v1/trust/echo/approve", &approve);
         assert_eq!(status, 401, "needs the token: {body}");
-        let (status, body) = call(server.addr, "POST", "/v1/trust/echo/approve?token=secret", &approve);
+        let (status, body) = authed(server.addr, "POST", "/v1/trust/echo/approve", &approve);
         assert_eq!(status, 200, "{body}");
 
-        let (status, body) =
-            call(server.addr, "GET", "/v1/translate?token=secret&text=hi&from=en&to=ru&service=echo&back=1", "");
+        let (status, body) = authed(server.addr, "GET", "/v1/translate?text=hi&from=en&to=ru&service=echo&back=1", "");
         assert_eq!(status, 200, "{body}");
         let v: Value = serde_json::from_str(&body).unwrap();
         for key in [
@@ -1711,10 +1727,10 @@ mod tests {
         assert_eq!(v["back"], "echo: echo: hi", "back accepted from the query string");
         assert!(e.history().is_empty(), "not recorded unless asked");
 
-        let (status, _) = call(
+        let (status, _) = authed(
             server.addr,
             "POST",
-            "/v1/translate?token=secret",
+            "/v1/translate",
             r#"{"text":"hi","from":"en","to":"ru","service":"echo","history":true}"#,
         );
         assert_eq!(status, 200);
@@ -1763,6 +1779,7 @@ mod tests {
             ("Authorization: Basic secret\r\n", ""),
             ("Authorization: secret\r\n", ""),
             ("Authorization: Bearer \r\n", ""),
+            ("", "?token=secret"),
             ("", "?token="),
             ("", "?token=wrong"),
             ("", "?tokens=secret"),
@@ -1775,13 +1792,13 @@ mod tests {
             assert_eq!(status, 401, "{auth}{query}");
             assert!(body.contains("token"), "{body}");
         }
-        // A wrong header does not spoil a right query string, nor the other
-        // way round.
+        // Only the header counts: a right token in the address does not
+        // make up for a wrong header, and a wrong one there spoils nothing.
         let (status, _) = request(
             server.addr,
             "GET /v1/services?token=secret HTTP/1.1\r\nHost: 127.0.0.1\r\nAuthorization: Bearer wrong\r\nConnection: close\r\n\r\n",
         );
-        assert_eq!(status, 200);
+        assert_eq!(status, 401);
         let (status, _) = request(
             server.addr,
             "GET /v1/services?token=wrong HTTP/1.1\r\nHost: 127.0.0.1\r\nAuthorization: Bearer secret\r\nConnection: close\r\n\r\n",
@@ -1814,7 +1831,7 @@ mod tests {
             assert_eq!(v["version"], glossa_core::VERSION);
         }
         // A trailing slash reaches the real route too.
-        assert_eq!(call(server.addr, "GET", "/v1/services/?token=secret", "").0, 200);
+        assert_eq!(authed(server.addr, "GET", "/v1/services/", "").0, 200);
         std::fs::remove_dir_all(&dir).ok();
     }
 
@@ -1823,16 +1840,16 @@ mod tests {
         let (e, dir) = engine();
         let server = start(e).unwrap();
         for path in ["/v1/translate", "/v1/detect", "/v1/dictionary", "/v1/speak"] {
-            let (status, body) = call(server.addr, "POST", &format!("{path}?token=secret"), "{}");
+            let (status, body) = authed(server.addr, "POST", path, "{}");
             assert_eq!(status, 400, "{path}");
             assert!(body.contains("text is required"), "{path}: {body}");
             // A body that is not JSON is told apart from a missing field.
-            let (status, body) = call(server.addr, "POST", &format!("{path}?token=secret"), "[1,");
+            let (status, body) = authed(server.addr, "POST", path, "[1,");
             assert_eq!(status, 400, "{path}");
             assert!(body.contains("invalid JSON"), "{path}: {body}");
         }
         // The answer is JSON with an `error` field, which clients parse.
-        let (_, body) = call(server.addr, "POST", "/v1/detect?token=secret", "{}");
+        let (_, body) = authed(server.addr, "POST", "/v1/detect", "{}");
         let v: Value = serde_json::from_str(&body).unwrap();
         assert!(v["error"].is_string(), "{body}");
         std::fs::remove_dir_all(&dir).ok();
@@ -1842,15 +1859,15 @@ mod tests {
     fn ocr_requests_without_a_usable_image_are_400() {
         let (e, dir) = engine();
         let server = start(e).unwrap();
-        let (status, body) = call(server.addr, "POST", "/v1/ocr?token=secret", "{}");
+        let (status, body) = authed(server.addr, "POST", "/v1/ocr", "{}");
         assert_eq!(status, 400);
         assert!(body.contains("image_base64"), "{body}");
-        let (status, body) = call(server.addr, "POST", "/v1/ocr?token=secret", r#"{"image_base64":"%%%"}"#);
+        let (status, body) = authed(server.addr, "POST", "/v1/ocr", r#"{"image_base64":"%%%"}"#);
         assert_eq!(status, 400);
         assert!(body.contains("image_base64"), "{body}");
-        let (status, _) = call(server.addr, "POST", "/v1/ocr?token=secret", r#"{"image_base64":7}"#);
+        let (status, _) = authed(server.addr, "POST", "/v1/ocr", r#"{"image_base64":7}"#);
         assert_eq!(status, 400, "not a string");
-        let (status, _) = call(server.addr, "POST", "/v1/ocr?token=secret", "nope");
+        let (status, _) = authed(server.addr, "POST", "/v1/ocr", "nope");
         assert_eq!(status, 400, "neither an image type nor JSON");
         std::fs::remove_dir_all(&dir).ok();
     }
@@ -1860,17 +1877,17 @@ mod tests {
         let (e, dir) = engine();
         let rx = e.subscribe();
         let server = start(e).unwrap();
-        let (status, body) = call(server.addr, "POST", "/v1/action/show_popup?token=secret", "из тела");
+        let (status, body) = authed(server.addr, "POST", "/v1/action/show_popup", "из тела");
         assert_eq!(status, 202);
         assert_eq!(serde_json::from_str::<Value>(&body).unwrap()["accepted"], "show_popup");
         assert_eq!(next_action(&rx), Some((Action::ShowPopup, Some("из тела".into()))));
         // The query string wins over the body; no text at all is `None`.
-        call(server.addr, "POST", "/v1/action/show_popup?token=secret&text=query", "body");
+        authed(server.addr, "POST", "/v1/action/show_popup?text=query", "body");
         assert_eq!(next_action(&rx), Some((Action::ShowPopup, Some("query".into()))));
-        call(server.addr, "GET", "/v1/action/show_main_window?token=secret", "");
+        authed(server.addr, "GET", "/v1/action/show_main_window", "");
         assert_eq!(next_action(&rx), Some((Action::ShowMainWindow, None)));
         // A wrong method on an action is a 405, not an unknown action.
-        assert_eq!(call(server.addr, "PUT", "/v1/action/show_popup?token=secret", "").0, 405);
+        assert_eq!(authed(server.addr, "PUT", "/v1/action/show_popup", "").0, 405);
         std::fs::remove_dir_all(&dir).ok();
     }
 

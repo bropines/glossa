@@ -291,6 +291,10 @@ pub struct HttpClient {
     user_agent: String,
     /// `[network] offline_only`: only this computer is asked.
     offline_only: bool,
+    /// Why the proxy the user entered cannot be used. While it is set, only
+    /// this computer is asked: connecting directly would show the user's
+    /// address to the very services the proxy was to hide it from.
+    proxy_problem: Option<String>,
 }
 
 /// How often the system proxy is looked up again (a registry read on
@@ -322,16 +326,24 @@ impl HttpClient {
     }
 
     /// [`HttpClient::new`] for starting the program, which must not fail
-    /// over a proxy: when the proxy cannot be used, the client connects
-    /// directly and the error is returned beside it for the user to be
-    /// told. A system proxy is still followed, so the client takes it up
-    /// once the system names one that works.
+    /// over a proxy: when the proxy cannot be used, a client is made all
+    /// the same and the error is returned beside it for the user to be
+    /// told. With the system's proxy the client connects directly, and
+    /// takes the proxy up once the system names one that works. With a
+    /// proxy the user entered it refuses every request that would leave
+    /// this computer, with that error, until the settings are corrected:
+    /// the user asked for the proxy, and going around it is not ours to
+    /// decide.
     pub fn new_or_direct(settings: &Network) -> (HttpClient, Option<Error>) {
         let spec = proxy_spec(settings);
         let (agent, problem) = match build_agent(settings, spec.clone()) {
             Ok(agent) => (agent, None),
             Err(e) => (build_agent(settings, None).expect("a proxy-less client always builds"), Some(e)),
         };
+        let proxy_problem = problem.as_ref().filter(|_| proxy_is_manual(settings)).map(|e| match e {
+            Error::Config(why) => why.clone(),
+            other => other.to_string(),
+        });
         let client = HttpClient {
             agent: RwLock::new(agent),
             settings: settings.clone(),
@@ -340,6 +352,7 @@ impl HttpClient {
             max_retries: settings.max_retries,
             user_agent: settings.user_agent.clone(),
             offline_only: settings.offline_only,
+            proxy_problem,
         };
         (client, problem)
     }
@@ -435,7 +448,14 @@ impl HttpClient {
     /// agent follows no redirects then, see [`build_agent`]), so no service
     /// or module that goes through Glossa's client can get around it.
     fn check_offline(&self, request: &HttpRequest) -> Result<(), Error> {
-        if !self.offline_only || is_loopback_url(&request.url) {
+        if is_loopback_url(&request.url) {
+            return Ok(());
+        }
+        if let Some(why) = &self.proxy_problem {
+            tracing::debug!(url = %redact(&request.url), "refused: the proxy cannot be used");
+            return Err(Error::Config(format!("{why}; nothing is sent until it is corrected")));
+        }
+        if !self.offline_only {
             return Ok(());
         }
         let who = if request.provider.is_empty() { "a request" } else { request.provider.as_str() };
@@ -1329,11 +1349,15 @@ mod tests {
         let strict = HttpClient::new(&settings).map(drop).unwrap_err().to_string();
         assert!(!strict.contains("secretpw"), "{strict}");
         assert!(check_proxy(&settings).is_err() && proxy_is_manual(&settings));
-        // At start: a client that connects directly, and the problem to show.
+        // At start: a client all the same, and the problem to show. It does
+        // not go around the proxy the user asked for.
         let (client, problem) = HttpClient::new_or_direct(&settings);
         let problem = problem.expect("reported").to_string();
         assert!(!problem.contains("secretpw"), "{problem}");
         assert!(client.system.is_none());
+        let refused = client.send(HttpRequest::get("https://example.com/")).unwrap_err().to_string();
+        assert!(refused.contains("cannot be used") && !refused.contains("secretpw"), "{refused}");
+        assert!(client.check_offline(&HttpRequest::get("http://127.0.0.1:9/")).is_ok(), "this computer is still asked");
         // A proxy that works is no problem.
         let fine =
             Network { proxy: Proxy { host: "127.0.0.1".into(), ..settings.proxy.clone() }, ..Default::default() };

@@ -33,6 +33,7 @@ pub mod child;
 pub mod host_api;
 #[cfg(feature = "image")]
 pub mod image_ops;
+pub mod install;
 pub mod log_tap;
 pub mod manifest;
 pub mod panels;

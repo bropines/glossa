@@ -278,7 +278,7 @@ programs cannot register global hotkeys, bind keys to the
 
 | key | type | default | set in | what it does |
 |---|---|---|---|---|
-| `mode` | `"system"`, `"none"`, `"manual"`, `"auto"` | `"system"` | Options → Internet | `system`: the `HTTPS_PROXY`/`ALL_PROXY`/`HTTP_PROXY` environment variables (with `NO_PROXY`), else on Windows the system proxy. `none`: connect directly. `manual`: the fields below. `auto` (the classic choice) is an alias of `system`: proxy auto-discovery (WPAD, PAC scripts) is not implemented; the value is kept so classic settings load, and the options show it as *System*. |
+| `mode` | `"system"`, `"none"`, `"manual"`, `"auto"` | `"system"` | Options → Internet | `system`: the `HTTPS_PROXY`/`ALL_PROXY`/`HTTP_PROXY` environment variables (with `NO_PROXY`), else on Windows the system proxy. `none`: connect directly. `manual`: the fields below; if they name a proxy that cannot be used, nothing is sent past this computer until they are corrected (Glossa does not quietly connect directly). `auto` (the classic choice) is an alias of `system`: proxy auto-discovery (WPAD, PAC scripts) is not implemented; the value is kept so classic settings load, and the options show it as *System*. |
 | `scheme` | `"http"`, `"https"`, `"socks4"`, `"socks5"` | `"http"` | Options → Internet | The proxy's protocol, with `manual`. |
 | `host` | string | `"127.0.0.1"` | Options → Internet | The proxy's address, with `manual`. Empty means no proxy. |
 | `port` | integer | `8080` | Options → Internet | 1–65535. |
