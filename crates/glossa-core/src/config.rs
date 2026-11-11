@@ -1980,7 +1980,11 @@ impl Config {
         let bytes = match std::fs::read(path) {
             Ok(bytes) => bytes,
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
-                return Ok(LoadedConfig { config: Config::default(), source: ConfigSource::Missing, issues: Vec::new() })
+                return Ok(LoadedConfig {
+                    config: Config::default(),
+                    source: ConfigSource::Missing,
+                    issues: Vec::new(),
+                })
             }
             Err(e) => return Err(e.into()),
         };
@@ -2250,7 +2254,6 @@ fn ignored_steps(path: &serde_ignored::Path) -> Vec<Step> {
     out.reverse();
     out
 }
-
 
 #[cfg(test)]
 mod tests {

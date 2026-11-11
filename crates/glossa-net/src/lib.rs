@@ -1130,10 +1130,8 @@ mod tests {
         assert!(!problem.contains("secretpw"), "{problem}");
         assert!(client.system.is_none());
         // A proxy that works is no problem.
-        let fine = Network {
-            proxy: Proxy { host: "127.0.0.1".into(), ..settings.proxy.clone() },
-            ..Default::default()
-        };
+        let fine =
+            Network { proxy: Proxy { host: "127.0.0.1".into(), ..settings.proxy.clone() }, ..Default::default() };
         assert!(check_proxy(&fine).is_ok());
         assert!(HttpClient::new_or_direct(&fine).1.is_none());
     }

@@ -434,7 +434,11 @@ mod tests {
         let mut sync = SecretSync::new();
         let mut loaded = Config::from_toml(&file.to_toml()).unwrap();
         assert!(sync.resolve(&mut loaded, &declared, Some(&store)).is_empty());
-        assert_eq!(loaded.services.option("deepl", "api_key"), Some(&serde_json::json!("dk-123")), "fetched all the same");
+        assert_eq!(
+            loaded.services.option("deepl", "api_key"),
+            Some(&serde_json::json!("dk-123")),
+            "fetched all the same"
+        );
         let (written, errors) = sync.prepare(&loaded, &declared, Some(&store));
         assert!(errors.is_empty());
         assert_eq!(written.services.option("deepl", "api_key"), Some(&serde_json::json!(IN_STORE)));
