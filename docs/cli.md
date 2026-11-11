@@ -901,14 +901,15 @@ user and for bug reports. Attach its output to a bug report.
 | Modules | How many loaded, and which failed or were skipped, with the reason. |
 | Files | The settings file (and whether it parses), the data and cache folders, the log. |
 | Network | The proxy requests go through, the timeout, and whether certificates are checked against the system's store. |
-| Control API | Switched on or not, and whether a Glossa, another program or nothing answers at its address. |
+| Control API | Switched on or not, whether a Glossa, another program or nothing answers at its address, and whether a Glossa that proved to run with this data folder is there: the only one `glossa-cli` sends its token to ([how it is found](control-api.md#how-glossa-cli-finds-glossa)). With `--json`, `control_api.instance` has `state` (`verified`, `none` or `unverified`), with `addr`, `pid` and `version` when verified and `reason` when not. |
 | D-Bus service | Linux and the BSDs: switched on or not, and whether its name is owned ([D-Bus](control-api.md#d-bus)). |
 | Desktop portal | Wayland only: the GlobalShortcuts and Screenshot portal versions, asked live, so it tells whether hotkeys can work in this session. `--json` also gives the RemoteDesktop version (`portal.remote_desktop`), which copy and paste into other programs need. |
 
 The last line says whether the desktop program runs for this data folder.
 
 Nothing is changed: a `config.toml` that does not parse is reported, not
-moved aside as the desktop program does. With `--json`, the same as one
+moved aside as the desktop program does (a `control-api.json` left by a
+Glossa that crashed is the exception: it is removed). With `--json`, the same as one
 object; each limitation there has a `key` (a locale key, which the
 interface translates) and its English `text`.
 
@@ -929,6 +930,7 @@ OCR engines
   …
 Control API
   enabled on 127.0.0.1:60828: Glossa 0.1.0 is running
+  this data folder: Glossa 0.1.0 (pid 4242) at 127.0.0.1:60828 proved to be this folder's
 
 D-Bus service
   enabled, io.github.bropines.Glossa: owned (Glossa is running)

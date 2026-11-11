@@ -55,6 +55,10 @@ the notes of its GitHub release.
 
 ### Added
 
+- `glossa-cli doctor` says whether the Glossa answering on the control
+  API's port is the one running with this data folder, the only one
+  `glossa-cli` talks to, or why it could not be verified
+  (`control_api.instance` with `--json`).
 - A double click on the popup's header (the language line or a free spot
   beside the buttons) opens the main window with the popup's text.
 - Options → Appearance → Popup → "Open the main window with the popup":
