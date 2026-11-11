@@ -33,6 +33,10 @@ base64 = { workspace = true }
 # For the proof `/health` gives `glossa-cli` (`server::runtime`); already in
 # the tree through glossa-modules.
 sha2 = "0.10"
+# The built-in language detector (`langdetect`): trigram tables for seventy
+# languages, about 0.6 MB in the binary, one dependency Glossa already has
+# (hashbrown). MIT.
+whatlang = "0.18"
 
 [target.'cfg(windows)'.dependencies]
 winreg = "0.55"

@@ -169,7 +169,12 @@ pub fn check(spec: &OptionSpec, pattern: Option<&Pattern>, value: &Value) -> Opt
             (!ok).then(|| FieldError::new("field.not_language", vec![]))
         }
         OptionKind::Bool | OptionKind::Unknown(_) => None,
-        OptionKind::Text | OptionKind::Secret | OptionKind::Url | OptionKind::Multiline | OptionKind::File => {
+        OptionKind::Text
+        | OptionKind::Secret
+        | OptionKind::Url
+        | OptionKind::Multiline
+        | OptionKind::File
+        | OptionKind::Command => {
             let s = value.as_str()?;
             let len = s.chars().count();
             if let Some(min) = spec.min_length.filter(|m| len < *m) {

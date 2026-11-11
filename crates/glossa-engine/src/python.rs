@@ -213,6 +213,15 @@ impl Engine {
         python_env::system_python().map(|(p, _)| PathBuf::from(p))
     }
 
+    /// With "offline only" on, nothing is installed: `uv` fetches packages
+    /// on its own connection, which Glossa's client cannot refuse.
+    fn refuse_downloads_offline(&self) -> Result<()> {
+        if self.config().network.offline_only {
+            return Err(Error::OfflineOnly("Python and module packages are not downloaded".into()));
+        }
+        Ok(())
+    }
+
     /// Get what module `id` needs (the managed Python and `uv` if it uses
     /// them, its environment) or, with no module, the managed Python and
     /// `uv` themselves, and wait (the CLI). `progress` is called as bytes
@@ -223,6 +232,7 @@ impl Engine {
         cancel: &CancelToken,
         progress: &dyn Fn(&AssetProgress),
     ) -> Result<PythonReport> {
+        self.refuse_downloads_offline()?;
         let http = self.inner.http.read().clone();
         match module {
             Some(id) => {
@@ -240,6 +250,7 @@ impl Engine {
     /// (with the module's id, or [`PYTHON_JOB`]) reports progress and the
     /// end. Starting one while it runs does nothing.
     pub fn start_python_install(&self, module: Option<&str>) -> Result<()> {
+        self.refuse_downloads_offline()?;
         let env = module.map(|id| self.python_env_of(id)).transpose()?;
         let key = module.unwrap_or(PYTHON_JOB).to_owned();
         let state = Arc::new(Mutex::new(AssetJobState { running: true, ..Default::default() }));

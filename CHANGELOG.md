@@ -100,6 +100,28 @@ the notes of its GitHub release.
   API's port is the one running with this data folder, the only one
   `glossa-cli` talks to, or why it could not be verified
   (`control_api.instance` with `--json`).
+- Language detection built into Glossa: the language of the text is worked
+  out on this computer, and an enabled service is asked only about text the
+  built-in detector is unsure of. `[general] detect` (`offline`, `service`,
+  `offline_then_service`) and `glossa-cli --detect` choose who detects.
+- `[network] offline_only` and `glossa-cli --offline`: nothing leaves this
+  computer; only services running here are used.
+
+### Security
+
+- A preset can no longer run a program. Commands and paths in a preset's
+  options (the external OCR command above all) are left out when a preset
+  is imported, saved or applied; an imported preset cannot select the
+  external OCR command unless you set that command up yourself, cannot set
+  extra request headers, and cannot make language detection less private.
+  Importing lists what was left out.
+- The *Private* preset no longer sends the text to Google, Bing,
+  LibreTranslate or Yandex to find out its language: it detects on this
+  computer only, and no preset asks a service that is not enabled.
+- An OCR engine that works on this computer no longer falls back to Google
+  Lens when it fails: the picture stays here and the engine's own error is
+  shown.
+
 - A double click on the popup's header (the language line or a free spot
   beside the buttons) opens the main window with the popup's text.
 - Options → Appearance → Popup → "Open the main window with the popup":

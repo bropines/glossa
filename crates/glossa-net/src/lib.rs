@@ -289,6 +289,8 @@ pub struct HttpClient {
     timeout: Duration,
     max_retries: u32,
     user_agent: String,
+    /// `[network] offline_only`: only this computer is asked.
+    offline_only: bool,
 }
 
 /// How often the system proxy is looked up again (a registry read on
@@ -319,6 +321,7 @@ impl HttpClient {
             timeout: Duration::from_secs(settings.timeout_secs.max(1)),
             max_retries: settings.max_retries,
             user_agent: settings.user_agent.clone(),
+            offline_only: settings.offline_only,
         })
     }
 
@@ -401,8 +404,23 @@ impl HttpClient {
         Ok(HttpResponse { status, headers, body, codepage: request.codepage })
     }
 
+    /// With "offline only" on, refuse a request that would leave this
+    /// computer. Every request the client makes passes here first (and the
+    /// agent follows no redirects then, see [`build_agent`]), so no service
+    /// or module that goes through Glossa's client can get around it.
+    fn check_offline(&self, request: &HttpRequest) -> Result<(), Error> {
+        if !self.offline_only || is_loopback_url(&request.url) {
+            return Ok(());
+        }
+        let who = if request.provider.is_empty() { "a request" } else { request.provider.as_str() };
+        let host = url_host(&request.url).unwrap_or_default();
+        tracing::debug!(url = %redact(&request.url), "refused: offline only");
+        Err(Error::OfflineOnly(format!("{who} to {host} was not sent")))
+    }
+
     /// Make the request and return the response with its body unread.
     fn open(&self, request: &HttpRequest) -> Result<ureq::http::Response<ureq::Body>, Error> {
+        self.check_offline(request)?;
         let provider = if request.provider.is_empty() { "http" } else { &request.provider };
         let mut builder = ureq::http::Request::builder().method(request.method.as_str()).uri(request.url.as_str());
         for (name, value) in &request.headers {
@@ -475,7 +493,9 @@ fn build_agent(settings: &Network, proxy: Option<ProxySpec>) -> Result<ureq::Age
         .timeout_global(Some(timeout))
         .timeout_resolve(Some(timeout.min(CONNECT_BUDGET)))
         .timeout_connect(Some(timeout.min(CONNECT_BUDGET)))
-        .max_redirects(8)
+        // Offline only: a server on this computer must not be able to send
+        // the request on to another one, so its redirect is the answer.
+        .max_redirects(if settings.offline_only { 0 } else { 8 })
         .user_agent(if settings.user_agent.is_empty() {
             DEFAULT_USER_AGENT.to_owned()
         } else {
@@ -538,6 +558,7 @@ impl Http for HttpClient {
         on_event: &mut dyn FnMut(DownloadEvent<'_>) -> bool,
     ) -> Result<HttpResponse, Error> {
         use std::io::Read as _;
+        self.check_offline(&request)?;
         let provider = if request.provider.is_empty() { "http" } else { request.provider.as_str() };
         let whole = request.timeout.unwrap_or(self.timeout);
         let mut builder = ureq::http::Request::builder().method(request.method.as_str()).uri(request.url.as_str());
@@ -717,6 +738,38 @@ pub fn redact(url: &str) -> &str {
 /// Hosts that never go through a proxy: a local server (a self-hosted DeepLX
 /// or LibreTranslate, say) is unreachable from the proxy's side.
 const LOOPBACK: &[&str] = &["localhost", "127.0.0.1", "::1", "[::1]"];
+
+/// The host a URL names, lowercased and without brackets, user name or
+/// port; `None` when the URL has none (or is written to confuse a parser).
+pub fn url_host(url: &str) -> Option<String> {
+    let (_, rest) = url.trim().split_once("://")?;
+    let authority = rest.split(['/', '?', '#']).next()?;
+    if authority.contains('\\') || authority.chars().any(char::is_whitespace) {
+        return None;
+    }
+    let host_port = authority.rsplit('@').next()?;
+    let host = match host_port.strip_prefix('[') {
+        Some(v6) => v6.split(']').next()?,
+        None => host_port.split(':').next()?,
+    };
+    (!host.is_empty()).then(|| host.trim_end_matches('.').to_ascii_lowercase())
+}
+
+/// Whether a URL points at this computer: `localhost` (and names under
+/// it), `127.0.0.0/8` or `::1`. "Offline only" applies this test to every
+/// request, and services with an address of their own (a self-hosted
+/// LibreTranslate, an AI endpoint) use it to say whether they are local.
+pub fn is_loopback_url(url: &str) -> bool {
+    let Some(host) = url_host(url) else { return false };
+    if host == "localhost" || host.ends_with(".localhost") {
+        return true;
+    }
+    match host.parse::<std::net::IpAddr>() {
+        Ok(std::net::IpAddr::V4(ip)) => ip.is_loopback(),
+        Ok(std::net::IpAddr::V6(ip)) => ip.is_loopback() || ip.to_ipv4_mapped().is_some_and(|v4| v4.is_loopback()),
+        Err(_) => false,
+    }
+}
 
 /// A proxy URL and the hosts that bypass it.
 type ProxySpec = (String, Vec<String>);
@@ -1029,6 +1082,75 @@ mod tests {
     fn urls_are_redacted_for_logs() {
         assert_eq!(redact("https://api.x/v1?key=secret&q=hi"), "https://api.x/v1");
         assert_eq!(redact("https://api.x/v1#frag"), "https://api.x/v1");
+    }
+
+    #[test]
+    fn only_this_computer_counts_as_local() {
+        for url in [
+            "http://localhost:11434/v1",
+            "http://LOCALHOST/",
+            "https://api.localhost/x",
+            "http://127.0.0.1:5000/translate",
+            "http://127.8.9.10",
+            "http://[::1]:8080/v1",
+            "http://user:pw@127.0.0.1/",
+            "http://[::ffff:127.0.0.1]/",
+        ] {
+            assert!(is_loopback_url(url), "{url}");
+        }
+        for url in [
+            "https://translate.googleapis.com/x",
+            "http://127.0.0.1@evil.example/",
+            "http://127.0.0.1.evil.example/",
+            "http://localhost.evil.example/",
+            "http://evil.example/?u=http://localhost/",
+            "http://evil.example#@localhost",
+            "http://127.0.0.1\\@evil.example/",
+            "http://192.168.1.5/",
+            "http://0.0.0.0/",
+            "localhost:8080",
+            "http://[::2]/",
+            "",
+        ] {
+            assert!(!is_loopback_url(url), "{url}");
+        }
+        assert_eq!(url_host("https://User@Example.COM.:443/a?b").as_deref(), Some("example.com"));
+    }
+
+    /// Offline only: nothing goes to another machine (the request is
+    /// refused before any connection), a server on this one still answers,
+    /// and its redirect is not followed elsewhere.
+    #[test]
+    fn offline_only_refuses_every_other_host_and_follows_no_redirect() {
+        let offline = HttpClient::new(&Network {
+            proxy: glossa_core::config::Proxy { mode: ProxyMode::None, ..Default::default() },
+            offline_only: true,
+            ..Default::default()
+        })
+        .unwrap();
+        // 192.0.2.1 is TEST-NET-1: were a connection tried, it would time out
+        // rather than be refused at once.
+        let started = Instant::now();
+        for url in ["http://192.0.2.1/translate", "https://translate.googleapis.com/x"] {
+            let err = offline.send(HttpRequest::get(url).provider("Google")).unwrap_err();
+            assert!(matches!(err, Error::OfflineOnly(ref m) if m.contains("Google")), "{err:?}");
+            let err = offline.send_streaming(HttpRequest::get(url), &mut |_| true).unwrap_err();
+            assert!(matches!(err, Error::OfflineOnly(_)), "{err:?}");
+            let err = offline.send_download(HttpRequest::get(url), &mut |_| true).unwrap_err();
+            assert!(matches!(err, Error::OfflineOnly(_)), "{err:?}");
+        }
+        assert!(started.elapsed() < Duration::from_secs(2), "refused without connecting");
+
+        let local = stalling_server(|mut stream| {
+            use std::io::{Read as _, Write as _};
+            let mut buf = [0u8; 1024];
+            let _ = stream.read(&mut buf);
+            let _ = stream.write_all(
+                b"HTTP/1.1 302 Found\r\nLocation: http://192.0.2.1/elsewhere\r\nContent-Length: 0\r\nConnection: close\r\n\r\n",
+            );
+        });
+        let response = offline.send(HttpRequest::get(&local)).unwrap();
+        assert_eq!(response.status, 302, "the redirect is the answer, not followed");
     }
 
     #[test]

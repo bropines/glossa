@@ -118,6 +118,65 @@ pub fn truncate_at_boundary(text: &str, max_chars: usize) -> &str {
     head
 }
 
+/// Cut `text` into pieces of at most `max_chars` characters that join back
+/// into `text` exactly, for a service with an input limit.
+///
+/// Each cut is made at the best boundary in the second half of the window:
+/// after a blank line (a paragraph), else after a line break, else after the
+/// space that follows a sentence end (or right after a CJK full stop, which
+/// has none), else after any whitespace, else at the limit without splitting
+/// a grapheme cluster. The whitespace at a cut stays with the piece before
+/// it, so a caller that sends the pieces trimmed can put it back.
+pub fn split_for_limit(text: &str, max_chars: usize) -> Vec<&str> {
+    let max = max_chars.max(1);
+    let mut out = Vec::new();
+    let mut rest = text;
+    while let Some((limit, _)) = rest.char_indices().nth(max) {
+        let window = &rest[..limit];
+        let late = |cut: &usize| *cut >= limit / 2;
+        let after_last = |pat: &str| window.rfind(pat).map(|i| i + pat.len());
+        let cut = after_last("\n\n")
+            .filter(late)
+            .or_else(|| after_last("\n").filter(late))
+            .or_else(|| sentence_cut(window).filter(late))
+            .or_else(|| {
+                let (i, c) = window.char_indices().rev().find(|(_, c)| c.is_whitespace())?;
+                Some(i + c.len_utf8()).filter(|cut| *cut > 0)
+            })
+            .unwrap_or_else(|| {
+                // No boundary at all (a long URL, text without spaces): the
+                // last whole grapheme cluster that fits.
+                rest.grapheme_indices(true)
+                    .map(|(i, g)| i + g.len())
+                    .take_while(|end| *end <= limit)
+                    .last()
+                    .unwrap_or(limit)
+            });
+        out.push(&rest[..cut]);
+        rest = &rest[cut..];
+    }
+    if !rest.is_empty() {
+        out.push(rest);
+    }
+    out
+}
+
+/// Where the last sentence in `window` ends, counting the space after it.
+fn sentence_cut(window: &str) -> Option<usize> {
+    let mut best = None;
+    let mut prev = None;
+    for (i, c) in window.char_indices() {
+        if c.is_whitespace() && matches!(prev, Some('.' | '!' | '?' | '…' | '؟' | '।')) {
+            best = Some(i + c.len_utf8());
+        }
+        if matches!(c, '\u{3002}' | '\u{FF01}' | '\u{FF1F}') {
+            best = Some(i + c.len_utf8());
+        }
+        prev = Some(c);
+    }
+    best
+}
+
 /// How many characters the text has, for the "5000 max" style limits a
 /// provider imposes.
 pub fn char_count(text: &str) -> usize {
@@ -302,6 +361,40 @@ mod tests {
         // Shorter than the limit: untouched.
         assert_eq!(truncate_at_boundary("short", 100), "short");
         assert_eq!(truncate_at_boundary("anything", 0), "");
+    }
+
+    #[test]
+    fn splitting_for_a_limit_loses_nothing_and_prefers_real_boundaries() {
+        let text = "First sentence here. Second one follows!\n\nA new paragraph starts. And ends.\nLast line";
+        for max in [1, 5, 12, 25, 40, 200] {
+            let parts = split_for_limit(text, max);
+            assert_eq!(parts.concat(), text, "max {max}");
+            assert!(parts.iter().all(|p| p.chars().count() <= max && !p.is_empty()), "max {max}: {parts:?}");
+        }
+        // Paragraph first, then sentence.
+        assert_eq!(
+            split_for_limit(text, 45),
+            vec!["First sentence here. Second one follows!\n\n", "A new paragraph starts. And ends.\nLast line"]
+        );
+        assert_eq!(
+            split_for_limit(text, 36),
+            vec![
+                "First sentence here. ",
+                "Second one follows!\n\n",
+                "A new paragraph starts. And ends.\n",
+                "Last line"
+            ]
+        );
+        assert_eq!(split_for_limit("One two. Three four. Five six.", 22), vec!["One two. Three four. ", "Five six."]);
+        // No sentence end: a word boundary.
+        assert_eq!(split_for_limit("alpha beta gamma delta", 12), vec!["alpha beta ", "gamma delta"]);
+        // CJK: after the full stop, else at the limit.
+        assert_eq!(split_for_limit("今日は晴れ。明日は雨。", 8), vec!["今日は晴れ。", "明日は雨。"]);
+        assert_eq!(split_for_limit("абвгдеж", 3), vec!["абв", "где", "ж"]);
+        // A cluster is never split.
+        assert_eq!(split_for_limit("ab👨‍👩‍👧cd", 5), vec!["ab", "👨‍👩‍👧", "cd"]);
+        assert!(split_for_limit("", 5).is_empty());
+        assert_eq!(split_for_limit("short", 5), vec!["short"]);
     }
 
     #[test]

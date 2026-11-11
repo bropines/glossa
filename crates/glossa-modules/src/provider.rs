@@ -201,6 +201,19 @@ pub trait Provider: Send + Sync {
         None
     }
 
+    /// Whether, with these option values, everything the provider does
+    /// stays on this computer: no text, picture or audio is sent to another
+    /// machine. The engine never falls back from a local OCR engine to one
+    /// that is not, and with "offline only" on it uses local providers alone.
+    ///
+    /// The default is the manifest's word: the `offline` capability. A
+    /// provider whose address is a setting (a self-hosted server, an AI
+    /// endpoint) answers by where that address points.
+    fn is_local(&self, options: &OptionValues) -> bool {
+        let _ = options;
+        self.info().capabilities.contains(Capabilities::OFFLINE)
+    }
+
     /// Release resources (a child process, a warm connection). Called when
     /// the module is disabled or the program idles; the provider must cope
     /// with being called again afterwards.
@@ -322,6 +335,11 @@ impl Provider for Guarded {
 
     fn web_link(&self, text: &str, pair: LangPair) -> Option<String> {
         std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| self.inner.web_link(text, pair))).ok().flatten()
+    }
+
+    fn is_local(&self, options: &OptionValues) -> bool {
+        // "Not local" is the safe answer when the question itself fails.
+        std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| self.inner.is_local(options))).unwrap_or(false)
     }
 
     fn suspend(&self) {
@@ -456,6 +474,11 @@ impl OptionSpec {
         }
     }
 
+    /// A command line or a program to run ([`OptionKind::Command`]).
+    pub fn command(key: &str, label: &str) -> Self {
+        Self { kind: OptionKind::Command, ..Self::text(key, label, "") }
+    }
+
     pub fn multiline(key: &str, label: &str, default: &str) -> Self {
         Self { kind: OptionKind::Multiline, ..Self::text(key, label, default) }
     }
@@ -503,6 +526,10 @@ pub enum OptionKind {
     /// A path, typed or picked with a file dialog. The module gets the path,
     /// not the file.
     File,
+    /// A command line or a program the provider runs. Typed like text, but
+    /// treated like a secret wherever settings travel: a preset never
+    /// carries one, since importing it would run someone else's program.
+    Command,
     /// A type from a newer format, with its name as written. The module
     /// still loads, the settings page says the field needs a newer Glossa,
     /// and the name is written back unchanged (the module editor rewrites
@@ -511,7 +538,7 @@ pub enum OptionKind {
 }
 
 impl OptionKind {
-    const NAMES: [(&'static str, OptionKind); 10] = [
+    const NAMES: [(&'static str, OptionKind); 11] = [
         ("text", OptionKind::Text),
         ("secret", OptionKind::Secret),
         ("url", OptionKind::Url),
@@ -522,6 +549,7 @@ impl OptionKind {
         ("multiselect", OptionKind::Multiselect),
         ("lang", OptionKind::Lang),
         ("file", OptionKind::File),
+        ("command", OptionKind::Command),
     ];
 
     /// The name as `module.toml` writes it.
@@ -543,8 +571,21 @@ impl OptionKind {
     pub fn is_text(&self) -> bool {
         matches!(
             self,
-            OptionKind::Text | OptionKind::Secret | OptionKind::Url | OptionKind::Multiline | OptionKind::File
+            OptionKind::Text
+                | OptionKind::Secret
+                | OptionKind::Url
+                | OptionKind::Multiline
+                | OptionKind::File
+                | OptionKind::Command
         )
+    }
+
+    /// Whether the value names something the provider runs or loads from
+    /// the disk: a command, or a path (a program, a model, a library). Such
+    /// a setting is the user's own to make; it is never taken from a file
+    /// someone else wrote.
+    pub fn is_executable(&self) -> bool {
+        matches!(self, OptionKind::Command | OptionKind::File)
     }
 }
 

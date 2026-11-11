@@ -101,6 +101,14 @@ impl Provider for LibreTranslate {
         &self.options
     }
 
+    /// An instance on this computer translates here: LibreTranslate runs
+    /// its own models. (A local Lingva or DeepLX only passes the text on,
+    /// so those never count as local.)
+    fn is_local(&self, options: &glossa_modules::OptionValues) -> bool {
+        let url = options.get("url").and_then(|v| v.as_str()).unwrap_or("");
+        glossa_net::is_loopback_url(&base_url(url, DEFAULT_URL))
+    }
+
     fn translate(&self, host: &Host, req: &TranslateRequest) -> Result<Translation> {
         check_pair(&self.info, req.from, req.to)?;
         let source = if is_auto(req.from) { "auto" } else { code(req.from) };

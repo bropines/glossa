@@ -65,6 +65,7 @@ impl Error {
             Error::Io(_) => "error.io",
             Error::Json(_) => "error.json",
             Error::Platform(_) => "error.platform",
+            Error::OfflineOnly(_) => "error.offline_only",
             Error::Cancelled => "error.cancelled",
             Error::Internal(_) => "error.internal",
         }
@@ -144,6 +145,7 @@ impl Locale {
             | Error::Io(_)
             | Error::Json(_)
             | Error::Platform(_)
+            | Error::OfflineOnly(_)
             | Error::Cancelled
             | Error::Internal(_) => Vec::new(),
         };
@@ -181,6 +183,7 @@ pub fn samples() -> Vec<Error> {
     let http = |status| Error::HttpStatus { provider: "DeepL".into(), status, body: "quota exceeded".into() };
     vec![
         Error::EmptyInput,
+        Error::OfflineOnly("translate.googleapis.com".into()),
         Error::Unsupported { provider: "DeepL".into(), capability: "speech" },
         Error::SourceLanguageUnsupported { provider: "DeepL".into(), lang: LangId::RUSSIAN },
         Error::TargetLanguageUnsupported { provider: "DeepL".into(), lang: LangId::RUSSIAN },

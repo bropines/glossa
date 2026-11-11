@@ -50,12 +50,16 @@ impl CommandOcr {
             ..OptionSpec::text("timeout_secs", "Timeout, seconds", "")
         };
         let options = vec![
-            OptionSpec::text("command", "Command", "")
+            OptionSpec::command("command", "Command")
                 .required()
                 .placeholder("tesseract {image} - -l {lang3}")
                 .help("Run without a shell. {image} is the picture's file, {lang} the language (BCP 47), {lang3} its Tesseract code."),
             OptionSpec::text("auto_lang3", "{lang3} when the language is automatic", "eng"),
             timeout,
+            OptionSpec::boolean("offline", "The command works without the internet", false).help(
+                "Glossa cannot see what a program does. Tick this only if it sends the picture nowhere: \
+                 then it may stand in for another offline engine, and it runs with \"offline only\" on.",
+            ),
         ];
         Self { info, options }
     }
@@ -68,6 +72,12 @@ impl Provider for CommandOcr {
 
     fn options(&self) -> &[OptionSpec] {
         &self.options
+    }
+
+    /// A program's doings cannot be seen from here, so the command counts
+    /// as going online unless the user says otherwise.
+    fn is_local(&self, options: &glossa_modules::OptionValues) -> bool {
+        options.get("offline").and_then(|v| v.as_bool()).unwrap_or(false)
     }
 
     fn recognize(&self, host: &Host, req: &OcrRequest) -> Result<OcrResult> {

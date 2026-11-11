@@ -1359,6 +1359,7 @@ pub static STRINGS: &[(&str, &str, Option<&str>)] = &[
     ("error.asset_corrupt", "File %s of module %s was damaged or changed on the server and has been deleted. Download it again.", None),
     ("error.no_such_module", "There is no service or module named %s.", None),
     ("error.no_provider", "No enabled service can do this. Switch one on in Options → Services.", None),
+    ("error.offline_only", "\"Offline only\" is switched on, and this needs the network.", None),
     ("error.config", "Something in the settings is wrong.", None),
     ("error.file_not_found", "Cannot find the file %s.", None),
     ("error.io", "Could not read or write a file.", None),

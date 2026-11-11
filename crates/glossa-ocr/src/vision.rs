@@ -92,7 +92,7 @@ fn under_rosetta() -> bool {
 
 impl MacVision {
     pub fn new(cfg: VisionConfig) -> Self {
-        let mut info = ProviderInfo::new(VISION_ID, NAME, Capabilities::OCR);
+        let mut info = ProviderInfo::new(VISION_ID, NAME, Capabilities::OCR | Capabilities::OFFLINE);
         info.description =
             "The text recognition built into macOS (Live Text). Offline; reads the languages your macOS version supports."
                 .into();

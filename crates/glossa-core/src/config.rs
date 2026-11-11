@@ -160,6 +160,43 @@ pub struct General {
     /// Where API keys, the proxy password and the Lens token are kept: in
     /// this file, or in the system's keychain (see [`crate::secrets`]).
     pub secret_storage: crate::secrets::SecretStorage,
+    /// Who works out the language of the text: the detector built into
+    /// Glossa, an enabled service, or the first with the second for text
+    /// it is not sure about.
+    #[serde(default)]
+    pub detect: DetectMode,
+}
+
+/// Who detects the language of the text (`[general] detect`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum DetectMode {
+    /// The detector built into Glossa only: nothing is sent anywhere to
+    /// find out the language.
+    Offline,
+    /// An enabled service only, as before the built-in detector existed.
+    Service,
+    /// The built-in detector when it is sure, else an enabled service
+    /// (short or ambiguous text), else the built-in one's best guess.
+    #[default]
+    OfflineThenService,
+}
+
+impl DetectMode {
+    /// The value as `config.toml` and the command line write it.
+    pub fn name(self) -> &'static str {
+        match self {
+            DetectMode::Offline => "offline",
+            DetectMode::Service => "service",
+            DetectMode::OfflineThenService => "offline_then_service",
+        }
+    }
+
+    pub fn from_name(name: &str) -> Option<DetectMode> {
+        [DetectMode::Offline, DetectMode::Service, DetectMode::OfflineThenService]
+            .into_iter()
+            .find(|m| m.name().eq_ignore_ascii_case(name.trim()))
+    }
 }
 
 impl Default for General {
@@ -195,6 +232,7 @@ impl Default for General {
             show_tray_hint: true,
             show_welcome: true,
             secret_storage: crate::secrets::SecretStorage::File,
+            detect: DetectMode::default(),
         }
     }
 }
@@ -345,11 +383,23 @@ pub struct Network {
     pub user_agent: String,
     /// Retries for connection errors, timeouts and 429/5xx answers.
     pub max_retries: u32,
+    /// Nothing leaves this computer: every request to a host other than
+    /// this machine (`localhost`, `127.0.0.1`, `::1`) is refused, and so is
+    /// every service that does not say it works offline. A translator, an
+    /// OCR engine or a voice running here keeps working.
+    #[serde(default)]
+    pub offline_only: bool,
 }
 
 impl Default for Network {
     fn default() -> Self {
-        Self { timeout_secs: 10, proxy: Proxy::default(), user_agent: String::new(), max_retries: 1 }
+        Self {
+            timeout_secs: 10,
+            proxy: Proxy::default(),
+            user_agent: String::new(),
+            max_retries: 1,
+            offline_only: false,
+        }
     }
 }
 
@@ -2465,6 +2515,7 @@ copy_joined_lines = true",
             tts: "google".into(),
             ocr: "lens".into(),
             pair: Some(LangPair::new(LangId::ENGLISH, LangId::RUSSIAN)),
+            detect: Some(DetectMode::Offline),
             options: [("google".to_owned(), [("domain".to_owned(), serde_json::json!("com"))].into_iter().collect())]
                 .into_iter()
                 .collect(),

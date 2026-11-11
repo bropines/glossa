@@ -48,7 +48,7 @@ pub struct OneOcr {
 
 impl OneOcr {
     pub fn new(folder: impl Into<String>, cache_dir: impl Into<PathBuf>) -> Self {
-        let mut info = ProviderInfo::new(ONEOCR_ID, NAME, Capabilities::OCR);
+        let mut info = ProviderInfo::new(ONEOCR_ID, NAME, Capabilities::OCR | Capabilities::OFFLINE);
         info.description = "The offline text recognition of the Windows 11 Snipping Tool, loaded from your own \
                             installation. Reads many scripts without choosing a language."
             .into();

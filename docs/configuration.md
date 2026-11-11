@@ -128,6 +128,7 @@ installation) but nothing reads it yet.
 | `show_tray_hint` | bool | `true` for a new configuration, `false` when the key is missing from an existing file | the note's *Got it* button; finishing the welcome guide also turns it off | While on, the main window opens at start with a note that Glossa lives in the tray (the menu bar on macOS) and which hotkey translates a selection. *Got it* turns it off. A file written before the note existed reads as off, so only a first run sees it. |
 | `show_welcome` | bool | `true` for a new configuration, `false` when the key is missing from an existing file | the welcome guide's *Finish* or *Skip*; *Options → Basics → Show the welcome guide* opens it again | Show the welcome guide at start: what Glossa is, its hotkeys, how to use it, and where to keep keys and data. |
 | `secret_storage` | `"file"`, `"system"` | `"file"` | *Options → Basics*, the welcome guide | Where API keys (`services.options`, AI endpoints included), the proxy password and the Lens token are kept. `"system"` puts each in the system keychain (Windows Credential Manager, the macOS Keychain, the Secret Service on Linux) and this file keeps `"@system-keychain"` in its place. Where no keychain answers (a Linux session without one), they stay in the file. |
+| `detect` | `"offline"`, `"service"`, `"offline_then_service"` | `"offline_then_service"` | `config.toml`, a preset | Who works out the language of the text. `"offline"`: the detector built into Glossa only, so nothing is sent anywhere to find out the language. `"service"`: an enabled service only. `"offline_then_service"`: the built-in detector when it is sure, else an enabled service (short or ambiguous text), else the built-in one's best guess. Only an enabled service is ever asked. The *Private* preset sets `"offline"`. |
 
 A language pair (`pair`, each item of `recent_pairs`) has two keys, `from`
 and `to`, each a language:
@@ -173,8 +174,16 @@ An imported preset is held to more, because applying it uses those keys:
 it keeps only options the installed module declares, and never an address
 (an option of the URL kind, one named like a URL, endpoint, host or server,
 or a value that looks like one). Otherwise a shared file could point a
-service you have a key for at someone else's server. What was left out is
-listed when you import it.
+service you have a key for at someone else's server.
+
+No preset, imported or your own, sets a command: an option whose value is
+run as a program or names one (the external OCR command, an interpreter, a
+path, a library) is left out when a preset is saved, imported or applied,
+and your own value stays. An imported preset also cannot choose a service
+that runs a command you have not set up yourself (`ocr = "command-ocr"`
+with no command), cannot set extra request headers or body fields, and
+cannot make language detection less private (`detect = "service"`). What
+was left out is listed when you import it.
 
 A list left empty leaves that part of the settings alone: a preset without
 `dictionary_enabled` does not touch the dictionaries. Services the preset
@@ -192,6 +201,7 @@ names that are not installed are skipped when it is applied, and listed.
 | `tts` | id | `""` | The speech service. |
 | `ocr` | id | `""` | The OCR engine ([`[ocr] provider`](#ocr)). |
 | `pair` | language pair | absent | The main window's direction (its two keys `from` and `to`, as in [`[general]`](#general)), when the preset was saved with it. |
+| `detect` | string | absent | Who detects the language ([`[general] detect`](#general)), when the preset sets it. An imported preset may only set `"offline"`. |
 | `options` | table: service id → table | `{}` | Service settings, as in [`[services.options]`](#services), merged over the current values. Never secrets. |
 
 ```toml
@@ -251,6 +261,7 @@ programs cannot register global hotkeys, bind keys to the
 | `timeout_secs` | integer | `10` | Options → Internet | Timeout for one request to a service, 1–300 s. (AI endpoints have their own timeout.) |
 | `max_retries` | integer | `1` | Options → Internet | Retries after a connection error or a 429, 500, 502, 503 or 504 answer, 0–5 (a timeout is not repeated: the next service is asked instead). The wait before a retry is about 0.6 s, doubling, scaled by a random 50–100 %; a `Retry-After` of up to 5 s on a 429 or 503 is obeyed instead, and a longer one ends the retries. Cancelling the translation ends the wait. Google Translate does not retry a 429: it asks its next address instead, and leaves the refusing one alone for a while (30 s, doubling to 10 min). |
 | `user_agent` | string | `""` | file only | Sent with every request unless a service sets its own. Empty uses Glossa's default. |
+| `offline_only` | bool | `false` | `config.toml`, `glossa-cli --offline` | Nothing leaves this computer: a request to a host other than this machine (`localhost`, `127.0.0.1`, `::1`) is refused, and so is every service that does not say it works offline. A translator, an OCR engine or a voice running here keeps working. |
 | `proxy` | table | | | See [`[network.proxy]`](#networkproxy). |
 
 ### `[network.proxy]`
