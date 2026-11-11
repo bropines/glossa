@@ -79,9 +79,9 @@ debug = "line-tables-only"
 
 - OS calls live in `glossa-platform`, one file per system (`foo/win.rs`,
   `foo/mac.rs`, `foo/linux.rs`) behind a common function that compiles on
-  every OS and fails politely (`Err(Error::Platform(..))` or `None`). The
-  OS OCR engines in `glossa-ocr` and the system voice in
-  `glossa-services/src/system_tts` follow the same layout.
+  every OS and fails politely (`Err(Error::Platform(..))` or `None`).
+  Code in crates below `glossa-platform` follows the same layout where it
+  is (see *Exceptions* below).
 - How the window systems differ (own title bar, points or pixels, Cmd or
   Ctrl, a menu bar…) is answered by `glossa_platform::shell::SHELL`, one
   `shell/{win,mac,linux}.rs` per system. UI code asks `SHELL` instead of
@@ -89,6 +89,19 @@ debug = "line-tables-only"
 - "Linux" in the code is `not(any(windows, target_os = "macos"))`, so the
   BSDs come along. Linux has not been tested on real hardware yet; say so
   rather than claim it works.
+- **Exceptions.** `glossa-platform` depends on `glossa-core` and is linked
+  only by the two front ends (`glossa-cli`, `glossa-ui-egui`); the crates
+  below them cannot use it. Pulling it into them would add its audio,
+  clipboard, hotkey and capture crates to the headless engine (and ALSA
+  headers to its Linux build). So these stay where they are, with the same
+  layout, one file per system behind functions that compile everywhere:
+  - `glossa-core/src/fsio.rs` with `fsio/{unix,other}.rs`: private file
+    permissions and durable writes. Core is below platform.
+  - `glossa-modules/src/proc_tree/{mod,unix,win}.rs`: a module's process
+    in its own process group or job object, so it is stopped with its
+    children.
+  - The OS OCR engines in `glossa-ocr` and the system voice in
+    `glossa-services/src/system_tts`.
 
 ## Trying the desktop app on Windows
 
@@ -145,7 +158,9 @@ loads (see `actions::read_selection`).
 draws and dispatches; it does not own logic another front end would need.
 
 **Platform code stays in `glossa-platform`**, behind functions that compile
-(and fail politely) on every OS ([above](#code-per-operating-system)).
+(and fail politely) on every OS ([above](#code-per-operating-system)),
+except in the crates below it that cannot depend on it (the exceptions
+listed there).
 
 **No emoji or symbol glyphs in the UI.** Most fonts lack them and they
 render as boxes. Draw icons with `icons::paint`, or use words.
