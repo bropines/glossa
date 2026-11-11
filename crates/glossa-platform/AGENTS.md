@@ -9,6 +9,11 @@ of `src/lib.rs` says what each system supports.
 - One file per system: `foo.rs` holds the common API and picks
   `foo/win.rs`, `foo/mac.rs` or `foo/linux.rs` with `cfg`. New code follows
   that layout (see `spell`, `secrets`, `shell`, `backdrop`, `window`).
+- This crate sits above `glossa-core` and is linked only by the front ends,
+  so OS code in the crates below it (`glossa-core::fsio`,
+  `glossa-modules::proc_tree`, the OS OCR engines, the system voice) stays
+  there in the same layout; see *Exceptions* in the root AGENTS.md. Do not
+  make `glossa-engine` or anything under it depend on this crate.
 - Every public function compiles on every OS. Where a system cannot do it,
   return `Err(glossa_core::Error::Platform(..))` or `None`; never panic, and
   never leave a function missing on one OS.
