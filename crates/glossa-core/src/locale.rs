@@ -142,21 +142,6 @@ impl Locale {
         })
     }
 
-    /// The string for `key` as it is worded for one system: `{key}_{variant}`
-    /// (`main.tray_hint_mac`) when there is such a string, else `key`. A
-    /// language that translates only the general string keeps it, rather
-    /// than fall back to English for the variant.
-    pub fn get_variant(&self, key: &str, variant: &str) -> String {
-        let specific = format!("{key}_{variant}");
-        if let Some(s) = self.strings.get(&specific) {
-            return s.clone();
-        }
-        if english(&specific).is_some() && !self.strings.contains_key(key) {
-            return self.get(&specific).to_owned();
-        }
-        self.get(key).to_owned()
-    }
-
     /// `get`, with `%s` replaced by `arg` — the classic placeholder.
     pub fn fmt(&self, key: &str, arg: &str) -> String {
         self.get(key).replacen("%s", arg, 1)

@@ -84,15 +84,6 @@ pub struct Shell {
     /// they do can be chosen. Linux indicators (AppIndicator) report none:
     /// a click there always opens the menu.
     pub tray_clicks: bool,
-    /// A dialog's default button stands last, at the right end of the row
-    /// (macOS: Cancel, then OK). Elsewhere it comes first (OK, Cancel,
-    /// Apply), as Windows lays its dialogs out.
-    pub default_button_last: bool,
-    /// The suffix of the interface strings worded for this system: a key
-    /// `main.tray_hint` has a variant `main.tray_hint_mac` where the text
-    /// differs on macOS (the menu bar instead of the tray). Strings without
-    /// such a variant are the same everywhere.
-    pub string_variant: &'static str,
 }
 
 /// Names of the modifier keys, in the order a hotkey shows them (the order
@@ -268,17 +259,6 @@ mod tests {
         assert_eq!(SHELL.modifier_names.alt, if mac { "Option" } else { "Alt" });
         assert_eq!(SHELL.backdrop_names, if mac { MAC_BACKDROP_NAMES } else { WINDOWS_BACKDROP_NAMES });
         assert_eq!(SHELL.login_items_url.is_some(), mac);
-        assert_eq!(SHELL.default_button_last, mac);
-        assert_eq!(
-            SHELL.string_variant,
-            if mac {
-                "mac"
-            } else if cfg!(windows) {
-                "win"
-            } else {
-                "linux"
-            }
-        );
     }
 
     #[test]

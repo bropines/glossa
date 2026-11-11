@@ -19,7 +19,6 @@ pub mod catalog;
 pub mod dbus;
 pub mod export;
 pub mod module_dev;
-pub mod net_check;
 pub mod ocr;
 pub mod panels;
 pub mod pipeline;

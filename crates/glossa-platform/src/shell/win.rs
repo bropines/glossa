@@ -28,8 +28,6 @@ pub const SHELL: Shell = Shell {
     window_classes: true,
     program_example: "program.exe",
     tray_clicks: true,
-    default_button_last: false,
-    string_variant: "win",
 };
 
 pub fn open(target: &str) -> std::io::Result<()> {
