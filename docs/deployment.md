@@ -363,7 +363,10 @@ default ([Privacy](privacy.md#the-update-check)).
 
 ## Updating
 
-Glossa does not update itself and does not check for new versions.
+Glossa does not update itself. It can tell the user that a newer version
+exists (*Options → Updates*, `glossa-cli update`; the daily check is off
+unless `[updates] check_automatically = true`), and then only opens the
+release page in the browser.
 Deploy a new version the way the first one was installed: the Windows
 installer upgrades in place, on macOS replace `Glossa.app`, on Debian and
 Ubuntu install the new `.deb`. Settings are kept, and a settings file from
