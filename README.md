@@ -164,8 +164,8 @@ described in [Installing](docs/install.md#macos).
   window with the source and one service or all of them side by side. The
   popup can be dragged, resized (the size is remembered) and pinned.
 - **Mouse mode**, as in QTranslate: select text with the mouse and a button
-  by the pointer (or the translation itself) appears, no hotkey needed. A
-  click on the tray icon turns it on and off.
+  by the pointer (or the translation itself) appears, no hotkey needed. On
+  Windows a click on the tray icon turns it on and off.
 - **Replace, copy, convert layout**: translate the selection in place, copy
   the translation, fix text typed in the wrong keyboard layout.
 - **Spell checking** in the main window's source pane, with the system's
@@ -221,9 +221,9 @@ described in [Installing](docs/install.md#macos).
   Manager, the macOS Keychain or the Secret Service on Linux.
 - **Portable**: a copy with a `portable.txt` beside the executable keeps
   its settings in a `data` folder next to it.
-- **Small**: a few MB of memory in the tray (the window system unloads when
-  nothing is on screen), one executable of about 20 MB, no web engine, no
-  runtime to install.
+- **Small**: a few MB of memory in the tray (the window system unloads
+  45 seconds after the last window closes), one executable (14 MB on
+  Apple silicon), no web engine, no runtime to install.
 
 ### Since the last release
 
@@ -246,6 +246,20 @@ On `main` and in the next release, not in 0.1.0-beta.2 (the
   translation (in the repository; its program is not released yet).
 - **Interface languages**: your own language packs, and switching the
   language without a restart.
+- **Errors you can act on**: messages in the interface language that name
+  the service, with buttons that fit the failure (*Try again*, *Service
+  settings*, *Download files*, *Try* the next service).
+- **Working offline**: `[network] offline_only` (or `glossa-cli
+  --offline`) keeps every request on the computer, and a built-in
+  language detector (`[general] detect`, `glossa-cli --detect`) means the
+  text need not go anywhere to find out its language.
+- **Update check**: *Options → Updates* and `glossa-cli update` ask GitHub
+  whether a newer version exists; the daily check is off by default.
+- **Housekeeping**: deleting history entries can be undone for a few
+  seconds; `config.toml` and `history.json` are readable by your account
+  only on Linux and macOS; every download carries
+  `THIRD-PARTY-NOTICES.txt`, linked from *About*; `glossa --help` and
+  `glossa --version` print and exit.
 - **Smaller things**: what a click on the tray icon does can be chosen;
   the popup says which service answered when the first one failed; a
   double click on the popup's header opens the main window; Google
@@ -332,21 +346,25 @@ glossa-cli ocr screenshot.png -t en
 glossa-cli services                  # what is available
 glossa-cli doctor                    # what works on this system
 glossa-cli action show_popup "text"  # ask the running app to show a popup
+glossa-cli --offline translate -t de "Hello"  # only services on this computer
+glossa-cli update                    # is there a newer version?
 ```
 
 `glossa-cli` with no arguments lists every command; `--json` gives
-machine-readable output. Every command and flag is in
+machine-readable output. `glossa --help` lists the desktop program's own
+flags. Every command and flag is in
 [docs/cli.md](docs/cli.md); the HTTP API other programs use is in
 [docs/control-api.md](docs/control-api.md).
 
 ## Privacy
 
 Glossa has no telemetry, no account and no server of its own, and it asks
-GitHub about a newer version only when you tell it to. A translator does have to send text somewhere: the
-text you translate goes to the service you chose, and a screen region
-goes to the OCR engine, which is Google Lens unless you pick an offline
-one. Keys stay on your machine, in the settings file or the system
-keychain. [Privacy and data](docs/privacy.md) lists every host by
+GitHub about a newer version only when you tell it to (*Options →
+Updates*; the daily check is off by default). A translator does have to
+send text somewhere: the text you translate goes to the service you
+chose, and a screen region goes to the OCR engine, which is Google Lens
+unless you pick an offline one. Keys stay on your machine, in the
+settings file or the system keychain. [Privacy and data](docs/privacy.md) lists every host by
 feature, what is stored and where, and how to work offline;
 [SECURITY.md](SECURITY.md) has the threat model.
 
@@ -438,4 +456,6 @@ Glossa is free. If it helps you, you can support its development on
 
 MIT ([LICENSE-MIT](LICENSE-MIT)) or Apache-2.0
 ([LICENSE-APACHE](LICENSE-APACHE)), at your option. Third-party notices are in
-[NOTICE](NOTICE).
+[NOTICE](NOTICE); every build also carries `THIRD-PARTY-NOTICES.txt`, the
+libraries in that build with their licences, opened from *About →
+Third-party notices*.
