@@ -49,6 +49,7 @@ command list and exits with 0.
 | `--home DIR` | Use `DIR` as the data folder, as `GLOSSA_HOME` does. `--home=DIR` works too. |
 | `-v`, `--verbose` | Log at `debug` level to stderr. `GLOSSA_LOG`, when set, takes precedence. |
 | `-V`, `--version` | Print the version and the commit it was built from (`glossa-cli 0.1.0 (1a2b3c4d)`; with `--json`, `{"name","version","commit"}`) and exit. A build without git (from a source archive) takes the commit from `GLOSSA_COMMIT` at build time, or shows the version alone. |
+| `--offline` | For this run, nothing leaves this computer: only services running here are used, and a request to any other host is refused. [`[network] offline_only`](configuration.md#network) makes it permanent. |
 | `--` | Everything after it is text, even if it starts with `-`. |
 
 Global flags may stand anywhere on the line, before or after the command.
@@ -137,7 +138,7 @@ $ glossa-cli translate -t ru "Hello"
 ### translate
 
 ```
-glossa-cli translate [-f FROM] [-t TO] [-s SERVICE] [--back] [--save-history] [--full] [TEXT…]
+glossa-cli translate [-f FROM] [-t TO] [-s SERVICE] [--back] [--save-history] [--full] [--detect MODE] [TEXT…]
 ```
 
 | option | default | meaning |
@@ -148,6 +149,7 @@ glossa-cli translate [-f FROM] [-t TO] [-s SERVICE] [--back] [--save-history] [-
 | `--back` | off | Also translate the result back into the source language. |
 | `--save-history` | off | Add the translation to the history (when `[history] enabled` is on) and write `history.json` at once. |
 | `--full` | off | Print the romanisation and dictionary senses even when stdout is not a terminal. |
+| `--detect MODE` | [`[general] detect`](configuration.md#general) | Who detects the language for this run: `offline`, `service` or `offline_then_service`. Also taken by `detect`, `dict` and `speak`. |
 
 With no text arguments the text is read from stdin. If stdin is a terminal
 and no text was given, that is a usage error (64). Empty or blank text fails
