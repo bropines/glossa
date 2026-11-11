@@ -567,6 +567,29 @@ fn module_action(args: &Args) -> Result<(), Fail> {
     Ok(())
 }
 
+/// `module remove ID`: delete a module from the user's modules folder, with
+/// its approval and downloaded files. Through a running Glossa when there
+/// is one, so the module it has loaded is stopped first.
+fn module_remove(args: &Args) -> Result<(), Fail> {
+    let Some(id) = args.rest.get(1) else {
+        return Err(Fail::Usage("module remove needs a module id (see `glossa-cli modules`)".into()));
+    };
+    let local = args.has(&["--local"]);
+    match if local { None } else { running_glossa(args) } {
+        Some((addr, token)) => {
+            control_api(&addr, &token, true, &format!("/v1/modules/{id}/remove"), vec![])?;
+        }
+        None => {
+            refuse_behind_a_running_glossa(args, local)?;
+            engine(args)?.remove_module(id)?;
+        }
+    }
+    if !args.json {
+        out!("removed {id}");
+    }
+    Ok(())
+}
+
 /// `module pending|approve|revoke|decline`: approving modules installed by
 /// hand. Through a running Glossa's control API when there is one, since it
 /// keeps its settings in memory; otherwise on the settings file.
@@ -861,11 +884,12 @@ fn module_command(args: &Args) -> Result<(), Fail> {
         "check" => true,
         "action" => return module_action(args),
         "pending" | "approve" | "revoke" | "decline" => return module_trust(args, sub),
+        "remove" => return module_remove(args),
         "panel" | "panels" => return module_panel(args),
         "" => {
             return Err(Fail::Usage(
                 "module test DIR…, module check DIR…, module action ID ACTION, module panel [ID/PANEL], \
-                 module pending, module approve ID, module revoke ID or module decline ID"
+                 module pending, module approve ID, module revoke ID, module decline ID or module remove ID"
                     .into(),
             ))
         }

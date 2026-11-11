@@ -368,6 +368,12 @@ a folder with a `module.toml` (often handed out as a `.zip`), or a pot-app
 4. If its settings show *Files* with *not downloaded*, press *Download*
    there. Models can be large; nothing is downloaded without that click.
 
+To remove a module: *Options → Modules*, *Remove* in its row of the
+module list, then confirm. Its folder, its approval and the files
+downloaded for it are deleted; its settings are kept. Only modules in
+your own folder have the button; one that came with Glossa is switched
+off in *Options → Services* instead.
+
 Install modules only from people you trust
 ([what approval does and does not check](../SECURITY.md#what-glossa-protects-and-what-it-does-not)).
 

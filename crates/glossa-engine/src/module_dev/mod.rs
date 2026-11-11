@@ -476,6 +476,97 @@ impl Engine {
         out
     }
 
+    /// Remove module `id` from the user's modules folder, with what Glossa
+    /// keeps for it: its approval, its downloaded files and its Python
+    /// environment. Its settings stay, so installing it again finds them.
+    /// Only a module in the user's own folder can be removed; one shipped
+    /// with the program or found in another folder is switched off instead.
+    /// Blocks on the disk and on the reload: call it on a worker thread.
+    pub fn remove_module(&self, id: &str) -> Result<()> {
+        let path = self.removable_path(id)?;
+        // What Glossa downloaded for it goes first, while the module is
+        // still loaded and says where that is. A module without either is
+        // the usual case, not an error.
+        let (assets, python) = {
+            let registry = self.registry();
+            let entry = registry.held().iter().chain(registry.entries()).find(|e| e.info().id == id);
+            (entry.and_then(|e| e.assets.clone()), entry.and_then(|e| e.python.clone()))
+        };
+        if let Some(p) = self.registry().get(id) {
+            p.suspend();
+        }
+        if let Some(assets) = assets {
+            self.cancel_asset_download(id);
+            assets.remove()?;
+        }
+        if let Some(env) = python {
+            env.remove_venv()?;
+        }
+        if path.is_dir() {
+            std::fs::remove_dir_all(&path)?;
+        } else {
+            std::fs::remove_file(&path)?;
+        }
+        self.update_config(|c| {
+            c.modules.granted.remove(id);
+            c.modules.disabled.retain(|d| d != id);
+        })?;
+        self.reload_modules();
+        Ok(())
+    }
+
+    /// The folder (or `.potext` file) of module `id` in the user's modules
+    /// folder: the only place a module is removed from.
+    fn removable_path(&self, id: &str) -> Result<PathBuf> {
+        let user_dir = self.inner.paths.user_module_dir();
+        let inside = |p: &Path| p.starts_with(&user_dir) && p != user_dir;
+        let registry = self.registry();
+        let mut known = false;
+        for entry in registry.held().iter().chain(registry.entries()).filter(|e| e.info().id == id) {
+            known = true;
+            let Origin::Module { dir, .. } = &entry.origin else { continue };
+            if inside(dir) {
+                return Ok(dir.clone());
+            }
+            // A `.potext` file is loaded from where it was unpacked.
+            let archives = std::fs::read_dir(&user_dir).into_iter().flatten().flatten().map(|e| e.path());
+            for archive in archives.filter(|p| p.extension().is_some_and(|x| x.eq_ignore_ascii_case("potext"))) {
+                let unpacked =
+                    glossa_modules::runtime::pot::unpack(&archive, &self.inner.paths.cache_dir.join("modules"));
+                if unpacked.is_ok_and(|u| u == *dir) {
+                    return Ok(archive);
+                }
+            }
+        }
+        // Not loaded: switched off, or a folder that failed to load (which
+        // is listed by its name). Found by what its manifest says, else by
+        // the folder's name.
+        let folders: Vec<PathBuf> = std::fs::read_dir(&user_dir)
+            .into_iter()
+            .flatten()
+            .flatten()
+            .map(|e| e.path())
+            .filter(|p| p.is_dir())
+            .collect();
+        let declares = |dir: &PathBuf| {
+            std::fs::read_to_string(dir.join("module.toml"))
+                .ok()
+                .and_then(|text| text.parse::<toml::Table>().ok())
+                .and_then(|t| t.get("module")?.get("id")?.as_str().map(|m| m == id))
+                .unwrap_or(false)
+        };
+        let named = |dir: &PathBuf| dir.file_name().is_some_and(|n| n.to_string_lossy() == id);
+        if let Some(dir) = folders.iter().find(|d| declares(d)).or_else(|| folders.iter().find(|d| named(d))) {
+            return Ok(dir.clone());
+        }
+        if known {
+            return Err(Error::Config(format!(
+                "module {id} is not in your modules folder, so it cannot be removed; switch it off instead"
+            )));
+        }
+        Err(Error::NoSuchModule(id.to_owned()))
+    }
+
     /// Where module `id` comes from, if it is loaded.
     pub fn module_source(&self, id: &str) -> Option<ModuleSource> {
         self.module_sources().into_iter().find(|m| m.id == id).map(|m| m.source)

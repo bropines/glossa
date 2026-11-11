@@ -193,6 +193,8 @@ pub struct OptionsState {
     assets_note: Option<(String, bool)>,
     /// The module editor's "New module" row: the template and the name.
     new_module_template: glossa_engine::module_dev::Template,
+    /// The module whose removal waits for a second click.
+    remove_ask: Option<String>,
     new_module_name: String,
     /// The modules the editor group lists, read once and again after a
     /// reload, not every frame.
@@ -214,6 +216,7 @@ impl OptionsState {
     pub fn modules_changed(&mut self) {
         self.module_list = None;
         self.trust = None;
+        self.remove_ask = None;
     }
 }
 
@@ -418,6 +421,7 @@ pub fn open(app: &mut GlossaApp) {
             assets_check: None,
             assets_note: None,
             new_module_template: glossa_engine::module_dev::Template::Translator,
+            remove_ask: None,
             new_module_name: String::new(),
             module_list: None,
             trust: None,
@@ -2927,6 +2931,24 @@ fn module_editor_group(app: &mut GlossaApp, ui: &mut egui::Ui, st: &mut OptionsS
         ui.add_space(4.0);
         egui::ScrollArea::vertical().id_salt("module-editor-list").max_height(220.0).show(ui, |ui| {
             for m in st.module_list.get_or_insert_with(|| app.engine.module_sources()).clone() {
+                // Removing deletes files: the row asks once more first.
+                if st.remove_ask.as_deref() == Some(m.id.as_str()) {
+                    ui.horizontal(|ui| {
+                        ui.label(
+                            RichText::new(app.locale.fmt("options.modules.remove_ask", &m.name)).color(look.error()),
+                        );
+                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                            if ui.small_button(app.t("options.cancel")).clicked() {
+                                st.remove_ask = None;
+                            }
+                            if ui.small_button(app.t("options.remove")).clicked() {
+                                st.remove_ask = None;
+                                remove_module(app, m.id.clone());
+                            }
+                        });
+                    });
+                    continue;
+                }
                 ui.horizontal(|ui| {
                     ui.label(&m.name);
                     let waiting = st.trust.as_ref().is_some_and(|t| t.iter().any(|x| x.pending && x.id == m.id));
@@ -2946,6 +2968,14 @@ fn module_editor_group(app: &mut GlossaApp, ui: &mut egui::Ui, st: &mut OptionsS
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                         // A waiting module is approved above first: the
                         // editor's saves approve what they write.
+                        if matches!(m.source, ModuleSource::User(_))
+                            && ui
+                                .small_button(app.t("options.remove"))
+                                .on_hover_text(app.t("options.modules.remove_tip"))
+                                .clicked()
+                        {
+                            st.remove_ask = Some(m.id.clone());
+                        }
                         let key = match &m.source {
                             ModuleSource::User(_) => "options.modules.edit",
                             ModuleSource::Installed(_) | ModuleSource::Bundled => "options.modules.copy_edit",
@@ -2967,6 +2997,22 @@ fn module_editor_group(app: &mut GlossaApp, ui: &mut egui::Ui, st: &mut OptionsS
     if let Some(t) = target {
         crate::module_editor::open(app, t);
     }
+}
+
+/// Remove a module of the user's with what was downloaded for it, on a
+/// worker: the files can be large, and the modules are loaded again after.
+fn remove_module(app: &mut GlossaApp, id: String) {
+    use crate::actions::Task;
+    let (engine, tx, ctx) = (app.engine.clone(), app.tasks_tx.clone(), app.ctx.clone());
+    let removed = app.locale.fmt("options.modules.removed", &id);
+    std::thread::spawn(move || {
+        let task = match engine.remove_module(&id) {
+            Ok(()) => Task::Done { message: removed, error: false },
+            Err(e) => Task::Failed(e),
+        };
+        let _ = tx.send(task);
+        ctx.request_repaint();
+    });
 }
 
 /// Install a module folder or archive into the user's modules, on a

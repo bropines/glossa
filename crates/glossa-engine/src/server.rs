@@ -559,8 +559,15 @@ fn python_route(engine: &Engine, rest: &str) -> Reply {
 
 /// `/v1/modules/<id>/check|reload|test`: the module editor's loop, for a
 /// module with a folder of its own (an editor outside Glossa can drive it).
+/// `/v1/modules/<id>/remove` removes a module from the user's folder.
 fn modules_route(engine: &Engine, rest: &str) -> Reply {
     let (id, op) = rest.split_once('/').unwrap_or((rest, ""));
+    if op == "remove" {
+        return match engine.remove_module(id) {
+            Ok(()) => Reply::json(200, json!({ "id": id, "done": op })),
+            Err(e) => Reply::from_error(&e),
+        };
+    }
     let Some(dir) = engine.module_source(id).and_then(|s| s.dir().map(std::path::Path::to_owned)) else {
         return Reply::error(404, format!("no module {id:?} loaded from a folder"));
     };
@@ -571,7 +578,7 @@ fn modules_route(engine: &Engine, rest: &str) -> Reply {
             Ok(outcome) => Reply::json(200, json!(outcome)),
             Err(e) => Reply::from_error(&e),
         },
-        other => Reply::error(404, format!("no module operation {other:?} (check, reload, test)")),
+        other => Reply::error(404, format!("no module operation {other:?} (check, reload, test, remove)")),
     }
 }
 
@@ -995,6 +1002,8 @@ mod tests {
         assert_eq!(get("/v1/python/nope/install", "GET").0, 405);
         assert_eq!(get("/v1/modules/nope/check", "POST").0, 404);
         assert_eq!(get("/v1/modules/nope/check", "GET").0, 405);
+        assert_eq!(get("/v1/modules/nope/remove", "POST").0, 404);
+        assert_eq!(get("/v1/modules/nope/remove", "GET").0, 405);
         assert_eq!(get("/v1/trust", "GET"), (200, "[]".into()));
         assert_eq!(get("/v1/trust/nope/approve", "POST").0, 404);
         assert_eq!(get("/v1/trust/nope/approve", "GET").0, 405);

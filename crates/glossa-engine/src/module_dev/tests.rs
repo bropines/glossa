@@ -180,3 +180,33 @@ fn small_helpers() {
     let p = Problem::new("main.js", 3, 0, Severity::Error, "x");
     assert_eq!(p.place(), "main.js:3");
 }
+
+#[test]
+fn removing_a_module_takes_its_folder_and_its_approval() {
+    let (e, root) = engine("remove");
+    let dir = e.new_module(Template::Translator, "Gone").unwrap();
+    assert!(e.registry().get("gone").is_some());
+    assert!(e.config().modules.granted.contains_key("gone"), "a module made here is approved");
+    e.decline_module("gone").unwrap();
+
+    e.remove_module("gone").unwrap();
+    assert!(!dir.exists());
+    assert!(e.registry().get("gone").is_none());
+    let cfg = e.config();
+    assert!(!cfg.modules.granted.contains_key("gone") && !cfg.modules.disabled.iter().any(|d| d == "gone"));
+    assert!(matches!(e.remove_module("gone"), Err(Error::NoSuchModule(_))));
+
+    // What ships with the program is not the user's to delete.
+    let shipped = e.module_sources().into_iter().find(|m| matches!(m.source, ModuleSource::Bundled)).unwrap();
+    let refused = e.remove_module(&shipped.id).unwrap_err().to_string();
+    assert!(refused.contains("switch it off"), "{refused}");
+
+    // A folder that does not load is removed by its name.
+    let broken = e.inner.paths.user_module_dir().join("broken");
+    std::fs::create_dir_all(&broken).unwrap();
+    std::fs::write(broken.join("module.toml"), "this is not a manifest").unwrap();
+    e.reload_modules();
+    e.remove_module("broken").unwrap();
+    assert!(!broken.exists());
+    std::fs::remove_dir_all(&root).ok();
+}

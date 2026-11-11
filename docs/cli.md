@@ -435,6 +435,7 @@ glossa-cli module pending
 glossa-cli module approve ID [--local] [--force]
 glossa-cli module revoke ID [--local] [--force]
 glossa-cli module decline ID [--local] [--force]
+glossa-cli module remove ID [--local] [--force]
 glossa-cli module panel [ID/PANEL [--action ACTION] [--state KEY=VALUE]… [--item JSON] [--open]]
 ```
 
@@ -490,6 +491,12 @@ reached holds the data folder (as `preset` does: `--local` skips the
 running Glossa, `--force` changes the file anyway). `--json` prints
 `pending` as a list of `{id, name, dir, pending, first_time, changed, request, new,
 hash}`.
+
+`module remove ID` deletes a module from your modules folder, together
+with its approval, the files downloaded for it and its Python
+environment; its settings are kept. Only a module in your own folder can
+be removed (one shipped with Glossa is switched off instead). It goes
+through a running Glossa like the commands above.
 
 `module panel` without a name lists the panels the loaded modules declare
 (`module/panel`, the window title, where they are offered). With a name it

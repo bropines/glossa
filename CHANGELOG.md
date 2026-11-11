@@ -95,6 +95,11 @@ the notes of its GitHub release.
 
 ### Added
 
+- A module can be removed: *Remove* in the module list on *Options →
+  Modules* (it asks once more), `glossa-cli module remove ID`, or
+  `POST /v1/modules/ID/remove`. The module's folder, its approval, its
+  downloaded files and its Python environment go; its settings stay.
+  Only modules in your own folder can be removed.
 - *Options → Modules → Install module…* takes a `.zip` of a module too,
   asks plainly for a file or a folder (it used to open a second dialog
   when the first was cancelled), copies on a worker thread, and replaces

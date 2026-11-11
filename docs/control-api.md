@@ -568,6 +568,7 @@ bundled one; copy those first).
 | POST | `/v1/modules/<id>/check` | Check the folder without running it: the manifest's TOML, what it declares, the script's syntax, the fixtures' syntax. Returns a list of `{file, line, column, severity, message}`. |
 | POST | `/v1/modules/<id>/reload` | Load the folder again and replace this one provider, leaving the rest alone. Returns `{"outcome": "reloaded" \| "needs_restart" \| "disabled", "id": …}`; a module that fails to load is an error and the old one keeps running. |
 | POST | `/v1/modules/<id>/test` | Run its `tests/` cases offline, as `glossa-cli module test` does. Returns the same report as `glossa-cli --json module test`. |
+| POST | `/v1/modules/<id>/remove` | Delete the module from the user's modules folder, with its approval, its downloaded files and its Python environment; its settings stay. Returns `{"id": …, "done": "remove"}`. A module that is not in the user's folder is a 400. |
 
 ```console
 $ curl -s -X POST -H "Authorization: Bearer $T" http://127.0.0.1:60828/v1/modules/my-translator/check
