@@ -15,6 +15,10 @@
 //! renamed over the original, and the folder flushed too, so a crash or a
 //! power cut leaves either the old file or the new one, and two programs
 //! saving at once cannot write into each other's temporary file.
+//!
+//! What differs per system is in `fsio/unix.rs` and `fsio/other.rs`. They
+//! sit here rather than in `glossa-platform` because that crate depends on
+//! this one (see "Exceptions" in AGENTS.md).
 
 use std::fs::{File, OpenOptions};
 use std::io::{self, Write};
@@ -22,6 +26,13 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Mutex, RwLock};
 use std::time::{Duration, SystemTime};
+
+#[cfg(unix)]
+#[path = "fsio/unix.rs"]
+mod os;
+#[cfg(not(unix))]
+#[path = "fsio/other.rs"]
+mod os;
 
 static COUNTER: AtomicU64 = AtomicU64::new(0);
 
@@ -44,24 +55,7 @@ pub fn create_private_dir(dir: &Path) -> io::Result<()> {
 /// nothing on Windows (see the module's description) and nothing when the
 /// path is missing or belongs to someone else.
 pub fn make_private(path: &Path) {
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        let Ok(meta) = std::fs::symlink_metadata(path) else { return };
-        // A link is left alone: its target may be a folder the user shares
-        // on purpose.
-        if meta.file_type().is_symlink() {
-            return;
-        }
-        let want = if meta.is_dir() { 0o700 } else { 0o600 };
-        if meta.permissions().mode() & 0o777 != want {
-            if let Err(e) = std::fs::set_permissions(path, std::fs::Permissions::from_mode(want)) {
-                tracing::warn!("could not make {} private: {e}", path.display());
-            }
-        }
-    }
-    #[cfg(not(unix))]
-    let _ = path;
+    os::restrict(path);
 }
 
 /// Create a new file for the user alone. Fails when the name is taken, so
@@ -69,11 +63,7 @@ pub fn make_private(path: &Path) {
 pub fn create_private_new(path: &Path) -> io::Result<File> {
     let mut options = OpenOptions::new();
     options.write(true).create_new(true);
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::OpenOptionsExt;
-        options.mode(0o600);
-    }
+    os::private_file(&mut options);
     options.open(path)
 }
 
@@ -109,13 +99,8 @@ fn write_atomic_with(path: &Path, bytes: &[u8], sync: bool) -> io::Result<()> {
         let _ = std::fs::remove_file(&tmp);
         return Err(e);
     }
-    #[cfg(unix)]
     if sync {
-        // The rename itself is in the folder; without this a power cut can
-        // bring the old name back. Not every file system can do it.
-        if let Ok(d) = File::open(dir) {
-            let _ = d.sync_all();
-        }
+        os::sync_dir(dir);
     }
     Ok(())
 }
@@ -161,11 +146,7 @@ impl FileLock {
     pub fn acquire(path: &Path) -> Option<FileLock> {
         let mut options = OpenOptions::new();
         options.read(true).write(true).create(true).truncate(false);
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::OpenOptionsExt;
-            options.mode(0o600);
-        }
+        os::private_file(&mut options);
         let file = options.open(path).ok()?;
         match file.lock() {
             Ok(()) => Some(FileLock { file }),
@@ -215,13 +196,8 @@ pub fn temp_dir() -> io::Result<PathBuf> {
     let mut last = None;
     for _ in 0..8 {
         let dir = std::env::temp_dir().join(unique("glossa-tmp-", ""));
-        #[cfg_attr(not(unix), allow(unused_mut))]
         let mut builder = std::fs::DirBuilder::new();
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::DirBuilderExt;
-            builder.mode(0o700);
-        }
+        os::private_dir(&mut builder);
         // Not `create_dir_all`: a folder that is there already is someone
         // else's, and files put in it would be theirs to swap.
         match builder.create(&dir) {
@@ -290,11 +266,7 @@ impl RotatingLog {
     fn reopen(&mut self) -> io::Result<()> {
         let mut options = OpenOptions::new();
         options.create(true).append(true);
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::OpenOptionsExt;
-            options.mode(0o600);
-        }
+        os::private_file(&mut options);
         let file = options.open(&self.path)?;
         self.size = file.metadata().map(|m| m.len()).unwrap_or(0);
         self.file = Some(file);
