@@ -10,6 +10,7 @@
 #   APPIMAGE_ARCH    the binaries' architecture: x86_64 (default) or aarch64.
 #                    appimagetool itself runs on the build machine, so an
 #                    aarch64 image can be made on x86-64
+#   THIRD_PARTY_NOTICES, ALLOW_NO_NOTICES  see stage.sh
 #
 # Only Glossa's own files go in. GTK 3, ALSA and glibc come from the system,
 # as for the tarball: every desktop has them, and a bundled GTK fights the

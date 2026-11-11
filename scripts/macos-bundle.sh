@@ -35,11 +35,22 @@ mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
 cp "$BIN/glossa" "$APP/Contents/MacOS/glossa"
 cp "$BIN/glossa-cli" "$OUT/glossa-cli"
 VERSION=$(grep -m1 '^version' "$ROOT/Cargo.toml" | sed 's/.*"\(.*\)".*/\1/')
+# CFBundleVersion takes numbers only (see scripts/version-numbers.sh).
+BUILD=$("$ROOT/scripts/version-numbers.sh" "$VERSION" | sed -n 's/^macos=//p')
 sed -e "s/@VERSION@/$VERSION/g" \
+    -e "s/@BUILD@/$BUILD/g" \
     -e "s|<string>io.github.bropines.glossa</string>|<string>$ID</string>|" \
     -e "s|<string>Glossa</string>|<string>Glossa Dev</string>|g" \
     "$ROOT/assets/macos/Info.plist" > "$APP/Contents/Info.plist"
 plutil -lint "$APP/Contents/Info.plist" >/dev/null
+# The licences, and the third-party notices for this Mac's build, where the
+# About window looks for them. The generator needs the crates' sources in
+# cargo's registry, which a build has just put there.
+cp "$ROOT/LICENSE-MIT" "$ROOT/LICENSE-APACHE" "$ROOT/NOTICE" "$APP/Contents/Resources/"
+if ! python3 "$ROOT/scripts/third-party-notices.py" -o "$APP/Contents/Resources/THIRD-PARTY-NOTICES.txt"; then
+  echo "Note: no THIRD-PARTY-NOTICES.txt in this bundle (see the message above)." >&2
+  rm -f "$APP/Contents/Resources/THIRD-PARTY-NOTICES.txt"
+fi
 # The bundled Python SDK lets Python modules start from a Finder launch.
 if [ -f "$ROOT/sdk/python/glossa_module.py" ]; then
   cp "$ROOT/sdk/python/glossa_module.py" "$APP/Contents/Resources/"

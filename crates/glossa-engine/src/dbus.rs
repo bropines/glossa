@@ -236,12 +236,28 @@ mod tests {
     use super::*;
     use crate::Event;
 
+    /// An engine that cannot reach a real service. A translation asked of
+    /// `echo` once came back from Google in CI: with fail-over on (the
+    /// default) a provider that fails hands over to the default service
+    /// list, and those are real web services. So fail-over is off, which
+    /// also makes a failing `echo` report its own error, and the proxy is a
+    /// closed local port, so nothing leaves the machine whatever is asked.
     fn engine() -> (Engine, std::path::PathBuf) {
-        let n = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().subsec_nanos();
+        static NEXT: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+        // A folder per engine: the tests run in parallel in one process, and
+        // each removes its folder, module included, when it ends.
+        let n = NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         let dir = std::env::temp_dir().join(format!("glossa-dbus-{}-{n}", std::process::id()));
+        std::fs::remove_dir_all(&dir).ok();
         let paths = Paths::for_exe_dir(dir.clone(), Some(dir.join("home")));
         let mut cfg = Config::default();
         cfg.server.enabled = false;
+        cfg.services.fail_over = false;
+        cfg.network.max_retries = 0;
+        cfg.network.timeout_secs = 2;
+        cfg.network.proxy.mode = glossa_core::config::ProxyMode::Manual;
+        cfg.network.proxy.host = "127.0.0.1".into();
+        cfg.network.proxy.port = 9; // discard: nothing listens
         (Engine::with_config(paths, cfg).unwrap(), dir)
     }
 
@@ -278,6 +294,7 @@ mod tests {
         add_echo(&e);
         let (text, from, service) = imp::translate(&e, "hi", "en", "ru", "echo").unwrap();
         assert_eq!((text.as_str(), from.as_str(), service.as_str()), ("echo: hi", "en", "echo"));
+        assert!(!e.config().services.fail_over, "the test engine must not hand over to real services");
         assert!(matches!(imp::translate(&e, "hi", "klingon", "ru", ""), Err(fdo::Error::InvalidArgs(_))));
         assert!(matches!(imp::translate(&e, "hi", "en", "ru", "gogle"), Err(fdo::Error::InvalidArgs(_))));
         assert!(matches!(imp::translate(&e, "hi", "en", "en", "echo"), Err(fdo::Error::InvalidArgs(_))));

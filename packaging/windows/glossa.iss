@@ -2,6 +2,12 @@
 ;
 ;   iscc /DMyAppVersion=1.2.3 /DStageDir=<folder> /O<out-dir> packaging\windows\glossa.iss
 ;
+; Optional: /DNumericVersion=1.2.3.9000, the version as four numbers
+; (scripts/version-numbers.sh prints it as "windows="; without it a
+; pre-release suffix is simply cut off), and /DLicensePage=<file>, the text
+; of the licence page (the release joins LICENSE-MIT and LICENSE-APACHE;
+; without it the page shows LICENSE-MIT alone).
+;
 ; StageDir is the unpacked release zip: glossa.exe, glossa-cli.exe, the
 ; documents, examples\modules and sdk\python (Glossa looks for sdk\python
 ; beside the executable). Everything in it is installed as is.
@@ -43,21 +49,40 @@
 ; Never change this: Windows knows the installed program by it.
 #define AppGuid "6101466B-422B-46CE-9B38-3DE5D1C61D58"
 #define RepoDir AddBackslash(SourcePath) + "..\.."
-; 1.2.3-rc.1 -> 1.2.3 for the numeric file version.
-#define NumericVersion Copy(MyAppVersion, 1, Pos("-", MyAppVersion + "-") - 1)
+; The file version takes numbers only. The release passes 1.2.3.3001 for
+; 1.2.3-rc.1, so a pre-release and its release differ; on its own this
+; script can only cut the suffix off.
+#ifndef NumericVersion
+  #define NumericVersion Copy(MyAppVersion, 1, Pos("-", MyAppVersion + "-") - 1)
+#endif
+#ifndef LicensePage
+  #define LicensePage RepoDir + "\LICENSE-MIT"
+#endif
+; The same two lines as in packaging\windows\version_resource.rs.
+#define Publisher "Bropines"
+#define Copyright "Copyright (c) 2026 bropines and contributors"
 
 [Setup]
 AppId={{{#AppGuid}}
 AppName=Glossa
 AppVersion={#MyAppVersion}
 AppVerName=Glossa {#MyAppVersion}
-AppPublisher=Bropines
+AppPublisher={#Publisher}
+AppCopyright={#Copyright}
 AppPublisherURL=https://github.com/bropines/glossa
 AppSupportURL=https://github.com/bropines/glossa/issues
 AppUpdatesURL=https://github.com/bropines/glossa/releases
 VersionInfoVersion={#NumericVersion}
+VersionInfoTextVersion={#MyAppVersion}
+VersionInfoProductVersion={#NumericVersion}
+VersionInfoProductTextVersion={#MyAppVersion}
 VersionInfoProductName=Glossa
 VersionInfoDescription=Glossa installer
+VersionInfoCompany={#Publisher}
+VersionInfoCopyright={#Copyright}
+; MIT OR Apache-2.0: shown for reading, with nothing to accept beyond the
+; usual radio button. A silent install skips the page.
+LicenseFile={#LicensePage}
 DefaultDirName={autopf}\Glossa
 DisableProgramGroupPage=yes
 PrivilegesRequired=lowest

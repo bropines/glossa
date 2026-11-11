@@ -12,6 +12,7 @@
 # Environment:
 #   DEB_ARCH        the package architecture (default: dpkg --print-architecture)
 #   DEB_MAINTAINER  the Maintainer field
+#   THIRD_PARTY_NOTICES, ALLOW_NO_NOTICES  see stage.sh
 set -eu
 [ $# -ge 2 ] || { echo "usage: $0 <bin-dir> <version> [out-dir]" >&2; exit 64; }
 bin=$(cd "$1" && pwd)
@@ -41,11 +42,12 @@ Upstream-Name: Glossa
 Source: https://github.com/bropines/glossa
 
 Files: *
-Copyright: Glossa contributors
+Copyright: 2026 bropines and contributors
 License: MIT or Apache-2.0
  The full texts are in /usr/share/doc/glossa/LICENSE-MIT and
- /usr/share/doc/glossa/LICENSE-APACHE. Third-party notices are in
- /usr/share/doc/glossa/NOTICE.
+ /usr/share/doc/glossa/LICENSE-APACHE. The software by others that the
+ programs contain, with its licences, is listed in
+ /usr/share/doc/glossa/THIRD-PARTY-NOTICES.txt (and summed up in NOTICE).
 EOF
 chmod 0644 "$root/usr/share/doc/glossa/copyright"
 

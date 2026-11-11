@@ -653,6 +653,12 @@ pub static STRINGS: &[(&str, &str, Option<&str>)] = &[
     ("about.apache", "Apache License 2.0", None),
     ("about.notices", "Third-party notices", None),
     ("about.open_online", "Open on GitHub", None),
+    ("about.all_notices", "Every component and its license", None),
+    (
+        "about.all_notices_tip",
+        "Opens the file shipped with Glossa that lists every library in this build with its license text:",
+        None,
+    ),
     ("about.back", "Back", None),
     ("about.not_affiliated", "Not affiliated with QTranslate or its author.", None),
     ("about.support_hint", "Glossa is free. If it helps you, you can support its development on Boosty.", None),

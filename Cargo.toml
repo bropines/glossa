@@ -27,7 +27,7 @@ version = "0.1.0-beta.2"
 edition = "2021"
 rust-version = "1.95"
 license = "MIT OR Apache-2.0"
-authors = ["Glossa contributors"]
+authors = ["bropines and contributors"]
 repository = "https://github.com/bropines/glossa"
 
 [workspace.dependencies]

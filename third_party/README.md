@@ -6,7 +6,10 @@ is released upstream.
 
 ## eframe 0.37.0 (MIT OR Apache-2.0, https://github.com/emilk/egui)
 
-Unchanged except for these fixes, marked `Glossa patch` in the source:
+`LICENSE-MIT` and `LICENSE-APACHE` beside it are egui's, from the 0.37.0
+tag (the crate on crates.io comes without them); copy the new tag's when
+upgrading. Unchanged except for these fixes, marked `Glossa patch` in the
+source:
 
 - `src/native/run.rs` / `src/native/event_loop_context.rs`: on Windows, eframe
   paints invisible windows directly from `check_redraw_requests`, outside the
