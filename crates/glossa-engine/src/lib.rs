@@ -2066,6 +2066,7 @@ fn quiet_ocr_fallback(id: &str, chosen: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use glossa_core::secrets::IN_STORE;
 
     #[test]
     fn pictures_go_to_an_ai_endpoint_or_oneocr_only_when_chosen() {

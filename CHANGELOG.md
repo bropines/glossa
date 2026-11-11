@@ -250,6 +250,19 @@ the notes of its GitHub release.
 
 ### Fixed
 
+- `config.toml` and `history.json` (API keys, what you translated) are
+  written for the user alone (`0600` on Linux and macOS), and files left
+  readable by others are tightened at start.
+- A proxy that cannot be used (in the settings or in `HTTPS_PROXY`) no
+  longer stops the program from starting: it starts without the proxy and
+  says so. The proxy's password is no longer printed in the error or the log.
+- One value in `config.toml` that cannot be used no longer resets every
+  setting: that value takes its default and the rest is kept. A file that
+  cannot be read at all falls back to the last good copy
+  (`config.toml.bak`) and is kept as `config.toml.broken-<time>`.
+- The history is saved a few seconds after it changes, not only at an
+  orderly exit, so a crash no longer loses the session's translations.
+
 - The popup's copy button no longer shows a "Copied" message, which
   turned up now and then and spoiled the popup's look. A failed copy is
   still reported.

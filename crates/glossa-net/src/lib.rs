@@ -1118,7 +1118,6 @@ mod tests {
                 port: 8080,
                 username: "x".into(),
                 password: "secretpw".into(),
-                ..Default::default()
             },
             ..Default::default()
         };

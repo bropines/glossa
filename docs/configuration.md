@@ -63,18 +63,28 @@ win over shipped ones of the same name.
   used are ignored like unknown ones, and dropped at the next save.
 - **Out-of-range numbers are pulled into range** when the file is read (the
   ranges are in the tables below), so a hand edit cannot break the program.
-- **A malformed file is set aside, not lost**: on a syntax error, or a
-  value of the wrong type (`timeout_secs = "ten"`), the desktop program and
-  the commands that start the engine move the file to
-  `config.toml.broken-<unix seconds>` beside it, start with the defaults,
-  and say so once, naming the line. Fix the copy and rename it back while
-  Glossa is not running. `glossa-cli config show` reports the error
-  without moving anything.
+- **One bad value does not reset the rest.** A value of the wrong type or
+  with a name this version does not know (`timeout_secs = "ten"`) takes its
+  default; every other setting in the file is kept, and the program says
+  once at start which value it could not use.
+- **A file that cannot be read at all is kept, not lost.** When
+  `config.toml` is empty or not TOML (a syntax error), the program starts
+  with the last good copy, `config.toml.bak`, or with the defaults when
+  there is none, and says so once, naming the problem. Nothing is written
+  at start; before the settings are next saved, the unreadable file is
+  copied to `config.toml.broken-<unix seconds>` beside it. Fix the copy
+  and rename it back while Glossa is not running.
 - **The program rewrites the whole file** when it saves: comments and key
   order are not kept, and every key is written out with its value. Writes go
-  to `config.toml.tmp` first and then replace the file, so a crash cannot
-  leave half a file. Edit the file while Glossa is not running, or your
+  to a temporary file beside it first and then replace the file, so a crash
+  cannot leave half a file, and the file as it was before the save is kept
+  as `config.toml.bak`. Edit the file while Glossa is not running, or your
   edits may be overwritten by its next save.
+- **The files are yours alone.** On Linux and macOS `config.toml`, its
+  copies and `history.json` are written with mode `0600` (they may hold API
+  keys and what you translated), and files an earlier version left readable
+  by other users are tightened at start. On Windows the profile folder's
+  own access rules apply.
 - `glossa-cli config show` prints the settings in effect: the file with
   every default filled in and values clamped.
 
@@ -696,6 +706,9 @@ service that translated it:
 
 `from` and `to` are numeric language ids; `created` is in Unix seconds.
 `[history] max_entries` limits the length; favourites are never dropped.
+The file is written a few seconds after the history changes (and at exit),
+through a temporary file that then replaces it, so a crash loses seconds
+rather than the session.
 The history window exports it as text, CSV, HTML or JSON, as does
 [`glossa-cli history --export`](cli.md#history).
 
