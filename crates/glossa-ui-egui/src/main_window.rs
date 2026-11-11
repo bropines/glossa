@@ -102,7 +102,7 @@ pub fn show(app: &mut GlossaApp, ui: &mut egui::Ui) {
             }
         });
     });
-    toast(app, &ctx);
+    crate::toast::draw(app, &ctx);
 }
 
 /// Notes across the top of the window, each with a button to put it away:
@@ -643,8 +643,12 @@ fn result_pane(app: &mut GlossaApp, ui: &mut egui::Ui, height: f32) {
                 let rtl = glossa_core::text::guessed_direction(&partial).is_rtl();
                 let text = RichText::new(partial).font(look.text_font()).color(c(look.theme.edit.normal.text));
                 crate::bidi::label(ui, text, rtl);
+            } else if app.main.outcome.is_none() && !app.has_translator() {
+                // Before the error: "no provider available" says less than
+                // this does, and offers no way out.
+                no_translator_note(app, ui, None);
             } else if let Some(err) = app.main.error.clone() {
-                ui.label(RichText::new(err).color(look.error()).font(look.text_font()));
+                failure(app, ui, &err);
             } else if let Some(o) = app.main.outcome.clone() {
                 let text = o.translation.text.clone();
                 app.fonts.ensure(&app.ctx, &text);
@@ -730,6 +734,34 @@ fn result_pane(app: &mut GlossaApp, ui: &mut egui::Ui, height: f32) {
         }
     });
     app.text_zoom_wheel(ui, shown.response.rect);
+}
+
+/// The services of the strip, in its order: what "try the next service"
+/// goes through.
+fn translators(app: &GlossaApp) -> Vec<String> {
+    let reg = app.engine.registry();
+    let can = |id: &&String| reg.get(id).is_some_and(|p| p.info().capabilities.contains(Capabilities::TRANSLATE));
+    app.cfg.services.enabled.iter().filter(can).cloned().collect()
+}
+
+/// A failed translation, with the ways out of it.
+fn failure(app: &mut GlossaApp, ui: &mut egui::Ui, err: &crate::errors::ErrorView) {
+    let asked = app.cfg.services.active.clone();
+    let services = translators(app);
+    let next = crate::errors::next_service(&services, &asked).map(str::to_owned);
+    let next_name = next.as_deref().and_then(|id| app.engine.registry().get(id).map(|p| p.info().name.clone()));
+    let style = crate::errors::Style { font: app.look.text_font(), weak: app.look.weak_text(), compact: false };
+    let Some(fix) = crate::errors::show(ui, app, err, &style, next_name.as_deref()) else { return };
+    match crate::errors::apply(app, err, fix, &asked) {
+        Some(crate::errors::Fix::Retry) => retranslate(app),
+        // Switching the service translates the text again with it.
+        Some(crate::errors::Fix::NextService) => {
+            if let Some(id) = next {
+                app.set_active_service(&id);
+            }
+        }
+        _ => {}
+    }
 }
 
 fn back_translation_pane(app: &mut GlossaApp, ui: &mut egui::Ui, height: f32) {
@@ -820,6 +852,9 @@ fn service_strip(app: &mut GlossaApp, ui: &mut egui::Ui) {
         })
         .collect();
     if services.is_empty() {
+        // Nothing to switch between: say why the strip is empty and where
+        // services are switched on, rather than leaving a blank band.
+        no_translator_note(app, ui, None);
         return;
     }
     let tip = app.t("service.ai_tip");
@@ -827,6 +862,20 @@ fn service_strip(app: &mut GlossaApp, ui: &mut egui::Ui) {
     if let Some(id) = clicked {
         app.set_active_service(&id);
     }
+}
+
+/// What stands in for translations while no translation service is switched
+/// on: one line saying so and a button that opens Options → Services.
+/// `color` is the text colour where the theme's weak text would not read
+/// (the popup has its own).
+pub fn no_translator_note(app: &mut GlossaApp, ui: &mut egui::Ui, color: Option<egui::Color32>) {
+    let color = color.unwrap_or_else(|| app.look.weak_text());
+    ui.horizontal_wrapped(|ui| {
+        ui.label(RichText::new(app.t("main.no_translator")).color(color));
+        if ui.button(app.t("main.no_translator.open")).clicked() {
+            crate::options::open_at(app, "services");
+        }
+    });
 }
 
 /// The source pane's context menu: undo and redo, the clipboard at the
@@ -1022,7 +1071,7 @@ fn on_drop(app: &mut GlossaApp, path: &std::path::Path) {
                     Some(app.cfg.general.pair.to).filter(|l| l.is_language()).or(Some(app.cfg.general.first_language));
                 crate::ocr::recognize_bytes(app, bytes, to);
             }
-            Err(e) => app.notify(e.to_string(), true),
+            Err(e) => app.report(&e.into()),
         }
         return;
     }
@@ -1036,21 +1085,6 @@ fn on_drop(app: &mut GlossaApp, path: &std::path::Path) {
             }
             retranslate(app);
         }
-        Err(e) => app.notify(e.to_string(), true),
+        Err(e) => app.report(&e.into()),
     }
-}
-
-fn toast(app: &mut GlossaApp, ctx: &egui::Context) {
-    let Some(t) = &app.toast else { return };
-    let look = &app.look;
-    let col = if t.error { look.error() } else { look.text() };
-    egui::Area::new(egui::Id::unique("toast"))
-        .anchor(egui::Align2::CENTER_BOTTOM, vec2(0.0, -58.0))
-        .interactable(false)
-        .show(ctx, |ui| {
-            egui::Frame::popup(ui.style()).corner_radius(ui.visuals().menu_corner_radius).show(ui, |ui| {
-                ui.set_max_width(460.0);
-                ui.label(RichText::new(&t.text).color(col));
-            });
-        });
 }

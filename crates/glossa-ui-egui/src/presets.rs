@@ -110,7 +110,7 @@ pub fn page(app: &mut GlossaApp, ui: &mut egui::Ui, st: &mut PresetsPage) {
                     st.selected = Some(r.name);
                     st.new_name.clear();
                 }
-                Err(e) => st.note = Some((e.to_string(), true)),
+                Err(e) => st.note = Some((app.describe(&e), true)),
             }
         }
         if ui.add_enabled(st.task.is_none(), egui::Button::new(app.t("options.presets.import"))).clicked() {
@@ -184,7 +184,7 @@ fn details(app: &mut GlossaApp, ui: &mut egui::Ui, st: &mut PresetsPage, e: &Pre
                         st.selected = Some(copy);
                         st.note = None;
                     }
-                    Err(err) => st.note = Some((err.to_string(), true)),
+                    Err(err) => st.note = Some((app.describe(&err), true)),
                 }
             }
             if ui.add_enabled(st.task.is_none(), egui::Button::new(app.t("options.presets.export"))).clicked() {
@@ -205,12 +205,12 @@ fn details(app: &mut GlossaApp, ui: &mut egui::Ui, st: &mut PresetsPage, e: &Pre
                         st.selected = Some(st.rename.trim().to_owned());
                         st.note = None;
                     }
-                    Err(err) => st.note = Some((err.to_string(), true)),
+                    Err(err) => st.note = Some((app.describe(&err), true)),
                 }
             }
             if ui.button(RichText::new(app.t("options.presets.delete")).color(look.error())).clicked() {
                 if let Err(err) = app.engine.delete_preset(&e.name) {
-                    st.note = Some((err.to_string(), true));
+                    st.note = Some((app.describe(&err), true));
                 }
                 st.selected = None;
             }
@@ -222,7 +222,7 @@ fn start_export(app: &GlossaApp, st: &mut PresetsPage, name: &str) {
     let text = match app.engine.export_preset_text(name) {
         Ok(t) => t,
         Err(e) => {
-            st.note = Some((e.to_string(), true));
+            st.note = Some((app.describe(&e), true));
             return;
         }
     };
@@ -247,6 +247,7 @@ fn start_export(app: &GlossaApp, st: &mut PresetsPage, name: &str) {
 fn start_import(app: &GlossaApp, st: &mut PresetsPage) {
     let filter = app.t("options.presets.file_filter");
     let too_large = app.t("options.presets.too_large");
+    let locale = app.locale.clone();
     let engine = app.engine.clone();
     let (tx, rx) = std::sync::mpsc::channel();
     let ctx = app.ctx.clone();
@@ -260,7 +261,7 @@ fn start_import(app: &GlossaApp, st: &mut PresetsPage) {
             }
             Some(path) => match engine.import_preset(&path) {
                 Ok(r) => FileOutcome::Imported(r),
-                Err(e) => FileOutcome::Failed(e.to_string()),
+                Err(e) => FileOutcome::Failed(crate::app::describe_error(&locale, &e)),
             },
         };
         let _ = tx.send(outcome);

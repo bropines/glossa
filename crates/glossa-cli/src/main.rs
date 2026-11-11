@@ -124,6 +124,7 @@ COMMANDS
     action     ACTION [TEXT]          ask a running Glossa to act (show_popup, text_recognition…)
     doctor                            what works here: session, hotkeys, selection, OCR engines,
                                       modules, permissions, files, proxy, control API
+    update                            ask GitHub whether a newer Glossa was released; installs nothing
 
 Languages are codes (en, ru, zh-CN, he, auto). SERVICE is a provider id from `services`.
 
@@ -259,7 +260,7 @@ fn command_flags(command: &str) -> Option<&'static [&'static str]> {
             "--open",
         ],
         "detect" | "modules" | "assets" | "python" | "import-classic" | "theme" | "locale" | "config" | "serve"
-        | "action" | "doctor" | "" | "help" | "version" => &[],
+        | "action" | "doctor" | "update" | "" | "help" | "version" => &[],
         _ => return None,
     })
 }
@@ -1444,6 +1445,33 @@ fn run(args: &Args) -> Result<(), Fail> {
                 out!("{}", serde_json::to_string_pretty(&report).unwrap_or_default());
             } else {
                 outp!("{}", doctor::print(&report));
+            }
+            Ok(())
+        }
+        "update" => {
+            if let Some(extra) = args.rest.first() {
+                return Err(Fail::Usage(format!("update takes no argument, got {extra:?}")));
+            }
+            let status = engine(args)?.check_for_updates()?;
+            let newer = match &status {
+                glossa_engine::UpdateStatus::Available(r) => Some(r),
+                glossa_engine::UpdateStatus::UpToDate => None,
+            };
+            if args.json {
+                out!(
+                    "{}",
+                    json!({
+                        "current": glossa_core::VERSION,
+                        "up_to_date": newer.is_none(),
+                        "latest": newer.map(|r| r.version.as_str()),
+                        "url": newer.map(|r| r.url.as_str()),
+                    })
+                );
+            } else {
+                match newer {
+                    Some(r) => out!("Glossa {} is available (this is {}): {}", r.version, glossa_core::VERSION, r.url),
+                    None => out!("Glossa {} is up to date", glossa_core::VERSION),
+                }
             }
             Ok(())
         }

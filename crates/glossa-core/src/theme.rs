@@ -94,6 +94,11 @@ pub struct Theme {
     /// Error and warning text.
     pub error: Color,
     pub warning: Color,
+    /// Text saying something is in order: a granted permission, "up to
+    /// date". Optional in a file, like every colour here.
+    pub success: Color,
+    /// What marks AI endpoints (language models) among the services.
+    pub ai: Color,
 
     pub popup: PopupStyle,
     pub metrics: Metrics,
@@ -102,6 +107,10 @@ pub struct Theme {
     /// (Mica, Acrylic, blur) is behind it.
     pub backdrop: BackdropStyle,
 }
+
+/// The default mark of AI endpoints: a blue apart from the usual accents,
+/// so the group reads as its own in every built-in theme.
+const AI_BLUE: Color = Color::rgb(0x42, 0x85, 0xf4);
 
 fn is_false(b: &bool) -> bool {
     !*b
@@ -766,6 +775,8 @@ impl Theme {
             selection: accent.with_alpha(0x80),
             error: Color::rgb(0xe0, 0x4f, 0x4f),
             warning: Color::rgb(0xe0, 0xa8, 0x3c),
+            success: if dark { Color::rgb(0x3f, 0xb9, 0x50) } else { Color::rgb(0x1a, 0x7f, 0x37) },
+            ai: AI_BLUE,
             popup: PopupStyle {
                 back: client_back,
                 text: window_text,
@@ -1135,6 +1146,8 @@ pub mod builtin {
             selection: accent.with_alpha(0x70),
             error: Color::rgb(0xe8, 0x5c, 0x5c),
             warning: Color::rgb(0xe0, 0xa8, 0x3c),
+            success: Color::rgb(0x3f, 0xb9, 0x50),
+            ai: AI_BLUE,
             popup: PopupStyle::default(),
             metrics: Metrics::default(),
             fonts: Fonts::default(),
@@ -1218,6 +1231,7 @@ pub mod builtin {
         t.selection = accent.with_alpha(0x50);
         t.error = Color::rgb(0xc4, 0x2b, 0x1c);
         t.warning = Color::rgb(0x9d, 0x5d, 0x00);
+        t.success = Color::rgb(0x1a, 0x7f, 0x37); // readable on a light window
         t.popup = PopupStyle {
             back: Color::grey(0xf0),
             text: Color::BLACK,
@@ -1374,6 +1388,7 @@ pub mod builtin {
         t.selection = WINDOWS_BLUE.base.with_alpha(0xb0);
         t.error = Color::rgb(0xff, 0x99, 0xa4); // SystemFillColorCritical
         t.warning = Color::rgb(0xfc, 0xe1, 0x00); // SystemFillColorCaution
+        t.success = Color::rgb(0x6c, 0xcb, 0x5f); // SystemFillColorSuccess
         t.popup = PopupStyle {
             back: Color::grey(0x2c), // AcrylicInAppFillColorDefault tint
             text,
@@ -1461,6 +1476,7 @@ pub mod builtin {
         t.selection = WINDOWS_BLUE.base.with_alpha(0x60);
         t.error = Color::rgb(0xc4, 0x2b, 0x1c);
         t.warning = Color::rgb(0x9d, 0x5d, 0x00);
+        t.success = Color::rgb(0x0f, 0x7b, 0x0f); // SystemFillColorSuccess
         t.popup = PopupStyle {
             back: Color::grey(0xfc), // AcrylicInAppFillColorDefault tint
             text,
@@ -1585,6 +1601,7 @@ pub mod builtin {
         t.selection = MAC_BLUE_DARK.with_alpha(0x80);
         t.error = Color::rgb(0xff, 0x45, 0x3a); // systemRed
         t.warning = Color::rgb(0xff, 0x9f, 0x0a); // systemOrange
+        t.success = Color::rgb(0x30, 0xd1, 0x58); // systemGreen
         t.popup = PopupStyle {
             back: Color::grey(0x2c), // the menu material's tint
             text,
@@ -1676,6 +1693,7 @@ pub mod builtin {
         // pale for text on a light window.
         t.error = Color::rgb(0xd7, 0x00, 0x15);
         t.warning = Color::rgb(0xa0, 0x4f, 0x00);
+        t.success = Color::rgb(0x24, 0x8a, 0x3d); // systemGreen, accessible
         t.popup =
             PopupStyle { back: Color::grey(0xf6), text, frame: Color::grey(0xc6), frame_thickness: 1.0, opacity: 1.0 };
         t.backdrop = BackdropStyle {

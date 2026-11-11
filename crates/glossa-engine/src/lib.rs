@@ -26,6 +26,7 @@ pub mod presets;
 pub mod python;
 pub mod server;
 pub mod trust;
+pub mod update;
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -60,6 +61,7 @@ pub use panels::{Effect, Panel, PanelId, PanelInfo, PanelNotice, PanelOutcome, P
 pub use pipeline::{Pipeline, Progress, TranslateOptions, TranslateReport, TranslationOutcome};
 pub use presets::{PresetEntry, PresetReport};
 pub use python::{python_dirs, ModulePython, PythonReport, PYTHON_JOB};
+pub use update::{Release, UpdateState, UpdateStatus};
 
 /// The presets an AI endpoint can start from, for front ends.
 pub mod ai {
@@ -151,6 +153,14 @@ pub enum Event {
     /// [`glossa_core::preset::follow`] instead of writing the old ones back.
     PresetsChanged {
         applied: Option<Arc<glossa_core::Preset>>,
+    },
+    /// A check for a newer version finished
+    /// ([`Engine::check_for_updates_async`]). `automatic` is true for the
+    /// daily one nobody asked for, which a front end mentions only when it
+    /// found a version the user has not been told about.
+    UpdateChecked {
+        automatic: bool,
+        result: std::result::Result<UpdateStatus, Arc<Error>>,
     },
 }
 
@@ -298,6 +308,10 @@ struct Inner {
     /// Background installs of the managed Python and modules' environments,
     /// by module id (or [`PYTHON_JOB`]).
     python_jobs: Mutex<HashMap<String, python::PythonJob>>,
+    /// The last check for a newer version (`update-check.json`).
+    update: Mutex<UpdateState>,
+    /// A check for a newer version is running.
+    update_busy: AtomicBool,
     /// Python modules' state as last read from disk, for front ends that
     /// draw it every frame; emptied whenever something may have changed it
     /// (see [`Engine::emit`]).
@@ -389,6 +403,7 @@ impl Engine {
         #[cfg(not(feature = "js"))]
         let bundled = Vec::new();
 
+        let update = update::load_state(&paths.update_state_file());
         let inner = Inner {
             paths,
             config: RwLock::new(config),
@@ -418,6 +433,8 @@ impl Engine {
             secret_sync: Mutex::new(SecretSync::new()),
             asset_jobs: Mutex::new(HashMap::new()),
             python_jobs: Mutex::new(HashMap::new()),
+            update: Mutex::new(update),
+            update_busy: AtomicBool::new(false),
             python_cache: Mutex::new(HashMap::new()),
             authored: Mutex::new(Default::default()),
         };
@@ -1153,10 +1170,7 @@ impl Engine {
                         return Ok(a);
                     }
                     Ok(_) => {
-                        last = Error::Module {
-                            module: provider.info().id.clone(),
-                            detail: format!("no results for {text:?}"),
-                        };
+                        last = Error::NoResults { provider: provider.info().id.clone(), query: text.clone() };
                         if !fail_over {
                             return Err(last);
                         }
@@ -1620,6 +1634,17 @@ impl Engine {
         }
     }
 
+    /// Put back an entry [`Engine::remove_history`] deleted, for an undo.
+    /// False when it could not go back (the same text was translated again
+    /// in the meantime).
+    pub fn restore_history(&self, entry: HistoryEntry) -> bool {
+        let restored = self.inner.history.lock().restore(entry);
+        if restored {
+            self.emit(Event::HistoryChanged);
+        }
+        restored
+    }
+
     pub fn clear_history(&self, including_favorites: bool) {
         self.inner.history.lock().clear(including_favorites);
         self.emit(Event::HistoryChanged);
@@ -1645,6 +1670,19 @@ impl Engine {
 
     pub fn clear_dictionary_history(&self) {
         self.inner.dictionary_history.lock().clear();
+    }
+
+    /// Put the looked-up words back as they were before
+    /// [`Engine::clear_dictionary_history`] (an undone clear), keeping
+    /// whatever was looked up since at the top.
+    pub fn restore_dictionary_history(&self, words: Vec<String>) {
+        let mut h = self.inner.dictionary_history.lock();
+        for w in words {
+            if !h.contains(&w) {
+                h.push(w);
+            }
+        }
+        h.truncate(200);
     }
 
     // -- classic installation -----------------------------------------------------
@@ -1877,7 +1915,7 @@ mod tests {
         std::fs::remove_dir_all(&dir).ok();
     }
 
-    fn engine(name: &str) -> (Engine, PathBuf) {
+    pub(crate) fn engine(name: &str) -> (Engine, PathBuf) {
         let dir = std::env::temp_dir().join(format!("glossa-engine-{}-{name}", std::process::id()));
         std::fs::remove_dir_all(&dir).ok();
         let paths = Paths::for_exe_dir(dir.clone(), Some(dir.join("home")));

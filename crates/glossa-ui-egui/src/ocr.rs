@@ -176,7 +176,9 @@ pub fn on_result(app: &mut GlossaApp, job: u64, result: Result<Arc<OcrOutcome>, 
                     app.translate_main();
                 }
             }
-            Err(_) => app.main.error = message,
+            // Nothing to press: "try again" in the result pane translates
+            // the text there, it does not read the picture again.
+            Err(_) => app.main.error = message.map(crate::errors::ErrorView::plain),
         }
         return;
     }
@@ -242,8 +244,9 @@ fn background_done(
 
 /// Put recognised text on the clipboard and say so by the region.
 fn copy_with_notice(app: &mut GlossaApp, text: &str, region: GRect) {
+    let locale = app.locale.clone();
     let result = match app.clipboard.as_mut() {
-        Some(c) => c.set_text(text).map_err(|e| e.to_string()),
+        Some(c) => c.set_text(text).map_err(|e| crate::app::describe_error(&locale, &e)),
         None => {
             app.ctx.copy_text(text.to_owned());
             Ok(())
@@ -289,7 +292,7 @@ pub fn recognize_region(app: &mut GlossaApp, rect: GRect) {
             let (lang, to) = (app.cfg.ocr.language, translate_target(app));
             crate::ocr_result::open(app, img, rect, lang, to);
         }
-        Err(e) => app.notify(e.to_string(), true),
+        Err(e) => app.report(&e),
     }
 }
 
@@ -491,7 +494,7 @@ fn run(app: &mut GlossaApp, st: &mut OcrState, sel: Rect, choice: Choice) -> boo
         Choice::CopyImage => {
             if let Some(cb) = app.clipboard.as_mut() {
                 if let Err(e) = cb.set_image(&crop) {
-                    app.notify(e.to_string(), true);
+                    app.report(&e);
                     return true;
                 }
             }
@@ -545,7 +548,9 @@ pub(crate) fn start_in_place(app: &mut GlossaApp, crop: image::RgbaImage, region
 pub(crate) fn save_image(app: &mut GlossaApp, img: &image::RgbaImage) {
     if let Some(path) = rfd::FileDialog::new().add_filter("PNG", &["png"]).set_file_name("glossa-ocr.png").save_file() {
         if let Err(e) = img.save(&path) {
-            app.notify(e.to_string(), true);
+            tracing::warn!("could not save {}: {e}", path.display());
+            let m = app.t("error.io");
+            app.notify_with(m, Some(e.to_string()), true);
         }
     }
 }

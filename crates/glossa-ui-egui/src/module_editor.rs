@@ -195,11 +195,13 @@ pub fn open(app: &mut GlossaApp, target: Target) {
         test_on_ready: false,
     };
     let engine = app.engine.clone();
+    let locale = app.locale.clone();
     ed.spawn(&app.ctx, move || {
+        let described = |e| crate::app::describe_error(&locale, &e);
         Reply::Ready(match target {
             Target::Dir(d) => Ok(d),
-            Target::New(t, name) => engine.new_module(t, &name).map_err(|e| e.to_string()),
-            Target::Copy(id) => engine.copy_module_to_user(&id).map_err(|e| e.to_string()),
+            Target::New(t, name) => engine.new_module(t, &name).map_err(described),
+            Target::Copy(id) => engine.copy_module_to_user(&id).map_err(described),
         })
     });
     app.module_editor = Some(ed);
@@ -284,7 +286,10 @@ impl ModuleEditor {
     fn reload(&mut self, app: &GlossaApp) {
         let Some(dir) = self.dir.clone() else { return };
         let engine = app.engine.clone();
-        self.spawn(&app.ctx, move || Reply::Reloaded(engine.reload_module_approved(&dir).map_err(|e| e.to_string())));
+        let locale = app.locale.clone();
+        self.spawn(&app.ctx, move || {
+            Reply::Reloaded(engine.reload_module_approved(&dir).map_err(|e| crate::app::describe_error(&locale, &e)))
+        });
     }
 
     fn test(&mut self, app: &GlossaApp) {
@@ -560,6 +565,7 @@ pub fn show(app: &mut GlossaApp, ctx: &egui::Context) {
             open = false;
         }
         crate::chrome::frame(ui, &app.look, custom, &crate::chrome::Caption::new(&title));
+        crate::toast::draw(app, ui.ctx());
         body(app, ui, &mut ed, &mut open);
     });
     app.child_backdrop(&title, false);

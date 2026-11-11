@@ -14,6 +14,7 @@ mod chrome;
 mod code_editor;
 mod dictionary;
 mod dropdown;
+mod errors;
 mod fonts;
 mod frametrace;
 mod history;
@@ -40,6 +41,7 @@ mod scroll;
 mod spell;
 mod style;
 mod text_menu;
+mod toast;
 mod tray;
 mod watchdog;
 mod welcome;
@@ -215,6 +217,12 @@ fn main() -> eframe::Result<()> {
     engine.attach_secret_store(glossa_platform::secrets::system_store());
     // The theme in effect may follow the system's light or dark mode.
     engine.set_system_dark(glossa_platform::appearance::system_prefers_dark());
+    // The daily look for a newer version, when the user switched it on. It
+    // lives as long as the process, like the engine, and a run that only
+    // renders a screenshot must not touch the network.
+    if launch.screenshot.is_none() {
+        engine.start_update_schedule();
+    }
 
     if let Some(guard) = &instance {
         let engine = engine.clone();

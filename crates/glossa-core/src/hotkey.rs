@@ -128,6 +128,14 @@ impl Action {
         Action::Quit,
     ];
 
+    /// Whether a front end should offer this action for a hotkey or in a
+    /// menu. Speech input is not built yet: its name still parses, so a
+    /// settings file or a classic import that binds it keeps loading, but
+    /// offering it would hand the user a key that only says "not available".
+    pub fn offered(self) -> bool {
+        !matches!(self, Action::SpeechInput | Action::OpenPanel)
+    }
+
     /// The key the classic options file used for this action's hotkey.
     pub fn legacy_option_key(self) -> Option<&'static str> {
         Some(match self {
@@ -597,6 +605,10 @@ mod tests {
         }
         assert_eq!(Action::from_id("open_panel"), Some(Action::OpenPanel), "reachable by id, not listed");
         assert!(!Action::ALL.contains(&Action::OpenPanel));
+        // Speech input keeps its id for old settings, but is not offered.
+        assert_eq!(Action::from_id("speech_input"), Some(Action::SpeechInput));
+        assert!(!Action::SpeechInput.offered());
+        assert!(Action::ShowPopup.offered());
         assert_eq!(serde_json::to_string(&Action::OpenPanel).unwrap(), "\"open_panel\"");
     }
 }

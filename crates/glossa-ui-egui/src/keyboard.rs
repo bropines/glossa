@@ -230,6 +230,7 @@ pub fn show_keyboard(app: &mut GlossaApp, ctx: &egui::Context) {
             open = false;
         }
         crate::chrome::frame(ui, &look, custom, &crate::chrome::Caption::new(&title));
+        crate::toast::draw(app, ui.ctx());
         egui::CentralPanel::default().show(ui, |ui| contents(app, ui, &mut st));
     });
     app.child_backdrop(&title, false);
