@@ -128,7 +128,10 @@ in a user's files (a classic `Service.js` may contain a hard-coded key).
 Tests use obvious fakes.
 
 **Size and memory are features.** Before adding a dependency, check what it
-pulls in (`cargo tree -e normal -i <crate>`). Load heavy things lazily (the
+pulls in (`cargo tree -e normal -i <crate>`) and that its licence passes
+`python3 scripts/third-party-notices.py --check` (CI runs it; a release
+ships the notices that script writes, see
+[packaging/AGENTS.md](packaging/AGENTS.md#third-party-notices)). Load heavy things lazily (the
 per-script fonts and Python module processes are examples). The resident
 cost in the tray is measured in single megabytes; keep it there.
 

@@ -73,8 +73,12 @@ each under its own license:
     (MPL-2.0): Hunspell dictionaries for spell checking, used unmodified,
     source at https://github.com/helix-editor/spellbook.
 
-The full list, with versions, is in Cargo.lock; each crate's license file
-ships with its source on crates.io.
+The full list is THIRD-PARTY-NOTICES.txt, which every release carries (in
+the archive or installation folder, in Glossa.app/Contents/Resources, in
+/usr/share/doc/glossa): each crate and bundled component in that system's
+programs, with its version, its license and the license texts and notices its
+authors ship. It is written by scripts/third-party-notices.py when a release
+is built; run that script to see it for a source checkout.
 
 Google Lens
 -----------

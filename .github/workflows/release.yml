@@ -26,11 +26,26 @@ name: release
 #   glossa-1.2.3-<arch>-linux-portable.tar.gz with portable.txt, as on Windows
 # Bropines.Glossa*.yaml, glossa.json          winget and Scoop manifests
 #                                              (packaging/fill-manifests.sh)
+# glossa-1.2.3-<target>.cdx.json              a CycloneDX SBOM per Rust
+#                                              target: every crate in the
+#                                              two programs
 #
 # Every archive also holds README.md, CHANGELOG.md, the licences, NOTICE,
+# THIRD-PARTY-NOTICES.txt (every crate and bundled component in that
+# system's programs with its licence text, from
+# scripts/third-party-notices.py; the About window opens it),
 # examples/modules/ (example modules, as source; they load once copied into
 # a module folder) and sdk/python/ (glossa_module.py, which Python modules
 # import; Glossa looks for it beside the executable or in the app bundle).
+# The installer, the .deb (usr/share/doc/glossa) and Glossa.app
+# (Contents/Resources) carry the notices too.
+#
+# Supply chain: every action is pinned to a commit (Dependabot proposes the
+# updates, .github/dependabot.yml), the compiler is the one version named in
+# RUST_TOOLCHAIN below, the licences of everything that ships are checked
+# before anything is built, and a tagged release in a public repository gets
+# a build provenance attestation for each file
+# (`gh attestation verify <file> --repo bropines/glossa`).
 
 on:
   push:
@@ -46,6 +61,9 @@ concurrency:
 
 env:
   CARGO_TERM_COLOR: always
+  # The compiler every release is built with. ci.yml tests with the same
+  # one; change both together (and try the new one locally first).
+  RUST_TOOLCHAIN: '1.99.1'
 
 jobs:
   version:
@@ -53,9 +71,10 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       version: ${{ steps.v.outputs.version }}
-      numeric: ${{ steps.v.outputs.numeric }}
+      windows: ${{ steps.v.outputs.windows }}
+      macos: ${{ steps.v.outputs.macos }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
       - id: v
         run: |
           version="$(cargo metadata --no-deps --format-version 1 | jq -r '.packages[] | select(.name == "glossa-cli") | .version')"
@@ -63,13 +82,57 @@ jobs:
             echo "::error::tag $GITHUB_REF_NAME does not match the workspace version $version"
             exit 1
           fi
-          echo "version=$version" >> "$GITHUB_OUTPUT"
-          # 0.1.0-beta.1 -> 0.1.0, for fields that take numbers only.
-          echo "numeric=${version%%-*}" >> "$GITHUB_OUTPUT"
+          # version=0.1.0-beta.1, and its forms for fields that take numbers
+          # only: windows=0.1.0.2001 (file versions), macos=1002001
+          # (CFBundleVersion). A pre-release keeps its place in both.
+          scripts/version-numbers.sh "$version" | tee -a "$GITHUB_OUTPUT"
+
+  notices:
+    # What ships, per target: the licence check, THIRD-PARTY-NOTICES and the
+    # SBOM, all from `cargo metadata` and the crates' own sources, so one
+    # Linux machine does it for every system. The builds wait for it: a
+    # dependency under a licence nobody has agreed to stops the release here.
+    name: licences, notices, SBOM
+    needs: version
+    runs-on: ubuntu-latest
+    env:
+      VERSION: ${{ needs.version.outputs.version }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # master
+        with:
+          toolchain: ${{ env.RUST_TOOLCHAIN }}
+      # The crates' sources, licence files included, for every platform.
+      - run: cargo fetch --locked
+      - name: Licence check
+        run: python3 scripts/third-party-notices.py --check
+      - name: Notices and SBOMs
+        run: |
+          mkdir -p notices sbom
+          for target in x86_64-unknown-linux-gnu aarch64-unknown-linux-gnu \
+              x86_64-pc-windows-msvc aarch64-pc-windows-msvc \
+              aarch64-apple-darwin x86_64-apple-darwin; do
+            python3 scripts/third-party-notices.py --target "$target" \
+              -o "notices/THIRD-PARTY-NOTICES-$target.txt" \
+              --sbom "sbom/glossa-$VERSION-$target.cdx.json"
+            python3 scripts/third-party-notices.py --target "$target" --summary
+          done
+          ls -l notices sbom
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: notices
+          path: notices/
+          if-no-files-found: error
+      # Named like the packages (dist-*), so the SBOMs go into the release.
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: dist-sbom
+          path: sbom/
+          if-no-files-found: error
 
   linux:
     name: build (linux ${{ matrix.arch }})
-    needs: version
+    needs: [version, notices]
     runs-on: ubuntu-latest
     # Built on Debian 12 rather than the runner's Ubuntu so the binaries ask
     # for glibc 2.36 at most and start on Debian 12, Ubuntu 22.04 and newer.
@@ -121,11 +184,18 @@ jobs:
               build-essential pkg-config curl ca-certificates git file \
               libgtk-3-dev libasound2-dev
           fi
-      - uses: actions/checkout@v4
-      # No build cache in release builds: a fresh, reproducible build from the
-      # tag is worth the extra minutes.
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      # THIRD-PARTY-NOTICES-<target>.txt for every target, from the notices job.
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
+          name: notices
+          path: notices
+      # No build cache in release builds: a fresh build from the tag, with
+      # the pinned compiler and the locked dependencies, is worth the extra
+      # minutes.
+      - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # master
+        with:
+          toolchain: ${{ env.RUST_TOOLCHAIN }}
           targets: ${{ matrix.target }}
       - name: Build
         run: |
@@ -142,6 +212,7 @@ jobs:
           mkdir -p "dist/$NAME/examples/modules" "dist/$NAME/sdk"
           cp "target/$TARGET/release/glossa" "target/$TARGET/release/glossa-cli" "dist/$NAME/"
           cp README.md CHANGELOG.md LICENSE-MIT LICENSE-APACHE NOTICE packaging/portable.txt "dist/$NAME/"
+          cp "notices/THIRD-PARTY-NOTICES-$TARGET.txt" "dist/$NAME/THIRD-PARTY-NOTICES.txt"
           # The menu entry, its icon and a script that installs both for the
           # user (desktops and the portal's shortcut settings name the app
           # from it).
@@ -158,6 +229,9 @@ jobs:
       # dependencies off the binaries built on this Debian 12.
       - name: Debian package
         run: |
+          # stage.sh puts it into usr/share/doc/glossa, for the AppImage too.
+          export THIRD_PARTY_NOTICES="$PWD/notices/THIRD-PARTY-NOTICES-$TARGET.txt"
+          echo "THIRD_PARTY_NOTICES=$THIRD_PARTY_NOTICES" >> "$GITHUB_ENV"
           DEB_ARCH=${{ matrix.deb }} packaging/linux/build-deb.sh "target/$TARGET/release" "$VERSION" dist
           deb="$(ls dist/glossa_*_${{ matrix.deb }}.deb)"
           dpkg-deb --info "$deb"
@@ -171,6 +245,8 @@ jobs:
           apt-get install -y ./dist/glossa_*_amd64.deb
           glossa-cli --home "$RUNNER_TEMP/glossa-deb" services -c translate
           test -f /usr/share/glossa/sdk/python/glossa_module.py
+          test -s /usr/share/doc/glossa/THIRD-PARTY-NOTICES.txt
+          test -f /usr/share/metainfo/io.github.bropines.Glossa.metainfo.xml
       # Pinned releases, checked against the digests GitHub lists for them.
       # The runtime is embedded as is, so appimagetool fetches nothing.
       # appimagetool runs on this x86-64 machine for both images.
@@ -200,9 +276,9 @@ jobs:
             # No FUSE in a container: the runtime unpacks itself instead.
             APPIMAGE_EXTRACT_AND_RUN=1 "$image" cli --home "$RUNNER_TEMP/glossa-appimage" services -c translate
           fi
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
-          name: linux-${{ matrix.arch }}
+          name: dist-linux-${{ matrix.arch }}
           path: |
             dist/*.tar.gz
             dist/*.deb
@@ -211,7 +287,7 @@ jobs:
 
   windows:
     name: build (windows ${{ matrix.arch }})
-    needs: version
+    needs: [version, notices]
     # arm64 cross-compiles here with Visual Studio's ARM64 tools (ring's
     # assembly needs the runner's clang, which is on PATH).
     runs-on: windows-latest
@@ -231,6 +307,8 @@ jobs:
     env:
       TARGET: ${{ matrix.target }}
       VERSION: ${{ needs.version.outputs.version }}
+      # 1.2.3-beta.1 as four numbers, for the installer's file version.
+      WINDOWS_VERSION: ${{ needs.version.outputs.windows }}
       NAME: glossa-${{ needs.version.outputs.version }}-${{ matrix.arch }}-windows
       # Link the C runtime statically, so the executables start on a system
       # without the Visual C++ redistributable installed. With an explicit
@@ -242,9 +320,15 @@ jobs:
       WINDOWS_SIGN_PFX: ${{ secrets.WINDOWS_SIGN_PFX }}
       WINDOWS_SIGN_PASSWORD: ${{ secrets.WINDOWS_SIGN_PASSWORD }}
     steps:
-      - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      # THIRD-PARTY-NOTICES-<target>.txt for every target, from the notices job.
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
+          name: notices
+          path: notices
+      - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # master
+        with:
+          toolchain: ${{ env.RUST_TOOLCHAIN }}
           targets: ${{ matrix.target }}
       - name: Build
         run: cargo build --release --locked --target "$TARGET" -p glossa-ui-egui -p glossa-cli
@@ -273,9 +357,19 @@ jobs:
           mkdir -p "dist/$NAME/examples/modules" "dist/$NAME/sdk"
           cp "target/$TARGET/release/glossa.exe" "target/$TARGET/release/glossa-cli.exe" "dist/$NAME/"
           cp README.md CHANGELOG.md LICENSE-MIT LICENSE-APACHE NOTICE "dist/$NAME/"
+          cp "notices/THIRD-PARTY-NOTICES-$TARGET.txt" "dist/$NAME/THIRD-PARTY-NOTICES.txt"
           cp -r modules/js modules/python "dist/$NAME/examples/modules/"
           cp -r sdk/python "dist/$NAME/sdk/"
           find "dist/$NAME" -name __pycache__ -prune -exec rm -rf {} +
+          # The installer's licence page: both licences, since either applies.
+          {
+            printf 'Glossa is licensed under the MIT License or the Apache License 2.0, at your option.\n'
+            printf 'Both texts follow. The software by others that Glossa contains is listed, with\n'
+            printf 'its licences, in THIRD-PARTY-NOTICES.txt in the installation folder.\n\n\n'
+            cat LICENSE-MIT
+            printf '\n\n'
+            cat LICENSE-APACHE
+          } > dist/license-page.txt
       - name: Portable zip
         run: |
           cp packaging/portable.txt "dist/$NAME/"
@@ -286,7 +380,8 @@ jobs:
         run: |
           $iscc = (Get-Command iscc -ErrorAction SilentlyContinue).Source
           if (-not $iscc) { $iscc = "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe" }
-          & $iscc "/DMyAppVersion=$env:VERSION" "/DArch=${{ matrix.inno }}" "/DStageDir=$PWD\dist\$env:NAME" "/O$PWD\dist" packaging\windows\glossa.iss
+          & $iscc "/DMyAppVersion=$env:VERSION" "/DNumericVersion=$env:WINDOWS_VERSION" "/DArch=${{ matrix.inno }}" `
+            "/DStageDir=$PWD\dist\$env:NAME" "/DLicensePage=$PWD\dist\license-page.txt" "/O$PWD\dist" packaging\windows\glossa.iss
           if ($LASTEXITCODE) { exit $LASTEXITCODE }
       - name: Sign the installer
         if: env.WINDOWS_SIGN_PFX != ''
@@ -307,9 +402,19 @@ jobs:
           $p = Start-Process "dist\$env:NAME-setup.exe" -Wait -PassThru `
             -ArgumentList '/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART', '/CURRENTUSER', "/DIR=`"$dir`""
           if ($p.ExitCode) { throw "setup exited with $($p.ExitCode)" }
-          foreach ($f in 'glossa.exe', 'glossa-cli.exe', 'sdk\python\glossa_module.py', 'examples\modules') {
+          foreach ($f in 'glossa.exe', 'glossa-cli.exe', 'sdk\python\glossa_module.py', 'examples\modules', 'THIRD-PARTY-NOTICES.txt') {
             if (-not (Test-Path "$dir\$f")) { throw "$f was not installed" }
           }
+          # Both programs say which release they are, pre-release part included.
+          foreach ($exe in 'glossa.exe', 'glossa-cli.exe') {
+            $info = (Get-Item "$dir\$exe").VersionInfo
+            "$exe $($info.FileVersion) [$($info.FileVersionRaw)] $($info.LegalCopyright)"
+            if ($info.FileVersion -ne $env:VERSION) { throw "$exe says version '$($info.FileVersion)', not $env:VERSION" }
+            if ("$($info.FileVersionRaw)" -ne $env:WINDOWS_VERSION) { throw "$exe has file version $($info.FileVersionRaw), not $env:WINDOWS_VERSION" }
+          }
+          # --version answers on a pipe and exits without opening a window.
+          $said = (& "$dir\glossa.exe" --version | Out-String).Trim()
+          if ($LASTEXITCODE -or $said -notlike "glossa $env:VERSION*") { throw "glossa.exe --version said '$said' (exit $LASTEXITCODE)" }
           if (Test-Path "$dir\portable.txt") { throw "the installer installed the portable marker" }
           if (Test-Path "$dir\data") { throw "the installer made a portable data folder" }
           & "$dir\glossa-cli.exe" --home "$env:RUNNER_TEMP\glossa-home" services -c translate
@@ -320,9 +425,9 @@ jobs:
           # at once; wait for the copy to finish.
           for ($i = 0; $i -lt 60 -and (Test-Path "$dir\glossa.exe"); $i++) { Start-Sleep -Seconds 1 }
           if (Test-Path "$dir\glossa.exe") { throw "glossa.exe is still there after uninstalling" }
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
-          name: windows-${{ matrix.arch }}
+          name: dist-windows-${{ matrix.arch }}
           path: |
             dist/*.zip
             dist/*-setup.exe
@@ -330,19 +435,26 @@ jobs:
 
   macos:
     name: build (macOS arm64 + x86_64)
-    needs: version
+    needs: [version, notices]
     # Apple silicon; the Intel build cross-compiles with the same Xcode SDK.
     runs-on: macos-latest
     env:
       VERSION: ${{ needs.version.outputs.version }}
-      NUMERIC_VERSION: ${{ needs.version.outputs.numeric }}
+      # CFBundleVersion: one number that grows with every release.
+      BUILD_NUMBER: ${{ needs.version.outputs.macos }}
       # Apple Vision's text recogniser appeared in 10.15 (Apple silicon
       # starts at 11 anyway). Matches LSMinimumSystemVersion in Info.plist.
       MACOSX_DEPLOYMENT_TARGET: '10.15'
     steps:
-      - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      # THIRD-PARTY-NOTICES-<target>.txt for every target, from the notices job.
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
+          name: notices
+          path: notices
+      - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # master
+        with:
+          toolchain: ${{ env.RUST_TOOLCHAIN }}
           targets: aarch64-apple-darwin, x86_64-apple-darwin
       - name: Build
         run: |
@@ -367,13 +479,19 @@ jobs:
       - name: Package
         run: |
           set -euo pipefail
-          package() { # arch, folder holding glossa and glossa-cli
+          package() { # arch, folder holding glossa and glossa-cli, Rust target
             local name="glossa-$VERSION-$1-macos"
             local root="dist/$name"
             local app="$root/Glossa.app"
             mkdir -p "$app/Contents/MacOS" "$app/Contents/Resources/sdk" "$root/examples/modules"
-            sed "s/@VERSION@/$NUMERIC_VERSION/g" assets/macos/Info.plist > "$app/Contents/Info.plist"
+            # The version in full for people (Finder, About), a plain number
+            # for CFBundleVersion.
+            sed -e "s/@VERSION@/$VERSION/g" -e "s/@BUILD@/$BUILD_NUMBER/g" assets/macos/Info.plist > "$app/Contents/Info.plist"
             plutil -lint "$app/Contents/Info.plist"
+            if grep -q '@[A-Z]*@' "$app/Contents/Info.plist"; then
+              echo "::error::Info.plist still has a placeholder"
+              exit 1
+            fi
             cp "$2/glossa" "$app/Contents/MacOS/"
             cp build/glossa.icns "$app/Contents/Resources/"
             # Python modules import glossa_module.py; Glossa looks for it in
@@ -381,6 +499,10 @@ jobs:
             cp -r sdk/python "$app/Contents/Resources/sdk/"
             cp "$2/glossa-cli" "$root/"
             cp README.md CHANGELOG.md LICENSE-MIT LICENSE-APACHE NOTICE "$root/"
+            cp "notices/THIRD-PARTY-NOTICES-$3.txt" "$root/THIRD-PARTY-NOTICES.txt"
+            # In the bundle too: the disk image holds nothing but Glossa.app,
+            # and the About window opens the notices from here.
+            cp LICENSE-MIT LICENSE-APACHE NOTICE "$root/THIRD-PARTY-NOTICES.txt" "$app/Contents/Resources/"
             cp -r modules/js modules/python "$root/examples/modules/"
             find "$root" -name __pycache__ -prune -exec rm -rf {} +
             # Not notarised: an ad-hoc signature keeps Apple silicon willing
@@ -424,11 +546,11 @@ jobs:
             done
             hdiutil verify "dist/$name.dmg"
           }
-          package arm64 target/aarch64-apple-darwin/release
-          package x86_64 target/x86_64-apple-darwin/release
-      - uses: actions/upload-artifact@v4
+          package arm64 target/aarch64-apple-darwin/release aarch64-apple-darwin
+          package x86_64 target/x86_64-apple-darwin/release x86_64-apple-darwin
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
-          name: macos
+          name: dist-macos
           path: |
             dist/*.zip
             dist/*.dmg
@@ -438,14 +560,21 @@ jobs:
     name: draft release
     # Only for a tag; a run by hand stops at the artifacts.
     if: github.ref_type == 'tag'
-    needs: [version, linux, windows, macos]
+    needs: [version, notices, linux, windows, macos]
     runs-on: ubuntu-latest
     permissions:
       contents: write
+      # For the provenance attestation: a signing identity for this run, and
+      # leave to store what it signs.
+      id-token: write
+      attestations: write
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/download-artifact@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      # The packages and the SBOMs (dist-*); the per-target notices are
+      # inside the packages already.
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
+          pattern: dist-*
           path: dist
           merge-multiple: true
       # winget and Scoop manifests pointing at this release's Windows files.
@@ -459,6 +588,16 @@ jobs:
         run: |
           sha256sum -- * > SHA256SUMS
           cat SHA256SUMS
+      # A signed statement, kept by GitHub, that each of these files was
+      # built by this workflow from this commit:
+      #   gh attestation verify <file> --repo bropines/glossa
+      # GitHub offers it to public repositories (and Enterprise ones), so a
+      # private repository's release goes without.
+      - name: Attest build provenance
+        if: ${{ !github.event.repository.private }}
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-path: dist/*
       - name: Create the draft release
         env:
           GH_TOKEN: ${{ github.token }}
@@ -491,7 +630,7 @@ jobs:
             - `glossa-*-x86_64.AppImage` / `glossa-*-aarch64.AppImage` for other distributions.
             - `glossa-*-linux-portable.tar.gz`: unpack and run `./glossa`; settings stay in `data/` next to it.
 
-          See [docs/install.md](https://github.com/bropines/glossa/blob/main/docs/install.md) for details. `SHA256SUMS` lists every file's checksum.
+          See [docs/install.md](https://github.com/bropines/glossa/blob/main/docs/install.md) for details. `SHA256SUMS` lists every file's checksum, `gh attestation verify <file> --repo bropines/glossa` checks that a file was built by this repository's release workflow, and the `.cdx.json` files are SBOMs (every library in the programs, per system). Each package carries `THIRD-PARTY-NOTICES.txt` with the licences of those libraries.
           EOF
             notes=(--notes-file notes.md)
           else

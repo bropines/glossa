@@ -15,6 +15,10 @@
 
 use std::path::{Path, PathBuf};
 
+/// The file name of the third-party notices in a release, written by
+/// `scripts/third-party-notices.py` when the release is built.
+pub const THIRD_PARTY_NOTICES: &str = "THIRD-PARTY-NOTICES.txt";
+
 #[derive(Debug, Clone)]
 pub struct Paths {
     /// The data is not in the user's profile: beside the program, or in a
@@ -132,6 +136,21 @@ impl Paths {
             out.push(repo.join("modules"));
         }
         out
+    }
+
+    /// The third-party notices a release ships
+    /// ([`THIRD_PARTY_NOTICES`]): every crate and bundled component in
+    /// the programs with its licence text, far too long to build in.
+    /// Beside the program (Windows, the portable archives), in the app
+    /// bundle's resources (macOS) or in the package's doc folder (Linux).
+    /// `None` in a build that was not packaged, such as a development one.
+    pub fn third_party_notices(&self) -> Option<PathBuf> {
+        let mut places = vec![self.exe_dir.join(THIRD_PARTY_NOTICES)];
+        if let Some(prefix) = self.exe_dir.parent() {
+            places.push(prefix.join("Resources").join(THIRD_PARTY_NOTICES));
+            places.push(prefix.join("share").join("doc").join("glossa").join(THIRD_PARTY_NOTICES));
+        }
+        places.into_iter().find(|p| p.is_file())
     }
 
     /// Where the user's own modules go when installed from the UI.

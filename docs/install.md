@@ -16,6 +16,7 @@ Every [release](https://github.com/bropines/glossa/releases) has these files
 | other Linux | `glossa-1.2.3-x86_64.AppImage`, `glossa-1.2.3-aarch64.AppImage` | single file to run |
 | | `glossa-1.2.3-x86_64-linux-portable.tar.gz`, `glossa-1.2.3-arm64-linux-portable.tar.gz` | portable archive |
 | | `SHA256SUMS` | checksums of all of the above |
+| | `glossa-<version>-<target>.cdx.json` | a CycloneDX SBOM per platform: every crate in the two programs |
 
 The Linux builds have not been tried on real hardware yet: they are built
 and smoke-tested by the release workflow only. Reports are welcome.
@@ -160,7 +161,7 @@ The package installs:
 | `/usr/share/icons/hicolor/256x256/apps/io.github.bropines.Glossa.png` | the icon |
 | `/usr/share/glossa/sdk/python/` | the Python module SDK, found by Glossa |
 | `/usr/share/glossa/examples/modules/` | example modules, to copy into `~/.config/glossa/modules` |
-| `/usr/share/doc/glossa/` | README, changelog, licences |
+| `/usr/share/doc/glossa/` | README, changelog, licences, `THIRD-PARTY-NOTICES.txt` |
 
 `sudo apt remove glossa` removes it; your settings in `~/.config/glossa`
 stay.
