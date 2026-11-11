@@ -309,6 +309,9 @@ pub fn test_module(dir: &Path, s: &Settings) -> ModuleReport {
         cache_dir: std::env::temp_dir().join("glossa-module-test"),
         models_dir: s.models_dir.clone().unwrap_or_else(|| std::env::temp_dir().join("glossa-module-test-models")),
         python_dirs: s.python_dirs.clone().unwrap_or_default(),
+        // Each case stands alone: one that reports a rate limit must not
+        // make the next ones wait out the cooling-off period.
+        rate_limit_cooldown: false,
         ..Default::default()
     };
 
