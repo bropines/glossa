@@ -11,6 +11,7 @@ pub mod color;
 pub mod config;
 pub mod dict;
 pub mod error;
+pub mod error_text;
 pub mod history;
 pub mod hotkey;
 pub mod jsonc;
@@ -58,6 +59,17 @@ pub fn long_version() -> String {
         VERSION.to_owned()
     } else {
         format!("{VERSION} ({COMMIT})")
+    }
+}
+
+/// The version as shown to the user (the about box): the commit without
+/// the `-dirty` mark. That mark says the build had uncommitted changes,
+/// which matters in a log or a bug report ([`long_version`]) and reads as
+/// a fault to everyone else.
+pub fn display_version() -> String {
+    match COMMIT.strip_suffix("-dirty").unwrap_or(COMMIT) {
+        "" => VERSION.to_owned(),
+        commit => format!("{VERSION} ({commit})"),
     }
 }
 

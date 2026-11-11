@@ -99,6 +99,14 @@ pub fn flow(app: &mut GlossaApp, ctx: &egui::Context, what: &str, path: &Path) {
             }
         }
     }
+    // `GLOSSA_SCREENSHOT_ERROR=credential|server|files`: show that failure
+    // in the window pictured, to look at the message, its buttons and the
+    // window's own toast without a service that really fails.
+    if frames == SWITCH_FRAME {
+        if let Ok(kind) = std::env::var("GLOSSA_SCREENSHOT_ERROR") {
+            show_error(app, target, &kind);
+        }
+    }
     if !SHOT.load(Ordering::SeqCst) && frames >= SETTLE_FRAMES && start.elapsed() >= SETTLE_TIME {
         SHOT.store(true, Ordering::SeqCst);
         let path = path.to_owned();
@@ -111,6 +119,33 @@ pub fn flow(app: &mut GlossaApp, ctx: &egui::Context, what: &str, path: &Path) {
     // wake an idle window.
     ctx.request_repaint();
     ctx.request_repaint_of(target);
+}
+
+/// Put a sample failure of `kind` into the window `target`: as its toast,
+/// and in the main window, the popup and the dictionary as the failed
+/// request too.
+fn show_error(app: &mut GlossaApp, target: ViewportId, kind: &str) {
+    use glossa_core::Error;
+    let e = match kind {
+        "credential" => Error::MissingCredential { provider: "DeepL".into(), what: "api_key".into() },
+        "files" => Error::AssetsMissing { module: "local-llm".into(), missing: vec!["model.gguf".into()] },
+        _ => Error::HttpStatus { provider: "DeepL".into(), status: 503, body: "upstream connect error".into() },
+    };
+    let view = crate::errors::ErrorView::new(&app.locale, &e);
+    // A job number no reply carries: the real answer, should one still
+    // come, does not replace the failure.
+    app.main.job = u64::MAX;
+    app.main.busy = false;
+    app.main.outcome = None;
+    app.main.error = Some(view.clone());
+    if let Some(p) = app.popup.as_mut() {
+        (p.job, p.busy, p.outcome, p.error) = (u64::MAX, false, None, Some(view.clone()));
+    }
+    if let Some(d) = app.dictionary.as_mut() {
+        (d.job, d.busy, d.article, d.error) = (u64::MAX, false, None, Some(view.clone()));
+    }
+    let toast = crate::toast::Toast::new(view.headline, view.detail, true, app.frame_number());
+    app.toasts.insert(target, toast);
 }
 
 /// Open the window named `what`; false for a name not known.

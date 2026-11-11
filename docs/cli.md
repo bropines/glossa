@@ -28,7 +28,7 @@ glossa-cli doctor                             # what works on this machine
   [`history`](#history),
   [`import-classic`](#import-classic), [`theme`](#theme),
   [`locale`](#locale), [`config`](#config), [`serve`](#serve),
-  [`action`](#action), [`doctor`](#doctor)
+  [`action`](#action), [`doctor`](#doctor), [`update`](#update)
 - [Environment variables](#environment-variables)
 - [The desktop program's own flags](#the-desktop-programs-own-flags)
 
@@ -133,6 +133,7 @@ $ glossa-cli translate -t ru "Hello"
 | [`serve`](#serve) | Run the control API in the foreground. |
 | [`action`](#action) | Ask a running Glossa to perform an action. |
 | [`doctor`](#doctor) | Show what works on this machine and what does not. |
+| [`update`](#update) | Ask whether a newer Glossa has been released. |
 
 ### translate
 
@@ -921,6 +922,36 @@ Desktop portal
   screenshot       yes (version 2)
 ```
 
+### update
+
+```
+glossa-cli [--json] update
+```
+
+Asks GitHub whether a version newer than this one has been released and
+prints the answer. Nothing is downloaded or installed: when there is a
+newer version, the address of its release page is printed for you to open.
+
+It is the check behind *Options → Updates → Check now*: one `GET` to
+`https://api.github.com/repos/bropines/glossa/releases`, through the proxy
+in `[network.proxy]`, carrying nothing about you or your settings. Only
+tags of the form `v1.2.3` count (module bundles released from the same
+repository are skipped), versions compare as semantic versions
+(`0.1.0-beta.2` is older than `0.1.0`), and pre-releases are offered only to
+a pre-release. The answer and its time go to `update-check.json` in the data
+folder, which the desktop program shows and its daily check
+([`[updates]`](configuration.md#updates)) goes by.
+
+The exit code is 0 whether or not there is a newer version, and 1 when
+GitHub could not be asked.
+
+```console
+$ glossa-cli update
+Glossa 0.2.0 is available (this is 0.1.0): https://github.com/bropines/glossa/releases/tag/v0.2.0
+$ glossa-cli --json update
+{"current":"0.1.0","latest":"0.2.0","up_to_date":false,"url":"https://github.com/bropines/glossa/releases/tag/v0.2.0"}
+```
+
 ## Environment variables
 
 | variable | read by | meaning |
@@ -931,6 +962,7 @@ Desktop portal
 | `LC_ALL`, `LC_MESSAGES`, `LANG` | desktop program | The system language, when `GLOSSA_LANG` is not set (on Windows, the display language comes first). |
 | `HTTPS_PROXY`, `ALL_PROXY`, `HTTP_PROXY` (and lower-case), `NO_PROXY` | both programs | With `[network.proxy] mode = "system"`, the first one set is the proxy, and `NO_PROXY` lists hosts that bypass it. On Windows, if none is set, the system (WinINet) proxy is used. |
 | `GLOSSA_SCREENSHOT_SWITCH` | desktop program | With `--screenshot`: a language (`ru`) to switch the interface to once the window is open, through the settings as Options does, to check that every part follows without a restart. Writes `ui_language` to the settings, so use a throwaway `GLOSSA_HOME`. |
+| `GLOSSA_SCREENSHOT_ERROR` | desktop program | With `--screenshot`: show a sample failure in the window pictured (`credential`, `files`, or anything else for a server error): as the window's own message, and in the main window, the popup and the dictionary as the failed request with its buttons. Nothing really fails. |
 | `GLOSSA_SCREENSHOT_SERVICE` | desktop program | With `--screenshot options:services`: a provider id (`google-vision-ocr`) whose settings to show, in the first service group it belongs to. |
 | `GLOSSA_SCREENSHOT_TAB` | desktop program | With `GLOSSA_SCREENSHOT_SERVICE`: `<tabs id>=<n>`, the tab (from 0) to show of a `tabs` item on that provider's settings page, as `pages=1`. |
 | `GLOSSA_SCREENSHOT_ACTION` | desktop program | With `--screenshot panel:MODULE/PANEL`: an action of that panel to run once it is open. With `GLOSSA_SCREENSHOT_SERVICE`, or with `--screenshot module-editor` (its preview): the id of one of the module's [actions](modules/README.md#actions) to press when the page is first drawn, so the picture shows its result (or its spinner, if it takes longer than the window takes to settle). It runs for real, network included, so use a throwaway `GLOSSA_HOME`. A button greyed out by `needs` is not pressed. |

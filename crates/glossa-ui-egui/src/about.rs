@@ -74,6 +74,7 @@ pub fn show_about(app: &mut GlossaApp, ctx: &egui::Context) {
             custom,
             &crate::chrome::Caption { minimize: false, maximize: false, ..crate::chrome::Caption::new(&title) },
         );
+        crate::toast::draw(app, ui.ctx());
         egui::CentralPanel::default().show(ui, |ui| contents(app, ui, &mut open));
     });
     app.child_backdrop(&title, false);
@@ -116,7 +117,8 @@ fn summary(app: &mut GlossaApp, ui: &mut egui::Ui, doc: &mut Option<Doc>) {
         ui.add_space(4.0);
         ui.heading(RichText::new("Glossa").strong());
         ui.label(
-            RichText::new(format!("{}{}", app.t("msg.version"), glossa_core::long_version())).color(look.weak_text()),
+            RichText::new(format!("{}{}", app.t("msg.version"), glossa_core::display_version()))
+                .color(look.weak_text()),
         );
         ui.add_space(8.0);
         ui.add(egui::Label::new(app.t("about.description")).wrap());

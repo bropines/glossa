@@ -48,8 +48,14 @@ pub fn service_badge(ui: &mut Ui, id: &str, name: &str, size: f32) {
     );
 }
 
-/// One tab of the service strip: badge + name, the name truncating when
-/// narrow.
+/// The least room a service tab's name needs to be worth drawing: about
+/// two letters and the ellipsis at `font_size`.
+fn service_tab_min_text(font_size: f32) -> f32 {
+    font_size * 2.2
+}
+
+/// One tab of the service strip: badge + name, the name cut with an
+/// ellipsis when narrow and left out when very narrow.
 pub fn service_tab(ui: &mut Ui, look: &Look, id: &str, name: &str, selected: bool, width: f32, tip: &str) -> Response {
     let h = look.theme.metrics.service_tab_height.clamp(20.0, 44.0);
     let (rect, resp) = ui.allocate_exact_size(vec2(width.max(h), h), Sense::click());
@@ -71,7 +77,16 @@ pub fn service_tab(ui: &mut Ui, look: &Look, id: &str, name: &str, selected: boo
             );
         }
         let badge = h - 10.0;
-        let badge_rect = egui::Rect::from_min_size(rect.min + vec2(5.0, 5.0), vec2(badge, badge));
+        let font = egui::FontId::proportional(look.theme.fonts.size * 1.25);
+        // The name is cut with an ellipsis when the tab is narrow; a tab too
+        // narrow for a couple of letters and the ellipsis shows the badge
+        // alone, centred, rather than a sliver of a letter. The tooltip
+        // carries the whole name either way.
+        let room = rect.width() - (5.0 + badge + 6.0) - 4.0;
+        let named = room >= service_tab_min_text(font.size);
+        let badge_min =
+            if named { rect.min + vec2(5.0, 5.0) } else { egui::pos2(rect.center().x - badge / 2.0, rect.top() + 5.0) };
+        let badge_rect = egui::Rect::from_min_size(badge_min, vec2(badge, badge));
         p.rect_filled(badge_rect, badge * 0.2, service_color(id));
         let initial = name.chars().find(|c| c.is_alphanumeric()).unwrap_or('?').to_uppercase().to_string();
         p.text(
@@ -81,24 +96,12 @@ pub fn service_tab(ui: &mut Ui, look: &Look, id: &str, name: &str, selected: boo
             egui::FontId::proportional(badge * 0.62),
             Color32::WHITE,
         );
-        let text_left = badge_rect.right() + 6.0;
-        let room = rect.right() - text_left - 4.0;
-        if room > 8.0 {
-            let galley = ui.painter().layout(
-                name.to_owned(),
-                egui::FontId::proportional(look.theme.fonts.size * 1.25),
-                c(b.text),
-                f32::INFINITY,
-            );
-            let clip = egui::Rect::from_min_max(
-                egui::pos2(text_left, rect.top()),
-                egui::pos2(rect.right() - 2.0, rect.bottom()),
-            );
-            ui.painter().with_clip_rect(clip).galley(
-                egui::pos2(text_left, rect.center().y - galley.size().y / 2.0),
-                galley,
-                c(b.text),
-            );
+        if named {
+            let mut job = egui::text::LayoutJob::simple_singleline(name.to_owned(), font, c(b.text));
+            job.wrap = egui::text::TextWrapping::truncate_at_width(room);
+            let galley = ui.painter().layout_job(job);
+            let text_left = badge_rect.right() + 6.0;
+            ui.painter().galley(egui::pos2(text_left, rect.center().y - galley.size().y / 2.0), galley, c(b.text));
         }
     }
     resp.on_hover_text(tip)
@@ -111,9 +114,6 @@ pub struct StripService {
     /// An AI endpoint (a language model): drawn in the strip's AI group.
     pub ai: bool,
 }
-
-/// The blue the AI group is marked with, whatever the theme's accent.
-const AI_BLUE: Color32 = Color32::from_rgb(66, 133, 244);
 
 /// A row of service tabs: the translators, then the AI services in a group
 /// of their own on a blue plate, so a model ("Google Gemini") is not
@@ -192,8 +192,8 @@ pub fn service_strip(
             egui::Shape::Rect(egui::epaint::RectShape::new(
                 rect,
                 radius,
-                AI_BLUE.gamma_multiply(0.45),
-                egui::Stroke::new(1.5, AI_BLUE),
+                look.ai_accent().gamma_multiply(0.45),
+                egui::Stroke::new(1.5, look.ai_accent()),
                 egui::StrokeKind::Inside,
             )),
         );

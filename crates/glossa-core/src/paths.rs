@@ -87,6 +87,11 @@ impl Paths {
         self.data_dir.join("dictionary-history.json")
     }
 
+    /// When Glossa last looked for a newer version and what it found.
+    pub fn update_state_file(&self) -> PathBuf {
+        self.data_dir.join("update-check.json")
+    }
+
     pub fn log_file(&self) -> PathBuf {
         self.cache_dir.join("glossa.log")
     }

@@ -283,7 +283,7 @@ fn font_picker(app: &GlossaApp, ui: &mut egui::Ui, list: &mut FontList, value: &
             None => {
                 ui.horizontal(|ui| {
                     ui.add(egui::Spinner::new().size(14.0));
-                    ui.label("…");
+                    ui.label(RichText::new(app.t("options.basics.fonts_loading")).color(app.look.weak_text()));
                 });
             }
             Some(names) => {
@@ -422,6 +422,7 @@ pub fn show(app: &mut GlossaApp, ctx: &egui::Context) {
         }
         let _trace = crate::frametrace::begin(ui.ctx(), "options");
         crate::chrome::frame(ui, &app.look, custom, &crate::chrome::Caption::new(&title));
+        crate::toast::draw(app, ui.ctx());
         open &= body(app, ui, &mut st);
     });
     app.child_backdrop(&title, false);
@@ -480,8 +481,10 @@ fn apply(app: &mut GlossaApp, st: &mut OptionsState) -> bool {
                 st.login_status_rx = if st.autostart { ask_login_status(&app.ctx) } else { None };
             }
             Err(e) => {
-                autostart_error = Some(app.locale.fmt("options.basics.autostart_failed", &e.to_string()));
-                st.autostart_done = Some(Err(e.to_string()));
+                tracing::warn!("start at login: {e}");
+                let why = app.describe(&e);
+                autostart_error = Some(app.locale.fmt("options.basics.autostart_failed", &why));
+                st.autostart_done = Some(Err(why));
                 attention = true;
             }
         }
@@ -494,7 +497,7 @@ fn apply(app: &mut GlossaApp, st: &mut OptionsState) -> bool {
                 None => (app.t("options.saved"), false),
             }
         }
-        Err(e) => (e.to_string(), true),
+        Err(e) => (app.describe(&e), true),
     });
     if attention {
         // The note is under the checkbox on the first page.
@@ -669,7 +672,9 @@ fn appearance_preview(app: &GlossaApp, ui: &mut egui::Ui, look: &crate::style::L
     let labels = crate::preview::Labels {
         source: app.t("options.appearance.preview_source"),
         translation: app.t("options.appearance.preview_translation"),
-        popup_title: format!("{from} \u{2192} {to} (Google)"),
+        // The words the real popup's header uses, so the preview does not
+        // promise a different one.
+        popup_title: app.locale.fmt_args("popup.title_direction", &[from.as_str(), to.as_str(), "Google"]),
         from,
         to,
         translate: app.t("main.translate"),
@@ -859,7 +864,7 @@ fn hotkeys(app: &mut GlossaApp, ui: &mut egui::Ui, st: &mut OptionsState) {
         ui.label(RichText::new(app.t("options.hotkeys.hotkey")).strong());
         ui.end_row();
         for action in Action::ALL {
-            if action == Action::Quit {
+            if action == Action::Quit || !action.offered() {
                 continue;
             }
             ui.label(app.t(&format!("action.{}", action.id())));
@@ -1283,7 +1288,7 @@ fn module_assets(app: &mut GlossaApp, ui: &mut egui::Ui, st: &mut OptionsState, 
     if let Some(name) = fetch_one {
         st.assets_note = None;
         if let Err(e) = app.engine.start_asset_download(id, &[name]) {
-            st.assets_note = Some((e.to_string(), true));
+            st.assets_note = Some((app.describe(&e), true));
         }
     }
     if let Some(job) = &report.job {
@@ -1312,7 +1317,7 @@ fn module_assets(app: &mut GlossaApp, ui: &mut egui::Ui, st: &mut OptionsState, 
             if ui.button(label).clicked() {
                 st.assets_note = None;
                 if let Err(e) = app.engine.start_asset_download(id, &[]) {
-                    st.assets_note = Some((e.to_string(), true));
+                    st.assets_note = Some((app.describe(&e), true));
                 }
             }
         }
@@ -1324,8 +1329,10 @@ fn module_assets(app: &mut GlossaApp, ui: &mut egui::Ui, st: &mut OptionsState, 
             let (tx, rx) = std::sync::mpsc::channel();
             let (engine, ctx, id, ok) =
                 (app.engine.clone(), app.ctx.clone(), id.to_owned(), app.t("options.assets.verified"));
+            let locale = app.locale.clone();
             std::thread::spawn(move || {
-                let r = engine.verify_module_assets(&id).map_err(|e| e.to_string()).and_then(|r| {
+                let described = |e| crate::app::describe_error(&locale, &e);
+                let r = engine.verify_module_assets(&id).map_err(described).and_then(|r| {
                     if r.assets.iter().all(|a| a.state == glossa_engine::AssetState::Ready) {
                         Ok(ok)
                     } else {
@@ -1354,7 +1361,7 @@ fn module_assets(app: &mut GlossaApp, ui: &mut egui::Ui, st: &mut OptionsState, 
         if any_on_disk && ui.add_enabled(!report.busy, egui::Button::new(app.t("options.assets.remove"))).clicked() {
             st.assets_note = None;
             if let Err(e) = app.engine.start_asset_removal(id) {
-                st.assets_note = Some((e.to_string(), true));
+                st.assets_note = Some((app.describe(&e), true));
             }
         }
     });
@@ -1435,7 +1442,7 @@ fn module_python(app: &mut GlossaApp, ui: &mut egui::Ui, id: &str) {
             };
             if ui.button(label).clicked() {
                 if let Err(e) = app.engine.start_python_install(Some(id)) {
-                    app.notify(e.to_string(), true);
+                    app.report(&e);
                 }
             }
         }
@@ -1649,7 +1656,7 @@ fn ai_endpoints(app: &mut GlossaApp, ui: &mut egui::Ui, st: &mut OptionsState) {
                         st.selected_service = None;
                     }
                 }
-                Err(e) => st.message = Some((e.to_string(), true)),
+                Err(e) => st.message = Some((app.describe(&e), true)),
             }
         }
         // Wrapped: the pane can be narrower than the row, and a row wider
@@ -1681,7 +1688,7 @@ fn ai_endpoints(app: &mut GlossaApp, ui: &mut egui::Ui, st: &mut OptionsState) {
                         st.selected_service = Some(id);
                         st.new_ai_name.clear();
                     }
-                    Err(e) => st.message = Some((e.to_string(), true)),
+                    Err(e) => st.message = Some((app.describe(&e), true)),
                 }
             }
         });
@@ -1706,8 +1713,9 @@ fn ai_tools(
             let (tx, rx) = std::sync::mpsc::channel();
             let (engine, ctx, id) = (app.engine.clone(), app.ctx.clone(), id.to_owned());
             let values = values.clone();
+            let locale = app.locale.clone();
             std::thread::spawn(move || {
-                let r = engine.list_models(&id, Some(&values)).map_err(|e| e.to_string());
+                let r = engine.list_models(&id, Some(&values)).map_err(|e| crate::app::describe_error(&locale, &e));
                 let _ = tx.send(AiReply::Models(id, r));
                 ctx.request_repaint();
             });
@@ -1720,8 +1728,9 @@ fn ai_tools(
         {
             let (tx, rx) = std::sync::mpsc::channel();
             let (engine, ctx, id) = (app.engine.clone(), app.ctx.clone(), id.to_owned());
+            let locale = app.locale.clone();
             std::thread::spawn(move || {
-                let r = engine.test_provider(&id, Some(&values)).map_err(|e| e.to_string());
+                let r = engine.test_provider(&id, Some(&values)).map_err(|e| crate::app::describe_error(&locale, &e));
                 let _ = tx.send(AiReply::Test(r));
                 ctx.request_repaint();
             });
@@ -2577,7 +2586,7 @@ fn modules(app: &mut GlossaApp, ui: &mut egui::Ui, st: &mut OptionsState) {
                             Some((app.locale.fmt_args("options.modules.imported", &[&settings, &entries]), false));
                         reload_draft = true;
                     }
-                    Err(e) => st.message = Some((e.to_string(), true)),
+                    Err(e) => st.message = Some((app.describe(&e), true)),
                 }
             }
         }
@@ -2722,12 +2731,13 @@ fn module_approvals(app: &mut GlossaApp, ui: &mut egui::Ui, st: &mut OptionsStat
         let ctx = app.ctx.clone();
         let (tx, rx) = std::sync::mpsc::channel();
         st.trust_job = Some(rx);
+        let locale = app.locale.clone();
         std::thread::spawn(move || {
             let done = match &hash {
                 Some(h) => engine.approve_module(&id, Some(h)),
                 None => engine.decline_module(&id),
             };
-            let _ = tx.send(done.map_err(|e| e.to_string()));
+            let _ = tx.send(done.map_err(|e| crate::app::describe_error(&locale, &e)));
             ctx.request_repaint();
         });
     }
@@ -2961,7 +2971,7 @@ pub(crate) fn permissions(app: &mut GlossaApp, ui: &mut egui::Ui) {
             ui.horizontal(|ui| {
                 let granted = perm::status(p) == Status::Granted;
                 let (text, colour) = if granted {
-                    (app.t("options.permissions.granted"), egui::Color32::from_rgb(0x3f, 0xb9, 0x50))
+                    (app.t("options.permissions.granted"), look.success())
                 } else {
                     (app.t("options.permissions.missing"), look.error())
                 };
@@ -2971,7 +2981,7 @@ pub(crate) fn permissions(app: &mut GlossaApp, ui: &mut egui::Ui) {
                 }
                 if ui.button(app.t("options.permissions.open_settings")).clicked() {
                     if let Err(e) = perm::open_settings(p) {
-                        app.notify(e.to_string(), true);
+                        app.report(&e);
                     }
                 }
             });
@@ -2981,11 +2991,65 @@ pub(crate) fn permissions(app: &mut GlossaApp, ui: &mut egui::Ui) {
     ui.label(RichText::new(app.t("options.permissions.rebuild_note")).small().color(look.weak_text()));
 }
 
-fn updates(app: &mut GlossaApp, ui: &mut egui::Ui, _st: &mut OptionsState) {
-    // There is no update server yet, so no "check automatically" switch:
-    // `updates.check_automatically` is kept in the settings, unused.
+fn updates(app: &mut GlossaApp, ui: &mut egui::Ui, st: &mut OptionsState) {
+    let look = app.look.clone();
+    // The engine owns the check and its outcome (the command line and the
+    // daily check share them); this page only shows what it knows. The
+    // engine's event wakes the window when a check ends.
+    let state = app.engine.update_state();
+    let checking = app.engine.update_check_running();
     ui.label(format!("{}{}", app.t("msg.version"), glossa_core::VERSION));
-    ui.label(RichText::new(app.t("options.updates.no_server")).color(app.look.weak_text()));
+    ui.add_space(4.0);
+    if checking {
+        ui.horizontal(|ui| {
+            ui.spinner();
+            ui.label(app.t("msg.checking_updates"));
+        });
+    } else if let Some(why) = &state.error {
+        ui.label(RichText::new(app.locale.fmt("options.updates.failed", why)).color(look.error()));
+    }
+    let newer = state.newer_than(glossa_core::VERSION).cloned();
+    if let Some(release) = &newer {
+        ui.horizontal(|ui| {
+            ui.label(RichText::new(app.locale.fmt("msg.update_available", &release.version)).strong());
+            if ui.button(app.t("options.updates.open_release")).clicked() {
+                app.open_url(&release.url);
+            }
+        });
+    } else if !checking && state.error.is_none() && state.checked_at > 0 {
+        ui.label(RichText::new(app.locale.fmt("msg.up_to_date", "Glossa")).color(look.success()));
+    }
+    hint(ui, &look, &last_checked(app, state.checked_at, glossa_core::now_unix()));
+    ui.add_space(8.0);
+    ui.checkbox(&mut st.draft.updates.check_automatically, app.t("options.updates.auto"));
+    hint(ui, &look, &app.t("options.updates.auto_hint"));
+    ui.add_space(8.0);
+    if ui.add_enabled(!checking, egui::Button::new(app.t("options.updates.check_now"))).clicked() {
+        app.engine.check_for_updates_async(false);
+    }
+    ui.add_space(4.0);
+    hint(ui, &look, &app.t("options.updates.note"));
+}
+
+/// "Last checked: 3 h ago". Units are abbreviated so the line needs no
+/// plural forms, which the locale format has no way to express.
+fn last_checked(app: &GlossaApp, checked_at: i64, now: i64) -> String {
+    let (key, n) = last_checked_parts(checked_at, now);
+    app.locale.fmt(key, &n.to_string())
+}
+
+/// The locale key and the number for [`last_checked`].
+fn last_checked_parts(checked_at: i64, now: i64) -> (&'static str, i64) {
+    // A clock set back since the check gives a negative age: "just now" is
+    // the least wrong thing to say.
+    let age = (now - checked_at).max(0);
+    match age {
+        _ if checked_at <= 0 => ("options.updates.never", 0),
+        0..=119 => ("options.updates.checked_now", 0),
+        120..=7199 => ("options.updates.checked_minutes", age / 60),
+        7200..=172_799 => ("options.updates.checked_hours", age / 3600),
+        _ => ("options.updates.checked_days", age / 86_400),
+    }
 }
 
 #[cfg(test)]
@@ -3002,6 +3066,17 @@ mod tests {
             files: Vec::new(),
             classic_files: 0,
         }
+    }
+
+    #[test]
+    fn the_time_of_the_last_update_check_is_put_in_the_largest_fitting_unit() {
+        let now = 1_800_000_000;
+        assert_eq!(last_checked_parts(0, now), ("options.updates.never", 0));
+        assert_eq!(last_checked_parts(now - 30, now), ("options.updates.checked_now", 0));
+        assert_eq!(last_checked_parts(now + 500, now), ("options.updates.checked_now", 0));
+        assert_eq!(last_checked_parts(now - 45 * 60, now), ("options.updates.checked_minutes", 45));
+        assert_eq!(last_checked_parts(now - 5 * 3600, now), ("options.updates.checked_hours", 5));
+        assert_eq!(last_checked_parts(now - 3 * 86_400, now), ("options.updates.checked_days", 3));
     }
 
     #[test]

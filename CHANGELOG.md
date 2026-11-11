@@ -9,6 +9,23 @@ the notes of its GitHub release.
 
 ### Added
 
+- Checking for updates. Options → Updates shows the version, when the last
+  check was and what it found, and has "Check now" and a switch for a check
+  once a day (off by default); `glossa-cli update` does the same check. A
+  newer version is named with a button that opens its release page; nothing
+  is downloaded or installed. The check is one request to GitHub's list of
+  the project's releases, through your proxy
+  ([configuration](docs/configuration.md#updates)).
+- With no translation service switched on, the main window and the popup
+  say so and offer a button to Options → Services, instead of an empty
+  strip.
+- The history window says "No translations yet" or "Nothing matches" when
+  its list is empty, labels its count, and offers "Undo" for a few seconds
+  after an entry is deleted. The dictionary window does the same after
+  "Clear history", and says "Type a word and press Enter" before the first
+  lookup.
+- Themes: `success` (text saying something is in order) and `ai` (the plate
+  behind AI endpoints in the service strips), both optional.
 - A double click on the popup's header (the language line or a free spot
   beside the buttons) opens the main window with the popup's text.
 - Options → Appearance → Popup → "Open the main window with the popup":
@@ -222,6 +239,49 @@ the notes of its GitHub release.
 
 ### Changed
 
+- "Speech input", which is not built yet, is no longer offered on the
+  hotkey page. A binding already in `config.toml` still loads.
+- Service tabs cut a long name with an ellipsis, and show the badge alone
+  when there is no room for a name, instead of clipping letters.
+- The font list leaves out the fonts the system hides (names starting
+  with a dot on macOS) and the `@` vertical twins on Windows; its first
+  entry reads "Default (theme font)".
+- The OCR result window reports a picture with no text once, calmly, with
+  one "Select again" button; "Translate in place" and the boxes toggle are
+  disabled when the recognition found no places to draw on.
+- The dictionary window names the dictionary under an article instead of
+  its id, and says "no results" in the interface language whatever the
+  dictionary. The history export says "Exported N entries to PATH".
+- The about box no longer shows the `-dirty` mark of a development build
+  (`glossa-cli --version` and `doctor` still do), and the Appearance
+  preview's popup header reads as the real popup's does.
+- Errors say what happened in the interface language. Every failure the
+  engine can report has its own message that names the service or module
+  and, where there is one, the way out ("DeepL needs an API key. Enter it
+  in Options → Services."), in English and Russian; before, all but a
+  handful came out as the engine's English text. What the service itself
+  answered is kept as small print under the message, and the original
+  goes to the log. A classic `lang.json` keeps its own wording for the
+  messages it has.
+- A failed translation or lookup is no longer a dead end. The main
+  window's result pane, the popup and the dictionary put buttons under
+  the message that fit the failure: "Try again" (no connection, a timeout,
+  too many requests, an answer that could not be read, a server error),
+  "Service settings" (a missing key, or the service refusing it with HTTP
+  401 or 403), "Download files" (a module whose files or Python packages
+  are not there yet), "Open Modules" (a module waiting for approval) and
+  "Try <the next service>".
+- An error message at the bottom of a window stays until it is closed and
+  has a Copy button; "Copied" and other notes still go away after four
+  seconds. An error shown by the pointer stays for as long as it takes to
+  read (eight seconds and up, with its length) and a long one ends in an
+  ellipsis after six lines instead of being cut off by the window's edge.
+- A message appears in the window that raised it: History, Dictionary,
+  Options, the module editor, module panels, the OCR result, Welcome,
+  About and the keyboard show their own, where they all used to appear in
+  the main window, behind the one being used. One raised by the popup or
+  an overlay, or by a window closed before it could show it, appears by
+  the pointer.
 - AI endpoints added in the options sit in their own group at the end of
   the service strips (popup and main window), on a blue plate, so "Google
   Gemini" no longer looks like a second Google. Hovering one says it is an

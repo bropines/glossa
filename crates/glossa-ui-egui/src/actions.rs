@@ -16,13 +16,15 @@ use crate::app::GlossaApp;
 /// A finished background step.
 pub enum Task {
     /// The selection (or the reason there is none) for an action.
-    Selection { action: Action, text: Option<String>, cursor: Option<(i32, i32)>, error: Option<String> },
+    Selection { action: Action, text: Option<String>, cursor: Option<(i32, i32)>, error: Option<glossa_core::Error> },
     /// The whole desktop, for the OCR overlay.
-    Screenshot { action: Action, image: image::RgbaImage, origin: (i32, i32), error: Option<String> },
+    Screenshot { action: Action, image: image::RgbaImage, origin: (i32, i32), error: Option<glossa_core::Error> },
     /// A translation made for an action with no window (copy, replace, listen).
     Translated { action: Action, text: String, error: Option<glossa_core::Error> },
     /// A step finished; tell the user how it went.
     Done { message: String, error: bool },
+    /// A step failed; the error is put in words where it is shown.
+    Failed(glossa_core::Error),
     /// Text selected with the mouse in mouse mode.
     Mouse { text: String, cursor: Option<(i32, i32)> },
 }
@@ -168,7 +170,7 @@ pub fn read_selection(cfg: &glossa_core::Config, action: Action) -> Option<Task>
     let started = std::time::Instant::now();
     let (text, error) = match glossa_platform::selection::capture_selection(&opts) {
         Ok(t) => (t.filter(|s| !s.trim().is_empty()), None),
-        Err(e) => (None, Some(e.to_string())),
+        Err(e) => (None, Some(e)),
     };
     tracing::debug!(
         chars = text.as_ref().map(|t| t.chars().count()),
@@ -234,12 +236,7 @@ fn grab_screen(app: &mut GlossaApp, action: Action) {
         std::thread::sleep(Duration::from_millis(120));
         let task = match glossa_platform::capture::capture_virtual_desktop() {
             Ok((image, x, y)) => Task::Screenshot { action, image, origin: (x, y), error: None },
-            Err(e) => Task::Screenshot {
-                action,
-                image: image::RgbaImage::new(1, 1),
-                origin: (0, 0),
-                error: Some(e.to_string()),
-            },
+            Err(e) => Task::Screenshot { action, image: image::RgbaImage::new(1, 1), origin: (0, 0), error: Some(e) },
         };
         let _ = tx.send(task);
         ctx.request_repaint();
@@ -262,18 +259,15 @@ fn grab_monitor(app: &mut GlossaApp, action: Action) {
         let task = match monitor {
             Some(m) => match glossa_platform::capture::capture_rect(m.bounds()) {
                 Ok(image) => Task::Screenshot { action, image, origin: (m.x, m.y), error: None },
-                Err(e) => Task::Screenshot {
-                    action,
-                    image: image::RgbaImage::new(1, 1),
-                    origin: (0, 0),
-                    error: Some(e.to_string()),
-                },
+                Err(e) => {
+                    Task::Screenshot { action, image: image::RgbaImage::new(1, 1), origin: (0, 0), error: Some(e) }
+                }
             },
             None => Task::Screenshot {
                 action,
                 image: image::RgbaImage::new(1, 1),
                 origin: (0, 0),
-                error: Some("no monitors found to capture".into()),
+                error: Some(glossa_core::Error::Platform("no monitors found to capture".into())),
             },
         };
         let _ = tx.send(task);
@@ -285,7 +279,7 @@ pub fn on_task(app: &mut GlossaApp, task: Task) {
     match task {
         Task::Selection { action, text, cursor, error } => match (text, error) {
             (Some(t), _) => with_selection(app, action, t, cursor),
-            (None, Some(e)) => app.notify(e, true),
+            (None, Some(e)) => app.report(&e),
             (None, None) => {
                 // Nothing selected: the classic fallback was the clipboard.
                 if action == Action::ShowPopup {
@@ -300,15 +294,15 @@ pub fn on_task(app: &mut GlossaApp, task: Task) {
         },
         Task::Screenshot { action, image, origin, error } => match error {
             Some(e) => {
-                let m = app.locale.fmt("msg.ocr_unavailable", &e);
-                app.notify(m, true);
+                tracing::warn!("screen capture failed: {e}");
+                let m = app.locale.fmt("msg.ocr_unavailable", &app.locale.describe_error(&e));
+                app.notify_with(m, e.detail(), true);
             }
             None => crate::ocr::begin(app, action, image, origin),
         },
         Task::Translated { action, text, error } => {
             if let Some(e) = error {
-                let m = app.describe(&e);
-                app.notify(m, true);
+                app.report(&e);
                 return;
             }
             match action {
@@ -318,7 +312,7 @@ pub fn on_task(app: &mut GlossaApp, task: Task) {
                     let ctx = app.ctx.clone();
                     std::thread::spawn(move || {
                         if let Err(e) = glossa_platform::selection::replace_selection(&text) {
-                            let _ = tx.send(Task::Done { message: e.to_string(), error: true });
+                            let _ = tx.send(Task::Failed(e));
                             ctx.request_repaint();
                         }
                     });
@@ -328,6 +322,7 @@ pub fn on_task(app: &mut GlossaApp, task: Task) {
             }
         }
         Task::Done { message, error } => app.notify(message, error),
+        Task::Failed(e) => app.report(&e),
         Task::Mouse { text, cursor } => crate::mouse::on_selection(app, text, cursor),
     }
 }
@@ -346,7 +341,7 @@ fn with_selection(app: &mut GlossaApp, action: Action, text: String, cursor: Opt
             let ctx = app.ctx.clone();
             std::thread::spawn(move || {
                 if let Err(e) = glossa_platform::selection::replace_selection(&converted) {
-                    let _ = tx.send(Task::Done { message: e.to_string(), error: true });
+                    let _ = tx.send(Task::Failed(e));
                     ctx.request_repaint();
                     return;
                 }

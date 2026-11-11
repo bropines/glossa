@@ -98,7 +98,7 @@ The classic shorthand is accepted too: `"b"` is `#bbbbbb`, `"57"` is
 
 | section | what it styles |
 |---|---|
-| top level | `dark` (start from dark or light defaults), `accent` (a colour, or `"system"`), `accent_text`, `link`, `selection`, `error`, `warning` |
+| top level | `dark` (start from dark or light defaults), `accent` (a colour, or `"system"`), `accent_text`, `link`, `selection`, `error`, `warning`, `success` (text saying something is in order: a granted permission, "up to date"), `ai` (the plate behind the AI endpoints in the service strips) |
 | `[window]` | window background, text, borders, the text panes' background (`client_back`), group frames |
 | `[button.normal]`, `.hover`, `.pressed`, `.disabled` | buttons: `back_top` / `back_bottom` (classic themes' gradient ends; drawn as their mix), `border`, `text` |
 | `[edit.normal]`, `.hover`, `.focused`, `.disabled` | text fields |
