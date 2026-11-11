@@ -1114,6 +1114,13 @@ pub struct Advanced {
     /// ([`TERMINAL_RULE_SETS`]); newer ones are added once on load, so a rule
     /// the user deleted stays deleted.
     pub terminal_rules_version: u32,
+    /// On a Wayland desktop that offers neither the PRIMARY selection nor
+    /// the RemoteDesktop portal, the selection cannot be read at all. With
+    /// this on, the selection actions then take whatever is on the
+    /// clipboard (copy first, then press the hotkey). Off by default: the
+    /// clipboard may hold something the user never meant to send to a
+    /// translation service.
+    pub clipboard_as_selection: bool,
 }
 
 impl Default for Advanced {
@@ -1130,6 +1137,7 @@ impl Default for Advanced {
             terminals: TERMINAL_RULE_SETS.iter().flat_map(|(_, rules)| rules.iter().map(|r| r.rule())).collect(),
             terminal_copy_action: CopyAction::AccessibilityOnly,
             terminal_rules_version: latest_terminal_rules(),
+            clipboard_as_selection: false,
         }
     }
 }
@@ -1642,7 +1650,14 @@ pub struct Server {
     /// Let pot-app's routes (`/selection_translate`, `/translate`…) through
     /// without the token, but only from a loopback address and without an
     /// `Origin` header, so key bindings made for pot-app work unchanged.
-    pub pot_compat_without_token: bool,
+    /// Off unless the user turns it on: with it, any local process (another
+    /// user's included) can open the popup with text of its choosing.
+    ///
+    /// This replaces `pot_compat_without_token`, which was on by default
+    /// and written into every `config.toml`, so a file cannot say whether
+    /// its user wanted it. The old key is deliberately not an alias: it is
+    /// ignored, and the routes need the token until this one is set.
+    pub pot_routes_without_token: bool,
     /// Offer the same actions on the session bus (`io.github.bropines.Glossa`)
     /// on Linux and the BSDs. Needs no token: the session bus is the user's
     /// own. Ignored on Windows and macOS.
@@ -1655,7 +1670,7 @@ impl Default for Server {
             enabled: true,
             bind: "127.0.0.1:60828".into(),
             token: String::new(),
-            pot_compat_without_token: true,
+            pot_routes_without_token: false,
             dbus: true,
         }
     }
@@ -2310,11 +2325,16 @@ copy_joined_lines = true",
     }
 
     #[test]
-    fn pot_compat_defaults_on() {
-        assert!(Config::from_toml("").unwrap().server.pot_compat_without_token);
+    fn pot_routes_need_the_token_unless_switched_on() {
+        assert!(!Config::from_toml("").unwrap().server.pot_routes_without_token);
         assert!(
-            !Config::from_toml("[server]\npot_compat_without_token = false").unwrap().server.pot_compat_without_token
+            Config::from_toml("[server]\npot_routes_without_token = true").unwrap().server.pot_routes_without_token
         );
+        // The old key was on by default and written into every file, so it
+        // cannot tell a choice from the default: it opens nothing any more.
+        let old = Config::from_toml("[server]\npot_compat_without_token = true").unwrap();
+        assert!(!old.server.pot_routes_without_token);
+        assert!(!old.to_toml().contains("pot_compat_without_token"), "and is dropped on the next save");
     }
 
     #[test]

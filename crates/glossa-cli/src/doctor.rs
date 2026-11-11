@@ -3,6 +3,8 @@
 //!
 //! Everything is looked up, nothing is changed: a `config.toml` that does
 //! not parse is reported, not moved aside as the desktop program would.
+//! The one exception is `control-api.json` left behind by a Glossa that
+//! crashed, which looking for the running one removes.
 
 use std::net::{SocketAddr, TcpStream, ToSocketAddrs};
 use std::time::Duration;
@@ -98,7 +100,7 @@ pub fn report(paths: &Paths) -> Value {
             "timeout_secs": cfg.network.timeout_secs,
             "certificates": if glossa_net::uses_system_certificates() { "system store" } else { "bundled Mozilla roots" },
         },
-        "control_api": control_api(&cfg),
+        "control_api": control_api(paths, &cfg),
         "dbus": dbus(&cfg),
         "portal": portal(&session),
         "running": glossa_platform::instance::is_running(paths),
@@ -136,8 +138,9 @@ fn portal(session: &Session) -> Value {
     })
 }
 
-/// Whether the control API is switched on and what answers at its address.
-fn control_api(cfg: &Config) -> Value {
+/// Whether the control API is switched on, what answers at its address,
+/// and whether a Glossa that proved to own this data folder runs one.
+fn control_api(paths: &Paths, cfg: &Config) -> Value {
     let addr = glossa_engine::server::connect_addr(&cfg.server.bind);
     let answer = match addr.to_socket_addrs().ok().and_then(|mut a| a.next()) {
         None => "the address does not resolve".to_owned(),
@@ -146,9 +149,37 @@ fn control_api(cfg: &Config) -> Value {
     json!({
         "enabled": cfg.server.enabled,
         "bind": cfg.server.bind,
-        "pot_compat_without_token": cfg.server.pot_compat_without_token,
+        "pot_routes_without_token": cfg.server.pot_routes_without_token,
         "answer": answer,
+        "instance": instance(paths),
     })
+}
+
+/// The Glossa `glossa-cli` would talk to for this data folder. A Glossa
+/// answering on the port is not enough (it may be another user's, or run
+/// with another folder), which is the usual reason behind "it runs, yet
+/// the command changed nothing"; so the report says which of the two it
+/// is. The token is never part of it.
+fn instance(paths: &Paths) -> Value {
+    use glossa_engine::server::Found;
+    match glossa_engine::server::find_running(paths) {
+        Found::Running(r) => json!({
+            "state": "verified",
+            "addr": r.addr,
+            "pid": r.pid,
+            "version": r.version,
+            "text": format!("Glossa {} (pid {}) at {} proved to be this folder's", r.version, r.pid, r.addr),
+        }),
+        Found::None => json!({
+            "state": "none",
+            "text": "no Glossa runs its control API with this data folder",
+        }),
+        Found::Unverified(why) => json!({
+            "state": "unverified",
+            "reason": why,
+            "text": format!("not verified, so glossa-cli sends it nothing: {why}"),
+        }),
+    }
 }
 
 /// What listens at `addr`: Glossa (its `/health`), something else, or
@@ -249,6 +280,7 @@ pub fn print(r: &Value) -> String {
         s(&c["bind"]),
         s(&c["answer"])
     );
+    let _ = writeln!(o, "  this data folder: {}", s(&c["instance"]["text"]));
     let d = &r["dbus"];
     if !d.is_null() {
         let _ = writeln!(o, "\nD-Bus service");
@@ -314,6 +346,43 @@ mod tests {
         assert_eq!(r["paths"]["config_state"]["ok"], false);
         assert!(print(&r).contains("does not parse"));
         assert!(paths.config_file().exists());
+        std::fs::remove_dir_all(&dir).ok();
+    }
+    /// Tells this folder's own Glossa from one that merely has the port,
+    /// and never prints the token.
+    #[test]
+    fn the_control_api_section_says_whose_glossa_answers() {
+        let dir = std::env::temp_dir().join(format!("glossa-doctor-instance-{}", std::process::id()));
+        std::fs::remove_dir_all(&dir).ok();
+        let server_of = |home: &str, bind: &str, token: &str| {
+            let paths = Paths::for_exe_dir(dir.clone(), Some(dir.join(home)));
+            let mut cfg = Config::default();
+            cfg.server.bind = bind.into();
+            cfg.server.token = token.into();
+            let engine = Engine::with_config(paths.clone(), cfg).unwrap();
+            (paths, glossa_engine::server::start(engine).unwrap())
+        };
+        let (theirs, their_server) = server_of("theirs", "127.0.0.1:0", "their-secret-token");
+        let own = instance(&theirs);
+        assert_eq!(own["state"], "verified", "{own}");
+        assert_eq!(own["addr"], their_server.addr.to_string());
+        assert_eq!(own["pid"], std::process::id());
+
+        // My settings name their port, and no Glossa runs with my folder.
+        let mine = Paths::for_exe_dir(dir.clone(), Some(dir.join("mine")));
+        let mut cfg = Config::default();
+        cfg.server.bind = their_server.addr.to_string();
+        cfg.server.token = "my-secret-token".into();
+        cfg.save(&mine.config_file()).unwrap();
+        let c = control_api(&mine, &cfg);
+        assert!(c["answer"].as_str().unwrap().contains("is running"), "{c}");
+        assert_eq!(c["instance"]["state"], "none", "{c}");
+        let text = print(&json!({ "control_api": c }));
+        assert!(text.contains("this data folder: no Glossa runs"), "{text}");
+        assert!(!c.to_string().contains("secret-token") && !own.to_string().contains("secret-token"));
+
+        their_server.stop();
+        assert_eq!(instance(&theirs)["state"], "none", "gone with its server");
         std::fs::remove_dir_all(&dir).ok();
     }
 }

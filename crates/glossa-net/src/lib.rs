@@ -13,8 +13,10 @@
 
 mod codepage;
 mod form;
+pub mod retry;
 
-use std::sync::{Mutex, RwLock};
+use std::sync::atomic::AtomicBool;
+use std::sync::{Arc, Mutex, RwLock};
 use std::time::{Duration, Instant};
 
 use glossa_core::config::{Network, ProxyMode};
@@ -78,6 +80,15 @@ pub struct HttpRequest {
     /// retrying: for a provider with somewhere else to go, a retry only
     /// prolongs the block and delays the fall-back.
     pub no_retry_when_limited: bool,
+    /// How many times this request may be retried, instead of the client's
+    /// setting. A caller that retries by its own policy through
+    /// [`retry::send`] sets 0 here, so nothing is retried twice.
+    pub retries: Option<u32>,
+    /// Raised when the job this request belongs to is cancelled: the wait
+    /// before a retry ends at once with [`Error::Cancelled`], and no further
+    /// attempt is made. The engine sets it for every provider call (see
+    /// [`Cancellable`]).
+    pub cancel: Option<Arc<AtomicBool>>,
 }
 
 impl HttpRequest {
@@ -123,6 +134,18 @@ impl HttpRequest {
     /// See [`HttpRequest::no_retry_when_limited`].
     pub fn no_retry_when_limited(mut self) -> Self {
         self.no_retry_when_limited = true;
+        self
+    }
+
+    /// See [`HttpRequest::retries`].
+    pub fn retries(mut self, retries: u32) -> Self {
+        self.retries = Some(retries);
+        self
+    }
+
+    /// See [`HttpRequest::cancel`].
+    pub fn cancel(mut self, flag: Arc<AtomicBool>) -> Self {
+        self.cancel = Some(flag);
         self
     }
 
@@ -565,54 +588,66 @@ impl Http for HttpClient {
 
     fn send(&self, request: HttpRequest) -> Result<HttpResponse, Error> {
         let started = Instant::now();
-        let mut attempt = 0;
-        loop {
-            let result = self.send_once(&request);
-            let retry = match &result {
-                // A timeout has used the whole budget already; waiting for it
-                // again doubles the time before the engine moves on to the
-                // next service. A host the network black-holes (TLS to some
-                // CDNs is dropped by DPI on some networks) cost 20 s that way.
-                Err(Error::Timeout(_)) => false,
-                Err(e) if e.is_transient() => true,
-                Ok(r) if request.no_retry_when_limited && is_rate_limit(r) => false,
-                Ok(r) => matches!(r.status, 429 | 500 | 502 | 503 | 504),
-                Err(_) => false,
-            };
-            if !retry || attempt >= self.max_retries {
-                if let Err(e) = &result {
-                    tracing::debug!(
-                        url = %redact(&request.url),
-                        error = %e,
-                        attempts = attempt + 1,
-                        ms = started.elapsed().as_millis() as u64,
-                        "request failed"
-                    );
-                } else if started.elapsed() >= SLOW {
-                    tracing::debug!(
-                        url = %redact(&request.url),
-                        attempts = attempt + 1,
-                        ms = started.elapsed().as_millis() as u64,
-                        "slow request done"
-                    );
-                } else {
-                    tracing::trace!(
-                        url = %redact(&request.url),
-                        ms = started.elapsed().as_millis() as u64,
-                        "request done"
-                    );
-                }
-                return result;
+        let mut attempts = 0u32;
+        // The one retry loop (`retry`): jittered waits, `Retry-After`, and a
+        // wait that ends when the job is cancelled.
+        let policy = retry::RetryPolicy::client(request.retries.unwrap_or(self.max_retries));
+        let result = retry::send(&policy, &request, |request| {
+            attempts += 1;
+            self.send_once(request)
+        });
+        let ms = started.elapsed().as_millis() as u64;
+        match &result {
+            Err(Error::Cancelled) => tracing::trace!(url = %redact(&request.url), attempts, ms, "request cancelled"),
+            Err(e) => tracing::debug!(url = %redact(&request.url), error = %e, attempts, ms, "request failed"),
+            Ok(_) if started.elapsed() >= SLOW => {
+                tracing::debug!(url = %redact(&request.url), attempts, ms, "slow request done")
             }
-            attempt += 1;
-            let backoff = Duration::from_millis(300 * (1 << attempt.min(4)));
-            let why = match &result {
-                Err(e) => e.to_string(),
-                Ok(r) => format!("status {}", r.status),
-            };
-            tracing::debug!(url = %redact(&request.url), attempt, error = %why, "retrying in {backoff:?}");
-            std::thread::sleep(backoff);
+            Ok(_) => tracing::trace!(url = %redact(&request.url), ms, "request done"),
         }
+        result
+    }
+}
+
+/// An [`Http`] that marks every request with a job's cancel flag, so the
+/// wait before a retry ends when the job is cancelled. The engine wraps its
+/// client in one for each provider call; a request that already carries a
+/// flag keeps it.
+pub struct Cancellable<'a> {
+    inner: &'a dyn Http,
+    flag: Arc<AtomicBool>,
+}
+
+impl<'a> Cancellable<'a> {
+    pub fn new(inner: &'a dyn Http, flag: Arc<AtomicBool>) -> Self {
+        Cancellable { inner, flag }
+    }
+
+    fn mark(&self, mut request: HttpRequest) -> HttpRequest {
+        request.cancel.get_or_insert_with(|| self.flag.clone());
+        request
+    }
+}
+
+impl Http for Cancellable<'_> {
+    fn send(&self, request: HttpRequest) -> Result<HttpResponse, Error> {
+        self.inner.send(self.mark(request))
+    }
+
+    fn send_streaming(
+        &self,
+        request: HttpRequest,
+        on_chunk: &mut dyn FnMut(&[u8]) -> bool,
+    ) -> Result<HttpResponse, Error> {
+        self.inner.send_streaming(self.mark(request), on_chunk)
+    }
+
+    fn send_download(
+        &self,
+        request: HttpRequest,
+        on_event: &mut dyn FnMut(DownloadEvent<'_>) -> bool,
+    ) -> Result<HttpResponse, Error> {
+        self.inner.send_download(self.mark(request), on_event)
     }
 }
 
@@ -1086,6 +1121,46 @@ mod tests {
             ..Default::default()
         };
         HttpClient::new(&settings).unwrap()
+    }
+
+    #[test]
+    fn the_client_obeys_retry_after_its_own_retry_count_and_the_cancel_flag() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        static HITS: AtomicUsize = AtomicUsize::new(0);
+        // The first two answers ask for one second; the rest for an hour.
+        let url = stalling_server(|mut s| {
+            use std::io::{Read as _, Write as _};
+            let mut buf = [0u8; 1024];
+            let _ = s.read(&mut buf);
+            let after = if HITS.fetch_add(1, Ordering::SeqCst) < 2 { 1 } else { 3600 };
+            let _ = s.write_all(
+                format!("HTTP/1.1 503 Busy\r\nRetry-After: {after}\r\nContent-Length: 0\r\nConnection: close\r\n\r\n")
+                    .as_bytes(),
+            );
+        });
+        // Cancelled during the second's wait: over at once, nothing more sent.
+        let flag = Arc::new(AtomicBool::new(false));
+        let raise = flag.clone();
+        std::thread::spawn(move || {
+            std::thread::sleep(Duration::from_millis(200));
+            raise.store(true, Ordering::SeqCst);
+        });
+        let started = Instant::now();
+        let err = client(5, 3).send(HttpRequest::get(&url).cancel(flag)).unwrap_err();
+        assert!(matches!(err, Error::Cancelled), "{err:?}");
+        assert!(started.elapsed() < Duration::from_millis(900), "took {:?}", started.elapsed());
+        assert_eq!(HITS.load(Ordering::SeqCst), 1);
+
+        // The second is waited for; the hour is not, nor retried sooner.
+        let started = Instant::now();
+        let r = client(5, 3).send(HttpRequest::get(&url)).unwrap();
+        assert_eq!((r.status, HITS.load(Ordering::SeqCst)), (503, 3));
+        assert!(started.elapsed() >= Duration::from_secs(1), "took {:?}", started.elapsed());
+        assert!(started.elapsed() < Duration::from_secs(4), "took {:?}", started.elapsed());
+
+        // A request that retries elsewhere is sent once.
+        let r = client(5, 3).send(HttpRequest::get(&url).retries(0)).unwrap();
+        assert_eq!((r.status, HITS.load(Ordering::SeqCst)), (503, 4));
     }
 
     #[test]

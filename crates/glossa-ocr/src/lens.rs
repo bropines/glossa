@@ -555,6 +555,7 @@ mod native {
     use glossa_core::{Error, OcrRequest, OcrResult, Result};
     use glossa_lens::{GeometryData, Page};
     use glossa_modules::Host;
+    use glossa_net::retry::RetryPolicy;
     use glossa_net::HttpRequest;
 
     use std::time::Duration;
@@ -583,10 +584,16 @@ mod native {
         Ok(result(&page, size, req))
     }
 
-    /// Retries after a failure that may pass: two, as chrome-lens-py makes.
-    const MAX_RETRIES: u32 = 2;
-    /// Statuses worth trying again (chrome-lens-py's `RETRYABLE_STATUS_CODES`).
-    const RETRYABLE: [u16; 5] = [429, 500, 502, 503, 504];
+    /// How Lens is retried: twice, as chrome-lens-py does, after a network
+    /// failure, a timeout or one of its `RETRYABLE_STATUS_CODES` (429, 500,
+    /// 502, 503, 504), waiting about 1 s and then 2 s, or what the server's
+    /// `Retry-After` says, up to 30 s.
+    const RETRY: RetryPolicy = RetryPolicy {
+        max_retries: 2,
+        base: Duration::from_secs(1),
+        cap: Duration::from_secs(30),
+        retry_timeouts: true,
+    };
     /// Requests to Lens at once, from the whole program: a screen being
     /// translated or watched must not hammer the service.
     const MAX_IN_FLIGHT: usize = 2;
@@ -617,56 +624,19 @@ mod native {
         }
     }
 
-    /// Send, trying again after a network failure or a status in
-    /// [`RETRYABLE`]: exponential backoff with jitter, capped at 30 s, or the
-    /// server's `Retry-After` for 429 and 503. Cancelling stops the wait.
+    /// Send by [`RETRY`], through the shared retry loop in `glossa_net`
+    /// (jitter, `Retry-After`, a wait that cancelling ends). The request
+    /// tells the client underneath not to retry as well: one layer retries,
+    /// or a failing Lens would be asked up to six times instead of three.
     fn send_with_retries(host: &Host, request: HttpRequest) -> Result<glossa_net::HttpResponse> {
         let _slot = Slot::take(host)?;
-        let mut attempt = 0;
-        loop {
-            host.check_cancelled()?;
-            let outcome = host.http.send(request.clone());
-            let wait = match &outcome {
-                Ok(r) if (200..300).contains(&r.status) => return outcome,
-                Ok(r) if RETRYABLE.contains(&r.status) && attempt < MAX_RETRIES => {
-                    let after = r
-                        .headers
-                        .iter()
-                        .find(|(k, _)| k.eq_ignore_ascii_case("retry-after"))
-                        .and_then(|(_, v)| retry_after(v))
-                        .filter(|_| matches!(r.status, 429 | 503));
-                    after.unwrap_or_else(|| backoff(attempt))
-                }
-                Ok(r) => {
-                    let body = String::from_utf8_lossy(&r.body).chars().take(300).collect();
-                    return Err(Error::HttpStatus { provider: NAME.into(), status: r.status, body });
-                }
-                Err(Error::Network(_) | Error::Timeout(_)) if attempt < MAX_RETRIES => backoff(attempt),
-                Err(_) => return outcome,
-            };
-            tracing::debug!(attempt, wait_ms = wait.as_millis() as u64, "Lens: trying again");
-            attempt += 1;
-            let until = std::time::Instant::now() + wait;
-            while std::time::Instant::now() < until {
-                host.check_cancelled()?;
-                std::thread::sleep(Duration::from_millis(50).min(until - std::time::Instant::now()));
-            }
+        let request = request.retries(0).cancel(host.cancel.flag());
+        let response = glossa_net::retry::send(&RETRY, &request, |request| host.http.send(request.clone()))?;
+        if (200..300).contains(&response.status) {
+            return Ok(response);
         }
-    }
-
-    /// `min(30 s, 2^attempt s)`, scaled by a random 50–100 % so several
-    /// clients do not retry in step.
-    fn backoff(attempt: u32) -> Duration {
-        use std::hash::{BuildHasher, Hasher};
-        let mut h = std::collections::hash_map::RandomState::new().build_hasher();
-        h.write_u32(attempt);
-        let jitter = 0.5 + 0.5 * (h.finish() % 1000) as f64 / 1000.0;
-        Duration::from_secs_f64((2f64.powi(attempt as i32)).min(30.0) * jitter)
-    }
-
-    /// A `Retry-After` in seconds (an HTTP date is ignored), at most 30 s.
-    fn retry_after(value: &str) -> Option<Duration> {
-        value.trim().parse::<u64>().ok().map(|s| Duration::from_secs(s.min(30)))
+        let body = String::from_utf8_lossy(&response.body).chars().take(300).collect();
+        Err(Error::HttpStatus { provider: NAME.into(), status: response.status, body })
     }
 
     /// The page as our result, its boxes in pixels of the picture as given
@@ -751,17 +721,58 @@ mod native {
         #[test]
         fn backoff_grows_and_stays_capped() {
             for attempt in 0..8 {
-                let d = backoff(attempt).as_secs_f64();
+                let d = RETRY.backoff(attempt).as_secs_f64();
                 let full = 2f64.powi(attempt as i32).min(30.0);
                 assert!(d >= full * 0.5 && d <= full, "attempt {attempt}: {d}");
             }
         }
 
+        /// A client that fails every request, counting them, and checks
+        /// that each one tells the client underneath not to retry.
+        struct Failing(std::sync::atomic::AtomicU32, u16);
+
+        impl glossa_net::Http for Failing {
+            fn send(&self, request: HttpRequest) -> Result<glossa_net::HttpResponse> {
+                assert_eq!(request.retries, Some(0), "the client must not retry under Lens's own retries");
+                assert!(request.cancel.is_some(), "the wait must be cancellable");
+                self.0.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                Ok(glossa_net::HttpResponse {
+                    status: self.1,
+                    headers: vec![("Retry-After".into(), "0".into())],
+                    body: b"busy".to_vec(),
+                    codepage: None,
+                })
+            }
+        }
+
         #[test]
-        fn retry_after_takes_seconds_only() {
-            assert_eq!(retry_after(" 3 "), Some(Duration::from_secs(3)));
-            assert_eq!(retry_after("600"), Some(Duration::from_secs(30)));
-            assert_eq!(retry_after("Wed, 21 Oct 2026 07:28:00 GMT"), None);
+        fn a_failing_lens_is_asked_three_times_by_one_retry_layer() {
+            let http = Failing(Default::default(), 503);
+            let options = Default::default();
+            let cancel = glossa_modules::CancelToken::new();
+            let host = Host {
+                http: &http,
+                options: &options,
+                ui_language: glossa_core::LangId::ENGLISH,
+                preferred_domain: "",
+                cancel: &cancel,
+            };
+            let err = send_with_retries(&host, HttpRequest::post("https://lens.test/")).unwrap_err();
+            assert!(matches!(err, Error::HttpStatus { status: 503, .. }), "{err:?}");
+            assert_eq!(http.0.load(std::sync::atomic::Ordering::SeqCst), 3);
+
+            // A status that will not pass is not asked again.
+            let http = Failing(Default::default(), 403);
+            let host = Host { http: &http, ..host };
+            assert!(send_with_retries(&host, HttpRequest::post("https://lens.test/")).is_err());
+            assert_eq!(http.0.load(std::sync::atomic::Ordering::SeqCst), 1);
+
+            // A cancelled job sends nothing.
+            cancel.cancel();
+            let http = Failing(Default::default(), 503);
+            let host = Host { http: &http, ..host };
+            assert!(matches!(send_with_retries(&host, HttpRequest::post("https://lens.test/")), Err(Error::Cancelled)));
+            assert_eq!(http.0.load(std::sync::atomic::Ordering::SeqCst), 0);
         }
     }
 }

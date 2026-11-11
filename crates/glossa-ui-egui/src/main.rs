@@ -926,17 +926,11 @@ fn refresh_autostart(cfg: &glossa_core::Config) {
 /// Ask an already running Glossa to show its main window. True if one
 /// answered.
 fn hand_over_to_running_instance(paths: &Paths) -> bool {
-    let Ok(cfg) = glossa_core::Config::load(&paths.config_file()) else { return false };
-    if !cfg.server.enabled || cfg.server.token.is_empty() {
-        return false;
-    }
-    // Is anything listening at all? Binding the port answers at once, where a
-    // connection to a closed port on Windows waits for its timeout.
-    if std::net::TcpListener::bind(&cfg.server.bind).is_ok() {
-        return false;
-    }
-    let url =
-        format!("http://{}/v1/action/{}?token={}", cfg.server.bind, Action::ShowMainWindow.id(), cfg.server.token);
+    // Only the Glossa that owns this data folder, and only once it has
+    // proved to be that one: the port in the settings may be anybody's, and
+    // whoever listens there must not be handed the token.
+    let Some(running) = glossa_engine::server::find_running(paths).running() else { return false };
+    let url = format!("http://{}/v1/action/{}", running.addr, Action::ShowMainWindow.id());
     let settings = glossa_core::config::Network {
         timeout_secs: 1,
         max_retries: 0,
@@ -944,7 +938,9 @@ fn hand_over_to_running_instance(paths: &Paths) -> bool {
         ..Default::default()
     };
     let Ok(http) = glossa_net::HttpClient::new(&settings) else { return false };
-    let req = glossa_net::HttpRequest::get(url).timeout(Duration::from_millis(600));
+    let req = glossa_net::HttpRequest::post(url)
+        .header("Authorization", format!("Bearer {}", running.token))
+        .timeout(Duration::from_millis(600));
     matches!(glossa_net::Http::send(&http, req), Ok(r) if r.status == 202)
 }
 

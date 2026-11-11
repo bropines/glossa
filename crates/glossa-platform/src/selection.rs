@@ -14,9 +14,13 @@
 //! - **X11**: the PRIMARY selection, which is exactly "what is highlighted";
 //!   no keystroke at all, so a terminal never receives a Ctrl+C.
 //! - **Wayland**: PRIMARY where the compositor offers data-control (KDE,
-//!   wlroots, Hyprland; GNOME bridges it for XWayland), otherwise the regular
-//!   clipboard — the user has to press Ctrl+C first, which
-//!   [`Session::limitations`](crate::Session::limitations) tells them.
+//!   wlroots, Hyprland; GNOME bridges it for XWayland), otherwise Ctrl+C
+//!   through the RemoteDesktop portal. With neither, the selection cannot
+//!   be read: the capture fails with a message saying so, unless the user
+//!   chose to have the clipboard stand in for it
+//!   (`[advanced] clipboard_as_selection`, off by default; the clipboard
+//!   may hold anything, and what is captured goes to a translation
+//!   service).
 //! - **macOS**: Accessibility `AXSelectedText`, then a synthetic Cmd+C with
 //!   the clipboard saved and restored. In web content (browsers, Electron
 //!   apps) Cmd+C comes first: Chromium's `AXSelectedText` loses the line
@@ -52,6 +56,35 @@ pub struct CaptureOptions {
     /// there instead of `copy_action`.
     pub terminals: Vec<ExceptionRule>,
     pub terminal_copy_action: CopyAction,
+    /// Where the selection cannot be read at all (Wayland without PRIMARY
+    /// and without the RemoteDesktop portal), return the clipboard's text
+    /// instead of failing (`[advanced] clipboard_as_selection`).
+    pub clipboard_as_selection: bool,
+}
+
+/// What the user is told where the selection cannot be read and the
+/// clipboard was not allowed to stand in for it.
+pub const NO_SELECTION_ACCESS: &str = "this desktop gives no way to read the selected text (no PRIMARY selection and \
+     no RemoteDesktop portal). Copy the text and use \"Translate clipboard\", or set [advanced] \
+     clipboard_as_selection = true to have the selection hotkeys take the clipboard";
+
+/// Without PRIMARY and without the portal: the clipboard's text when the
+/// user allowed that, else an error that says what to do. Never the
+/// clipboard unasked: it may hold a password or a private message, and
+/// whatever this returns is sent to a translation service.
+#[cfg_attr(any(windows, target_os = "macos"), allow(dead_code))]
+fn last_resort(allowed: bool, clipboard: impl FnOnce() -> Option<String>) -> Result<Option<String>> {
+    if !allowed {
+        return Err(crate::platform_err(NO_SELECTION_ACCESS));
+    }
+    static WARNED: std::sync::Once = std::sync::Once::new();
+    WARNED.call_once(|| {
+        tracing::warn!(
+            "the selection cannot be read on this desktop; taking the clipboard instead, as [advanced] \
+             clipboard_as_selection asks (copy the text with Ctrl+C before translating)"
+        );
+    });
+    Ok(clipboard())
 }
 
 impl Default for CaptureOptions {
@@ -68,6 +101,7 @@ impl CaptureOptions {
             restore_clipboard: true,
             terminals: advanced.terminals.clone(),
             terminal_copy_action: advanced.terminal_copy_action,
+            clipboard_as_selection: advanced.clipboard_as_selection,
         }
     }
 
@@ -160,17 +194,10 @@ fn unix_capture(opts: &CaptureOptions) -> Result<Option<String>> {
                     Err(e) => tracing::debug!("no copy through the desktop portal: {e}"),
                 }
             }
-            // The clipboard is the best we have then. It holds the selection
-            // only if the user copied it, which the session limitations
-            // explain.
-            static WARNED: std::sync::Once = std::sync::Once::new();
-            WARNED.call_once(|| {
-                tracing::warn!(
-                    "PRIMARY selection unavailable on this compositor; using the clipboard \
-                     (copy text with Ctrl+C before translating)"
-                );
-            });
-            Ok(cb.get_text())
+            // Nothing can read the selection here. The clipboard stands in
+            // only when the user asked for that; otherwise say so instead
+            // of quietly translating whatever was copied last.
+            last_resort(opts.clipboard_as_selection, || cb.get_text())
         }
         _ => Err(crate::platform_err("reading the selection needs a graphical session")),
     }
@@ -374,6 +401,22 @@ mod tests {
         assert_eq!(o.copy_action, CopyAction::CtrlInsert);
         assert_eq!(o.wait_ms, 900);
         assert!(o.restore_clipboard);
+    }
+
+    #[test]
+    fn the_clipboard_stands_in_for_the_selection_only_when_asked() {
+        assert!(!CaptureOptions::default().clipboard_as_selection, "off unless the user turns it on");
+        let adv = Advanced { clipboard_as_selection: true, ..Advanced::default() };
+        assert!(CaptureOptions::from_config(&adv).clipboard_as_selection);
+
+        // Not asked: the clipboard is not even looked at, and the error
+        // says what to do instead.
+        let err = last_resort(false, || panic!("the clipboard must not be read")).unwrap_err();
+        let text = err.to_string();
+        assert!(text.contains("Translate clipboard") && text.contains("clipboard_as_selection"), "{text}");
+        // Asked: what was copied, or nothing.
+        assert_eq!(last_resort(true, || Some("copied".into())).unwrap().as_deref(), Some("copied"));
+        assert_eq!(last_resort(true, || None).unwrap(), None);
     }
 
     #[test]

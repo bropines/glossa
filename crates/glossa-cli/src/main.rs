@@ -717,14 +717,9 @@ fn module_panel(args: &Args) -> Result<(), Fail> {
     };
     let id = glossa_engine::PanelId::parse(name)?;
     if args.flags.iter().any(|(n, _)| n == "--open") {
-        let cfg = glossa_core::Config::load(&paths(args).config_file())?;
-        let addr = glossa_engine::server::connect_addr(&cfg.server.bind);
-        let url =
-            format!("http://{addr}/v1/panel?id={}&token={}", glossa_net::url_encode(&id.to_string()), cfg.server.token);
-        let resp = glossa_net::Http::send(&glossa_net::HttpClient::plain(), glossa_net::HttpRequest::post(url))?;
-        if !resp.is_success() {
-            return Err(Fail::Op(format!("Glossa answered {}: {}", resp.status, resp.text())));
-        }
+        let (addr, token) = the_running_glossa(args)?;
+        let path = format!("/v1/panel?id={}", glossa_net::url_encode(&id.to_string()));
+        control_api(&addr, &token, true, &path, vec![])?;
         return Ok(());
     }
     let e = engine(args)?;
@@ -1425,18 +1420,11 @@ fn run(args: &Args) -> Result<(), Fail> {
         }
         "action" => {
             let id = args.rest.first().ok_or_else(|| Fail::Usage("action needs an action id".into()))?;
-            let cfg = glossa_core::Config::load(&paths(args).config_file())?;
-            let addr = glossa_engine::server::connect_addr(&cfg.server.bind);
-            let mut url = format!("http://{addr}/v1/action/{id}?token={}", cfg.server.token);
-            if let Some(t) = args.rest.get(1..).filter(|r| !r.is_empty()) {
-                url.push_str("&text=");
-                url.push_str(&glossa_net::url_encode(&t.join(" ")));
-            }
-            let http = glossa_net::HttpClient::plain();
-            let resp = glossa_net::Http::send(&http, glossa_net::HttpRequest::get(url))?;
-            if !resp.is_success() {
-                return Err(Fail::Op(format!("Glossa answered {}: {}", resp.status, resp.text())));
-            }
+            let (addr, token) = the_running_glossa(args)?;
+            // The text goes in the body and the token in a header: neither
+            // belongs in a URL, which ends up in logs.
+            let text = args.rest.get(1..).filter(|r| !r.is_empty()).map(|t| t.join(" ").into_bytes());
+            control_api(&addr, &token, true, &format!("/v1/action/{id}"), text.unwrap_or_default())?;
             Ok(())
         }
         "doctor" => {
@@ -1669,16 +1657,33 @@ fn python(args: &Args, words: &[String]) -> Result<(), Fail> {
     }
 }
 
-/// A running Glossa's control API, when one answers: its address and token.
+/// The control API of the Glossa that runs with this data folder: its
+/// address and token. `None` when none runs, or when what answers has not
+/// proved to be that Glossa (said on stderr): the port named in
+/// `config.toml` may belong to another program, another user or a Glossa
+/// with another data folder, and none of them is sent the token. See
+/// `glossa_engine::server::runtime`.
 fn running_glossa(args: &Args) -> Option<(String, String)> {
-    let cfg = glossa_core::Config::load(&paths(args).config_file()).ok()?;
-    if !cfg.server.enabled || cfg.server.token.is_empty() {
-        return None;
+    use glossa_engine::server::Found;
+    match glossa_engine::server::find_running(&paths(args)) {
+        Found::Running(r) => Some((r.addr, r.token)),
+        Found::None => None,
+        Found::Unverified(why) => {
+            eprintln!("glossa-cli: note: not using the control API ({why}); the token was not sent");
+            None
+        }
     }
-    let addr = glossa_engine::server::connect_addr(&cfg.server.bind);
-    let probe = glossa_net::HttpRequest::get(format!("http://{addr}/health")).timeout(Duration::from_secs(2));
-    let resp = glossa_net::Http::send(&glossa_net::HttpClient::plain(), probe).ok()?;
-    (resp.is_success() && resp.text().contains("\"glossa\"")).then_some((addr, cfg.server.token))
+}
+
+/// [`running_glossa`], for a command that only makes sense with one.
+fn the_running_glossa(args: &Args) -> Result<(String, String), Fail> {
+    running_glossa(args).ok_or_else(|| {
+        Fail::Op(format!(
+            "no Glossa with its control API on is running with this data folder ({}). Start Glossa (or \
+             `glossa-cli serve`), or name its folder with --home",
+            paths(args).data_dir.display()
+        ))
+    })
 }
 
 /// A Glossa holding this data folder that could not be reached through
@@ -1715,7 +1720,9 @@ fn preset_api(addr: &str, token: &str, post: bool, path: &str, body: Vec<u8>) ->
 fn control_api(addr: &str, token: &str, post: bool, path: &str, body: Vec<u8>) -> Result<String, Fail> {
     let url = format!("http://{addr}{path}");
     let req = if post { glossa_net::HttpRequest::post(url).body(body) } else { glossa_net::HttpRequest::get(url) };
-    let req = req.header("Authorization", format!("Bearer {token}")).timeout(Duration::from_secs(30));
+    // Never retried here: an answer lost on the way back does not mean the
+    // preset was not applied or the module not approved.
+    let req = req.header("Authorization", format!("Bearer {token}")).timeout(Duration::from_secs(30)).retries(0);
     let resp = glossa_net::Http::send(&glossa_net::HttpClient::plain(), req)?;
     let text = resp.text();
     if !resp.is_success() {
@@ -2014,6 +2021,65 @@ mod tests {
         drop(guard);
         assert!(run(&["--local", "apply", "A"]).is_ok(), "nobody running");
         std::fs::remove_dir_all(&home).ok();
+    }
+
+    /// The audit's case: another Glossa (another data folder) listens on
+    /// the port this folder's settings name. The command must act on its
+    /// own folder and send that Glossa nothing, where it used to send its
+    /// token and fail with "missing or wrong token".
+    #[test]
+    fn a_glossa_with_another_data_folder_is_left_alone() {
+        let base = std::env::temp_dir().join(format!("glossa-cli-two-homes-{}", std::process::id()));
+        std::fs::remove_dir_all(&base).ok();
+        let (theirs, mine) = (base.join("theirs"), base.join("mine"));
+        let exe = std::env::current_exe().unwrap().parent().unwrap().to_path_buf();
+        let their_engine = {
+            let mut cfg = glossa_core::Config::default();
+            cfg.server.bind = "127.0.0.1:0".into();
+            cfg.server.token = "their-token".into();
+            Engine::with_config(Paths::for_exe_dir(exe.clone(), Some(theirs.clone())), cfg).unwrap()
+        };
+        let their_server = glossa_engine::server::start(their_engine.clone()).unwrap();
+        // My settings name their port, as two default installs both name 60828.
+        let mut cfg = glossa_core::Config::default();
+        cfg.server.bind = their_server.addr.to_string();
+        cfg.server.token = "my-token".into();
+        cfg.save(&Paths::for_exe_dir(exe.clone(), Some(mine.clone())).config_file()).unwrap();
+
+        let h = mine.to_string_lossy().into_owned();
+        let args = p(&["--home", h.as_str(), "--json", "preset", "apply", "Private"]);
+        assert!(running_glossa(&args).is_none(), "their Glossa is not mine");
+        assert!(preset(&args, &args.rest).is_ok(), "applied to my own settings file");
+        let mine_now = glossa_core::Config::load(&paths(&args).config_file()).unwrap();
+        assert_eq!(mine_now.services.preset, "Private");
+        assert_ne!(their_engine.config().services.preset, "Private", "theirs was not touched");
+        // A command that needs a running Glossa says that none runs here.
+        let action = p(&["--home", h.as_str(), "action", "show_popup"]);
+        assert!(matches!(run(&action), Err(Fail::Op(m)) if m.contains("running with this data folder")));
+
+        // My own Glossa running (on yet another port): now it is found, by
+        // its runtime file, and the change goes through it.
+        let my_engine = {
+            let mut cfg = mine_now.clone();
+            cfg.server.bind = "127.0.0.1:0".into();
+            Engine::with_config(paths(&args), cfg).unwrap()
+        };
+        let rx = my_engine.subscribe();
+        let my_server = glossa_engine::server::start(my_engine.clone()).unwrap();
+        let (addr, token) = running_glossa(&args).expect("my own Glossa proves itself");
+        assert_eq!((addr, token.as_str()), (my_server.addr.to_string(), "my-token"));
+        let back = p(&["--home", h.as_str(), "--json", "preset", "apply", "Everyday"]);
+        assert!(preset(&back, &back.rest).is_ok());
+        assert_eq!(my_engine.config().services.preset, "Everyday", "applied in the running program");
+        assert!(run(&p(&["--home", h.as_str(), "action", "show_popup", "two", "words"])).is_ok());
+        let got = (0..50).find_map(|_| match rx.recv_timeout(Duration::from_millis(100)) {
+            Ok(glossa_engine::Event::Action { action, text }) => Some((action, text)),
+            _ => None,
+        });
+        assert_eq!(got, Some((glossa_core::Action::ShowPopup, Some("two words".into()))));
+        my_server.stop();
+        their_server.stop();
+        std::fs::remove_dir_all(&base).ok();
     }
 
     #[test]
