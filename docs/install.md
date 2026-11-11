@@ -1,5 +1,9 @@
 # Installing Glossa
 
+In a hurry? [Getting started](getting-started.md) is the short version.
+По-русски: [ru/install.md](ru/install.md). Installing on other people's
+machines: [Deployment](deployment.md).
+
 Every [release](https://github.com/bropines/glossa/releases) has these files
 (`1.2.3` stands for the version). Each comes for two kinds of processor:
 `x86_64` is an ordinary Intel or AMD PC and an Intel Mac, `arm64` is ARM
@@ -31,6 +35,7 @@ installer or portable copy:
   <img src="images/downloads.svg" alt="Which download to take: the system, then the processor, then an installer or a portable copy" width="760">
 </p>
 
+- [System requirements](#system-requirements)
 - [Windows](#windows): [the installer](#the-installer),
   [the portable archive](#the-portable-archive),
   [winget and Scoop](#winget-and-scoop)
@@ -38,7 +43,51 @@ installer or portable copy:
 - [Linux](#linux): [Debian and Ubuntu](#debian-and-ubuntu),
   [AppImage](#appimage), [the archive](#the-archive)
 - [Where Glossa keeps your files](#where-glossa-keeps-your-files)
+- [Removing Glossa completely](#removing-glossa-completely)
+- [Accessibility](#accessibility)
 - [Building the packages](#building-the-packages)
+
+## System requirements
+
+What the release workflow builds, and what those builds need. Nothing
+else is built or tested.
+
+| | supported | processors | state |
+|---|---|---|---|
+| Windows | 10 and 11 (the installer refuses older versions) | x86_64; arm64 | x86_64 is used daily by the author. The arm64 build has not been run on ARM hardware yet. |
+| macOS | 11 or later on Apple silicon; 10.15 or later on Intel | arm64; x86_64 | Early testing, on Apple silicon. Run under Rosetta on Apple silicon, the Intel build's Apple Vision engine reads only Latin text, so take the arm64 build there. |
+| Linux | Debian 12, Ubuntu 22.04 and distributions of that age or newer, with GTK 3 | x86_64; arm64 | Built and smoke-tested by the release workflow only; not tried on real hardware. |
+
+There are no 32-bit builds, and none for Windows 7 or 8.
+
+- **Graphics.** Windows are drawn with OpenGL by default. *Options →
+  Appearance → Graphics engine* (or `GLOSSA_RENDERER`) switches to the GPU
+  through Direct3D 12, Vulkan or Metal, or to a software rasteriser for
+  machines without a working graphics driver. The oldest OpenGL version
+  that works has not been measured.
+- **Linux libraries.** GTK 3, ALSA and OpenGL from the system. The tray
+  icon needs an AppIndicator library, and on GNOME the *AppIndicator and
+  KStatusNotifierItem Support* extension. Under Wayland some features
+  depend on the desktop's portals
+  ([Troubleshooting](troubleshooting.md#linux-and-wayland)).
+- **Disk.** The downloads of 0.1.0-beta.2 are 8 to 17 MB each (the macOS
+  disk images the smallest, the Linux archives the largest). A release
+  build for macOS on Apple silicon is 14 MB for `glossa` and 6.5 MB for
+  `glossa-cli`; installed sizes on the other systems have not been
+  measured. There is no web engine and no runtime to install.
+- **Disk, optional.** What modules download on request is much larger
+  than Glossa itself: the managed Python about 25 MB (65 MB unpacked) and
+  `uv` about 15 MB for Python modules, the PaddleOCR module 30 to 45 MB,
+  a local language model 1.1 to 1.3 GB.
+- **Memory.** By the project's own figures, a few MB while Glossa waits
+  in the tray with no window open (the window system is unloaded after 45
+  seconds without one) and about 75 MB with windows loaded under OpenGL.
+  Not measured again for this page, and not at all on Linux.
+- **Network.** Not needed to install or start. The online services need
+  it; [Privacy](privacy.md) lists what is contacted and what works
+  offline.
+- **Rights.** No administrator rights, except to install for all users on
+  Windows or a `.deb` on Linux.
 
 ## Windows
 
@@ -95,20 +144,24 @@ does. To upgrade, unpack the new version over the old folder; `data` stays.
 
 ### winget and Scoop
 
-Each release carries manifests for both, with that release's URLs and
-checksums. They become usable only once the repository is public and the
-release is published; until then the download links behind them do not
-answer. After that:
+Glossa is **not in the winget community repository yet and has no Scoop
+bucket**: `winget install Bropines.Glossa` and `scoop install glossa` do
+not find it. What exists is a manifest for each, attached to every release
+with that release's URLs and checksums, which both tools can use directly:
 
 - **Scoop**: `scoop install https://github.com/bropines/glossa/releases/download/v1.2.3/glossa.json`
-  (or add the manifest to a bucket). It installs the portable archive for
-  your processor, keeps its `data` folder across updates, and puts
-  `glossa-cli` on the `PATH`.
-- **winget**: the three `Bropines.Glossa*.yaml` files go in a pull request to
-  [winget-pkgs](https://github.com/microsoft/winget-pkgs) (under
-  `manifests/b/Bropines/Glossa/1.2.3/`); once merged,
-  `winget install Bropines.Glossa`. Before that, `winget install --manifest
-  <folder with the three files>` tries them locally.
+  (put the release's tag in place of `v1.2.3`). It installs the portable
+  archive for your processor, keeps its `data` folder across updates, and
+  puts `glossa-cli` on the `PATH`. Installed from a URL, Scoop has no
+  bucket to learn about later versions from: install the next release's
+  manifest the same way.
+- **winget**: download the three `Bropines.Glossa*.yaml` files into an
+  empty folder and run `winget install --manifest <that folder>`. winget
+  installs from local manifests only after an administrator has allowed
+  it once: `winget settings --enable LocalManifestFiles`. The manifests
+  have not been submitted to
+  [winget-pkgs](https://github.com/microsoft/winget-pkgs) yet (they would
+  go under `manifests/b/Bropines/Glossa/<version>/`).
 
 ## macOS
 
@@ -125,9 +178,16 @@ Terminal:
 xattr -dr com.apple.quarantine /Applications/Glossa.app
 ```
 
-The [README](../README.md#macos) lists the permissions it asks for. To remove
-Glossa, quit it from the menu bar and move `Glossa.app` to the Bin; settings
-are in `~/Library/Application Support/Glossa`.
+The [README](../README.md#macos) lists the permissions it asks for.
+
+**Upgrading**: quit Glossa from the menu bar, replace `Glossa.app` with the
+new one, and grant the permissions again: macOS ties them to the app's
+signature, which is different in every build
+([how](troubleshooting.md#macos-permissions)). Your settings stay.
+
+**Removing**: quit it from the menu bar and move `Glossa.app` to the Bin.
+Settings stay in `~/Library/Application Support/Glossa`;
+[below](#removing-glossa-completely) is the rest.
 
 The `.zip` holds the same app plus `glossa-cli` and the documents. A Mac
 app keeps its settings in the user's Library rather than beside itself; to
@@ -203,6 +263,96 @@ unless *Options → Basics* (or the welcome guide) puts them in the system
 keychain: Windows Credential Manager, the macOS Keychain, or the Secret
 Service on Linux. The keychain stays on the computer, so a portable copy
 on a USB stick is better off with the file.
+
+## Removing Glossa completely
+
+The uninstallers remove the program and keep your data unless you say
+otherwise. To leave nothing behind, turn off starting at login in
+*Options → Basics* if it is on, quit Glossa (the tray or menu-bar icon →
+*Exit*), and then:
+
+**Windows**
+
+1. *Settings → Apps → Installed apps → Glossa → Uninstall*, and answer
+   *Yes* when it asks whether to delete your settings, history and
+   modules. That removes `%APPDATA%\Glossa` and `%LOCALAPPDATA%\Glossa`
+   (the log, caches and module downloads). A silent uninstall
+   (`unins000.exe /VERYSILENT`) never deletes them: remove the two folders
+   by hand.
+2. Keys kept in the system keychain: *Control Panel → Credential Manager →
+   Windows Credentials*, the entries whose names start with `Glossa/`.
+3. A portable copy: delete its folder. If starting at login was still on,
+   also the value `Glossa` under
+   `HKCU\Software\Microsoft\Windows\CurrentVersion\Run` (Task Manager's
+   *Startup apps* shows it).
+
+**macOS**
+
+1. Move `Glossa.app` to the Bin.
+2. Delete `~/Library/Application Support/Glossa` (settings, history,
+   modules and their downloads) and `~/Library/Caches/Glossa` (the log
+   and caches).
+3. Starting at login, if it was still on: delete
+   `~/Library/LaunchAgents/app.glossa.plist`.
+4. Keys: in *Keychain Access*, the login keychain, the items whose
+   service is `Glossa`.
+5. Permissions: remove Glossa from *Accessibility*, *Screen Recording* and
+   *Input Monitoring* in *System Settings → Privacy & Security*, or:
+
+   ```bash
+   tccutil reset Accessibility io.github.bropines.glossa
+   tccutil reset ScreenCapture io.github.bropines.glossa
+   tccutil reset ListenEvent io.github.bropines.glossa
+   ```
+
+**Linux**
+
+1. `sudo apt remove glossa`, or delete the AppImage or the unpacked
+   archive. If you ran the archive's `install.sh`, also
+   `~/.local/share/applications/io.github.bropines.Glossa.desktop` and
+   `~/.local/share/icons/hicolor/256x256/apps/io.github.bropines.Glossa.png`.
+2. Delete `~/.config/glossa` (settings, history, modules),
+   `~/.cache/glossa` (the log and caches) and `~/.local/share/glossa`
+   (module downloads).
+3. Starting at login, if it was still on: delete
+   `~/.config/autostart/glossa.desktop`.
+4. Keys: in your desktop's password manager (Seahorse, KWallet), the
+   entries for Glossa.
+
+A copy started with `GLOSSA_HOME` keeps everything in that folder, and a
+portable copy in `data` beside the program. Glossa installs no services,
+drivers or browser extensions. Programs it only talks to (Tesseract,
+chrome-lens-py, Ollama) are not its own and stay.
+
+## Accessibility
+
+What there is, and what there is not:
+
+- **Scaling.** *Options → Appearance* scales the whole interface
+  (`[appearance] ui_scale`, 0.5 to 3) and the icons separately. *Options →
+  Basics* sets the text size of the panes, and Ctrl + mouse wheel (or Ctrl
+  with plus and minus) over a text area zooms that text alone.
+- **Themes.** Light and dark themes, optionally following the system's
+  mode; themes are plain files, so colours can be changed to taste
+  ([Themes](theming.md)). There is no dedicated high-contrast theme.
+- **Fonts.** *Options → Basics → Font name* picks any installed font.
+- **Keyboard.** Every main action has a global hotkey or can be given one
+  (*Options → Hotkeys*), and the main window has shortcuts for
+  translating, clearing and swapping. Some things need the pointer:
+  dragging and resizing the popup, selecting a screen region, and the
+  popup's service strip, which shows on hover. Keyboard-only use of every
+  window has not been tested.
+- **Screen readers: not supported.** Glossa draws its own interface with
+  egui instead of the system's controls, and its builds do not include
+  egui's accessibility bridge (AccessKit). Narrator, NVDA, VoiceOver and
+  Orca therefore get nothing to read from Glossa's windows. If you rely on
+  a screen reader, [`glossa-cli`](cli.md) does the same translating,
+  looking up and recognising in a terminal.
+- **Reading aloud.** Translations can be spoken with the system's voices
+  ([guide](guide.md#listening)).
+
+Reports from people who use assistive technology are welcome
+([SUPPORT.md](../SUPPORT.md)).
 
 ## Building the packages
 

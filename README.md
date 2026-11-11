@@ -11,7 +11,7 @@
 
 <p align="center">
   <a href="https://github.com/bropines/glossa/actions/workflows/ci.yml"><img src="https://github.com/bropines/glossa/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
-  <a href="https://github.com/bropines/glossa/releases"><img src="https://img.shields.io/github/v/release/bropines/glossa?include_prereleases&label=release" alt="Latest release"></a>
+  <a href="https://github.com/bropines/glossa/releases"><img src="https://img.shields.io/github/v/release/bropines/glossa?include_prereleases&filter=v*&label=release" alt="Latest release"></a>
   <a href="#license"><img src="https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-blue" alt="MIT OR Apache-2.0"></a>
   <img src="https://img.shields.io/badge/platforms-Windows%20%C2%B7%20macOS%20%C2%B7%20Linux-555" alt="Windows, macOS and Linux">
 </p>
@@ -82,11 +82,12 @@
 
 - [Getting started](#getting-started): [download](#download),
   [first translation](#first-translation), [macOS permissions](#macos)
-- [Features](#features)
+- [Features](#features) · [Since the last release](#since-the-last-release)
 - [Coming from QTranslate](#coming-from-qtranslate)
 - [AI translators](#ai-translators) · [Text recognition](#text-recognition) ·
   [Modules](#modules) · [Command line](#command-line)
-- [Status](#status) · [Documentation](#documentation) · [Building](#building)
+- [Privacy](#privacy) · [Status](#status) ·
+  [Documentation](#documentation) · [Help](#help) · [Building](#building)
 - [Clean room](#clean-room) · [License](#license)
 
 ## Getting started
@@ -103,8 +104,10 @@ Take the file for your system from the
 | Linux (experimental) | the `.deb` on Debian and Ubuntu, otherwise the AppImage or the portable archive |
 
 Each comes for `x86_64` (Intel and AMD) and `arm64` (Apple silicon,
-Snapdragon, ARM boards). [Installing](docs/install.md) has every file, the
-first-launch warnings, upgrading and removing, and this chart:
+Snapdragon, ARM boards). [Getting started](docs/getting-started.md) walks
+through the first minutes; [Installing](docs/install.md) has every file,
+the system requirements, the first-launch warnings, upgrading and
+removing, and this chart:
 
 <p align="center">
   <img src="docs/images/downloads.svg" alt="Which download to take: the system, then the processor, then an installer or a portable copy" width="760">
@@ -133,7 +136,8 @@ aloud, replacing it with the translation, and more), are in
 
 The keyless services (Google, Microsoft, Yandex, DeepL and others) work at
 once. Services that need a key, and AI endpoints, are set up in
-*Options → Services*.
+*Options → Services*. The [user guide](docs/guide.md) goes through the
+rest task by task.
 
 ### macOS
 
@@ -220,6 +224,33 @@ described in [Installing](docs/install.md#macos).
 - **Small**: a few MB of memory in the tray (the window system unloads when
   nothing is on screen), one executable of about 20 MB, no web engine, no
   runtime to install.
+
+### Since the last release
+
+On `main` and in the next release, not in 0.1.0-beta.2 (the
+[changelog](CHANGELOG.md) has the full list under *Unreleased*):
+
+- **Module approvals**: a module you install by hand does not run until
+  you approve what its manifest asks for (hosts, programs, downloads,
+  packages); an update that asks for more waits again.
+- **Presets**: named sets of services, dictionaries, voice and OCR engine
+  to switch between in one click; they never hold keys.
+- **Modules with windows and richer settings**: module panels drawn by
+  Glossa, settings pages with conditions, checks and action buttons, and
+  a module editor inside the program.
+- **Modules that download what they need**: models and helper programs as
+  checked downloads on request, and Python modules without Python
+  installed (a managed Python and per-module environments).
+- **Offline engines as modules**: PaddleOCR for text recognition (its
+  program is released), and a local language model on llama.cpp for
+  translation (in the repository; its program is not released yet).
+- **Interface languages**: your own language packs, and switching the
+  language without a restart.
+- **Smaller things**: what a click on the tray icon does can be chosen;
+  the popup says which service answered when the first one failed; a
+  double click on the popup's header opens the main window; Google
+  Translate takes texts of up to 50 000 characters and copes with rate
+  limits by asking its other addresses.
 
 ## Coming from QTranslate
 
@@ -308,6 +339,17 @@ machine-readable output. Every command and flag is in
 [docs/cli.md](docs/cli.md); the HTTP API other programs use is in
 [docs/control-api.md](docs/control-api.md).
 
+## Privacy
+
+Glossa has no telemetry, no account and no server of its own, and it asks
+GitHub about a newer version only when you tell it to. A translator does have to send text somewhere: the
+text you translate goes to the service you chose, and a screen region
+goes to the OCR engine, which is Google Lens unless you pick an offline
+one. Keys stay on your machine, in the settings file or the system
+keychain. [Privacy and data](docs/privacy.md) lists every host by
+feature, what is stored and where, and how to work offline;
+[SECURITY.md](SECURITY.md) has the threat model.
+
 ## Status
 
 | system | state |
@@ -316,7 +358,7 @@ machine-readable output. Every command and flag is in
 | macOS (Apple silicon) | early testing |
 | Linux | experimental: builds and passes the tests, not yet tried on a real desktop |
 
-Not implemented yet: speech input, the update check.
+Not implemented yet: speech input.
 
 On Linux under Wayland, a program cannot do everything it can under X11.
 Glossa uses the desktop's portals where they exist: global hotkeys through
@@ -340,7 +382,12 @@ All pages, by topic: [docs/README.md](docs/README.md)
 
 | page | what it covers |
 |---|---|
-| [Installing](docs/install.md) | every download, first launch, upgrading, removing |
+| [Getting started](docs/getting-started.md) | install, the first start, the first translation |
+| [User guide](docs/guide.md) | the popup, the main window, dictionary, history, presets, mouse mode, hotkeys, AI translators, modules |
+| [Installing](docs/install.md) | system requirements, every download, first launch, upgrading, removing, accessibility |
+| [Troubleshooting](docs/troubleshooting.md) | by symptom: hotkeys, the popup, permissions, proxies, text recognition, modules, the log |
+| [Privacy and data](docs/privacy.md) | what is sent where, what is stored, working offline, clearing data |
+| [Deployment](docs/deployment.md) | unattended installs, preparing settings, proxies, hardening, the hosts to allow |
 | [Text recognition](docs/ocr.md) | engines, copy mode, Lens translation, translating in place |
 | [AI endpoints](docs/ai-endpoints.md) | OpenAI-compatible translators |
 | [Configuration](docs/configuration.md) | every `config.toml` key, and where the data folder is |
@@ -351,7 +398,14 @@ All pages, by topic: [docs/README.md](docs/README.md)
 | [Architecture](docs/architecture.md) | the crates and how a translation flows through them |
 
 [Changelog](CHANGELOG.md) · [Contributing](CONTRIBUTING.md) ·
-[Security](SECURITY.md)
+[Security](SECURITY.md) · [Code of Conduct](CODE_OF_CONDUCT.md) ·
+[Releasing](RELEASING.md)
+
+## Help
+
+[Troubleshooting](docs/troubleshooting.md) first, then
+[SUPPORT.md](SUPPORT.md): where to ask and what to include. Bug reports
+and questions are welcome in English and in Russian.
 
 ## Building
 

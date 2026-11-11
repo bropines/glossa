@@ -591,7 +591,7 @@ Set in *Options → Modules*, except `disabled`. See
 | `allow_native` | bool | `true` | Load native (shared library) modules. They run with the program's full privileges. |
 | `allow_legacy_scripts` | bool | `true` | Load classic QTranslate `Service.js` scripts. |
 | `call_timeout_ms` | integer | `30000` | Time limit for one call into a module, 1000–600 000 ms. |
-| `disabled` | array of ids | `[]` | Module ids not to load. File only. |
+| `disabled` | array of ids | `[]` | Ids not to load at all: modules, and also built-in and bundled services, built-in OCR engines and AI endpoints (`"lens"`, `"google"`, `"lara"`…). A listed id is absent from every list and is never used as a fallback. File only. |
 | `auto_download_assets` | bool | `false` | Download the files a module declares (models, dictionaries), and the managed Python and packages a Python module needs, on its first use without asking. Off, a module missing them fails with a message and its settings offer the download. See [modules/README.md](modules/README.md#assets). |
 | `trust_initialised` | bool | `false` | Written by the program once it has granted the modules installed before approvals existed what they declared then (see below). A settings file without it starts that one-time migration, except a broken one set aside for the defaults: then every hand-installed module asks again. File only. |
 

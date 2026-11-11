@@ -5,8 +5,9 @@ body:
   - type: markdown
     attributes:
       value: |
-        Please write in English. A new translation service is often best
-        written as a module, without changing Glossa itself: see the
+        Write in English or in Russian (можно по-русски). A new translation
+        service is often best written as a module, without changing Glossa
+        itself: see the
         [module guides](https://github.com/bropines/glossa/blob/main/docs/modules/README.md).
   - type: textarea
     id: problem
