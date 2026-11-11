@@ -527,7 +527,9 @@ fn build_agent(settings: &Network, proxy: Option<ProxySpec>) -> Result<ureq::Age
         } else {
             settings.user_agent.clone()
         })
-        .proxy(make_proxy(proxy)?)
+        // Offline only: nothing goes through a proxy, which is another
+        // machine whatever address the request names.
+        .proxy(make_proxy(if settings.offline_only { None } else { proxy })?)
         .tls_config(tls_config());
     Ok(cfg.build().into())
 }
@@ -846,13 +848,15 @@ pub fn url_host(url: &str) -> Option<String> {
     (!host.is_empty()).then(|| host.trim_end_matches('.').to_ascii_lowercase())
 }
 
-/// Whether a URL points at this computer: `localhost` (and names under
-/// it), `127.0.0.0/8` or `::1`. "Offline only" applies this test to every
+/// Whether a URL points at this computer: `localhost`, `127.0.0.0/8` or
+/// `::1`. "Offline only" applies this test to every
 /// request, and services with an address of their own (a self-hosted
 /// LibreTranslate, an AI endpoint) use it to say whether they are local.
 pub fn is_loopback_url(url: &str) -> bool {
     let Some(host) = url_host(url) else { return false };
-    if host == "localhost" || host.ends_with(".localhost") {
+    // Not names under `localhost`: a resolver that does not know them asks
+    // the network, and the answer need not be this computer.
+    if host == "localhost" {
         return true;
     }
     match host.parse::<std::net::IpAddr>() {
@@ -1208,7 +1212,6 @@ mod tests {
         for url in [
             "http://localhost:11434/v1",
             "http://LOCALHOST/",
-            "https://api.localhost/x",
             "http://127.0.0.1:5000/translate",
             "http://127.8.9.10",
             "http://[::1]:8080/v1",
@@ -1222,6 +1225,7 @@ mod tests {
             "http://127.0.0.1@evil.example/",
             "http://127.0.0.1.evil.example/",
             "http://localhost.evil.example/",
+            "https://api.localhost/x",
             "http://evil.example/?u=http://localhost/",
             "http://evil.example#@localhost",
             "http://127.0.0.1\\@evil.example/",

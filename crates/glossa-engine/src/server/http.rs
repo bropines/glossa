@@ -153,7 +153,10 @@ impl Request {
             let _ = stream.set_read_timeout(Some(Duration::from_millis(200)));
             let mut sink = [0u8; 8192];
             let mut drained = 0usize;
-            while drained < 256 * 1024 {
+            // One second in all: a client trickling bytes must not hold a
+            // connection slot for as long as it likes.
+            let until = std::time::Instant::now() + Duration::from_secs(1);
+            while drained < 256 * 1024 && std::time::Instant::now() < until {
                 match stream.read(&mut sink) {
                     Ok(0) | Err(_) => break,
                     Ok(n) => drained += n,

@@ -436,6 +436,23 @@ the notes of its GitHub release.
 
 ### Fixed
 
+- "Offline only" no longer sends a request for an address on this computer
+  through a configured proxy, counts only `localhost` and loopback addresses
+  as this computer (not names under `.localhost`), and applies to module
+  actions and panels too.
+- An imported preset sets nothing of a service that runs a program of yours
+  (the OCR command above all): not its arguments, and not whether it counts
+  as offline.
+- A settings file with a faulty entry in a list (a preset, an AI endpoint, a
+  rule) is kept as `config.toml.broken-<time>` before it is written over;
+  the entry used to be dropped for good after two saves.
+- With the data folder pointed at a folder that holds other things, files
+  there keep their owner's permissions (a script stays runnable); only
+  other users' access is taken away.
+- `glossa-cli` reaches a running Glossa whose control API token is kept in
+  the system keychain; a connection that trickles bytes can no longer hold
+  one of the control API's slots, and `0.0.0.0` is not accepted as its host.
+- An undone delete in the history is saved at once, like any other change.
 - `glossa` with a flag it does not know (or a stray word, or a flag missing
   its value) says so and exits with 64. It used to ignore the mistake and
   start, so `glossa --help` opened the application.

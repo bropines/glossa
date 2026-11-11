@@ -235,6 +235,9 @@ impl Engine {
                         ui_lang: lang.clone(),
                         strings: Default::default(),
                     };
+                    if let Some(e) = p.offline_refusal(provider.as_ref()) {
+                        return Err(e);
+                    }
                     out.reply = provider.action_with_updates(&p.host(&options), params, &bounded)?;
                 }
                 ActionKind::Call => {
@@ -285,12 +288,18 @@ impl Engine {
                             article_value(&article)?
                         }
                         "detect" => {
+                            if let Some(e) = p.offline_refusal(provider.as_ref()) {
+                                return Err(e);
+                            }
                             let d = provider.detect(&p.host(&options), &text)?;
                             Value::String(d.lang.bcp47().to_owned())
                         }
                         "speak" => {
                             let lang = lang_arg(&arg("lang")).unwrap_or(from);
                             let req = glossa_core::SpeakRequest { text: text.clone(), lang, slow: false };
+                            if let Some(e) = p.offline_refusal(provider.as_ref()) {
+                                return Err(e);
+                            }
                             let audio = provider.speak(&p.host(&options), &req)?;
                             out.effects.push(Effect::Play(Arc::new(audio)));
                             Value::Null

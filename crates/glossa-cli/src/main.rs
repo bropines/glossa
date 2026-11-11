@@ -1692,7 +1692,7 @@ fn python(args: &Args, words: &[String]) -> Result<(), Fail> {
 /// `glossa_engine::server::runtime`.
 fn running_glossa(args: &Args) -> Option<(String, String)> {
     use glossa_engine::server::Found;
-    match glossa_engine::server::find_running(&paths(args)) {
+    match glossa_engine::server::find_running(&paths(args), glossa_platform::secrets::system_store().as_deref()) {
         Found::Running(r) => Some((r.addr, r.token)),
         Found::None => None,
         Found::Unverified(why) => {

@@ -28,7 +28,7 @@ use std::net::{SocketAddr, TcpStream};
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
-use glossa_core::{Config, Paths};
+use glossa_core::Paths;
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 
@@ -212,7 +212,7 @@ impl Found {
 /// Find the control API of the Glossa that uses `paths`, and check that it
 /// is the one before anything secret is sent to it. A runtime file left by
 /// a crash is removed.
-pub fn find(paths: &Paths) -> Found {
+pub fn find(paths: &Paths, store: Option<&dyn glossa_core::secrets::SecretStore>) -> Found {
     let path = runtime_file(paths);
     let Ok(text) = std::fs::read_to_string(&path) else { return Found::None };
     // Stale? Whoever wrote the file holds the lock while it runs.
@@ -241,7 +241,9 @@ pub fn find(paths: &Paths) -> Found {
     let (Some(addr), Some(secret)) = (file["addr"].as_str(), file["instance"].as_str()) else {
         return Found::Unverified(format!("{} lacks the address or the instance secret", path.display()));
     };
-    let Ok(token) = Config::load(&paths.config_file()).map(|c| c.server.token) else {
+    // Through the keychain where the token is kept there: the file then
+    // holds a placeholder, which the server refuses.
+    let Ok(token) = crate::stored_config(paths, store).map(|c| c.server.token) else {
         return Found::Unverified("config.toml cannot be read for the token".into());
     };
     match verify(addr, secret) {

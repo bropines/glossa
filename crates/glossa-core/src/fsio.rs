@@ -53,8 +53,12 @@ pub fn make_private(path: &Path) {
         if meta.file_type().is_symlink() {
             return;
         }
-        let want = if meta.is_dir() { 0o700 } else { 0o600 };
-        if meta.permissions().mode() & 0o777 != want {
+        // Only the others' access goes. The owner's own bits stay as they
+        // are: a data folder pointed at a folder with other things in it
+        // (`GLOSSA_HOME=~`) must not cost a script its right to run.
+        let now = meta.permissions().mode() & 0o777;
+        let want = if meta.is_dir() { 0o700 } else { now & 0o700 };
+        if now != want {
             if let Err(e) = std::fs::set_permissions(path, std::fs::Permissions::from_mode(want)) {
                 tracing::warn!("could not make {} private: {e}", path.display());
             }

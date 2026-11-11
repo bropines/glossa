@@ -445,6 +445,12 @@ impl Engine {
                 damaged = Some(keep);
             }
         }
+        // A faulty entry of a list (a preset, an AI endpoint, a rule) is
+        // left out whole and is not written back, so the next save would
+        // lose the user's text: keep the file as it is beside the new one.
+        if damaged.is_none() && loaded.issues.iter().any(|i| i.path.contains('[')) {
+            damaged = Some(Config::damaged_path(&file, glossa_core::now_unix()));
+        }
         for issue in loaded.issues.iter().take(MAX_VALUE_WARNINGS) {
             tracing::warn!("{}: {}: {}; the default is used", file.display(), issue.path, issue.problem);
             warnings.push(StartupWarning {
@@ -2035,6 +2041,7 @@ impl Engine {
     pub fn restore_history(&self, entry: HistoryEntry) -> bool {
         let restored = self.inner.history.lock().restore(entry);
         if restored {
+            self.history_touched(false);
             self.emit(Event::HistoryChanged);
         }
         restored
@@ -2083,6 +2090,8 @@ impl Engine {
             }
         }
         h.truncate(200);
+        drop(h);
+        self.history_touched(true);
     }
 
     // -- classic installation -----------------------------------------------------

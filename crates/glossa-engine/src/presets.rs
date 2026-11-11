@@ -456,8 +456,16 @@ impl Engine {
 
         for (module, values) in p.options.iter_mut() {
             let specs = registry.get(module).map(|m| m.options().to_vec()).unwrap_or_default();
+            // A provider that runs the user's own program takes nothing
+            // from a preset: its other settings (which arguments, whether
+            // it counts as offline) decide what that program does.
+            let runs_a_program = specs.iter().any(|s| s.kind.is_executable());
             values.retain(|key, value| {
                 let label = format!("{module}.{key}");
+                if runs_a_program {
+                    dropped_options.push(label);
+                    return false;
+                }
                 let Some(spec) = specs.iter().find(|s| &s.key == key) else {
                     dropped_options.push(label);
                     return false;
@@ -692,7 +700,13 @@ mod tests {
             marker.display()
         );
         let report = e.import_preset_text(&file).unwrap();
-        assert_eq!(report.dropped_options, vec!["command-ocr.command".to_owned()], "{report:?}");
+        // Every setting of a provider that runs a program, not the command
+        // alone: `auto_lang3` is an argument of it.
+        assert_eq!(
+            report.dropped_options,
+            ["auto_lang3", "command", "timeout_secs"].map(|k| format!("command-ocr.{k}")),
+            "{report:?}"
+        );
         assert_eq!(report.blocked, vec!["ocr = command-ocr".to_owned()], "{report:?}");
         assert!(report.changes.iter().all(|c| c.what != "ocr"), "{report:?}");
         let (stored, _) = e.preset("Fast OCR").unwrap();
@@ -703,8 +717,8 @@ mod tests {
         let cfg = e.config();
         assert_eq!(cfg.ocr.provider, before.ocr.provider, "OCR was not switched");
         assert_eq!(cfg.services.option("command-ocr", "command"), None);
-        // Harmless settings of the same module still come through.
-        assert_eq!(cfg.services.option("command-ocr", "auto_lang3"), Some(&json!("deu")));
+        // Nor its other settings: they are arguments of the program.
+        assert_eq!(cfg.services.option("command-ocr", "auto_lang3"), None);
         let png = vec![0x89, b'P', b'N', b'G', 0x0D, 0x0A, 0x1A, 0x0A];
         let _ = e.recognize_using("command-ocr", png, glossa_core::LangId::ENGLISH, None);
         assert!(!marker.exists(), "the preset's program ran");
@@ -786,11 +800,12 @@ mod tests {
                  extra_headers = \"X-Forwarded-For: 1\"\nstyle = \"formal\"\n",
             )
             .unwrap();
-        for key in ["launcher", "model", "python_path", "player_cmd", "browser", "extra_headers"] {
+        for key in ["launcher", "model", "python_path", "player_cmd", "browser", "extra_headers", "style"] {
             assert!(report.dropped_options.contains(&format!("runner.{key}")), "{key}: {report:?}");
         }
         let (p, _) = e.preset("R").unwrap();
-        assert_eq!(p.options["runner"].keys().collect::<Vec<_>>(), vec!["style"]);
+        // It declares a command, so a preset sets nothing of it at all.
+        assert!(!p.options.contains_key("runner"), "{p:?}");
         // It declares a command the user never filled in: no role for it.
         assert!(report.blocked.contains(&"active = runner".to_owned()), "{report:?}");
         assert!(report.blocked.contains(&"enabled = runner".to_owned()), "{report:?}");

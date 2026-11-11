@@ -93,6 +93,9 @@ impl Engine {
                 ui_lang: lang.clone(),
                 strings: Default::default(),
             };
+            if let Some(e) = p.offline_refusal(provider.as_ref()) {
+                return Err(e);
+            }
             provider.action(&p.host(&options), params)
         });
         // The options may hold keys; only the outcome is logged.

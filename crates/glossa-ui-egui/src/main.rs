@@ -929,7 +929,11 @@ fn hand_over_to_running_instance(paths: &Paths) -> bool {
     // Only the Glossa that owns this data folder, and only once it has
     // proved to be that one: the port in the settings may be anybody's, and
     // whoever listens there must not be handed the token.
-    let Some(running) = glossa_engine::server::find_running(paths).running() else { return false };
+    let Some(running) =
+        glossa_engine::server::find_running(paths, glossa_platform::secrets::system_store().as_deref()).running()
+    else {
+        return false;
+    };
     let url = format!("http://{}/v1/action/{}", running.addr, Action::ShowMainWindow.id());
     let settings = glossa_core::config::Network {
         timeout_secs: 1,

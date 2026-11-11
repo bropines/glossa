@@ -480,7 +480,9 @@ fn host_allowed(host: Option<&str>, listening_beyond_loopback: bool) -> bool {
         return true;
     }
     match name.parse::<std::net::IpAddr>() {
-        Ok(ip) => ip.is_loopback() || listening_beyond_loopback,
+        // Never the unspecified address: a web page can name `0.0.0.0` to
+        // reach a server on this computer.
+        Ok(ip) => ip.is_loopback() || (listening_beyond_loopback && !ip.is_unspecified()),
         Err(_) => false,
     }
 }
@@ -1459,7 +1461,7 @@ mod tests {
     fn the_cli_finds_the_instance_of_its_own_data_folder_and_no_other() {
         let (e, dir) = engine();
         let paths = e.paths().clone();
-        assert_eq!(find_running(&paths), Found::None, "nothing runs yet");
+        assert_eq!(find_running(&paths, None), Found::None, "nothing runs yet");
         let server = start(e.clone()).unwrap();
         let file = runtime::runtime_file(&paths);
         #[cfg(unix)]
@@ -1467,7 +1469,7 @@ mod tests {
             use std::os::unix::fs::PermissionsExt;
             assert_eq!(std::fs::metadata(&file).unwrap().permissions().mode() & 0o777, 0o600);
         }
-        let found = find_running(&paths).running().expect("the running server proves itself");
+        let found = find_running(&paths, None).running().expect("the running server proves itself");
         assert_eq!(found.addr, server.addr.to_string(), "the port really bound, not the one in the settings");
         assert_eq!(found.token, "secret");
         assert_eq!(found.pid, std::process::id());
@@ -1476,7 +1478,7 @@ mod tests {
         // every default install does) finds nothing, and so sends nothing.
         let (other, other_dir) = engine();
         other.update_config(|c| c.server.bind = server.addr.to_string()).unwrap();
-        assert_eq!(find_running(other.paths()), Found::None);
+        assert_eq!(find_running(other.paths(), None), Found::None);
 
         // The secret is not in what /health says, with or without a challenge.
         let secret = serde_json::from_str::<Value>(&std::fs::read_to_string(&file).unwrap()).unwrap()["instance"]
@@ -1494,7 +1496,7 @@ mod tests {
         // Stopped: the file is withdrawn.
         server.stop();
         assert!(!file.exists());
-        assert_eq!(find_running(&paths), Found::None);
+        assert_eq!(find_running(&paths, None), Found::None);
         std::fs::remove_dir_all(&dir).ok();
         std::fs::remove_dir_all(&other_dir).ok();
     }
@@ -1530,7 +1532,7 @@ mod tests {
         // The settings name the impostor's port, and no Glossa runs: the
         // old check ("/health says glossa") would have sent the token.
         e.update_config(|c| c.server.bind = addr.to_string()).unwrap();
-        assert_eq!(find_running(&paths), Found::None);
+        assert_eq!(find_running(&paths, None), Found::None);
         assert!(seen.lock().unwrap().is_empty(), "nothing at all was sent");
 
         // Even a runtime file pointing at it, with its writer alive (the
@@ -1542,7 +1544,7 @@ mod tests {
             json!({ "addr": addr.to_string(), "pid": 1, "instance": "the-real-secret" }).to_string(),
         )
         .unwrap();
-        match find_running(&paths) {
+        match find_running(&paths, None) {
             Found::Unverified(why) => assert!(why.contains("not the one that owns this data folder"), "{why}"),
             other => panic!("{other:?}"),
         }
@@ -1553,7 +1555,7 @@ mod tests {
         // The writer gone (the lock free): the file is stale and removed.
         lock.unlock().unwrap();
         drop(lock);
-        assert_eq!(find_running(&paths), Found::None);
+        assert_eq!(find_running(&paths, None), Found::None);
         assert!(!runtime::runtime_file(&paths).exists(), "a stale runtime file is cleaned up");
         std::fs::remove_dir_all(&dir).ok();
     }
@@ -1564,12 +1566,12 @@ mod tests {
         let first = start(e.clone()).unwrap();
         let second = start(e.clone()).unwrap();
         assert_ne!(first.addr, second.addr);
-        assert_eq!(find_running(e.paths()).running().unwrap().addr, first.addr.to_string());
+        assert_eq!(find_running(e.paths(), None).running().unwrap().addr, first.addr.to_string());
         // The second stopping leaves the first one's file alone.
         second.stop();
-        assert_eq!(find_running(e.paths()).running().unwrap().addr, first.addr.to_string());
+        assert_eq!(find_running(e.paths(), None).running().unwrap().addr, first.addr.to_string());
         first.stop();
-        assert_eq!(find_running(e.paths()), Found::None);
+        assert_eq!(find_running(e.paths(), None), Found::None);
         std::fs::remove_dir_all(&dir).ok();
     }
 

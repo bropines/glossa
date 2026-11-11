@@ -162,7 +162,7 @@ fn control_api(paths: &Paths, cfg: &Config) -> Value {
 /// is. The token is never part of it.
 fn instance(paths: &Paths) -> Value {
     use glossa_engine::server::Found;
-    match glossa_engine::server::find_running(paths) {
+    match glossa_engine::server::find_running(paths, None) {
         Found::Running(r) => json!({
             "state": "verified",
             "addr": r.addr,
