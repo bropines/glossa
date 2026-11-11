@@ -63,6 +63,15 @@ the notes of its GitHub release.
 
 ### Added
 
+- Options has controls for two settings that could only be set in
+  `config.toml`: *Basics → Detect the language with* (`[general] detect`:
+  the built-in detector, a service, or the first and then the second) and
+  *Internet → Work offline* (`[network] offline_only`), each with a line
+  saying what it does.
+- A proxy that cannot be used is reported under the proxy's fields on
+  Options → Internet, with the entry marked, and the dialog stays open on
+  that page; the line at the bottom says nothing was saved.
+
 - Checking for updates. Options → Updates shows the version, when the last
   check was and what it found, and has "Check now" and a switch for a check
   once a day (off by default); `glossa-cli update` does the same check. A
@@ -346,6 +355,10 @@ the notes of its GitHub release.
 
 ### Changed
 
+- Options: lists and text fields at the right of a row have one width on
+  every page, the proxy's fields fill their group, the scroll bar no longer
+  sits on the groups' frames, and the mouse mode choices wrap in a narrow
+  window.
 - "Speech input", which is not built yet, is no longer offered on the
   hotkey page. A binding already in `config.toml` still loads.
 - Service tabs cut a long name with an ellipsis, and show the badge alone

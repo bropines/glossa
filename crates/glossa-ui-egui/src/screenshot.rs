@@ -49,7 +49,7 @@ const TOP_BAND: f64 = 0.15;
 /// Options states rather than pages, as `options::open_at` takes them: the
 /// font list open, the note after starting at login is turned on, and the
 /// Presets tab of the Services page.
-const SPECIAL_OPTIONS: [&str; 3] = ["font", "autostart", "presets"];
+const SPECIAL_OPTIONS: [&str; 4] = ["font", "autostart", "presets", "proxy"];
 
 /// Every window `--screenshot` can draw, as `--screenshot-list` prints them.
 pub fn targets() -> Vec<String> {

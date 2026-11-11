@@ -9,8 +9,8 @@
 
 use egui::{vec2, Color32, RichText};
 use glossa_core::config::{
-    CopyAction, ExceptionMode, ExceptionRule, LensMode, MouseBehaviour, ProxyMode, ProxyScheme, TrayAction, TrayConfig,
-    VisionLevel,
+    CopyAction, DetectMode, ExceptionMode, ExceptionRule, LensMode, MouseBehaviour, ProxyMode, ProxyScheme, TrayAction,
+    TrayConfig, VisionLevel,
 };
 use glossa_core::{Action, Capabilities, Config, LangId};
 use glossa_platform::shell::SHELL;
@@ -18,6 +18,13 @@ use glossa_platform::shell::SHELL;
 use crate::app::GlossaApp;
 use crate::icons::Icon;
 use crate::widgets::{group, row};
+
+/// The width of the control at the right of a row (a list, a text field),
+/// the same on every page so their left edges line up down the window.
+const CONTROL_W: f32 = 260.0;
+/// Room kept at the right of a page for its scroll bar, so the bar is not
+/// drawn over the groups' frames.
+const SCROLL_GUTTER: f32 = 12.0;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Page {
@@ -167,6 +174,9 @@ pub struct OptionsState {
     login_status: Option<glossa_platform::autostart::LoginItemStatus>,
     login_status_rx: Option<std::sync::mpsc::Receiver<glossa_platform::autostart::LoginItemStatus>>,
     message: Option<(String, bool)>,
+    /// The proxy Apply refused and why, shown under the proxy's fields for
+    /// as long as they stay as they were refused.
+    proxy_error: Option<(glossa_core::config::Proxy, String)>,
     show_secrets: bool,
     /// A setting that applies at start-up changed: offer to restart.
     ask_restart: bool,
@@ -248,7 +258,7 @@ fn font_picker(app: &GlossaApp, ui: &mut egui::Ui, list: &mut FontList, value: &
     let search_id = id.with("search");
     let default = app.t("options.basics.font_default");
     let shown = if value.trim().is_empty() { default.clone() } else { value.clone() };
-    let button = dropdown::combo_button(ui, &shown, 240.0, dropdown::is_open(ui.ctx(), id));
+    let button = dropdown::combo_button(ui, &shown, CONTROL_W, dropdown::is_open(ui.ctx(), id));
     let for_screenshot = std::mem::take(&mut list.open_now);
     if button.clicked() || for_screenshot {
         if for_screenshot {
@@ -261,7 +271,7 @@ fn font_picker(app: &GlossaApp, ui: &mut egui::Ui, list: &mut FontList, value: &
         list.load(ui.ctx());
     }
     list.poll();
-    dropdown::show(ui, id, button.rect, 240.0, 460.0, |ui, settling| {
+    dropdown::show(ui, id, button.rect, CONTROL_W, 460.0, |ui, settling| {
         let mut search: String = ui.ctx().data(|d| d.get_temp(search_id)).unwrap_or_default();
         let r = ui.add(
             egui::TextEdit::singleline(&mut search)
@@ -340,6 +350,16 @@ pub fn open_at(app: &mut GlossaApp, name: &str) {
                 st.autostart_initial = true;
                 st.autostart_done = Some(Ok(true));
             }
+            "proxy" => {
+                // A proxy nothing here can use, refused the way Apply
+                // refuses it.
+                st.draft.network.proxy.mode = ProxyMode::Manual;
+                st.draft.network.proxy.host = "bad host".into();
+                let mut st = app.options.take().expect("just opened");
+                apply(app, &mut st);
+                app.options = Some(st);
+                return;
+            }
             "presets" => {
                 st.page = Page::Services;
                 st.presets_tab = true;
@@ -387,6 +407,7 @@ pub fn open(app: &mut GlossaApp) {
             login_status: None,
             login_status_rx: autostart.then(|| ask_login_status(&app.ctx)).flatten(),
             message: None,
+            proxy_error: None,
             show_secrets: false,
             ask_restart: false,
             new_ai_preset: "openrouter".into(),
@@ -469,6 +490,14 @@ fn apply(app: &mut GlossaApp, st: &mut OptionsState) -> bool {
         c.modules.trust_initialised = trust_initialised;
     });
     let mut attention = false;
+    // A proxy that cannot be used is the one thing the engine refuses: say
+    // so at its fields rather than only in the line at the bottom.
+    st.proxy_error = None;
+    if result.is_err() && glossa_net::proxy_is_manual(&st.draft.network) {
+        if let Err(e) = glossa_net::check_proxy(&st.draft.network) {
+            st.proxy_error = Some((st.draft.network.proxy.clone(), app.describe(&e)));
+        }
+    }
     let mut autostart_error = None;
     if st.autostart != st.autostart_initial {
         let exe = std::env::current_exe().unwrap_or_default();
@@ -497,11 +526,17 @@ fn apply(app: &mut GlossaApp, st: &mut OptionsState) -> bool {
                 None => (app.t("options.saved"), false),
             }
         }
+        Err(_) if st.proxy_error.is_some() => (app.t("options.not_saved"), true),
         Err(e) => (app.describe(&e), true),
     });
     if attention {
         // The note is under the checkbox on the first page.
         st.page = Page::Basics;
+    }
+    if st.proxy_error.is_some() {
+        // Nothing was saved: the fields to correct come first.
+        st.page = Page::Internet;
+        attention = true;
     }
     attention
 }
@@ -571,8 +606,10 @@ fn body(app: &mut GlossaApp, ui: &mut egui::Ui, st: &mut OptionsState) -> bool {
             services(app, ui, st);
             return;
         }
-        egui::ScrollArea::vertical().id_salt(("opt-page", st.page as u8)).show(ui, |ui| {
-            ui.set_width(ui.available_width() - 8.0);
+        // Not shrunk to the page: the scroll bar stays at the window's edge,
+        // clear of the groups' frames.
+        egui::ScrollArea::vertical().id_salt(("opt-page", st.page as u8)).auto_shrink([false, false]).show(ui, |ui| {
+            ui.set_width(ui.available_width() - SCROLL_GUTTER);
             match st.page {
                 Page::Basics => basics(app, ui, st),
                 Page::Hotkeys => hotkeys(app, ui, st),
@@ -651,7 +688,7 @@ fn page_header(ui: &mut egui::Ui, look: &crate::style::Look, page: Page, name: &
 /// A list of the installed themes for `value`.
 fn theme_picker(app: &GlossaApp, ui: &mut egui::Ui, salt: &str, value: &mut String) {
     let entries = app.engine.theme_entries();
-    crate::dropdown::ComboBox::from_id_salt(salt).width(260.0).selected_text(value.as_str()).show_ui(ui, |ui| {
+    crate::dropdown::ComboBox::from_id_salt(salt).width(CONTROL_W).selected_text(value.as_str()).show_ui(ui, |ui| {
         for t in &entries {
             let label =
                 if t.classic { app.locale.fmt("options.appearance.classic_theme", &t.name) } else { t.name.clone() };
@@ -689,7 +726,7 @@ fn lang_row(app: &GlossaApp, ui: &mut egui::Ui, label: &str, salt: &str, value: 
     let auto = app.t("main.auto_detect");
     row(ui, label, |ui| {
         if let Some(l) =
-            crate::widgets::lang_combo(ui, salt, *value, allow_auto, &auto, &app.t("lang.search"), &[], 240.0)
+            crate::widgets::lang_combo(ui, salt, *value, allow_auto, &auto, &app.t("lang.search"), &[], CONTROL_W)
         {
             *value = l;
         }
@@ -773,22 +810,28 @@ fn basics(app: &mut GlossaApp, ui: &mut egui::Ui, st: &mut OptionsState) {
             let current = chosen_locale(&locales, &d.general.ui_language)
                 .map(|l| format!("{} - {}", l.name, l.native_name))
                 .unwrap_or_else(|| app.t("options.basics.ui_language_system"));
-            crate::dropdown::ComboBox::from_id_salt("ui-lang").width(240.0).selected_text(current).show_ui(ui, |ui| {
-                if ui
-                    .selectable_label(d.general.ui_language.is_empty(), app.t("options.basics.ui_language_system"))
-                    .clicked()
-                {
-                    d.general.ui_language.clear();
-                }
-                for l in &locales {
+            crate::dropdown::ComboBox::from_id_salt("ui-lang").width(CONTROL_W).selected_text(current).show_ui(
+                ui,
+                |ui| {
                     if ui
-                        .selectable_label(l.code == d.general.ui_language, format!("{} - {}", l.name, l.native_name))
+                        .selectable_label(d.general.ui_language.is_empty(), app.t("options.basics.ui_language_system"))
                         .clicked()
                     {
-                        d.general.ui_language = l.code.clone();
+                        d.general.ui_language.clear();
                     }
-                }
-            });
+                    for l in &locales {
+                        if ui
+                            .selectable_label(
+                                l.code == d.general.ui_language,
+                                format!("{} - {}", l.name, l.native_name),
+                            )
+                            .clicked()
+                        {
+                            d.general.ui_language = l.code.clone();
+                        }
+                    }
+                },
+            );
         });
         language_files(app, ui, &look);
         row(ui, &app.t("options.basics.font"), |ui| {
@@ -824,6 +867,23 @@ fn basics(app: &mut GlossaApp, ui: &mut egui::Ui, st: &mut OptionsState) {
         lang_row(app, ui, &app.t("options.basics.second_language"), "second", &mut d.general.second_language, false);
 
         ui.checkbox(&mut d.general.smart_direction, app.t("options.basics.smart_direction"));
+        row(ui, &app.t("options.basics.detect"), |ui| {
+            let names = [
+                (DetectMode::OfflineThenService, app.t("options.basics.detect_offline_then_service")),
+                (DetectMode::Offline, app.t("options.basics.detect_offline")),
+                (DetectMode::Service, app.t("options.basics.detect_service")),
+            ];
+            let current = names.iter().find(|(m, _)| *m == d.general.detect).map(|(_, n)| n.clone());
+            crate::dropdown::ComboBox::from_id_salt("detect-mode")
+                .width(CONTROL_W)
+                .selected_text(current.unwrap_or_default())
+                .show_ui(ui, |ui| {
+                    for (m, name) in &names {
+                        ui.selectable_value(&mut d.general.detect, *m, name);
+                    }
+                });
+        });
+        hint(ui, &look, &app.t("options.basics.detect_hint"));
     });
     group(ui, &look, &app.t("options.basics.history_group"), |ui| {
         ui.checkbox(&mut d.history.enabled, app.t("options.basics.enable_history"));
@@ -949,8 +1009,11 @@ fn panel_hotkeys(app: &GlossaApp, ui: &mut egui::Ui, d: &mut glossa_core::Config
 
 fn internet(app: &mut GlossaApp, ui: &mut egui::Ui, st: &mut OptionsState) {
     let look = app.look.clone();
+    let refused = st.proxy_error.clone();
     let n = &mut st.draft.network;
     group(ui, &look, &app.t("options.internet.connection"), |ui| {
+        ui.checkbox(&mut n.offline_only, app.t("options.internet.offline_only"));
+        hint(ui, &look, &app.t("options.internet.offline_only_hint"));
         row(ui, &app.t("options.internet.timeout"), |ui| {
             ui.add(egui::DragValue::new(&mut n.timeout_secs).range(1..=300));
         });
@@ -977,7 +1040,11 @@ fn internet(app: &mut GlossaApp, ui: &mut egui::Ui, st: &mut OptionsState) {
                     ui.selectable_value(&mut p.mode, *m, name);
                 }
             });
+        // The error belongs to the entry that was refused: it goes once
+        // any of the fields changes.
+        let error = refused.filter(|(proxy, _)| proxy == p).map(|(_, why)| why);
         ui.add_enabled_ui(p.mode == ProxyMode::Manual, |ui| {
+            let gap = ui.spacing().item_spacing.x;
             ui.horizontal(|ui| {
                 crate::dropdown::ComboBox::from_id_salt("proxy-scheme")
                     .width(100.0)
@@ -987,27 +1054,37 @@ fn internet(app: &mut GlossaApp, ui: &mut egui::Ui, st: &mut OptionsState) {
                             ui.selectable_value(&mut p.scheme, s, s.as_str().to_uppercase());
                         }
                     });
-                ui.add(
-                    egui::TextEdit::singleline(&mut p.host)
-                        .hint_text(app.t("options.internet.host"))
-                        .desired_width(240.0),
+                // The port keeps its place at the right edge, under the
+                // numbers of the group above; the host takes what is left.
+                const PORT_W: f32 = 64.0;
+                let host = egui::TextEdit::singleline(&mut p.host)
+                    .hint_text(app.t("options.internet.host"))
+                    .desired_width((ui.available_width() - PORT_W - gap).max(80.0));
+                let host = if error.is_some() { host.text_color(look.error()) } else { host };
+                ui.add(host);
+                ui.add_sized(
+                    vec2(PORT_W, ui.spacing().interact_size.y),
+                    egui::DragValue::new(&mut p.port).range(1..=65535),
                 );
-                ui.add(egui::DragValue::new(&mut p.port).range(1..=65535));
             });
             ui.horizontal(|ui| {
+                let each = ((ui.available_width() - gap) / 2.0).max(80.0);
                 ui.add(
                     egui::TextEdit::singleline(&mut p.username)
                         .hint_text(app.t("options.internet.username"))
-                        .desired_width(180.0),
+                        .desired_width(each),
                 );
                 ui.add(
                     egui::TextEdit::singleline(&mut p.password)
                         .hint_text(app.t("options.internet.password"))
                         .password(true)
-                        .desired_width(180.0),
+                        .desired_width(each),
                 );
             });
-            ui.label(RichText::new(app.t("options.internet.password_plain")).small().color(look.weak_text()));
+            if let Some(why) = &error {
+                ui.label(RichText::new(why).color(look.error()));
+            }
+            hint(ui, &look, &app.t("options.internet.password_plain"));
         });
     });
 }
@@ -1917,7 +1994,7 @@ fn appearance(app: &mut GlossaApp, ui: &mut egui::Ui, st: &mut OptionsState) {
             ];
             let cur =
                 names.iter().find(|(r, _)| *r == d.appearance.renderer).map(|(_, n)| n.clone()).unwrap_or_default();
-            crate::dropdown::ComboBox::from_id_salt("renderer").width(280.0).selected_text(cur).show_ui(ui, |ui| {
+            crate::dropdown::ComboBox::from_id_salt("renderer").width(CONTROL_W).selected_text(cur).show_ui(ui, |ui| {
                 for (r, n) in names {
                     ui.selectable_value(&mut d.appearance.renderer, r, n);
                 }
@@ -2126,7 +2203,7 @@ fn advanced(app: &mut GlossaApp, ui: &mut egui::Ui, st: &mut OptionsState) {
             ui.add(
                 egui::TextEdit::singleline(&mut d.advanced.browser)
                     .hint_text(app.t("options.advanced.browser_default"))
-                    .desired_width(260.0),
+                    .desired_width(CONTROL_W),
             );
         });
         hint(ui, &look, &app.t("options.advanced.browser_hint"));
@@ -2156,16 +2233,19 @@ fn advanced(app: &mut GlossaApp, ui: &mut egui::Ui, st: &mut OptionsState) {
             .collect();
             let cur =
                 names.iter().find(|(a, _)| *a == d.advanced.copy_action).map(|(_, n)| n.clone()).unwrap_or_default();
-            crate::dropdown::ComboBox::from_id_salt("copy-action").width(260.0).selected_text(cur).show_ui(ui, |ui| {
-                for (a, n) in names {
-                    ui.selectable_value(&mut d.advanced.copy_action, a, n);
-                }
-            });
+            crate::dropdown::ComboBox::from_id_salt("copy-action").width(CONTROL_W).selected_text(cur).show_ui(
+                ui,
+                |ui| {
+                    for (a, n) in names {
+                        ui.selectable_value(&mut d.advanced.copy_action, a, n);
+                    }
+                },
+            );
         });
         hint(ui, &look, &app.t("options.advanced.copy_action_hint"));
         row(ui, &app.t("options.advanced.preferred_domain"), |ui| {
             crate::dropdown::ComboBox::from_id_salt("domain")
-                .width(260.0)
+                .width(CONTROL_W)
                 .selected_text(&d.advanced.preferred_domain)
                 .show_ui(ui, |ui| {
                     for dom in [
@@ -2241,7 +2321,7 @@ fn tray_click_options(app: &GlossaApp, ui: &mut egui::Ui, look: &crate::style::L
         for (salt, label, value) in rows {
             row(ui, &app.t(label), |ui| {
                 crate::dropdown::ComboBox::from_id_salt(salt)
-                    .width(280.0)
+                    .width(CONTROL_W)
                     .selected_text(tray_action_label(app, *value))
                     .show_ui(ui, |ui| {
                         let current = *value;
@@ -2262,7 +2342,9 @@ fn tray_click_options(app: &GlossaApp, ui: &mut egui::Ui, look: &crate::style::L
 /// The mouse mode switches, greyed out by the caller where it cannot work.
 fn mouse_mode_options(app: &GlossaApp, ui: &mut egui::Ui, look: &crate::style::Look, d: &mut Config) {
     ui.checkbox(&mut d.mouse_mode.enabled, app.t("tray.mouse_enabled"));
-    ui.horizontal(|ui| {
+    // Wrapped: the three do not fit on one line of a narrow window in
+    // every language.
+    ui.horizontal_wrapped(|ui| {
         ui.radio_value(&mut d.mouse_mode.behaviour, MouseBehaviour::ShowIcon, app.t("tray.mouse_icon"));
         ui.radio_value(&mut d.mouse_mode.behaviour, MouseBehaviour::ShowTranslation, app.t("tray.mouse_translation"));
         ui.radio_value(
@@ -2292,18 +2374,21 @@ fn ocr(app: &mut GlossaApp, ui: &mut egui::Ui, st: &mut OptionsState) {
             // Recognition engines first, then the AI endpoints that can
             // read pictures with a vision model.
             let (ai, engines): (Vec<_>, Vec<_>) = providers.iter().partition(|p| is_ai_endpoint(&p.info.id));
-            crate::dropdown::ComboBox::from_id_salt("ocr-provider").width(280.0).selected_text(cur).show_ui(ui, |ui| {
-                for p in &engines {
-                    ui.selectable_value(&mut d.provider, p.info.id.clone(), &p.info.name);
-                }
-                if !ai.is_empty() {
-                    ui.separator();
-                    ui.label(RichText::new(app.t("options.ocr.ai_group")).small().color(look.weak_text()));
-                    for p in &ai {
+            crate::dropdown::ComboBox::from_id_salt("ocr-provider").width(CONTROL_W).selected_text(cur).show_ui(
+                ui,
+                |ui| {
+                    for p in &engines {
                         ui.selectable_value(&mut d.provider, p.info.id.clone(), &p.info.name);
                     }
-                }
-            });
+                    if !ai.is_empty() {
+                        ui.separator();
+                        ui.label(RichText::new(app.t("options.ocr.ai_group")).small().color(look.weak_text()));
+                        for p in &ai {
+                            ui.selectable_value(&mut d.provider, p.info.id.clone(), &p.info.name);
+                        }
+                    }
+                },
+            );
         });
         if is_ai_endpoint(&d.provider) {
             let name =
@@ -2326,7 +2411,7 @@ fn ocr(app: &mut GlossaApp, ui: &mut egui::Ui, st: &mut OptionsState) {
                 &auto,
                 &app.t("lang.search"),
                 &[],
-                280.0,
+                CONTROL_W,
             ) {
                 d.language = l;
             }
@@ -2376,17 +2461,17 @@ fn ocr(app: &mut GlossaApp, ui: &mut egui::Ui, st: &mut OptionsState) {
             ui.add(
                 egui::TextEdit::singleline(&mut l.endpoint)
                     .hint_text(app.t("options.ocr.lens_endpoint_hint"))
-                    .desired_width(280.0),
+                    .desired_width(CONTROL_W),
             );
         });
         row(ui, &app.t("options.server.token"), |ui| {
-            ui.add(egui::TextEdit::singleline(&mut l.token).password(true).desired_width(280.0));
+            ui.add(egui::TextEdit::singleline(&mut l.token).password(true).desired_width(CONTROL_W));
         });
         row(ui, &app.t("options.ocr.lens_cli_path"), |ui| {
             ui.add(
                 egui::TextEdit::singleline(&mut l.cli_path)
                     .hint_text(app.t("options.ocr.lens_cli_hint"))
-                    .desired_width(280.0),
+                    .desired_width(CONTROL_W),
             );
         });
         ui.label(RichText::new(app.t("options.ocr.lens_install")).small().color(look.weak_text()));
@@ -2401,7 +2486,7 @@ fn ocr(app: &mut GlossaApp, ui: &mut egui::Ui, st: &mut OptionsState) {
                 ui.add(
                     egui::TextEdit::singleline(&mut o.folder)
                         .hint_text(app.t("options.ocr.oneocr_folder_hint"))
-                        .desired_width(250.0),
+                        .desired_width(CONTROL_W),
                 );
                 if ui.button("…").clicked() {
                     if let Some(dir) = rfd::FileDialog::new().pick_folder() {
@@ -2424,7 +2509,7 @@ fn ocr(app: &mut GlossaApp, ui: &mut egui::Ui, st: &mut OptionsState) {
                 ui.add(
                     egui::TextEdit::singleline(&mut v.auto_languages)
                         .hint_text(app.t("options.ocr.vision_auto_hint"))
-                        .desired_width(250.0),
+                        .desired_width(CONTROL_W),
                 );
             });
             ui.label(RichText::new(app.t("options.ocr.vision_note")).small().color(look.weak_text()));
@@ -2436,7 +2521,7 @@ fn ocr(app: &mut GlossaApp, ui: &mut egui::Ui, st: &mut OptionsState) {
             ui.add(
                 egui::TextEdit::singleline(&mut t.path)
                     .hint_text(app.t("options.ocr.tesseract_path_hint"))
-                    .desired_width(250.0),
+                    .desired_width(CONTROL_W),
             );
             if ui.button("…").clicked() {
                 if let Some(file) = rfd::FileDialog::new().pick_file() {
@@ -2448,7 +2533,7 @@ fn ocr(app: &mut GlossaApp, ui: &mut egui::Ui, st: &mut OptionsState) {
             ui.add(
                 egui::TextEdit::singleline(&mut t.tessdata_dir)
                     .hint_text(app.t("options.ocr.tesseract_tessdata_hint"))
-                    .desired_width(250.0),
+                    .desired_width(CONTROL_W),
             );
             if ui.button("…").clicked() {
                 if let Some(dir) = rfd::FileDialog::new().pick_folder() {
@@ -2460,7 +2545,7 @@ fn ocr(app: &mut GlossaApp, ui: &mut egui::Ui, st: &mut OptionsState) {
             ui.add(
                 egui::TextEdit::singleline(&mut t.auto_languages)
                     .hint_text(app.t("options.ocr.tesseract_auto_hint"))
-                    .desired_width(250.0),
+                    .desired_width(CONTROL_W),
             );
         });
         let default = app.t("options.ocr.default");
@@ -2471,7 +2556,7 @@ fn ocr(app: &mut GlossaApp, ui: &mut egui::Ui, st: &mut OptionsState) {
                 .psm
                 .map(|n| psm.iter().find(|(m, _)| *m == n).map_or(n.to_string(), |(_, l)| l.clone()))
                 .unwrap_or(default.clone());
-            egui::ComboBox::from_id_salt("tesseract-psm").width(250.0).selected_text(shown).show_ui(ui, |ui| {
+            egui::ComboBox::from_id_salt("tesseract-psm").width(CONTROL_W).selected_text(shown).show_ui(ui, |ui| {
                 ui.selectable_value(&mut t.psm, None, &default);
                 for (n, label) in &psm {
                     ui.selectable_value(&mut t.psm, Some(*n), label);
@@ -2485,7 +2570,7 @@ fn ocr(app: &mut GlossaApp, ui: &mut egui::Ui, st: &mut OptionsState) {
                 .oem
                 .map(|n| oem.iter().find(|(m, _)| *m == n).map_or(n.to_string(), |(_, l)| l.clone()))
                 .unwrap_or(default.clone());
-            egui::ComboBox::from_id_salt("tesseract-oem").width(250.0).selected_text(shown).show_ui(ui, |ui| {
+            egui::ComboBox::from_id_salt("tesseract-oem").width(CONTROL_W).selected_text(shown).show_ui(ui, |ui| {
                 ui.selectable_value(&mut t.oem, None, &default);
                 for (n, label) in &oem {
                     ui.selectable_value(&mut t.oem, Some(*n), label);
@@ -2496,7 +2581,7 @@ fn ocr(app: &mut GlossaApp, ui: &mut egui::Ui, st: &mut OptionsState) {
             ui.add(
                 egui::TextEdit::singleline(&mut t.extra_args)
                     .hint_text("-c preserve_interword_spaces=1")
-                    .desired_width(250.0),
+                    .desired_width(CONTROL_W),
             );
         });
         ui.label(RichText::new(app.t("options.ocr.tesseract_note")).small().color(look.weak_text()));
@@ -2553,7 +2638,7 @@ fn modules(app: &mut GlossaApp, ui: &mut egui::Ui, st: &mut OptionsState) {
             ui.add(
                 egui::TextEdit::singleline(&mut d.modules.java)
                     .hint_text(app.t("options.modules.java_hint"))
-                    .desired_width(280.0),
+                    .desired_width(CONTROL_W),
             );
         });
         row(ui, &app.t("options.modules.call_timeout"), |ui| {
