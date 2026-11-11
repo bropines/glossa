@@ -1,0 +1,21 @@
+# cargo-deny, for the advisories check only (.github/workflows/advisories.yml):
+#
+#   cargo deny check advisories
+#
+# Licences are not checked here. scripts/third-party-notices.py does that
+# (its ALLOWED list), because it also has to find each licence's text for
+# the notices a release ships, and it looks at exactly what ships: the
+# normal dependencies of the two programs for each release target.
+
+[advisories]
+# A vulnerability or an unsoundness advisory fails the check. "Unmaintained"
+# notices do not: the GTK 3 bindings the Linux tray icon needs (tray-icon,
+# muda) are marked that way and have no replacement yet, and such a notice
+# is a reason to plan, not to stop a release. Look at them now and then with
+# `cargo deny check advisories` and `unmaintained = "all"`.
+unmaintained = "none"
+# A yanked version is usually followed by a fixed one; say so, do not fail.
+yanked = "warn"
+# Advisories that were read and do not apply, each with its reason:
+#   { id = "RUSTSEC-0000-0000", reason = "..." }
+ignore = []

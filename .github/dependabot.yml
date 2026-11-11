@@ -1,0 +1,57 @@
+# Weekly update proposals: the crates (the workspace and the two module
+# programs with lock files of their own) and the actions the workflows use,
+# which are pinned to commits and so never move by themselves.
+#
+# Minor and patch updates come as one pull request per ecosystem; a major
+# version gets its own, since it usually needs code changes. Security
+# updates are separate from this file and arrive as soon as an advisory is
+# published.
+version: 2
+updates:
+  - package-ecosystem: cargo
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+    open-pull-requests-limit: 5
+    commit-message:
+      prefix: deps
+    groups:
+      cargo:
+        update-types: [minor, patch]
+    ignore:
+      # third_party/eframe is eframe 0.37.0 with Glossa's fixes; the egui
+      # crates move together with it, by hand (third_party/README.md).
+      - dependency-name: eframe
+      - dependency-name: egui
+      - dependency-name: egui-*
+      - dependency-name: egui_*
+      - dependency-name: epaint
+      - dependency-name: epaint_*
+      - dependency-name: emath
+      - dependency-name: ecolor
+
+  - package-ecosystem: cargo
+    directories:
+      - /modules/process/paddle-ocr
+      - /modules/process/local-llm
+    schedule:
+      interval: weekly
+      day: monday
+    open-pull-requests-limit: 2
+    commit-message:
+      prefix: deps(modules)
+    groups:
+      module-programs:
+        patterns: ['*']
+
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+    commit-message:
+      prefix: ci
+    groups:
+      actions:
+        patterns: ['*']

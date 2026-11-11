@@ -1,7 +1,10 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-<!-- Glossa.app's Info.plist; the release workflow fills in @VERSION@
-     (the version without a pre-release suffix: Apple wants plain numbers). -->
+<!-- Glossa.app's Info.plist; the release workflow and
+     scripts/macos-bundle.sh fill in @VERSION@ (the version in full,
+     0.1.0-beta.2, which is what Finder shows) and @BUILD@ (a number that
+     grows with every release, from scripts/version-numbers.sh: Apple wants
+     plain numbers in CFBundleVersion). -->
 <plist version="1.0">
 <dict>
     <key>CFBundleDevelopmentRegion</key>
@@ -23,7 +26,7 @@
     <key>CFBundleShortVersionString</key>
     <string>@VERSION@</string>
     <key>CFBundleVersion</key>
-    <string>@VERSION@</string>
+    <string>@BUILD@</string>
     <key>LSApplicationCategoryType</key>
     <string>public.app-category.productivity</string>
     <!-- Apple Vision's text recogniser needs 10.15. -->
@@ -35,6 +38,6 @@
     <key>NSHighResolutionCapable</key>
     <true/>
     <key>NSHumanReadableCopyright</key>
-    <string>Glossa contributors. MIT OR Apache-2.0.</string>
+    <string>Copyright (c) 2026 bropines and contributors. MIT OR Apache-2.0.</string>
 </dict>
 </plist>

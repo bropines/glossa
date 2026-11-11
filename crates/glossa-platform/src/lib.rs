@@ -43,6 +43,7 @@ pub mod autostart;
 pub mod backdrop;
 pub mod capture;
 pub mod clipboard;
+pub mod console;
 pub mod crash;
 pub mod fonts;
 pub mod hotkeys;

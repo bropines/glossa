@@ -1900,6 +1900,7 @@ dependencies = [
 name = "glossa-cli"
 version = "0.1.0-beta.2"
 dependencies = [
+ "embed-resource",
  "glossa-core",
  "glossa-dict",
  "glossa-engine",

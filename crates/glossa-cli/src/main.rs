@@ -1987,6 +1987,13 @@ mod tests {
         let home = std::env::temp_dir().join(format!("glossa-cli-presets-{}", std::process::id()));
         std::fs::remove_dir_all(&home).ok();
         std::fs::create_dir_all(&home).unwrap();
+        // No control API to reach, whatever runs on this machine: with the
+        // default settings the command looks for a Glossa on the default
+        // port, and a developer's own running copy answered there (with
+        // "missing or wrong token", failing the --force case below).
+        let data = Paths::for_exe_dir(home.clone(), Some(home.clone()));
+        std::fs::create_dir_all(data.config_file().parent().unwrap()).unwrap();
+        std::fs::write(data.config_file(), "[server]\nenabled = false\n").unwrap();
         let h = home.to_string_lossy().into_owned();
         let args = |rest: &[&str]| {
             let mut v = vec!["--home", h.as_str(), "--json", "preset"];

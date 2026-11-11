@@ -26,6 +26,22 @@ the notes of its GitHub release.
   lookup.
 - Themes: `success` (text saying something is in order) and `ai` (the plate
   behind AI endpoints in the service strips), both optional.
+- Third-party notices in every download. Each archive, the Windows
+  installer, `Glossa.app` and the Linux packages carry
+  `THIRD-PARTY-NOTICES.txt`: every library and bundled component in that
+  system's programs, with its version, its licence and the licence texts
+  its authors ship. *About → Third-party notices* has a link that opens the
+  file. It is written from the build's dependency list by
+  `scripts/third-party-notices.py`, which also checks every licence against
+  an allow-list in CI and before a release is built.
+- A release also has a CycloneDX SBOM per platform
+  (`glossa-<version>-<target>.cdx.json`) and, in a public repository, a
+  build provenance attestation for each file
+  (`gh attestation verify <file> --repo bropines/glossa`).
+- `glossa-cli.exe` has the icon and version details `glossa.exe` has, and
+  the Linux packages install AppStream metadata for software centres.
+- `glossa --help` lists the desktop program's flags and `glossa --version`
+  prints its version; both answer on the terminal and exit.
 - A double click on the popup's header (the language line or a free spot
   beside the buttons) opens the main window with the popup's text.
 - Options → Appearance → Popup → "Open the main window with the popup":
@@ -282,6 +298,12 @@ the notes of its GitHub release.
   the main window, behind the one being used. One raised by the popup or
   an overlay, or by a window closed before it could show it, appears by
   the pointer.
+- Version fields that take numbers only keep the pre-release: a Windows
+  file version is `0.1.0.2002` for `0.1.0-beta.2` (it was `0.1.0.0` for
+  every beta), and the macOS bundle shows the version in full with a build
+  number that grows with every release. The Windows installer shows both
+  licences, and the publisher and copyright lines are the same everywhere.
+
 - AI endpoints added in the options sit in their own group at the end of
   the service strips (popup and main window), on a blue plate, so "Google
   Gemini" no longer looks like a second Google. Hovering one says it is an
@@ -310,6 +332,9 @@ the notes of its GitHub release.
 
 ### Fixed
 
+- `glossa` with a flag it does not know (or a stray word, or a flag missing
+  its value) says so and exits with 64. It used to ignore the mistake and
+  start, so `glossa --help` opened the application.
 - The popup's copy button no longer shows a "Copied" message, which
   turned up now and then and spoiled the popup's look. A failed copy is
   still reported.

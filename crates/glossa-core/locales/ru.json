@@ -81,6 +81,8 @@
     "about.apache": "Лицензия Apache 2.0",
     "about.notices": "Сторонние компоненты",
     "about.open_online": "Открыть на GitHub",
+    "about.all_notices": "Все компоненты и их лицензии",
+    "about.all_notices_tip": "Открывает поставляемый с Glossa файл, где перечислены все библиотеки этой сборки с текстами их лицензий:",
     "about.back": "Назад",
     "about.not_affiliated": "Не связан с QTranslate и его автором.",
     "about.support_hint": "Glossa бесплатна. Если она вам помогает, можно поддержать разработку на Boosty.",

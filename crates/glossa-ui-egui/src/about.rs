@@ -1,5 +1,8 @@
 //! The About window: what Glossa is, who made it, and its licences, with
-//! the license texts and third-party notices built in to read.
+//! the license texts and the NOTICE file built in to read. The complete
+//! third-party notices (every crate with its licence text, most of a
+//! megabyte) are a file a release ships; the window opens it rather than
+//! carrying it.
 
 use egui::{vec2, RichText, Sense};
 
@@ -167,6 +170,18 @@ fn document(app: &mut GlossaApp, ui: &mut egui::Ui, d: Doc, doc: &mut Option<Doc
             if ui.link(app.t("about.open_online")).on_hover_text(&url).clicked() {
                 app.open_url(&url);
             }
+            // NOTICE names the notable components; the file beside the
+            // program lists all of them. A development build has none.
+            if let Some(file) = (d == Doc::Notice).then(|| notices_file(app, ui.ctx())).flatten() {
+                let tip = format!("{}\n{}", app.t("about.all_notices_tip"), file.display());
+                if ui.link(app.t("about.all_notices")).on_hover_text(tip).clicked() {
+                    // The system's viewer for a text file, not the browser
+                    // the user chose for links.
+                    if let Err(e) = crate::app::open_with_system(&file.to_string_lossy()) {
+                        tracing::warn!("could not open {}: {e}", file.display());
+                    }
+                }
+            }
         });
     });
     ui.separator();
@@ -174,6 +189,18 @@ fn document(app: &mut GlossaApp, ui: &mut egui::Ui, d: Doc, doc: &mut Option<Doc
         // Legal texts are shown as written, line for line.
         ui.add(egui::Label::new(RichText::new(d.text()).monospace().size(10.0)).extend());
     });
+}
+
+/// The shipped third-party notices, looked for once per graphics context
+/// rather than on every frame.
+fn notices_file(app: &GlossaApp, ctx: &egui::Context) -> Option<std::path::PathBuf> {
+    let id = egui::Id::unique("glossa-about-notices-file");
+    if let Some(found) = ctx.data(|d| d.get_temp::<Option<std::path::PathBuf>>(id)) {
+        return found;
+    }
+    let found = app.engine.paths().third_party_notices();
+    ctx.data_mut(|d| d.insert_temp(id, found.clone()));
+    found
 }
 
 /// Lay out `add` in a row centred in the available width. The row's width

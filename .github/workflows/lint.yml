@@ -1,0 +1,58 @@
+name: lint
+
+# The cheap checks for what ci.yml skips: prose and the workflows
+# themselves. A few seconds each, nothing compiled.
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - '**/*.md'
+      - .github/workflows/**
+      - .github/dependabot.yml
+  pull_request:
+    paths:
+      - '**/*.md'
+      - .github/workflows/**
+      - .github/dependabot.yml
+
+permissions:
+  contents: read
+
+concurrency:
+  group: lint-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  links:
+    # Links between the repository's own files: a renamed document or a
+    # moved picture breaks them silently. Offline, so only relative links
+    # are followed and no web site's bad day can fail the job; links inside
+    # a page (#anchors) are not checked.
+    name: links in the docs
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: lycheeverse/lychee-action@e7477775783ea5526144ba13e8db5eec57747ce8 # v2.9.0
+        with:
+          # third_party/ is other people's prose, scripts/licenses/ their
+          # licence texts.
+          args: >-
+            --offline --no-progress
+            --exclude-path third_party
+            --exclude-path scripts/licenses
+            './**/*.md'
+          fail: true
+
+  actionlint:
+    # Mistakes in the workflows (a misspelt key, an unknown context, a shell
+    # error shellcheck knows) before a release run finds them.
+    name: actionlint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      # actionlint's own image: the prebuilt program with shellcheck beside
+      # it. The tag is a release of rhysd/actionlint; raise it by hand.
+      - uses: docker://rhysd/actionlint:1.7.12
+        with:
+          args: -color
