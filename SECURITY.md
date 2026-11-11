@@ -130,8 +130,7 @@ described), or from a web page, is a vulnerability.
 
 **Secrets in the settings.** By default API keys, the proxy password and
 the Lens daemon token live in plain text in `config.toml` in the user's
-data folder, like the classic program's `Options.json`. Glossa sets no
-special permissions on the file: it is as private as the profile it is in.
+data folder, like the classic program's `Options.json`.
 With `[general] secret_storage = "system"` (*Options → Basics*, or the
 welcome guide) they are kept in the system keychain instead: Windows
 Credential Manager, the macOS Keychain, or the Secret Service on Linux;

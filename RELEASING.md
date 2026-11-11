@@ -52,7 +52,7 @@ a `-` in it (`0.1.0-beta.3`) becomes a pre-release.
    the manifests.
 3. **Places that name a version in prose.** Search for the old one and fix
    what is meant to move:
-   - the *Beta* note near the top of `README.md` and of `README.ru.md`;
+   - the *Beta* note near the top of `README.md`;
    - `min_glossa` in a module's `module.toml`, only where the module now
      needs something this release adds;
    - `docs/install.md`, if a download size or a supported system changed.

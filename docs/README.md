@@ -28,7 +28,7 @@ that exist in Russian.
 
 | page | what it covers |
 |---|---|
-| [Privacy and data](privacy.md) | What leaves the machine, per feature and host; that there is no telemetry and no update check; fallbacks that can send text to another service; what is stored and where; working offline; clearing data. |
+| [Privacy and data](privacy.md) | What leaves the machine, per feature and host; that there is no telemetry, and when the update check asks GitHub; fallbacks that can send text to another service; what is stored and where; working offline; clearing data. |
 | [Deployment](deployment.md) | For administrators: unattended installation on each system, where files go, preparing `config.toml` for users, `GLOSSA_HOME` and portable mode, proxy and certificates, the settings that reduce risk, the hosts to allow by feature, removal. There is no policy layer yet. |
 | [SECURITY.md](../SECURITY.md) | Reporting a vulnerability, supported versions, and what Glossa does and does not protect: module approvals, module permissions, the control API, secrets. |
 

@@ -17,9 +17,10 @@ keeps. For vulnerabilities and the threat model see
 
 - **No telemetry.** Glossa has no analytics, usage statistics or crash
   reporting. A crash is written to the local log file and goes nowhere.
-- **No update check.** This version never asks a server whether a newer
-  one exists. `[updates] check_automatically` is stored but nothing reads
-  it.
+- **No update check unless you ask for one.** Glossa asks GitHub whether
+  a newer version exists only when you press *Check now*, run `glossa-cli
+  update`, or switch the daily check on (`[updates] check_automatically`,
+  off by default). It never downloads or installs a version itself.
 - **No account, no Glossa server.** There is no service of the project's
   own between you and the translation services. Requests go straight from
   your machine (through your proxy, if one is set) to the service you
@@ -29,7 +30,7 @@ keeps. For vulnerabilities and the threat model see
   the screen region it reads. The services' own privacy policies apply to
   what they do with it; Glossa has no say there. Most built-in services
   are reached without a key through the same addresses their websites use.
-- **Nothing is downloaded at start-up.** Module files, the managed Python
+- **Nothing is downloaded on its own.** Module files, the managed Python
   and Python packages are fetched only when you press *Download* (or when
   `[modules] auto_download_assets` is on and a module is first used).
 
@@ -151,6 +152,17 @@ release assets, Hugging Face's and ModelScope's file servers); Glossa
 follows them. A download request carries no text of yours, only what any
 HTTP request does: your address and Glossa's user agent.
 
+### The update check
+
+One request to `api.github.com` (the list of this project's releases),
+through your proxy if one is set. It carries nothing about you, your
+settings or your texts; GitHub sees your address, as any site does. It is
+made when you press *Check now* in *Options → Updates* or run `glossa-cli
+update`, and once a day, a little after the start, only if
+`[updates] check_automatically` is on. It is off in a fresh installation.
+The answer is kept in `update-check.json`. A newer version is named, and
+its release page opens in the browser when you ask; nothing is downloaded.
+
 ### Links
 
 *Help*, *Support the project*, *Open on GitHub* and "open in browser"
@@ -218,6 +230,7 @@ folder instead.
 | Translation history | `history.json` (data) | Every translation the desktop program shows: source text, translations, service, languages, time. Up to `[history] max_entries` (5000). Plain text. `glossa-cli` and the control API add entries only when asked. |
 | Dictionary look-ups | `dictionary-history.json` (data) | The words looked up in the dictionary window. |
 | The main window's text | `[contents]` in `config.toml` | The source and translation panes, kept across restarts while *Save contents on exit* is on (it is by default). |
+| The last update check | `update-check.json` (data) | When GitHub was last asked and what it answered. Safe to delete. |
 | Module approvals | `[modules.granted]` in `config.toml` | What you approved for each module. |
 | Captured regions | the folder in `[ocr] save_image_dir` | Only if you set one. |
 | The log | `glossa.log` (cache) | Appended to and never trimmed by Glossa. Records events, errors and crashes, not the text you translate; request addresses are logged without their query string. What a Python, Java or process module prints is copied into it, so a module can put text there. `GLOSSA_LOG=debug` makes it more detailed. |
@@ -226,10 +239,8 @@ folder instead.
 | The Wayland portal token | `remote-desktop-token` (data) | Linux only. |
 | Autostart entry | the `Run` registry value, `~/Library/LaunchAgents/app.glossa.plist` or `~/.config/autostart/glossa.desktop` | Only when starting at login is on. |
 
-Glossa sets no special permissions on these files: they are as private as
-your profile folder is. On a shared machine, a settings file with keys in
-it is better off with the system keychain. Presets, when exported, never
-contain keys.
+On a shared machine, keep keys in the system keychain so that they are not
+in a plain-text file at all. Presets, when exported, never contain keys.
 
 ## Working offline
 

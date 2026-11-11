@@ -343,6 +343,7 @@ otherwise, made by `glossa` and `glossa-cli` (`glossa.exe`,
 | Managed Python and `uv` | `github.com` |
 | Python packages | `pypi.org`, `files.pythonhosted.org` (requested by `uv`, a separate program in the `runtimes` folder) |
 | Other modules | the hosts in the module's `[permissions] network`, shown when it is approved |
+| The update check (on request, or daily if switched on) | `api.github.com` |
 
 Downloads from `github.com`, `huggingface.co` and `www.modelscope.cn` are
 answered with redirects to those sites' file servers (for GitHub release
@@ -354,8 +355,11 @@ and other programs that process modules start (they run from the
 `runtimes`, `venvs` and `models` folders or from the module's folder), and
 `lens_scan` if chrome-lens-py is used for Lens.
 
-Glossa makes no request at start-up and none in the background: no
-telemetry and no update check ([Privacy](privacy.md)).
+Glossa has no telemetry and, as installed, makes no request at start-up
+and none in the background. The update check asks `api.github.com` only
+when the user presses *Check now* or runs `glossa-cli update`, or once a
+day if `[updates] check_automatically` is switched on; it is off by
+default ([Privacy](privacy.md#the-update-check)).
 
 ## Updating
 

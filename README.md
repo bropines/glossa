@@ -78,8 +78,6 @@
 > ([how to open them](docs/install.md)). Windows is used daily, macOS is in
 > early testing, and Linux has not been tried on real hardware yet.
 
-<p align="center"><a href="README.ru.md">По-русски</a></p>
-
 ## Contents
 
 - [Getting started](#getting-started): [download](#download),
@@ -343,8 +341,8 @@ machine-readable output. Every command and flag is in
 
 ## Privacy
 
-Glossa has no telemetry, no account and no server of its own, and it does
-not check for updates. A translator does have to send text somewhere: the
+Glossa has no telemetry, no account and no server of its own, and it asks
+GitHub about a newer version only when you tell it to. A translator does have to send text somewhere: the
 text you translate goes to the service you chose, and a screen region
 goes to the OCR engine, which is Google Lens unless you pick an offline
 one. Keys stay on your machine, in the settings file or the system
@@ -360,7 +358,7 @@ feature, what is stored and where, and how to work offline;
 | macOS (Apple silicon) | early testing |
 | Linux | experimental: builds and passes the tests, not yet tried on a real desktop |
 
-Not implemented yet: speech input, the update check.
+Not implemented yet: speech input.
 
 On Linux under Wayland, a program cannot do everything it can under X11.
 Glossa uses the desktop's portals where they exist: global hotkeys through
