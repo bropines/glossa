@@ -249,7 +249,8 @@ impl Pipeline<'_> {
     /// the tie-breakers.
     fn detect_offline(&self, text: &str) -> Option<crate::langdetect::Guess> {
         let g = &self.config.general;
-        let hints: Vec<LangId> = [g.first_language, g.second_language].into_iter().filter(|l| l.is_language()).collect();
+        let hints: Vec<LangId> =
+            [g.first_language, g.second_language].into_iter().filter(|l| l.is_language()).collect();
         crate::langdetect::detect(text, &hints)
     }
 
@@ -270,7 +271,8 @@ impl Pipeline<'_> {
             (DetectMode::OfflineThenService, Some(g)) if g.sure && g.detection.is_usable() => return Ok(g.detection),
             _ => {}
         }
-        let mut last = if usable.is_some() { Error::LanguageNotDetected } else { Error::NoProvider("language detection") };
+        let mut last =
+            if usable.is_some() { Error::LanguageNotDetected } else { Error::NoProvider("language detection") };
         for p in self.candidates(Capabilities::DETECT_LANGUAGE, preferred, true) {
             self.cancel_check()?;
             let opts = self.options_for(p.as_ref());
@@ -513,7 +515,10 @@ impl Pipeline<'_> {
                     whole.text.push_str(&gap);
                     let part = call(&part_req, &whole.text)?;
                     if part.is_empty() {
-                        return Err(Error::bad_response(&provider.info().name, "empty translation for part of the text"));
+                        return Err(Error::bad_response(
+                            &provider.info().name,
+                            "empty translation for part of the text",
+                        ));
                     }
                     part
                 }
@@ -757,7 +762,8 @@ mod tests {
     fn long_text_is_translated_in_pieces_at_sentence_and_paragraph_ends() {
         let calls = Arc::new(AtomicUsize::new(0));
         let (reg, cfg) = setup(vec![shouting("a", 30, calls.clone())], "a", &["a"]);
-        let text = "First sentence here. Second one follows!\n\nA new paragraph starts. And ends.\n  Indented last line";
+        let text =
+            "First sentence here. Second one follows!\n\nA new paragraph starts. And ends.\n  Indented last line";
         let out = run(&reg, &cfg, text, LangPair::new(LangId::ENGLISH, LangId::RUSSIAN)).unwrap();
         assert_eq!(out.translation.text, text.to_uppercase(), "everything, with its line breaks and spaces");
         assert!(!out.truncated);
@@ -800,8 +806,12 @@ mod tests {
         });
         flaky.info.max_input_chars = Some(12);
         let (reg, cfg) = setup(vec![flaky, echo("b")], "a", &["a", "b"]);
-        let out = run(&reg, &cfg, "one two three. four five six.", LangPair::new(LangId::ENGLISH, LangId::RUSSIAN)).unwrap();
-        assert_eq!(out.translation.text, "b:en->ru:one two three. four five six.", "not half of one and half of the other");
+        let out =
+            run(&reg, &cfg, "one two three. four five six.", LangPair::new(LangId::ENGLISH, LangId::RUSSIAN)).unwrap();
+        assert_eq!(
+            out.translation.text, "b:en->ru:one two three. four five six.",
+            "not half of one and half of the other"
+        );
         assert_eq!(calls.load(Ordering::SeqCst), 2, "the pieces after the failed one were not sent");
         assert_eq!(out.failed[0].0, "a");
     }
@@ -841,7 +851,11 @@ mod tests {
         let cancel = CancelToken::new();
         let pipeline = Pipeline { registry: &reg, config: &cfg, http: &http, cancel: &cancel };
         let out = pipeline
-            .translate("alpha beta gamma delta", LangPair::new(LangId::AUTO, LangId::RUSSIAN), &TranslateOptions::default())
+            .translate(
+                "alpha beta gamma delta",
+                LangPair::new(LangId::AUTO, LangId::RUSSIAN),
+                &TranslateOptions::default(),
+            )
             .unwrap();
         assert_eq!(out.translation.text, "ALPHA BETA GAMMA DELTA");
         let from = seen_from.lock().clone();
@@ -899,8 +913,13 @@ mod tests {
         let out = run(&reg, &cfg, RUSSIAN_SENTENCE, LangPair::new(LangId::AUTO, LangId::AUTO)).unwrap();
         assert_eq!(out.pair, LangPair::new(LangId::RUSSIAN, LangId::ENGLISH));
         assert_eq!(out.detected.map(|d| d.lang), Some(LangId::RUSSIAN));
-        let out = run(&reg, &cfg, "The weather is lovely today, let us go for a long walk.", LangPair::new(LangId::AUTO, LangId::AUTO))
-            .unwrap();
+        let out = run(
+            &reg,
+            &cfg,
+            "The weather is lovely today, let us go for a long walk.",
+            LangPair::new(LangId::AUTO, LangId::AUTO),
+        )
+        .unwrap();
         assert_eq!(out.pair, LangPair::new(LangId::ENGLISH, LangId::RUSSIAN));
         // A word or two: the user's languages (ru, en) decide.
         let out = run(&reg, &cfg, "привет", LangPair::new(LangId::AUTO, LangId::AUTO)).unwrap();
@@ -923,7 +942,8 @@ mod tests {
     fn the_default_asks_an_enabled_service_only_about_what_the_builtin_detector_is_unsure_of() {
         let calls = Arc::new(AtomicUsize::new(0));
         let german = LangId::from_code("de").unwrap();
-        let (reg, mut cfg) = setup(vec![echo("a"), counting_detector("det", german, calls.clone())], "a", &["a", "det"]);
+        let (reg, mut cfg) =
+            setup(vec![echo("a"), counting_detector("det", german, calls.clone())], "a", &["a", "det"]);
         cfg.general.detect = DetectMode::OfflineThenService;
         assert_eq!(Config::default().general.detect, DetectMode::OfflineThenService);
         // Sure: answered here, the service never sees it.

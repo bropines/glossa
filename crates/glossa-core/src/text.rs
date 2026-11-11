@@ -378,7 +378,12 @@ mod tests {
         );
         assert_eq!(
             split_for_limit(text, 36),
-            vec!["First sentence here. ", "Second one follows!\n\n", "A new paragraph starts. And ends.\n", "Last line"]
+            vec![
+                "First sentence here. ",
+                "Second one follows!\n\n",
+                "A new paragraph starts. And ends.\n",
+                "Last line"
+            ]
         );
         assert_eq!(split_for_limit("One two. Three four. Five six.", 22), vec!["One two. Three four. ", "Five six."]);
         // No sentence end: a word boundary.

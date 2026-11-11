@@ -268,8 +268,8 @@ fn command_flags(command: &str) -> Option<&'static [&'static str]> {
             "--item",
             "--open",
         ],
-        "modules" | "assets" | "python" | "import-classic" | "theme" | "locale" | "config" | "serve"
-        | "action" | "doctor" | "" | "help" | "version" => &[],
+        "modules" | "assets" | "python" | "import-classic" | "theme" | "locale" | "config" | "serve" | "action"
+        | "doctor" | "" | "help" | "version" => &[],
         _ => return None,
     })
 }

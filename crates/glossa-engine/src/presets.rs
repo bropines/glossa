@@ -189,9 +189,9 @@ impl Engine {
         if commands.is_empty() {
             return false;
         }
-        let set_up = commands.iter().any(|key| {
-            cfg.services.option(id, key).and_then(|v| v.as_str()).is_some_and(|v| !v.trim().is_empty())
-        });
+        let set_up = commands
+            .iter()
+            .any(|key| cfg.services.option(id, key).and_then(|v| v.as_str()).is_some_and(|v| !v.trim().is_empty()));
         !set_up
     }
 
@@ -227,7 +227,12 @@ impl Engine {
         one("ocr", &cfg.ocr.provider, &after.ocr.provider, is_online(&after.ocr.provider));
         let pair = |p: LangPair| format!("{} > {}", p.from.bcp47(), p.to.bcp47());
         one("pair", &pair(cfg.general.pair), &pair(after.general.pair), false);
-        one("detect", cfg.general.detect.name(), after.general.detect.name(), after.general.detect != DetectMode::Offline);
+        one(
+            "detect",
+            cfg.general.detect.name(),
+            after.general.detect.name(),
+            after.general.detect != DetectMode::Offline,
+        );
         for (module, values) in &p.options {
             for (key, value) in values {
                 let show = |v: Option<&serde_json::Value>| match v {
@@ -758,7 +763,8 @@ mod tests {
         let (e, dir) = engine("module-commands");
         let m = e.paths().user_module_dir().join("runner");
         std::fs::create_dir_all(&m).unwrap();
-        let option = |key: &str, kind: &str| format!("[[options]]\nkey = \"{key}\"\ntype = \"{kind}\"\nlabel = \"{key}\"\n");
+        let option =
+            |key: &str, kind: &str| format!("[[options]]\nkey = \"{key}\"\ntype = \"{kind}\"\nlabel = \"{key}\"\n");
         let manifest = format!(
             "capabilities = [\"translate\"]\n[module]\nid = \"runner\"\nname = \"Runner\"\nruntime = \"js\"\n{}{}{}{}{}{}{}",
             option("launcher", "command"),
@@ -850,13 +856,17 @@ mod tests {
                  [options.deepl]\nformality = \"less\"\n",
             )
             .unwrap();
-        let change = |what: &str| report.changes.iter().find(|c| c.what == what).unwrap_or_else(|| panic!("{what}: {report:?}"));
+        let change =
+            |what: &str| report.changes.iter().find(|c| c.what == what).unwrap_or_else(|| panic!("{what}: {report:?}"));
         assert_eq!((change("ocr").from.as_str(), change("ocr").to.as_str()), ("tesseract", "lens"));
         assert!(change("ocr").online, "pictures would start going to Google");
         assert!(change("tts").online);
         assert_eq!(change("active").to, "google");
         assert!(change("enabled").online && change("enabled").to.contains("google"));
-        assert_eq!((change("options.deepl.formality").from.as_str(), change("options.deepl.formality").to.as_str()), ("more", "less"));
+        assert_eq!(
+            (change("options.deepl.formality").from.as_str(), change("options.deepl.formality").to.as_str()),
+            ("more", "less")
+        );
         // Nothing was applied by importing.
         assert_eq!(e.config().ocr.provider, "tesseract");
         // Applying reports the same.

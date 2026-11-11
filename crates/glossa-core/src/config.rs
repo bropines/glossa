@@ -2495,6 +2495,7 @@ copy_joined_lines = true",
             tts: "google".into(),
             ocr: "lens".into(),
             pair: Some(LangPair::new(LangId::ENGLISH, LangId::RUSSIAN)),
+            detect: Some(DetectMode::Offline),
             options: [("google".to_owned(), [("domain".to_owned(), serde_json::json!("com"))].into_iter().collect())]
                 .into_iter()
                 .collect(),

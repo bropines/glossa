@@ -1381,7 +1381,8 @@ impl Engine {
                 vec![p]
             }
             None => {
-                let chosen = registry.get(&cfg.ocr.provider).filter(|p| p.info().capabilities.contains(Capabilities::OCR));
+                let chosen =
+                    registry.get(&cfg.ocr.provider).filter(|p| p.info().capabilities.contains(Capabilities::OCR));
                 let mut v: Vec<Arc<dyn Provider>> = Vec::new();
                 match &chosen {
                     Some(p) if offline_only && !is_local(p.as_ref()) => {
@@ -1397,7 +1398,11 @@ impl Engine {
                 // online engine is never a fallback: choosing Tesseract
                 // must not end in an upload because Tesseract was missing.
                 v.extend(registry.with_capability(Capabilities::OCR).into_iter().filter(|p| {
-                    quiet_ocr_fallback(&p.info().id, &cfg.ocr.provider, p.info().capabilities.contains(Capabilities::OFFLINE) || is_local(p.as_ref()))
+                    quiet_ocr_fallback(
+                        &p.info().id,
+                        &cfg.ocr.provider,
+                        p.info().capabilities.contains(Capabilities::OFFLINE) || is_local(p.as_ref()),
+                    )
                 }));
                 v
             }
@@ -2032,14 +2037,16 @@ mod tests {
         // The engine's own client refuses too, for anything that gets past
         // the checks above (a module, a download).
         let http = e.inner.http.read().clone();
-        let err = glossa_net::Http::send(http.as_ref(), glossa_net::HttpRequest::get("https://example.com/")).unwrap_err();
+        let err =
+            glossa_net::Http::send(http.as_ref(), glossa_net::HttpRequest::get("https://example.com/")).unwrap_err();
         assert!(matches!(err, Error::OfflineOnly(_)), "{err:?}");
 
         // An AI endpoint on this computer is local; the same one pointed
         // elsewhere is not.
         let id = e.add_ai_endpoint("Mine", "ollama").unwrap();
         let endpoint = e.registry().get(&id).unwrap();
-        let options = |url: &str| -> OptionValues { [("base_url".to_owned(), serde_json::json!(url))].into_iter().collect() };
+        let options =
+            |url: &str| -> OptionValues { [("base_url".to_owned(), serde_json::json!(url))].into_iter().collect() };
         assert!(endpoint.is_local(&options("http://localhost:11434/v1")));
         assert!(endpoint.is_local(&options("http://127.0.0.1:1234/v1/chat/completions")));
         assert!(!endpoint.is_local(&options("https://api.openai.com/v1")));
@@ -2097,7 +2104,9 @@ mod tests {
         let mut preset = false;
         for ev in events.try_iter() {
             match ev {
-                Event::Translated { job, result: Err(err), .. } if matches!(*err, Error::Internal(_)) => ended.push(job),
+                Event::Translated { job, result: Err(err), .. } if matches!(*err, Error::Internal(_)) => {
+                    ended.push(job)
+                }
                 Event::Dictionary { job, query, result: Err(_), .. } => {
                     assert_eq!(query, "hello");
                     ended.push(job);

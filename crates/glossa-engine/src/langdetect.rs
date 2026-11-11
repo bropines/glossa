@@ -124,7 +124,10 @@ fn to_whatlang(lang: LangId) -> Option<Lang> {
     if lang == SIMPLIFIED || lang == TRADITIONAL {
         return Some(Lang::Cmn);
     }
-    CODES.iter().find(|(_, ours)| LangId::from_code(ours) == Some(lang)).and_then(|(theirs, _)| Lang::from_code(*theirs))
+    CODES
+        .iter()
+        .find(|(_, ours)| LangId::from_code(ours) == Some(lang))
+        .and_then(|(theirs, _)| Lang::from_code(*theirs))
 }
 
 /// Detect the language of `text`. `hints` are the languages the user works
@@ -186,9 +189,8 @@ fn by_script(sample: &str, hints: &[LangId]) -> Option<Guess> {
     if letters == 0 {
         return None;
     }
-    let sure = |code: &str| {
-        LangId::from_code(code).map(|lang| Guess { detection: Detection::certain(lang), sure: true })
-    };
+    let sure =
+        |code: &str| LangId::from_code(code).map(|lang| Guess { detection: Detection::certain(lang), sure: true });
     // Japanese mixes kana with Han characters, and a product name or a
     // quotation in Latin letters does not make it less Japanese.
     if kana > 0 && (kana + han) * 2 >= letters {
@@ -214,8 +216,10 @@ fn by_script(sample: &str, hints: &[LangId]) -> Option<Guess> {
 /// Simplified or traditional, by the common characters only one of them
 /// uses; `fallback` when the text has none of either (or as many of both).
 fn chinese_variant(sample: &str, fallback: LangId) -> LangId {
-    const SIMPLIFIED_ONLY: &str = "这个们来时为说国过对会学经还点实现发体关样长间题当种么机电开无与应东车书见门头问后语话华万义";
-    const TRADITIONAL_ONLY: &str = "這個們來時為說國過對會學經還點實現發體關樣長間題當種麼機電開無與應東車書見門頭問後語話華萬義";
+    const SIMPLIFIED_ONLY: &str =
+        "这个们来时为说国过对会学经还点实现发体关样长间题当种么机电开无与应东车书见门头问后语话华万义";
+    const TRADITIONAL_ONLY: &str =
+        "這個們來時為說國過對會學經還點實現發體關樣長間題當種麼機電開無與應東車書見門頭問後語話華萬義";
     let simplified = sample.chars().filter(|c| SIMPLIFIED_ONLY.contains(*c)).count();
     let traditional = sample.chars().filter(|c| TRADITIONAL_ONLY.contains(*c)).count();
     match simplified.cmp(&traditional) {
@@ -254,7 +258,8 @@ mod tests {
         // whatlang upgrade) is noticed here.
         assert_eq!(unknown, ["amh", "jav", "guj", "pan", "mal", "ori", "mya", "nep", "tuk", "aka", "zul", "sna"]);
         assert_eq!(detect("ይህ በአማርኛ የተጻፈ ዓረፍተ ነገር ነው", &[]), None, "Amharic is not in the table");
-        for (theirs, ours) in [("rus", "ru"), ("ukr", "uk"), ("bul", "bg"), ("srp", "sr"), ("heb", "he"), ("pes", "fa")] {
+        for (theirs, ours) in [("rus", "ru"), ("ukr", "uk"), ("bul", "bg"), ("srp", "sr"), ("heb", "he"), ("pes", "fa")]
+        {
             assert_eq!(to_lang_id(Lang::from_code(theirs).unwrap()), Some(id(ours)));
         }
         assert_eq!(to_lang_id(Lang::Cmn), Some(SIMPLIFIED));
