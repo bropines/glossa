@@ -54,7 +54,9 @@ jobs:
     name: rustdoc
     runs-on: ubuntu-latest
     env:
-      RUSTDOCFLAGS: -D warnings
+      # The pages are built with the private items, so a link from public
+      # documentation to a private one does resolve here.
+      RUSTDOCFLAGS: -D warnings -A rustdoc::private_intra_doc_links
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
       - name: Linux build dependencies
