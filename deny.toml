@@ -18,4 +18,14 @@ unmaintained = "none"
 yanked = "warn"
 # Advisories that were read and do not apply, each with its reason:
 #   { id = "RUSTSEC-0000-0000", reason = "..." }
-ignore = []
+ignore = [
+    # zip before 9.0: four faults in `extract()` (links leaving the folder,
+    # permissions set through them, set-uid bits kept, an abort on a forged
+    # size). The workspace is on zip 9. paddle-ocr gets zip 8 from oar-ocr
+    # 0.10, the newest there is, which opens one named entry of a language
+    # model and never calls `extract()`.
+    { id = "RUSTSEC-2026-0367", reason = "paddle-ocr only: oar-ocr reads a named entry, never extract()" },
+    { id = "RUSTSEC-2026-0368", reason = "paddle-ocr only: oar-ocr reads a named entry, never extract()" },
+    { id = "RUSTSEC-2026-0369", reason = "paddle-ocr only: oar-ocr reads a named entry, never extract()" },
+    { id = "RUSTSEC-2026-0429", reason = "paddle-ocr only: oar-ocr reads a named entry, never extract()" },
+]

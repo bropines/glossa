@@ -50,6 +50,9 @@ jobs:
         with:
           command: check advisories
           manifest-path: ${{ matrix.manifest }}
-          # `--config` belongs to cargo-deny itself, not to `check`; the
-          # first word is the action's default for this input.
-          arguments: --all-features --config deny.toml
+          # `--config` belongs to cargo-deny itself, not to `check`. No
+          # `--all-features` (the action's default here): with it cargo
+          # metadata refuses glossa-platform, whose optional Linux xcap is
+          # the crate its Windows and macOS builds use under another name.
+          # Every other optional dependency is on by default.
+          arguments: --config deny.toml

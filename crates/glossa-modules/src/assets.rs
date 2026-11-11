@@ -1115,7 +1115,7 @@ fn unzip(archive: &Path, dest: &Path, budget: &mut Budget) -> std::result::Resul
     let mut zip = zip::ZipArchive::new(file).map_err(|e| e.to_string())?;
     for i in 0..zip.len() {
         let mut entry = zip.by_index(i).map_err(|e| e.to_string())?;
-        let name = entry.name().replace('\\', "/");
+        let name = entry.name().map_err(|e| e.to_string())?.replace('\\', "/");
         let Some(path) = safe_join(dest, &name) else {
             return Err(format!("{name:?} points outside the archive's folder"));
         };
