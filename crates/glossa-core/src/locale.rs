@@ -775,6 +775,7 @@ pub static STRINGS: &[(&str, &str, Option<&str>)] = &[
     ("options.cancel", "Cancel", Some("w:2:2")),
     ("options.apply", "Apply", Some("w:2:1049")),
     ("options.saved", "Saved.", None),
+    ("options.not_saved", "Nothing was saved: correct the proxy first.", None),
     ("options.remove", "Remove", None),
     // -- options: basics --------------------------------------------------------
     ("options.appearance.preview", "Preview", None),
@@ -871,6 +872,21 @@ pub static STRINGS: &[(&str, &str, Option<&str>)] = &[
     // -- options: internet ------------------------------------------------------
     ("options.internet", "Internet", Some("w:11:caption")),
     ("options.internet.connection", "Connection", Some("w:11:1049")),
+    ("options.internet.offline_only", "Work offline: nothing leaves this computer", None),
+    (
+        "options.internet.offline_only_hint",
+        "Every request to another computer is refused, and so is every service that does not work offline. A translator, an OCR engine or a voice running here keeps working.",
+        None,
+    ),
+    ("options.basics.detect", "Detect the language with:", None),
+    ("options.basics.detect_offline_then_service", "Built-in detector, then a service", None),
+    ("options.basics.detect_offline", "Built-in detector only", None),
+    ("options.basics.detect_service", "A service only", None),
+    (
+        "options.basics.detect_hint",
+        "The built-in detector sends nothing anywhere. A service is asked about short or ambiguous text, and only one you enabled.",
+        None,
+    ),
     ("options.internet.timeout", "Timeout, sec:", Some("w:11:1084")),
     ("options.internet.proxy", "Proxy", Some("w:11:1048")),
     ("options.internet.host", "Host", Some("w:11:1034")),
