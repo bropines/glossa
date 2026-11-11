@@ -2776,7 +2776,13 @@ fn module_approvals(app: &mut GlossaApp, ui: &mut egui::Ui, st: &mut OptionsStat
             ui.add_space(6.0);
             ui.horizontal_wrapped(|ui| {
                 ui.label(RichText::new(&m.name).strong());
-                let why = if m.first_time { "options.modules.trust.new" } else { "options.modules.trust.widened" };
+                let why = if m.first_time {
+                    "options.modules.trust.new"
+                } else if m.changed {
+                    "options.modules.trust.changed"
+                } else {
+                    "options.modules.trust.widened"
+                };
                 ui.label(RichText::new(app.t(why)).small().color(look.accent()));
                 ui.label(RichText::new(&m.id).small().color(look.weak_text()));
             });

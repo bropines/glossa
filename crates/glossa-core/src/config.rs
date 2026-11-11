@@ -1799,6 +1799,12 @@ pub struct ModuleGrant {
     /// claiming the same id waits for its own approval. Empty (a grant
     /// written by hand) applies to the id in any folder.
     pub dir: String,
+    /// SHA-256 over the files in the module's folder when approved, in hex:
+    /// a module whose files changed since waits for approval again. Empty
+    /// in a grant from before files were hashed (or written by hand); the
+    /// program fills it in the next time it loads the module.
+    #[serde(skip_serializing_if = "String::is_empty")]
+    pub content: String,
 }
 
 impl Default for ModulesConfig {

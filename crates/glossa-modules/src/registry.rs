@@ -91,7 +91,9 @@ pub struct RuntimeContext {
     pub auto_download_assets: bool,
     /// Module ids the user switched off.
     pub disabled: Vec<String>,
-    /// Which modules may run; the default approves everything.
+    /// Which modules may run. The default approves everything, for tools
+    /// that load one module the developer named; the program always sets
+    /// its own ([`TrustPolicy::granted`] present, however empty).
     pub trust: TrustPolicy,
     /// The Google domain and interface language some classic scripts read
     /// from their `Options` object.
@@ -677,6 +679,7 @@ size = 11
             granted: Some(Arc::new(granted)),
             trusted_dirs: vec![shipped.clone()],
             trusted_script_dirs: Vec::new(),
+            legacy: Vec::new(),
         };
         let ctx = RuntimeContext { trust: policy(BTreeMap::new()), ..Default::default() };
         let mut r = Registry::new();

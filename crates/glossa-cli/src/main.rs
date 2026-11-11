@@ -618,7 +618,13 @@ fn module_trust(args: &Args, op: &str) -> Result<(), Fail> {
                 out!("no module is waiting for approval");
             } else {
                 for m in &waiting {
-                    let why = if m["first_time"] == json!(true) { "new" } else { "asks for more since approved" };
+                    let why = if m["first_time"] == json!(true) {
+                        "new"
+                    } else if m["changed"] == json!(true) {
+                        "its files changed since approved"
+                    } else {
+                        "asks for more since approved"
+                    };
                     out!(
                         "{} ({}): {why}",
                         m["id"].as_str().unwrap_or_default(),

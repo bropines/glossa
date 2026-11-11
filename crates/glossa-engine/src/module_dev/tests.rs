@@ -49,7 +49,7 @@ fn the_edit_check_reload_test_loop() {
     assert_eq!(p.line, 9, "{p:?}");
     assert!(p.message.contains("SyntaxError"), "{p:?}");
     // Reloading a broken module keeps the old one running and says why.
-    assert!(e.reload_module(&dir).is_err());
+    assert!(e.reload_module_approved(&dir).is_err());
     assert!(e.registry().get("loop").is_some());
     assert!(e.module_status().failed.iter().any(|(d, _)| d.ends_with("loop")));
     let rows: Vec<_> = e.module_sources().into_iter().filter(|m| m.source.dir() == Some(dir.as_path())).collect();
@@ -71,7 +71,7 @@ fn the_edit_check_reload_test_loop() {
     let manifest = read_module_file(&dir, "module.toml").unwrap().replace("name = \"Loop\"", "name = \"Loop two\"");
     save_module_file(&dir, "module.toml", &manifest).unwrap();
     let google_before = e.registry().get("google").map(|p| std::sync::Arc::as_ptr(&p) as *const () as usize);
-    assert_eq!(e.reload_module(&dir).unwrap(), ReloadOutcome::Reloaded { id: "loop".into() });
+    assert_eq!(e.reload_module_approved(&dir).unwrap(), ReloadOutcome::Reloaded { id: "loop".into() });
     assert_eq!(e.registry().get("loop").unwrap().info().name, "Loop two");
     let google_after = e.registry().get("google").map(|p| std::sync::Arc::as_ptr(&p) as *const () as usize);
     assert_eq!(google_before, google_after, "other providers are kept, not rebuilt");
@@ -84,7 +84,7 @@ fn the_edit_check_reload_test_loop() {
     // A changed id replaces the provider from the same folder.
     let renamed = manifest.replace("id = \"loop\"", "id = \"loop-renamed\"");
     save_module_file(&dir, "module.toml", &renamed).unwrap();
-    e.reload_module(&dir).unwrap();
+    e.reload_module_approved(&dir).unwrap();
     assert!(e.registry().get("loop").is_none());
     assert!(e.registry().get("loop-renamed").is_some());
     std::fs::remove_dir_all(&root).ok();

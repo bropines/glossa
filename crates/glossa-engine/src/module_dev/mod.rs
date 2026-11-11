@@ -643,6 +643,12 @@ impl Engine {
         // program, installs its packages and downloads its files: not for a
         // module the user has not approved. (`glossa-cli module test` is
         // the developer's own explicit choice and stays allowed.)
+        // A module the user made in the editor in this session is theirs:
+        // what they just saved is approved, as a reload would, so its tests
+        // run without reloading first.
+        if self.inner.authored.lock().contains(&glossa_modules::trust::canonical(dir)) {
+            self.approve_dir(dir);
+        }
         if self.waits_for_approval(dir) {
             let id = Manifest::load(&dir.join("module.toml")).map(|m| m.module.id).unwrap_or_default();
             return ModuleReport {

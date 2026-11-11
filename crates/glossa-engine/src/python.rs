@@ -354,7 +354,7 @@ mod tests {
         let paths = Paths::for_exe_dir(dir.clone(), Some(dir.join("home")));
         let mut cfg = Config::default();
         cfg.modules.python = python.into();
-        (Engine::with_config(paths, cfg).unwrap(), dir)
+        (Engine::approving(paths, cfg), dir)
     }
 
     #[test]

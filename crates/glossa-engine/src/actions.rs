@@ -155,7 +155,7 @@ mod tests {
         )
         .unwrap();
         let paths = Paths::for_exe_dir(dir.clone(), Some(dir.join("home")));
-        (Engine::with_config(paths, Config::default()).unwrap(), dir)
+        (Engine::approving(paths, Config::default()), dir)
     }
 
     #[test]

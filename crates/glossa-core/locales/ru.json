@@ -718,6 +718,7 @@
     "options.modules.trust.hint": "Эти модули установлены вручную. Они не запустятся, пока вы не одобрите то, что они просят.",
     "options.modules.trust.new": "новый модуль",
     "options.modules.trust.widened": "просит больше, чем вы одобрили",
+    "options.modules.trust.changed": "его файлы изменились после одобрения",
     "options.modules.trust.sandboxed": "Работает в песочнице: без доступа к вашим файлам и программам",
     "options.modules.trust.program": "Запускает программу на вашем компьютере с вашими правами и может читать и менять ваши файлы: %s",
     "options.modules.trust.native": "Загружает системную библиотеку в Glossa: полное доверие, она работает внутри Glossa (%s)",
