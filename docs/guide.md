@@ -80,8 +80,9 @@ else goes into the first.
 
 The language of the text is detected by Glossa itself, on your computer;
 an enabled service is asked only about short or ambiguous text (next
-release). `[general] detect` in `config.toml` changes that: `offline`
-never asks a service, `service` always does
+release). *Detect the language with* on the same page (`[general] detect`
+in `config.toml`) changes that: the built-in detector alone never asks a
+service, a service alone always does
 ([Configuration](configuration.md#general)).
 
 ## The popup
@@ -385,10 +386,10 @@ text, or in the system keychain (Windows Credential Manager, the macOS
 Keychain, the Secret Service on Linux). A portable copy on a USB stick is
 better off with the file; a shared computer with the keychain.
 
-To keep everything on the computer, set `[network] offline_only = true`
-in `config.toml`: only services that run on your machine are used (next
-release; there is no switch in Options for it). `glossa-cli --offline`
-does the same for one command.
+To keep everything on the computer, tick *Options → Internet → Work
+offline: nothing leaves this computer* (`[network] offline_only` in
+`config.toml`): only services that run on your machine are used (next
+release). `glossa-cli --offline` does the same for one command.
 
 What is sent where, what is stored, and how to work without the network:
 [Privacy and data](privacy.md).
