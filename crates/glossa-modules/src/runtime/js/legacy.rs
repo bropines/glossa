@@ -592,14 +592,15 @@ fn has_scheme(url: &str) -> bool {
 }
 
 impl Transport for LegacyTransport {
-    fn call(
+    fn call_with(
         &self,
         method: &str,
         params: serde_json::Value,
         host: &dyn Fn(&str, serde_json::Value) -> Reply,
-    ) -> Result<serde_json::Value, ModuleError> {
-        let _bridge = Bridge::install(host);
-        self.run(method, &params, host)
+        control: &crate::protocol::CallControl,
+    ) -> Result<serde_json::Value, crate::protocol::CallError> {
+        let bridge = Bridge::install_with(host, control);
+        bridge.finish(self.run(method, &params, host))
     }
 }
 

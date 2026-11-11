@@ -59,7 +59,7 @@ const DEFAULT_JVM_ARGS: &[&str] = &["-XX:+UseSerialGC", "-Djava.awt.headless=tru
 
 pub fn load(dir: &Path, manifest: Manifest, ctx: &RuntimeContext) -> Result<Arc<dyn Provider>, String> {
     let transport = transport(dir, &manifest, ctx)?;
-    Ok(Arc::new(ProtocolProvider::new(manifest, transport, ctx.cache.clone())))
+    Ok(Arc::new(ProtocolProvider::new(manifest, transport, ctx.cache.clone()).configured(ctx)))
 }
 
 /// The stdio transport for a `process` or `java` module. Nothing starts

@@ -77,6 +77,10 @@ pub struct RuntimeContext {
     pub allow_native: bool,
     pub allow_legacy_scripts: bool,
     pub call_timeout: Duration,
+    /// After a module reports a rate limit, leave it alone for a
+    /// cooling-off period instead of calling it again. On in the program;
+    /// the module tester switches it off.
+    pub rate_limit_cooldown: bool,
     pub cache: Arc<ModuleCache>,
     /// Where `.potext` archives are unpacked.
     pub cache_dir: PathBuf,
@@ -104,6 +108,7 @@ impl Default for RuntimeContext {
             allow_native: true,
             allow_legacy_scripts: true,
             call_timeout: Duration::from_secs(30),
+            rate_limit_cooldown: true,
             cache: ModuleCache::new(),
             cache_dir: std::env::temp_dir().join("glossa-modules"),
             models_dir: std::env::temp_dir().join("glossa-models"),

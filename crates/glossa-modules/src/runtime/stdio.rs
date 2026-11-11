@@ -31,6 +31,24 @@
 //! [`Transport::suspend`], when a call exceeds the call timeout, and when the
 //! provider is dropped. A process that died is started again on the next call.
 //! Calls are serialised: one request at a time per process.
+//!
+//! Stopping is polite first: stdin is closed, which is how the protocol
+//! asks a module to leave, and after a second whatever is left of the
+//! process *and of the processes it started* is killed (a process group on
+//! Unix, a job object on Windows; see [`crate::proc_tree`]). A module that
+//! overran its time limit is killed at once.
+//!
+//! # Cancellation
+//!
+//! A call whose request was cancelled (superseded by a newer one) returns
+//! at once instead of sitting out the module's work, and frees the lock.
+//! The process is not killed for it, since starting it again can cost far
+//! more than letting it finish: the abandoned request stays in flight, the
+//! host calls it still makes are answered with an error so it ends sooner,
+//! and its reply is thrown away. The next call waits for that reply for up
+//! to [`ABANDONED_GRACE`] before sending its own request (so the module
+//! never sees two requests at once, as the protocol promises); a module
+//! that has not come back by then is restarted.
 
 use std::collections::VecDeque;
 use std::ffi::OsString;
@@ -46,7 +64,8 @@ use glossa_module_sdk::wire::{ModuleError, Reply};
 use parking_lot::Mutex;
 use serde_json::Value;
 
-use crate::protocol::Transport;
+use crate::proc_tree::{self, Tree};
+use crate::protocol::{CallControl, CallError, Transport};
 
 /// How long a module may sit unused before its process is stopped.
 pub const DEFAULT_IDLE_TIMEOUT: Duration = Duration::from_secs(300);
@@ -56,6 +75,12 @@ const MAX_FRAME: usize = 64 * 1024 * 1024;
 const MAX_LOG_LINE: usize = 2000;
 /// How many recent stderr lines are kept to explain a crash.
 const RECENT_LINES: usize = 30;
+/// How often a waiting call looks at its cancel token. A frame from the
+/// module still wakes it at once.
+const POLL: Duration = Duration::from_millis(25);
+/// How long the next call waits for a module still busy with a request
+/// that was cancelled, before the process is restarted instead.
+pub const ABANDONED_GRACE: Duration = Duration::from_secs(3);
 
 /// One way to start the module's process.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -114,13 +139,32 @@ struct Inner {
     last_used: Instant,
 }
 
-/// A running module process. Dropping it kills the process.
+/// A running module process. Dropping it stops the process: stdin closes at
+/// once, and a thread ends what is still there a second later (see
+/// [`proc_tree::stop_in_background`]).
 struct Proc {
-    child: Child,
-    stdin: ChildStdin,
+    /// `None` once the process has been ended and collected.
+    child: Option<Child>,
+    stdin: Option<ChildStdin>,
+    /// The process and everything it started.
+    tree: Option<Tree>,
+    module_id: String,
     frames: Receiver<Frame>,
     recent: Arc<Mutex<VecDeque<String>>>,
     stderr_done: Receiver<()>,
+    /// A request whose caller was cancelled and whose reply has not come.
+    abandoned: Option<Abandoned>,
+    /// The module overran its time limit or broke the protocol: there is
+    /// no point in asking it to leave nicely.
+    hung: bool,
+}
+
+/// A request given up on; see the module docs on cancellation.
+#[derive(Clone, Copy)]
+struct Abandoned {
+    id: u64,
+    /// When its own time limit runs out.
+    deadline: Instant,
 }
 
 enum Frame {
@@ -131,16 +175,42 @@ enum Frame {
 
 impl Drop for Proc {
     fn drop(&mut self) {
-        let _ = self.child.kill();
-        let _ = self.child.wait();
+        let stdin = self.stdin.take();
+        let (Some(mut child), Some(tree)) = (self.child.take(), self.tree.take()) else { return };
+        if self.hung {
+            drop(stdin);
+            proc_tree::kill_now(&mut child, &tree);
+        } else {
+            proc_tree::stop_in_background(child, stdin, tree, &self.module_id);
+        }
     }
 }
 
 impl Proc {
+    /// Whether the process has ended, without collecting its status.
+    fn has_exited(&mut self) -> bool {
+        match (self.child.as_mut(), self.tree.as_ref()) {
+            (Some(child), Some(tree)) => tree.has_exited(child),
+            _ => true,
+        }
+    }
+
+    fn write(&mut self, value: &Value) -> std::io::Result<()> {
+        match self.stdin.as_mut() {
+            Some(stdin) => write_frame(stdin, value),
+            None => Err(std::io::Error::new(std::io::ErrorKind::BrokenPipe, "the module's stdin is closed")),
+        }
+    }
+
     /// Why the process is gone: its exit status and the end of its stderr.
+    /// Ends whatever is left of it.
     fn exit_detail(&mut self) -> String {
-        let _ = self.child.kill(); // in case it merely closed stdout
-        let status = self.child.wait().ok();
+        self.stdin = None;
+        // Kill in case it merely closed stdout.
+        let status = match (self.child.take(), self.tree.take()) {
+            (Some(mut child), Some(tree)) => proc_tree::kill_now(&mut child, &tree),
+            _ => None,
+        };
         let _ = self.stderr_done.recv_timeout(Duration::from_millis(500));
         let recent: Vec<String> = self.recent.lock().iter().rev().take(12).rev().cloned().collect();
         let mut out = match status.and_then(|s| s.code()) {
@@ -183,20 +253,32 @@ impl StdioTransport {
             .stdout(Stdio::piped())
             .stderr(Stdio::piped());
         hide_window(&mut cmd);
+        proc_tree::prepare(&mut cmd);
 
         let mut child = cmd
             .spawn()
             .map_err(|e| ModuleError::other(format!("cannot start {}: {e}", Path::new(&launch.program).display())))?;
+        let tree = Tree::adopt(&child);
         let (Some(stdin), Some(stdout), Some(stderr)) = (child.stdin.take(), child.stdout.take(), child.stderr.take())
         else {
-            let _ = child.kill();
+            proc_tree::kill_now(&mut child, &tree);
             return Err(ModuleError::other("the module process has no stdio"));
         };
         let recent = Arc::new(Mutex::new(VecDeque::with_capacity(RECENT_LINES)));
         let frames = read_frames(stdout, cfg.module_id.clone(), recent.clone());
         let stderr_done = drain_stderr(stderr, cfg.module_id.clone(), recent.clone());
         tracing::debug!(module = %cfg.module_id, pid = child.id(), "{} module started", cfg.kind);
-        Ok(Proc { child, stdin, frames, recent, stderr_done })
+        Ok(Proc {
+            child: Some(child),
+            stdin: Some(stdin),
+            tree: Some(tree),
+            module_id: cfg.module_id.clone(),
+            frames,
+            recent,
+            stderr_done,
+            abandoned: None,
+            hung: false,
+        })
     }
 
     /// Spawn a process and set its idle watcher going.
@@ -209,8 +291,7 @@ impl StdioTransport {
         Ok(proc)
     }
 
-    /// One request and its host calls, on a running process. The flag says
-    /// whether the process is still fit for the next call.
+    /// One request and its host calls, on a running process.
     fn exchange(
         &self,
         proc: &mut Proc,
@@ -218,93 +299,210 @@ impl StdioTransport {
         method: &str,
         params: Value,
         host: &dyn Fn(&str, Value) -> Reply,
-    ) -> (Result<Value, ModuleError>, bool) {
+        control: &CallControl,
+    ) -> Exchange {
         let frame = serde_json::json!({ "id": id, "method": method, "params": params });
-        if let Err(e) = write_frame(&mut proc.stdin, &frame) {
-            return (Err(ModuleError::other(format!("cannot reach the module: {e}{}", proc.exit_detail()))), false);
+        if let Err(e) = proc.write(&frame) {
+            return Exchange::Broken(ModuleError::other(format!("cannot reach the module: {e}{}", proc.exit_detail())));
         }
-        let timeout = self.cfg.call_timeout;
+        let timeout = control.timeout.unwrap_or(self.cfg.call_timeout);
         let mut deadline = Instant::now() + timeout;
         loop {
+            if control.cancel.is_cancelled() {
+                proc.abandoned = Some(Abandoned { id, deadline });
+                return Exchange::Cancelled;
+            }
             let wait = deadline.saturating_duration_since(Instant::now());
-            match proc.frames.recv_timeout(wait) {
+            if wait.is_zero() {
+                tracing::warn!(module = %self.cfg.module_id, "module call timed out; stopping its process");
+                return Exchange::TimedOut(timeout);
+            }
+            match proc.frames.recv_timeout(wait.min(POLL)) {
                 Ok(Frame::Oversize) => {
-                    return (
-                        Err(ModuleError::bad_response(format!("the module sent a line over {MAX_FRAME} bytes"))),
-                        false,
-                    );
+                    return Exchange::Broken(ModuleError::bad_response(format!(
+                        "the module sent a line over {MAX_FRAME} bytes"
+                    )));
                 }
                 Ok(Frame::Message(msg)) => {
                     if msg.get("id").and_then(Value::as_u64) == Some(id) {
-                        return (parse_reply(&msg), true);
+                        return Exchange::Done(parse_reply(&msg));
                     }
-                    let call_id = msg.get("id").and_then(Value::as_str).map(str::to_owned);
-                    let call_method = msg.get("method").and_then(Value::as_str).map(str::to_owned);
-                    let (Some(call_id), Some(call_method)) = (call_id, call_method) else {
+                    let Some((call_id, call_method)) = host_call_of(&msg) else {
                         tracing::debug!(module = %self.cfg.module_id, "ignoring an unexpected frame: {}", clip(&msg.to_string()));
                         continue;
                     };
+                    // A request nobody waits for any more gets no work done
+                    // for it: the refusal lets the module finish quickly.
+                    let cancelled = control.cancel.is_cancelled();
                     // The clock stops while the host works: a slow network
                     // call has its own timeout and is not the module hanging.
                     let started = Instant::now();
-                    let reply = host(&call_method, msg.get("params").cloned().unwrap_or(Value::Null));
+                    let reply = if cancelled {
+                        Reply::err(crate::host_api::cancelled_error())
+                    } else {
+                        host(&call_method, msg.get("params").cloned().unwrap_or(Value::Null))
+                    };
                     deadline += started.elapsed();
-                    let mut answer = serde_json::to_value(&reply).unwrap_or_else(|_| serde_json::json!({}));
-                    if let Some(obj) = answer.as_object_mut() {
-                        obj.insert("id".into(), Value::String(call_id));
-                    }
-                    if let Err(e) = write_frame(&mut proc.stdin, &answer) {
-                        return (
-                            Err(ModuleError::other(format!("cannot reach the module: {e}{}", proc.exit_detail()))),
-                            false,
-                        );
+                    if let Err(e) = proc.write(&host_answer(&reply, call_id)) {
+                        return Exchange::Broken(ModuleError::other(format!(
+                            "cannot reach the module: {e}{}",
+                            proc.exit_detail()
+                        )));
                     }
                 }
-                Err(RecvTimeoutError::Timeout) => {
-                    tracing::warn!(module = %self.cfg.module_id, "module call timed out; stopping its process");
-                    return (
-                        Err(ModuleError::other(format!("{method} timed out after {} ms", timeout.as_millis()))),
-                        false,
-                    );
-                }
+                Err(RecvTimeoutError::Timeout) => {}
                 Err(RecvTimeoutError::Disconnected) => {
-                    return (
-                        Err(ModuleError::other(format!("the module process exited{}", proc.exit_detail()))),
-                        false,
-                    );
+                    return Exchange::Broken(ModuleError::other(format!(
+                        "the module process exited{}",
+                        proc.exit_detail()
+                    )));
                 }
+            }
+        }
+    }
+
+    /// Wait for the reply to a request that was cancelled, refusing the
+    /// host calls it still makes, so the module is free for the next
+    /// request. Gives up when that request's own time limit or
+    /// [`ABANDONED_GRACE`] has passed.
+    fn settle_abandoned(&self, proc: &mut Proc, abandoned: Abandoned, control: &CallControl) -> Settled {
+        let until = abandoned.deadline.min(Instant::now() + ABANDONED_GRACE);
+        loop {
+            if control.cancel.is_cancelled() {
+                return Settled::Cancelled;
+            }
+            let wait = until.saturating_duration_since(Instant::now());
+            match proc.frames.recv_timeout(wait.min(POLL)) {
+                Ok(Frame::Message(msg)) => {
+                    if msg.get("id").and_then(Value::as_u64) == Some(abandoned.id) {
+                        return Settled::Free;
+                    }
+                    if let Some((call_id, _)) = host_call_of(&msg) {
+                        let refusal = Reply::err(crate::host_api::cancelled_error());
+                        if proc.write(&host_answer(&refusal, call_id)).is_err() {
+                            return Settled::Unusable;
+                        }
+                    }
+                }
+                Ok(Frame::Oversize) | Err(RecvTimeoutError::Disconnected) => return Settled::Unusable,
+                Err(RecvTimeoutError::Timeout) if wait.is_zero() => return Settled::Unusable,
+                Err(RecvTimeoutError::Timeout) => {}
             }
         }
     }
 }
 
+/// How one request ended.
+enum Exchange {
+    /// The module answered; the process is fit for the next call.
+    Done(Result<Value, ModuleError>),
+    /// The caller was cancelled; the request is still in flight
+    /// ([`Proc::abandoned`]) and the process stays.
+    Cancelled,
+    /// The time limit passed; the process is to be killed.
+    TimedOut(Duration),
+    /// The process died or broke the protocol.
+    Broken(ModuleError),
+}
+
+/// What became of a request that had been abandoned.
+enum Settled {
+    /// Its reply came (and was dropped); the module is idle.
+    Free,
+    /// The caller waiting for it was cancelled in turn.
+    Cancelled,
+    /// The module did not come back in time, or broke.
+    Unusable,
+}
+
+/// `(id, method)` when `msg` is a host call: a string id and a method.
+fn host_call_of(msg: &Value) -> Option<(String, String)> {
+    let id = msg.get("id").and_then(Value::as_str)?;
+    let method = msg.get("method").and_then(Value::as_str)?;
+    Some((id.to_owned(), method.to_owned()))
+}
+
+/// The frame answering host call `call_id` with `reply`.
+fn host_answer(reply: &Reply, call_id: String) -> Value {
+    let mut answer = serde_json::to_value(reply).unwrap_or_else(|_| serde_json::json!({}));
+    if let Some(obj) = answer.as_object_mut() {
+        obj.insert("id".into(), Value::String(call_id));
+    }
+    answer
+}
+
 impl Transport for StdioTransport {
-    fn call(&self, method: &str, params: Value, host: &dyn Fn(&str, Value) -> Reply) -> Result<Value, ModuleError> {
-        let mut inner = self.inner.lock();
+    fn call_with(
+        &self,
+        method: &str,
+        params: Value,
+        host: &dyn Fn(&str, Value) -> Reply,
+        control: &CallControl,
+    ) -> Result<Value, CallError> {
+        // Another call may hold the process; a cancelled caller does not
+        // queue up behind it.
+        let mut inner = loop {
+            if let Some(guard) = self.inner.try_lock_for(POLL) {
+                break guard;
+            }
+            if control.cancel.is_cancelled() {
+                return Err(CallError::Cancelled);
+            }
+        };
         inner.last_used = Instant::now();
 
         let mut proc = match inner.proc.take() {
-            Some(mut p) => match p.child.try_wait() {
-                Ok(None) => p,
-                _ => {
+            Some(mut p) => {
+                if p.has_exited() {
                     tracing::debug!(module = %self.cfg.module_id, "module process had exited{}", p.exit_detail());
                     drop(p);
                     self.start(&mut inner)?
+                } else {
+                    p
                 }
-            },
+            }
             None => self.start(&mut inner)?,
         };
 
+        if let Some(abandoned) = proc.abandoned.take() {
+            match self.settle_abandoned(&mut proc, abandoned, control) {
+                Settled::Free => {}
+                Settled::Cancelled => {
+                    proc.abandoned = Some(abandoned);
+                    inner.proc = Some(proc);
+                    return Err(CallError::Cancelled);
+                }
+                Settled::Unusable => {
+                    tracing::debug!(module = %self.cfg.module_id, "the module is still busy with a cancelled request; restarting it");
+                    proc.hung = true;
+                    drop(proc);
+                    proc = self.start(&mut inner)?;
+                }
+            }
+        }
+
         inner.next_id += 1;
         let id = inner.next_id;
-        let (result, alive) = self.exchange(&mut proc, id, method, params, host);
+        let outcome = self.exchange(&mut proc, id, method, params, host, control);
         inner.last_used = Instant::now();
+        let (result, keep) = match outcome {
+            Exchange::Done(r) => (r.map_err(CallError::Module), true),
+            Exchange::Cancelled => (Err(CallError::Cancelled), true),
+            Exchange::TimedOut(limit) => {
+                proc.hung = true;
+                (Err(CallError::Timeout(limit)), false)
+            }
+            Exchange::Broken(e) => {
+                proc.hung = true;
+                (Err(CallError::Module(e)), false)
+            }
+        };
         if self.stop_after_call.swap(false, Ordering::SeqCst) {
             tracing::debug!(module = %self.cfg.module_id, "{} module suspended after its call", self.cfg.kind);
-        } else if alive {
+        } else if keep {
             inner.proc = Some(proc);
         }
-        // Otherwise `proc` is dropped here, which kills it.
+        // Otherwise `proc` is dropped here, which stops it.
         result
     }
 
@@ -625,5 +823,60 @@ mod tests {
         assert!(find_program(shell, &dir).is_some());
         assert!(find_program("glossa-surely-not-a-program", &dir).is_none());
         std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// A module in shell: answers every request with its process id, after
+    /// `delay` seconds.
+    #[cfg(unix)]
+    fn slow_module(delay: &str, call_timeout: Duration) -> StdioTransport {
+        let script = format!(
+            r#"while IFS= read -r line; do id=$(printf '%s' "$line" | sed 's/.*"id":\([0-9]*\).*/\1/'); sleep {delay}; printf '{{"id":%s,"result":%s}}\n' "$id" "$$"; done"#
+        );
+        StdioTransport::new(
+            StdioConfig::new("slow", "process", call_timeout, Some(0)),
+            Box::new(move || {
+                Ok(Launch {
+                    program: "sh".into(),
+                    args: vec!["-c".into(), script.clone().into()],
+                    cwd: std::env::temp_dir(),
+                    env: Vec::new(),
+                })
+            }),
+        )
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_cancelled_call_returns_at_once_and_the_process_serves_the_next_one() {
+        let transport = slow_module("0.4", Duration::from_secs(20));
+        let host = |_: &str, _: Value| Reply::ok(Value::Null);
+        let pid = transport.call("ping", Value::Null, &host).unwrap();
+
+        let cancel = crate::provider::CancelToken::new();
+        let started = Instant::now();
+        let outcome = std::thread::scope(|s| {
+            s.spawn(|| {
+                std::thread::sleep(Duration::from_millis(50));
+                cancel.cancel();
+            });
+            transport.call_with("ping", Value::Null, &host, &CallControl { cancel: &cancel, timeout: None })
+        });
+        assert_eq!(outcome, Err(CallError::Cancelled));
+        assert!(started.elapsed() < Duration::from_millis(300), "it did not wait for the module: {:?}", started.elapsed());
+
+        // The abandoned reply is dropped, not taken for the next call's,
+        // and the process was not restarted for it.
+        assert_eq!(transport.call("ping", Value::Null, &host).unwrap(), pid);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_call_over_the_limit_it_was_given_is_a_timeout_not_a_cancellation() {
+        let transport = slow_module("5", Duration::from_secs(20));
+        let host = |_: &str, _: Value| Reply::ok(Value::Null);
+        let limit = Duration::from_millis(150);
+        let never = crate::provider::CancelToken::new();
+        let outcome = transport.call_with("ping", Value::Null, &host, &CallControl { cancel: &never, timeout: Some(limit) });
+        assert_eq!(outcome, Err(CallError::Timeout(limit)));
     }
 }

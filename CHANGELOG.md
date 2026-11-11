@@ -250,6 +250,25 @@ the notes of its GitHub release.
 
 ### Fixed
 
+- A module that runs as a program (Python, Java, `runtime = "process"`) is
+  stopped together with the programs it started itself (a model server,
+  workers): they used to be left running. It is asked to leave first, by
+  closing its input, and what remains a second later is ended; a module
+  that overran its time limit is ended at once.
+- A request that was superseded by a newer one no longer waits for a slow
+  module to finish: the call returns at once, the module's late answer is
+  discarded and the network requests it still asks for are refused. The
+  module's process is kept; it is restarted only if it has not come back
+  three seconds into the next request.
+- A module's manifest may set `call_timeout_secs` (1 to 600) when its work
+  is slow by nature, instead of the program-wide `[modules]
+  call_timeout_ms`.
+- A rate limit (429) answered to a module's HTTP request goes straight to
+  the module, with the server's `Retry-After` as `retry_after_secs` in the
+  response, instead of being retried behind its back.
+- A module that reported a rate limit is left alone for the time the
+  service asked for (or a growing pause) instead of being called again at
+  once, also across a reload of the modules.
 - Downloads of module files (models, helper programs, the managed Python
   and `uv`) no longer give up at the first hiccup. A dropped connection, a
   timeout, a busy server (5xx) or a rate limit (429, waiting as long as

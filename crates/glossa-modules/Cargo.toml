@@ -45,6 +45,15 @@ flate2 = { version = "1.1", default-features = false, features = ["rust_backend"
 # `regex` crate (and regex-syntax's Unicode tables) would.
 regex-automata = { version = "0.4", default-features = false, features = ["std", "syntax", "dfa-build", "dfa-search"] }
 
+# Ending a module's process together with the processes it started
+# (`proc_tree`): a process group on Unix, a job object on Windows. Both
+# crates are in the tree already (std and ureq's stack; glossa-services).
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
+
+[target.'cfg(windows)'.dependencies]
+windows = { workspace = true, features = ["Win32_Foundation", "Win32_Security", "Win32_System_JobObjects", "Win32_System_Threading"] }
+
 [dev-dependencies]
 glossa-net = { workspace = true }
 

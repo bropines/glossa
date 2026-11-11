@@ -272,6 +272,12 @@ result or an error of the same shape as above.
 - `body` is decoded using the response's charset (UTF-8 if none).
 - A non-2xx status is **not** an error: you get the status and decide.
 - Response header names are lower-case; repeated headers are joined with `\n`.
+- A 429 is not retried by Glossa: it comes straight back to you. For a 429 or
+  503 the response has `retry_after_secs`, the `Retry-After` header in seconds
+  when the server sent one; pass it on in a `rate_limited` error.
+- Once the request you are working for has been cancelled (the user asked
+  for something else), host calls fail with an error. Return as soon as you
+  can; your reply is discarded.
 
 ### `log`
 

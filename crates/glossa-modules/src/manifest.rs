@@ -146,6 +146,12 @@ pub struct ModuleSection {
     /// resident memory down.
     #[serde(default)]
     pub idle_timeout_secs: Option<u64>,
+    /// How long one call into the module may take, in seconds (1 to 600),
+    /// instead of the program's `[modules] call_timeout_ms`: for a module
+    /// whose work is slow by nature (a local language model, OCR of a full
+    /// page). Shown to the user when the module is approved.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub call_timeout_secs: Option<u64>,
     /// The module works with no setup, so Glossa may switch it on when it
     /// first appears. Leave it off for anything that needs a key or a server.
     #[serde(default)]
@@ -396,6 +402,12 @@ impl Manifest {
         if self.capabilities.is_empty() {
             return Err("the manifest lists no capabilities".into());
         }
+        if let Some(secs) = self.module.call_timeout_secs {
+            let max = crate::protocol::MAX_CALL_TIMEOUT_SECS;
+            if secs == 0 || secs > max {
+                return Err(format!("call_timeout_secs = {secs} must be between 1 and {max}"));
+            }
+        }
         if self.module.runtime == Runtime::Process && self.module.command.is_none() {
             return Err("runtime = \"process\" needs a command, e.g. command = [\"node\", \"main.mjs\"]".into());
         }
@@ -438,6 +450,13 @@ impl Manifest {
             }
         }
         Ok(())
+    }
+
+    /// The time limit the manifest asks for one call, if it does.
+    pub fn call_timeout(&self) -> Option<std::time::Duration> {
+        self.module
+            .call_timeout_secs
+            .map(|s| std::time::Duration::from_secs(s.clamp(1, crate::protocol::MAX_CALL_TIMEOUT_SECS)))
     }
 
     pub fn capabilities(&self) -> Capabilities {

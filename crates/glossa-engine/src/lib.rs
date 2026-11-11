@@ -650,6 +650,7 @@ impl Engine {
             allow_native: cfg.modules.allow_native,
             allow_legacy_scripts: cfg.modules.allow_legacy_scripts,
             call_timeout: Duration::from_millis(cfg.modules.call_timeout_ms),
+            rate_limit_cooldown: true,
             cache: self.inner.module_cache.clone(),
             cache_dir: paths.cache_dir.join("modules"),
             models_dir: paths.models_dir(),

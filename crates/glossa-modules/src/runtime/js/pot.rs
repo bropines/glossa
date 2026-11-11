@@ -224,15 +224,23 @@ impl PotTransport {
 }
 
 impl Transport for PotTransport {
-    fn call(
+    fn call_with(
         &self,
         method: &str,
         params: serde_json::Value,
         host: &dyn Fn(&str, serde_json::Value) -> Reply,
-    ) -> Result<serde_json::Value, ModuleError> {
+        control: &crate::protocol::CallControl,
+    ) -> Result<serde_json::Value, crate::protocol::CallError> {
         let routed =
             |m: &str, p: serde_json::Value| if m.starts_with("local:") { self.local(m, &p) } else { host(m, p) };
-        let _bridge = Bridge::install(&routed);
+        let bridge = Bridge::install_with(&routed, control);
+        bridge.finish(self.run(method, params))
+    }
+}
+
+impl PotTransport {
+    /// The call itself, with the bridge to the host in place.
+    fn run(&self, method: &str, params: serde_json::Value) -> Result<serde_json::Value, ModuleError> {
 
         let os = if cfg!(windows) {
             "Windows_NT"
