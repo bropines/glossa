@@ -74,7 +74,7 @@ jobs:
       windows: ${{ steps.v.outputs.windows }}
       macos: ${{ steps.v.outputs.macos }}
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - id: v
         run: |
           version="$(cargo metadata --no-deps --format-version 1 | jq -r '.packages[] | select(.name == "glossa-cli") | .version')"
@@ -98,7 +98,7 @@ jobs:
     env:
       VERSION: ${{ needs.version.outputs.version }}
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # master
         with:
           toolchain: ${{ env.RUST_TOOLCHAIN }}
@@ -118,13 +118,13 @@ jobs:
             python3 scripts/third-party-notices.py --target "$target" --summary
           done
           ls -l notices sbom
-      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: notices
           path: notices/
           if-no-files-found: error
       # Named like the packages (dist-*), so the SBOMs go into the release.
-      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: dist-sbom
           path: sbom/
@@ -184,9 +184,9 @@ jobs:
               build-essential pkg-config curl ca-certificates git file \
               libgtk-3-dev libasound2-dev
           fi
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       # THIRD-PARTY-NOTICES-<target>.txt for every target, from the notices job.
-      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: notices
           path: notices
@@ -276,7 +276,7 @@ jobs:
             # No FUSE in a container: the runtime unpacks itself instead.
             APPIMAGE_EXTRACT_AND_RUN=1 "$image" cli --home "$RUNNER_TEMP/glossa-appimage" services -c translate
           fi
-      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: dist-linux-${{ matrix.arch }}
           path: |
@@ -320,9 +320,9 @@ jobs:
       WINDOWS_SIGN_PFX: ${{ secrets.WINDOWS_SIGN_PFX }}
       WINDOWS_SIGN_PASSWORD: ${{ secrets.WINDOWS_SIGN_PASSWORD }}
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       # THIRD-PARTY-NOTICES-<target>.txt for every target, from the notices job.
-      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: notices
           path: notices
@@ -425,7 +425,7 @@ jobs:
           # at once; wait for the copy to finish.
           for ($i = 0; $i -lt 60 -and (Test-Path "$dir\glossa.exe"); $i++) { Start-Sleep -Seconds 1 }
           if (Test-Path "$dir\glossa.exe") { throw "glossa.exe is still there after uninstalling" }
-      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: dist-windows-${{ matrix.arch }}
           path: |
@@ -446,9 +446,9 @@ jobs:
       # starts at 11 anyway). Matches LSMinimumSystemVersion in Info.plist.
       MACOSX_DEPLOYMENT_TARGET: '10.15'
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       # THIRD-PARTY-NOTICES-<target>.txt for every target, from the notices job.
-      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: notices
           path: notices
@@ -548,7 +548,7 @@ jobs:
           }
           package arm64 target/aarch64-apple-darwin/release aarch64-apple-darwin
           package x86_64 target/x86_64-apple-darwin/release x86_64-apple-darwin
-      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: dist-macos
           path: |
@@ -569,10 +569,10 @@ jobs:
       id-token: write
       attestations: write
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       # The packages and the SBOMs (dist-*); the per-target notices are
       # inside the packages already.
-      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           pattern: dist-*
           path: dist
