@@ -126,7 +126,7 @@ impl Engine {
 
     /// Stop module `id`'s process, so its environment can be deleted or
     /// made again (Windows keeps a running `python.exe`'s folder locked).
-    fn stop_module(&self, id: &str) {
+    pub(crate) fn stop_module(&self, id: &str) {
         if let Some(p) = self.registry().get(id) {
             p.suspend();
         }

@@ -814,6 +814,10 @@ impl Engine {
     /// again. It then waits for approval like any module put there by hand.
     /// Blocks on the disk and on the reload: call it on a worker thread.
     pub fn install_module(&self, from: &Path) -> std::result::Result<PathBuf, InstallError> {
+        // A module being replaced must not be running: Windows does not rename
+        // a folder holding a running program. Stopped modules start again on
+        // their next call.
+        self.registry().suspend_all();
         let at = glossa_modules::install::install(from, &self.inner.paths.user_module_dir())?;
         self.reload_modules();
         Ok(at)

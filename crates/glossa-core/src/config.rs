@@ -2127,6 +2127,7 @@ impl Config {
     /// not know are remembered in [`Config::carried`], so they are written
     /// back. Text that is not TOML is still an error.
     pub fn from_toml_lenient(text: &str) -> crate::Result<(Config, Vec<ConfigIssue>)> {
+        const OLD_POT_KEY: (&str, &str) = ("server", "pot_compat_without_token");
         let bad = |e: &dyn std::fmt::Display| crate::Error::Config(format!("config file: {e}"));
         let table: toml::Table = toml::from_str(text).map_err(|e| bad(&e))?;
         let original = toml::Value::Table(table);
@@ -2177,6 +2178,18 @@ impl Config {
         }
         for path in ignored {
             if let (Some(keys), Some(value)) = (keys_only(&path), value_at(&original, &path)) {
+                // Retired, not from a newer version: dropped on the next save
+                // (see `Server::pot_routes_without_token`).
+                if keys == [OLD_POT_KEY.0, OLD_POT_KEY.1] {
+                    if value.as_bool() == Some(true) && !config.server.pot_routes_without_token {
+                        tracing::warn!(
+                            "[server] pot_compat_without_token is no longer read: pot-app's routes now need the \
+                             token. Key bindings made for pot-app (which cannot send it) get 401 until \
+                             [server] pot_routes_without_token = true is set"
+                        );
+                    }
+                    continue;
+                }
                 config.carried.unknown.push((keys, value.clone()));
             }
         }
@@ -2965,6 +2978,11 @@ copy_joined_lines = true",
         let old = Config::from_toml("[server]\npot_compat_without_token = true").unwrap();
         assert!(!old.server.pot_routes_without_token);
         assert!(!old.to_toml().contains("pot_compat_without_token"), "and is dropped on the next save");
+        // Also through the loader the program uses, which keeps unknown keys.
+        let (old, issues) = Config::from_toml_lenient("[server]\npot_compat_without_token = true").unwrap();
+        assert!(issues.is_empty() && old.carried.is_empty());
+        assert!(!old.server.pot_routes_without_token);
+        assert!(!old.to_toml().contains("pot_compat_without_token"));
     }
 
     #[test]

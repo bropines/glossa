@@ -22,34 +22,44 @@ pub struct Bundled {
     pub id: &'static str,
     pub manifest: &'static str,
     pub script: &'static str,
+    /// Its `locales/<lang>.toml` files, as (language, text).
+    pub locales: &'static [(&'static str, &'static str)],
 }
 
 macro_rules! bundled {
-    ($($id:literal),* $(,)?) => {
+    ($($id:literal $([$($lang:literal),*])?),* $(,)?) => {
         &[$(Bundled {
             id: $id,
             manifest: include_str!(concat!("../../../../modules/bundled/", $id, "/module.toml")),
             script: include_str!(concat!("../../../../modules/bundled/", $id, "/main.js")),
+            locales: bundled_locales!($id $(, $($lang),*)?),
         }),*]
     };
 }
 
+macro_rules! bundled_locales {
+    ($id:literal $(, $lang:literal)*) => {
+        &[$(($lang, include_str!(concat!("../../../../modules/bundled/", $id, "/locales/", $lang, ".toml")))),*]
+    };
+}
+
 /// Every bundled module, in the order the options page lists them:
-/// translators, then dictionaries.
+/// translators, then dictionaries. The languages in brackets are its
+/// `locales/` files (a test checks none is left out).
 pub static BUNDLED: &[Bundled] = bundled![
     "yandex-web",
-    "deepl-web",
+    "deepl-web"["ru"],
     "lara",
     "modernmt",
-    "multitran",
-    "lingvo-live",
-    "oxford-learners",
+    "multitran"["ru"],
+    "lingvo-live"["ru"],
+    "oxford-learners"["ru"],
     "wiktionary",
     "youdao",
-    "dic-academic",
-    "translate-academic",
+    "dic-academic"["ru"],
+    "translate-academic"["ru"],
     "wikipedia",
-    "urban-dictionary",
+    "urban-dictionary"["ru"],
 ];
 
 /// The bundled modules as providers. One that fails to load (which the tests
@@ -59,7 +69,7 @@ pub fn providers(cache: &Arc<ModuleCache>) -> Vec<Arc<dyn Provider>> {
         .iter()
         .filter_map(|b| {
             let label = format!("bundled/{}/main.js", b.id);
-            glossa_modules::runtime::js::load_embedded(b.manifest, b.script, &label, cache.clone())
+            glossa_modules::runtime::js::load_embedded(b.manifest, b.script, b.locales, &label, cache.clone())
                 .map_err(|e| tracing::error!("bundled module {}: {e}", b.id))
                 .ok()
         })

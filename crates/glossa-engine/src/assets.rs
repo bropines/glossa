@@ -220,6 +220,9 @@ impl Engine {
     pub fn remove_module_assets(&self, id: &str) -> Result<()> {
         let assets = self.assets_of(id)?;
         self.cancel_asset_download(id);
+        // First the process: Windows does not delete the files of a running
+        // program (paddle-ocr stays up for minutes after a call).
+        self.stop_module(id);
         assets.remove()?;
         self.inner.asset_jobs.lock().remove(id);
         self.reload_modules();

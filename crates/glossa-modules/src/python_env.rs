@@ -382,7 +382,7 @@ impl Toolchain {
 }
 
 fn remove_dir(dir: &Path) -> Result<()> {
-    match std::fs::remove_dir_all(dir) {
+    match crate::fs_retry::retry(|| std::fs::remove_dir_all(dir)) {
         Err(e) if e.kind() != std::io::ErrorKind::NotFound => Err(e.into()),
         _ => Ok(()),
     }

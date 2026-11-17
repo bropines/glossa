@@ -1163,8 +1163,7 @@ pub fn toggle_comment(text: &str, sel: Range<usize>, prefix: &str) -> (String, R
         && !chosen.is_empty();
     // Comments go at the selection's smallest indentation, so the code
     // stays aligned.
-    let indent =
-        chosen.iter().filter(|l| !l.trim().is_empty()).map(|l| l.len() - l.trim_start().len()).min().unwrap_or(0);
+    let indent = chosen.iter().filter(|l| !l.trim().is_empty()).map(|l| ascii_indent(l)).min().unwrap_or(0);
     let out: Vec<String> = all
         .iter()
         .enumerate()
@@ -1180,7 +1179,7 @@ pub fn toggle_comment(text: &str, sel: Range<usize>, prefix: &str) -> (String, R
                 }
                 format!("{}{rest}", &l[..at])
             } else {
-                let cut = indent.min(l.len());
+                let cut = indent.min(ascii_indent(l));
                 format!("{}{prefix} {}", &l[..cut], &l[cut..])
             }
         })
@@ -1188,6 +1187,13 @@ pub fn toggle_comment(text: &str, sel: Range<usize>, prefix: &str) -> (String, R
     let joined = out.join("\n");
     let range = whole_lines(&joined, &lines);
     (joined, range)
+}
+
+/// The width in bytes of `line`'s leading spaces and tabs. Only those: a
+/// no-break or full-width space is several bytes, and cutting another line
+/// at its width would land inside a character.
+fn ascii_indent(line: &str) -> usize {
+    line.len() - line.trim_start_matches([' ', '\t']).len()
 }
 
 /// The coloured layout of `text`.
@@ -1446,6 +1452,10 @@ mod tests {
         assert_eq!(t, "  // x = 1\n  // y = 2\nz");
         let (t, _) = toggle_comment(&t, 0..12, "//");
         assert_eq!(t, "  x = 1\n  y = 2\nz");
+        // A no-break space (two bytes) at the start of one line, one space
+        // at the start of the other: no cut inside a character.
+        let (t, _) = toggle_comment("\u{a0}x\n y", 0..5, "//");
+        assert_eq!(t, "// \u{a0}x\n//  y");
         assert_eq!(insert("ab", 1..1, "--").0, "a--b");
         assert_eq!(char_index_of("ab\ncd\nef", 2, 2), 4);
         assert_eq!(char_index_of("ab\ncd", 9, 1), 5);

@@ -101,8 +101,8 @@ declares) from wheels only; they are not pinned by hash.
 **The local control API requires its token.** It listens on loopback
 (`127.0.0.1:60828`) by default and is switched on by default
 (`[server] enabled`). Every request except `GET /health` must carry the
-token (`Authorization: Bearer …` or `?token=…`); a token is generated when
-none is set and cannot be left empty. Two more checks apply even with the
+token in an `Authorization: Bearer …` header (not in the address: `?token=…`
+is refused); a token is generated when none is set and cannot be left empty. Two more checks apply even with the
 token: a request carrying a header only browsers send (`Origin`,
 `Sec-Fetch-*`, `Referer`) is refused, so a web page cannot reach the API
 from the user's browser, and the `Host` header must be an address or

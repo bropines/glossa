@@ -24,7 +24,27 @@ use super::*;
 
 fn provider(id: &str) -> Arc<dyn Provider> {
     let b = BUNDLED.iter().find(|b| b.id == id).unwrap_or_else(|| panic!("no bundled module {id}"));
-    glossa_modules::runtime::js::load_embedded(b.manifest, b.script, id, ModuleCache::new()).unwrap()
+    glossa_modules::runtime::js::load_embedded(b.manifest, b.script, b.locales, id, ModuleCache::new()).unwrap()
+}
+
+/// Every `locales/*.toml` of a bundled module is compiled in with it, and
+/// its translations reach the settings page.
+#[test]
+fn every_locale_file_is_compiled_in() {
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../modules/bundled");
+    for b in BUNDLED {
+        let mut on_disk: Vec<String> = std::fs::read_dir(root.join(b.id).join("locales"))
+            .map(|d| {
+                d.flatten().filter_map(|e| e.file_name().to_str()?.strip_suffix(".toml").map(str::to_owned)).collect()
+            })
+            .unwrap_or_default();
+        on_disk.sort();
+        let mut listed: Vec<String> = b.locales.iter().map(|(lang, _)| (*lang).to_owned()).collect();
+        listed.sort();
+        assert_eq!(listed, on_disk, "{}: list its locales/ files in BUNDLED", b.id);
+    }
+    let p = provider("deepl-web");
+    assert!(!p.manifest().unwrap().strings.is_empty(), "deepl-web's Russian text is loaded");
 }
 
 fn lang(code: &str) -> LangId {

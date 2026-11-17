@@ -320,3 +320,16 @@ unsafe extern "system" fn enum_proc(hmon: HMONITOR, _: HDC, _: *mut RECT, data: 
     });
     BOOL(1)
 }
+
+pub fn show_without_activating(hwnd: isize) -> bool {
+    use windows::Win32::UI::WindowsAndMessaging::{IsWindow, ShowWindow, SW_SHOWNOACTIVATE};
+    let hwnd = HWND(hwnd as *mut core::ffi::c_void);
+    // SAFETY: a stale handle makes both calls fail, which is harmless.
+    unsafe {
+        if !IsWindow(Some(hwnd)).as_bool() {
+            return false;
+        }
+        let _ = ShowWindow(hwnd, SW_SHOWNOACTIVATE);
+    }
+    true
+}

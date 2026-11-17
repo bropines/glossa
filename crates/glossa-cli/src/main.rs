@@ -895,7 +895,7 @@ fn module_command(args: &Args) -> Result<(), Fail> {
         }
         other => {
             return Err(Fail::Usage(format!(
-                "unknown module command {other:?}; use test, check, action, panel, pending, approve, revoke or decline"
+                "unknown module command {other:?}; use test, check, action, panel, pending, approve, revoke, decline or remove"
             )))
         }
     };

@@ -919,7 +919,7 @@ impl ModuleAssets {
         let mut files = Vec::new();
         match spec.unpack {
             Unpack::None => {
-                fs::rename(part, &dest)?;
+                crate::fs_retry::rename(part, &dest)?;
                 #[cfg(unix)]
                 if spec.executable {
                     set_executable(&dest, 0o755);
@@ -941,7 +941,7 @@ impl ModuleAssets {
                     set_executable(&staging, 0o755);
                 }
                 files.push((String::new(), fs::metadata(&staging)?.len()));
-                fs::rename(&staging, &dest)?;
+                crate::fs_retry::rename(&staging, &dest)?;
                 fs::remove_file(part)?;
             }
             kind => {
@@ -961,7 +961,7 @@ impl ModuleAssets {
                     });
                 }
                 files = list_files(&staging)?;
-                fs::rename(&staging, &dest)?;
+                crate::fs_retry::rename(&staging, &dest)?;
                 fs::remove_file(part)?;
             }
         }
@@ -1019,8 +1019,8 @@ impl ModuleAssets {
 
 fn remove_any(path: &Path) -> io::Result<()> {
     match fs::symlink_metadata(path) {
-        Ok(m) if m.is_dir() => fs::remove_dir_all(path),
-        Ok(_) => fs::remove_file(path),
+        Ok(m) if m.is_dir() => crate::fs_retry::retry(|| fs::remove_dir_all(path)),
+        Ok(_) => crate::fs_retry::retry(|| fs::remove_file(path)),
         Err(e) if e.kind() == io::ErrorKind::NotFound => Ok(()),
         Err(e) => Err(e),
     }

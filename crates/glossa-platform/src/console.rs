@@ -19,3 +19,19 @@ pub fn attach_parent() {
         let _ = unsafe { AttachConsole(ATTACH_PARENT_PROCESS) };
     }
 }
+
+/// Whether this program has a console to write to (after
+/// [`attach_parent`]). On Windows a release build started from Explorer or
+/// a shortcut has none, and what it prints is lost. Always true elsewhere.
+pub fn has_console() -> bool {
+    #[cfg(windows)]
+    {
+        use windows::Win32::System::Console::GetConsoleWindow;
+        // SAFETY: a plain system call without arguments.
+        !unsafe { GetConsoleWindow() }.is_invalid()
+    }
+    #[cfg(not(windows))]
+    {
+        true
+    }
+}

@@ -502,10 +502,12 @@ impl Engine {
         if let Some(env) = python {
             env.remove_venv()?;
         }
+        // The process stopped above is ended in the background; on Windows its
+        // files stay locked until it has gone.
         if path.is_dir() {
-            std::fs::remove_dir_all(&path)?;
+            glossa_modules::fs_retry::retry(|| std::fs::remove_dir_all(&path))?;
         } else {
-            std::fs::remove_file(&path)?;
+            glossa_modules::fs_retry::retry(|| std::fs::remove_file(&path))?;
         }
         self.update_config(|c| {
             c.modules.granted.remove(id);

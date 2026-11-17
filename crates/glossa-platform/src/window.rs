@@ -240,9 +240,6 @@ pub fn place_dropdown(anchor: Rect, size: (f32, f32), monitors: &[Monitor]) -> D
     }
 }
 
-/// A top-level window of this process with exactly this title, visible or
-/// not, as a Win32 `HWND`: for windows egui creates (immediate viewports),
-/// whose handles it does not hand out. Always `None` off Windows.
 /// macOS: whether Glossa shows in the Dock and the Cmd+Tab switcher. A
 /// menu-bar app (`LSUIElement`) is hidden there, which suits it while only
 /// the menu-bar icon and the popup are up, but a settings or main window
@@ -412,6 +409,22 @@ pub fn float_free(title: &str) -> bool {
     #[cfg(not(target_os = "macos"))]
     {
         let _ = title;
+        false
+    }
+}
+
+/// Show (or restore) window `hwnd` of this program without activating it:
+/// the program the user is typing in keeps the focus. The window toolkit
+/// activates a window it shows a second time. Returns whether `hwnd` is a
+/// window; always `false` off Windows.
+pub fn show_without_activating(hwnd: isize) -> bool {
+    #[cfg(windows)]
+    {
+        win::show_without_activating(hwnd)
+    }
+    #[cfg(not(windows))]
+    {
+        let _ = hwnd;
         false
     }
 }

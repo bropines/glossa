@@ -30,6 +30,7 @@ pub mod actions;
 pub mod assets;
 pub mod backoff;
 pub mod child;
+pub mod fs_retry;
 pub mod host_api;
 #[cfg(feature = "image")]
 pub mod image_ops;
@@ -37,7 +38,9 @@ pub mod install;
 pub mod log_tap;
 pub mod manifest;
 pub mod panels;
-#[cfg(any(feature = "python", feature = "process"))]
+// Also without those runtimes: `child::run` ends the helper programs it
+// starts (uv, Tesseract) with what they started.
+#[cfg_attr(not(any(feature = "python", feature = "process")), allow(dead_code))]
 pub mod proc_tree;
 pub mod protocol;
 pub mod provider;

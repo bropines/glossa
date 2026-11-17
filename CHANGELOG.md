@@ -58,11 +58,13 @@ the notes of its GitHub release.
   token like every other route. They were open to every program on the
   machine, another user's included, which could put text of its choosing
   into the popup and so send it to your translation services. **If you
-  call them from key bindings made for pot-app, add `?token=…` to the
-  URLs, or set `[server] pot_routes_without_token = true`** to open them
-  to this machine again. The old key, `pot_compat_without_token`, is
-  ignored: it was on by default and written into every `config.toml`, so
-  it could not tell a choice from the default. `POST /translate` takes at
+  call them from key bindings made for pot-app, which cannot send a
+  header, set `[server] pot_routes_without_token = true`** to open them to
+  this machine again; your own scripts can send
+  `Authorization: Bearer …` instead. The old key, `pot_compat_without_token`,
+  is ignored (Glossa says so in its log) and dropped on the next save: it
+  was on by default and written into every `config.toml`, so it could not
+  tell a choice from the default. `POST /translate` takes at
   most 64 KiB.
 - With the control API bound beyond loopback (`bind = "0.0.0.0:…"`), where
   the token crosses the network unencrypted, the routes that change the
@@ -297,8 +299,7 @@ the notes of its GitHub release.
   (30–45 MB for a typical set), one recogniser per script on request. On a
   Mac it read a six-line English, Russian and Japanese picture exactly in
   0.3 s per recogniser. Its program is built for Windows, Linux and macOS
-  on Apple silicon by a separate workflow (`paddle-ocr-v*` tags) and is not
-  released yet.
+  on Apple silicon by a separate workflow (`paddle-ocr-v*` tags).
 - The interface language switches at once, without a restart: every
   window, the tray menu and the macOS menu bar follow the setting as soon
   as it is applied.
@@ -478,6 +479,28 @@ the notes of its GitHub release.
 
 ### Fixed
 
+- With the interface scale other than 100 %, the main window came back
+  larger (by 11 % at 0.9) and further down and right at every start. Its
+  size and place are now saved as the window is made again.
+- Windows: deleting a module's downloaded files or the module itself while
+  its program was running (PaddleOCR stays up for two minutes after a
+  call) deleted only part of them and broke the module. The module is now
+  stopped first, and files still held a moment longer are waited for.
+  Reinstalling a module that was running no longer fails on its folder,
+  and a freshly unpacked program held by the antivirus is waited for.
+- Cancelling a Python environment install now also ends the programs uv
+  started, which kept the half-made environment open.
+- Windows: "Open the main window with the popup" took the focus from your
+  program from the second popup on, so Replace typed into Glossa.
+- Windows: a command line Glossa did not understand, given by a shortcut or
+  the file manager, made it exit without a word. With no console to say so,
+  it now starts and notes the ignored arguments in its log.
+- The built-in services' settings (DeepL, Multitran, Lingvo Live, Oxford,
+  Academic, Urban Dictionary) show in Russian: their translations are
+  compiled in with them.
+- The module editor no longer crashes commenting out lines when one starts
+  with a no-break or full-width space.
+- The curl commands Options copies work in cmd.exe and PowerShell.
 - "Offline only" no longer sends a request for an address on this computer
   through a configured proxy, counts only `localhost` and loopback addresses
   as this computer (not names under `.localhost`), and applies to module
