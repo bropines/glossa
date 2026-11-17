@@ -610,12 +610,24 @@ mod tests {
         }
         // Idle connections that never send a request hold a place only
         // until they are dropped; afterwards there is room again.
+        // Polled rather than slept: a busy CI machine (Windows) may take
+        // longer than a fixed pause to accept or to notice a closed socket.
+        let answers = |status: &str| {
+            let until = std::time::Instant::now() + Duration::from_secs(10);
+            loop {
+                if exchange(addr, b"GET / HTTP/1.1\r\n\r\n").starts_with(status) {
+                    return true;
+                }
+                if std::time::Instant::now() > until {
+                    return false;
+                }
+                std::thread::sleep(Duration::from_millis(50));
+            }
+        };
         let idle: Vec<_> = (0..2).map(|_| TcpStream::connect(addr).unwrap()).collect();
-        std::thread::sleep(Duration::from_millis(100));
-        assert!(exchange(addr, b"GET / HTTP/1.1\r\n\r\n").starts_with("HTTP/1.1 503 "));
+        assert!(answers("HTTP/1.1 503 "), "two idle connections fill the cap");
         drop(idle);
-        std::thread::sleep(Duration::from_millis(200));
-        assert!(exchange(addr, b"GET / HTTP/1.1\r\n\r\n").starts_with("HTTP/1.1 200 "));
+        assert!(answers("HTTP/1.1 200 "), "dropped connections free their places");
     }
 
     #[test]

@@ -5,10 +5,6 @@ How to do things with Glossa, task by task. New here? Start with
 English interface shows; on macOS read Cmd for Ctrl inside Glossa's
 windows.
 
-Some things described here were added after 0.1.0-beta.2 and are in the
-next release; the [changelog](../CHANGELOG.md) lists them under
-*Unreleased*. They are marked "(next release)".
-
 - [Where everything is](#where-everything-is)
 - [Translating a selection](#translating-a-selection)
 - [The popup](#the-popup)
@@ -34,7 +30,7 @@ Glossa lives in the tray (the menu bar on macOS). Its menu has *Show
 Glossa*; the recognition actions (*Text recognition*, *Copy text from the
 screen*, *Translate the screen in place*, *Translate the whole screen in
 place*, and the rest under *More recognition*); *Dictionary*, *History*,
-*Keyboard*, *Next preset* (next release); the switches *Mouse mode* and
+*Keyboard*, *Next preset*; the switches *Mouse mode* and
 *Enable global hotkeys*; *Options*, *Support the project*, *About Glossa*;
 and *Exit*. A module that offers a window adds a *Modules* submenu.
 
@@ -49,7 +45,7 @@ application menu.
 *Automatically check for updates* (once a day; off by default). A newer
 version is offered as a link to its release page; Glossa never downloads
 or installs anything itself. `glossa-cli update` does the same check from
-a terminal, and `glossa --version` prints the version (next release).
+a terminal, and `glossa --version` prints the version.
 
 Every setting is also a key in `config.toml`
 ([Configuration](configuration.md)).
@@ -95,7 +91,7 @@ service, a service alone always does
   Appearance → Popup window* chooses which of the last four show.
 - The **service strip** appears along the bottom when the pointer is over
   the popup: click another service to translate with it. AI endpoints sit
-  in their own group at its end (next release). The popup remembers its
+  in their own group at its end. The popup remembers its
   own service, apart from the main window's.
 - **Drag** it by the header; drag an edge to **resize** it (the size is
   remembered; *Back to automatic size* undoes that). The **pin** keeps it
@@ -108,11 +104,11 @@ service, a service alone always does
   text; *Open the main window with the popup* does it every time (next
   release).
 - When the first service fails and another answers, the popup says which
-  one did and why (next release).
+  one did and why.
 - When no service answers, the message says what went wrong in plain
   words and offers what fits: *Try again*, *Service settings* (a missing
   or refused key), *Download files*, *Open Modules* or *Try* the next
-  service (next release). The main window and the dictionary do the same.
+  service. The main window and the dictionary do the same.
 
 ## The main window
 
@@ -126,7 +122,7 @@ Glossa* in the tray menu.
   language*), the source and target languages (*Auto-detect* for either),
   the swap button and *Translate*.
 - The **service tabs** switch the translator. AI endpoints sit in their
-  own group at the end (next release).
+  own group at the end.
 - The **toolbar** has back and forward (Alt+Left, Alt+Right; a right click
   lists recent texts) and the service's name, which opens its website. At
   the right end: *History*, *Dictionary*, *Text recognition* (the camera),
@@ -148,7 +144,7 @@ switches:
 | *Always on top* | keeps the window above others |
 | *Minimise to tray when minimised*, *Minimise to tray when closed* | what minimising and closing do; closing hides to the tray by default |
 | *On startup* | *Show window*, *Minimise to tray* or *Restore previous state* |
-| *Presets* | switch to a [preset](#presets) (next release) |
+| *Presets* | switch to a [preset](#presets) |
 
 Below the switches it also has *Dictionary*, *History*, *Keyboard*,
 *Options*, *Help*, *Support the project*, *About Glossa* and *Exit*.
@@ -156,7 +152,7 @@ Below the switches it also has *Dictionary*, *History*, *Keyboard*,
 ## Services
 
 *Options → Services* has a tab for each kind: *Translation*,
-*Dictionaries*, *Speech*, *Text recognition* and *Presets* (next release).
+*Dictionaries*, *Speech*, *Text recognition* and *Presets*.
 
 - Tick the services you want in the strip and put them in order with the
   up and down buttons. Services that work without a key are on from the
@@ -180,7 +176,7 @@ the popup's dictionary button, which looks up the popup's text. The action
 - *Exact search*, in the same menu, matches the headword exactly instead
   of taking the service's nearest suggestion.
 - The window keeps the words you looked up; *Clear history* in the menu
-  forgets them, with *Undo* offered for a few seconds (next release).
+  forgets them, with *Undo* offered for a few seconds.
 
 **Offline dictionaries.** *Options → Services → Dictionaries → Add
 dictionary…* takes StarDict (`.ifo`), DSL, XDXF and tab-separated files.
@@ -200,14 +196,14 @@ from the tray menu or the main window's toolbar (*History*).
   text is translated again. Its context menu has *Open*, *Copy text*,
   *Copy translation*, *Listen* and *Delete*; the bin at the end of the
   entry deletes it too. After a delete, *Undo* at the bottom brings the
-  entry back for eight seconds (next release).
+  entry back for eight seconds.
 - *Save as…* exports the list (or the favourites, when filtered) as
   text, CSV, HTML or JSON.
 
 *Options → Basics → History* has *Enable history*, *Clear history on exit*
 and *Expand items* (show each translation in the list). The file is
 `history.json` in the data folder; on Linux and macOS it is written
-readable by your account only (next release)
+readable by your account only
 ([Privacy](privacy.md#what-is-stored-on-the-machine)).
 
 ## Text on the screen
@@ -232,7 +228,7 @@ Google Lens reads the picture by default, which sends that picture to
 Google. *Options → Text recognition → Provider* switches to an engine on
 your machine: Windows OCR or OneOCR on Windows, Apple Vision on macOS,
 Tesseract anywhere. An engine on your machine that fails shows its own
-error rather than sending the picture to Lens (next release). On macOS
+error rather than sending the picture to Lens. On macOS
 Glossa needs the Screen Recording permission first. Everything else is in
 [Text recognition](ocr.md).
 
@@ -253,7 +249,7 @@ There is no speech input yet.
 
 ## Presets
 
-(Next release.) A preset is a named set of services: which are on, their
+A preset is a named set of services: which are on, their
 order, the selected one, the dictionaries, the voice, the OCR engine,
 module settings and, if you like, the language pair. It never holds a key.
 
@@ -290,7 +286,7 @@ Glossa says so in *Options*.
 
 What the clicks on the tray icon do (click, double click, middle click)
 is set in *Options → Advanced → Tray icon* (*Menu bar icon* on macOS,
-where a click opens the menu by default) (next release). On Linux any
+where a click opens the menu by default). On Linux any
 click opens the menu.
 
 ## Exceptions
@@ -358,7 +354,7 @@ a folder with a `module.toml` (often handed out as a `.zip`), or a pot-app
    have replaces it. (*Open my modules folder* shows where modules live,
    if you prefer to copy the folder yourself; *Reload modules* picks it
    up.)
-2. **Approve it** (next release). The module appears at the top of the
+2. **Approve it**. The module appears at the top of the
    page under *Waiting for your approval*, with what it asks for: the
    hosts it may reach, whether it runs a program on your computer or a
    library inside Glossa, the files it would download. Read it; *Approve*
@@ -383,8 +379,7 @@ services, themes and interface languages are used in place. *Import its
 settings and history* brings those over once.
 
 **Writing one** is described in the [modules overview](modules/README.md);
-*Options → Modules → Module editor* is an editor for it inside Glossa
-(next release).
+*Options → Modules → Module editor* is an editor for it inside Glossa.
 
 ## Keys and privacy
 

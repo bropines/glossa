@@ -22,8 +22,8 @@ entry = "main.js"
 description = "Document text recognition with the Cloud Vision API: layout down to words, with confidence."
 homepage = "https://cloud.google.com/vision/docs/fulltext-annotations"
 license = "MIT"
-# The settings below need a Glossa that knows them.
-min_glossa = "0.1.0-beta.2"
+# The settings and actions below need a Glossa that knows them.
+min_glossa = "0.1.0"
 
 [permissions]
 network = ["vision.googleapis.com"]

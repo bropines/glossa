@@ -1,11 +1,5 @@
 # Local LLM (offline)
 
-> **Not released yet.** The `local-llm` program has not been published, so
-> the `bin` hashes in `module.toml` are all-zero placeholders. Glossa
-> refuses them: the module does not load and cannot be installed or
-> downloaded yet. To try it with your own build, see
-> [Testing a local build](#testing-a-local-build).
-
 Translation by a small language model that runs on your own machine,
 through [llama.cpp](https://github.com/ggml-org/llama.cpp). No account, no
 key, nothing leaves the computer. The default model, Tencent's Hy-MT2

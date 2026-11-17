@@ -1,8 +1,3 @@
-# NOT RELEASED YET: the program's archives are not published and the `bin`
-# hashes below are all-zero placeholders, which Glossa refuses, so this
-# module does not load and cannot be installed. README.md, "Testing a local
-# build", says how to try it with your own build.
-#
 # Offline translation with a small language model on llama.cpp. A process
 # module: `local-llm` is a small Rust program (src/), downloaded as an
 # asset, that Glossa starts on the first translation. It starts llama-server
@@ -32,11 +27,8 @@ description = "Offline translation with a small language model (Hy-MT2 or Qwen3)
 homepage = "https://github.com/bropines/glossa/tree/main/modules/process/local-llm"
 author = "Glossa contributors"
 license = "MIT OR Apache-2.0 (llama.cpp MIT, models Apache-2.0)"
-# [[assets]] came after 0.1.0-beta.2. Set `min_glossa` to the next version in
-# the commit that bumps the workspace version: a value above the build's own
-# makes that build, the tests included, refuse the module.
-# The settings page uses `file` and [ui.settings].
-min_glossa = "0.1.0-beta.2"
+# [[assets]], `file` and [ui.settings] came after 0.1.0-beta.2.
+min_glossa = "0.1.0"
 
 [permissions]
 # Only where the files come from; the program itself talks to llama-server
@@ -120,16 +112,12 @@ children = ["gpu", "threads", "context"]
 # The module's program, one archive per system. Built by
 # .github/workflows/local-llm.yml and attached to the `local-llm-v<version>`
 # GitHub release (README.md, "Releasing the binary").
-# TODO(release): replace each sha256 and size below with the values the
-# workflow prints for that archive (its SIZES file). Until then Glossa
-# refuses the all-zero placeholders and the module does not load; to try
-# it, see README.md, "Testing a local build".
 
 [[assets]]
 name = "bin"
 url = "https://github.com/bropines/glossa/releases/download/local-llm-v0.1.0/local-llm-0.1.0-macos-aarch64.tar.gz"
-sha256 = "0000000000000000000000000000000000000000000000000000000000000000"
-size = 350000
+sha256 = "b908dd17c4aba1ba9fc54499dd6a9671b9d9125b673df713464d6289fd2b3c8f"
+size = 363961
 unpack = "tar.gz"
 os = ["macos"]
 arch = ["aarch64"]
@@ -137,8 +125,8 @@ arch = ["aarch64"]
 [[assets]]
 name = "bin"
 url = "https://github.com/bropines/glossa/releases/download/local-llm-v0.1.0/local-llm-0.1.0-windows-x86_64.zip"
-sha256 = "0000000000000000000000000000000000000000000000000000000000000000"
-size = 350000
+sha256 = "b711d682858f0f3c58dc062e2c589d2ca5248347dbde5c09fa90c28146dcc496"
+size = 314147
 unpack = "zip"
 os = ["windows"]
 arch = ["x86_64"]
@@ -146,8 +134,8 @@ arch = ["x86_64"]
 [[assets]]
 name = "bin"
 url = "https://github.com/bropines/glossa/releases/download/local-llm-v0.1.0/local-llm-0.1.0-windows-aarch64.zip"
-sha256 = "0000000000000000000000000000000000000000000000000000000000000000"
-size = 350000
+sha256 = "c875f3ded9f061b3c18e39448063a1dbf6d18a24cf775dfe5735fc33e6a803d2"
+size = 296415
 unpack = "zip"
 os = ["windows"]
 arch = ["aarch64"]
@@ -155,8 +143,8 @@ arch = ["aarch64"]
 [[assets]]
 name = "bin"
 url = "https://github.com/bropines/glossa/releases/download/local-llm-v0.1.0/local-llm-0.1.0-linux-x86_64.tar.gz"
-sha256 = "0000000000000000000000000000000000000000000000000000000000000000"
-size = 350000
+sha256 = "33e85ec5a19e87e2fbce54e10384f697642bfb95058a8192e2d997692395c164"
+size = 398847
 unpack = "tar.gz"
 os = ["linux"]
 arch = ["x86_64"]
@@ -164,8 +152,8 @@ arch = ["x86_64"]
 [[assets]]
 name = "bin"
 url = "https://github.com/bropines/glossa/releases/download/local-llm-v0.1.0/local-llm-0.1.0-linux-aarch64.tar.gz"
-sha256 = "0000000000000000000000000000000000000000000000000000000000000000"
-size = 350000
+sha256 = "784224cd2e6ee894b5d0b3293e8d5067f9658ac46ed95a648b37e01d99ec0f6c"
+size = 371300
 unpack = "tar.gz"
 os = ["linux"]
 arch = ["aarch64"]

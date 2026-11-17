@@ -10,7 +10,7 @@ that exist in Russian.
 |---|---|
 | [Getting started](getting-started.md) | Installing, the first start and the welcome guide, the first translation, the default hotkeys. |
 | [User guide](guide.md) | Task by task: translating a selection, the popup, the main window, services, the dictionary, history, text on the screen, listening, presets, mouse mode, exceptions, hotkeys, adding an AI translator, installing a module. |
-| [Installing](install.md) | System requirements; which download to take; the Windows installer, macOS disk image, `.deb`, AppImage and portable archives; first launch of the unsigned beta, where files go, upgrading, removing completely; accessibility; building the packages. |
+| [Installing](install.md) | System requirements; which download to take; the Windows installer, macOS disk image, `.deb`, AppImage and portable archives; first launch of the unsigned builds, where files go, upgrading, removing completely; accessibility; building the packages. |
 | [Troubleshooting](troubleshooting.md) | By symptom: the program does not start, a hotkey does nothing, the popup is empty, macOS permissions, elevated windows on Windows, Wayland, proxy and certificate errors, rate limiting, text recognition, module approval and downloads, the log, what to attach to a bug report. |
 
 ## Using Glossa

@@ -5,7 +5,7 @@ installation, where the files go, preparing settings for users, the proxy,
 the settings that narrow what Glossa may do, the hosts it talks to, and
 removal. End users want [Installing](install.md) instead.
 
-Glossa is a beta made for single users. This page describes what the
+Glossa is made for single users. This page describes what the
 installers and the program really do; it does not claim a managed-desktop
 feature set. Linux packages are built and smoke-tested but have not been
 tried on real hardware yet.
