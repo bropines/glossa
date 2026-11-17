@@ -169,6 +169,12 @@ fn system_argument(arg: &str) -> bool {
 /// program does not know is an error rather than ignored: `glossa --help`
 /// used to start the application.
 fn parse(args: impl IntoIterator<Item = String>) -> Result<Invocation, String> {
+    parse_with(args, &mut None)
+}
+
+/// [`parse`]; with `skipped` given, an argument it does not know is left
+/// out and listed there instead of being an error.
+fn parse_with(args: impl IntoIterator<Item = String>, skipped: &mut Option<Vec<String>>) -> Result<Invocation, String> {
     let mut l = Launch::default();
     let mut it = args.into_iter().peekable();
     while let Some(a) = it.next() {
@@ -184,6 +190,10 @@ fn parse(args: impl IntoIterator<Item = String>) -> Result<Invocation, String> {
             _ => (a.as_str(), None),
         };
         let Some(doc) = FLAGS.iter().find(|f| f.names.contains(&name)) else {
+            if let Some(skipped) = skipped {
+                skipped.push(a);
+                continue;
+            }
             return Err(if a.starts_with('-') {
                 format!("unknown flag {name}")
             } else {
@@ -217,6 +227,10 @@ fn parse(args: impl IntoIterator<Item = String>) -> Result<Invocation, String> {
 /// (`EX_USAGE`), clear of the codes `--screenshot` uses.
 const USAGE_ERROR: i32 = 64;
 
+/// What the command line held that a launch without a console left out,
+/// for the log once it is open.
+static SKIPPED_ARGS: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+
 /// The launch the command line asks for. `--help`, `--version`,
 /// `--screenshot-list` and a mistake answer on the terminal and leave
 /// before anything else starts: no window, no tray icon, no data folder.
@@ -236,9 +250,21 @@ fn parse_args() -> Launch {
                 println!("{t}");
             }
         }
-        Err(e) => {
+        Err(e) if glossa_platform::console::has_console() => {
             eprintln!("glossa: {e}\nTry 'glossa --help'.");
             std::process::exit(USAGE_ERROR);
+        }
+        // Started from a shortcut or the file manager: there is nowhere to
+        // say what was wrong, and leaving at once would look like a program
+        // that does not start. Start without what it did not understand.
+        Err(e) => {
+            let mut skipped = Some(Vec::new());
+            let launch = match parse_with(std::env::args().skip(1), &mut skipped) {
+                Ok(Invocation::Run(launch)) => launch,
+                _ => Launch::default(),
+            };
+            let _ = SKIPPED_ARGS.set(format!("{e}; ignored: {:?}", skipped.unwrap_or_default()));
+            return launch;
         }
     }
     std::process::exit(0);
@@ -299,6 +325,9 @@ fn main() -> eframe::Result<()> {
         None => Paths::discover(),
     };
     init_logging(&paths);
+    if let Some(skipped) = SKIPPED_ARGS.get() {
+        tracing::warn!("command line: {skipped}");
+    }
     frametrace::init(&paths.cache_dir);
     glossa_platform::crash::install(&paths.log_file());
     // The desktop portal's permissions to remember (Wayland) live with the data.
@@ -1147,6 +1176,13 @@ mod tests {
         assert!(args(&["stray"]).unwrap_err().contains("unexpected argument"));
         assert!(args(&["--home"]).unwrap_err().contains("needs a value"));
         assert!(args(&["--hidden=yes"]).unwrap_err().contains("takes no value"));
+
+        // Without a console the rest of the line still counts.
+        let mut skipped = Some(Vec::new());
+        let line = ["--frobnicate", "--hidden", "stray"].map(String::from);
+        let Ok(Invocation::Run(launch)) = super::parse_with(line, &mut skipped) else { panic!("not a launch") };
+        assert!(launch.hidden);
+        assert_eq!(skipped.unwrap(), ["--frobnicate", "stray"]);
     }
 
     /// Finder and LaunchServices add arguments of their own to an app's

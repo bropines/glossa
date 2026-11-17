@@ -122,9 +122,9 @@ fn put_in_place(staged: &Path, target: &Path) -> std::io::Result<()> {
     let old = staged.with_file_name(".replaced");
     let had_old = target.symlink_metadata().is_ok();
     if had_old {
-        std::fs::rename(target, &old)?;
+        crate::fs_retry::rename(target, &old)?;
     }
-    if let Err(e) = std::fs::rename(staged, target) {
+    if let Err(e) = crate::fs_retry::rename(staged, target) {
         if had_old {
             let _ = std::fs::rename(&old, target);
         }

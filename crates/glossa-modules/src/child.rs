@@ -55,6 +55,9 @@ pub fn run(mut cmd: Command, timeout: Duration, cancel: Option<&CancelToken>) ->
     let program = cmd.get_program().to_string_lossy().into_owned();
     cmd.stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::piped());
     hide_window(&mut cmd);
+    // Its own process family, so that a cancel also ends what it started
+    // (uv runs Python to build a package, which holds the environment open).
+    crate::proc_tree::prepare(&mut cmd);
     let mut attempt = 0;
     let mut child = loop {
         match cmd.spawn() {
@@ -69,6 +72,7 @@ pub fn run(mut cmd: Command, timeout: Duration, cancel: Option<&CancelToken>) ->
             Err(e) => return Err(Error::Platform(format!("cannot start {program}: {e}"))),
         }
     };
+    let tree = crate::proc_tree::Tree::adopt(&child);
     let stdout = collect(child.stdout.take());
     let stderr = collect(child.stderr.take());
 
@@ -78,16 +82,16 @@ pub fn run(mut cmd: Command, timeout: Duration, cancel: Option<&CancelToken>) ->
             Ok(Some(status)) => break status.code(),
             Ok(None) => {}
             Err(e) => {
-                kill(&mut child);
+                kill(&mut child, &tree);
                 return Err(Error::Platform(format!("{program}: {e}")));
             }
         }
         if cancel.is_some_and(|c| c.is_cancelled()) {
-            kill(&mut child);
+            kill(&mut child, &tree);
             return Err(Error::Cancelled);
         }
         if Instant::now() >= deadline {
-            kill(&mut child);
+            kill(&mut child, &tree);
             return Err(Error::Timeout(timeout.as_millis() as u64));
         }
         std::thread::sleep(Duration::from_millis(15));
@@ -117,7 +121,8 @@ fn join(rx: Option<Receiver<Vec<u8>>>) -> Vec<u8> {
     rx.and_then(|rx| rx.recv_timeout(Duration::from_secs(2)).ok()).unwrap_or_default()
 }
 
-fn kill(child: &mut Child) {
+fn kill(child: &mut Child, tree: &crate::proc_tree::Tree) {
+    tree.kill();
     let _ = child.kill();
     let _ = child.wait();
 }

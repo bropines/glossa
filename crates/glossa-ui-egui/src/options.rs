@@ -906,7 +906,8 @@ fn hotkeys(app: &mut GlossaApp, ui: &mut egui::Ui, st: &mut OptionsState) {
     let portal = app.hotkeys.as_ref().is_some_and(|h| h.uses_portal());
     if app.hotkeys.is_none() || (app.session.is_wayland() && !portal) {
         let token = &d.server.token;
-        let cmd = format!("curl -s -H 'Authorization: Bearer {token}' 'http://{}/v1/action/show_popup'", d.server.bind);
+        let cmd =
+            format!("{CURL} -s -H \"Authorization: Bearer {token}\" \"http://{}/v1/action/show_popup\"", d.server.bind);
         ui.label(RichText::new(app.t("options.hotkeys.wayland")).color(app.look.weak_text()));
         ui.horizontal(|ui| {
             ui.code(&cmd);
@@ -3067,7 +3068,7 @@ fn api(app: &mut GlossaApp, ui: &mut egui::Ui, st: &mut OptionsState) {
         ("options.server.cmd_ocr_translate", "/v1/action/recognize_and_translate"),
         ("options.server.cmd_main", "/v1/action/show_main_window"),
     ] {
-        let cmd = format!("curl -s -H 'Authorization: Bearer {}' 'http://{}{path}'", s.token, s.bind);
+        let cmd = format!("{CURL} -s -H \"Authorization: Bearer {}\" \"http://{}{path}\"", s.token, s.bind);
         ui.horizontal(|ui| {
             if crate::icons::sized_button(ui, &app.look, crate::icons::Icon::Copy, &app.t("edit.copy"), 18.0, true)
                 .clicked()
@@ -3179,6 +3180,11 @@ fn last_checked_parts(checked_at: i64, now: i64) -> (&'static str, i64) {
         _ => ("options.updates.checked_days", age / 86_400),
     }
 }
+
+/// curl, as a command copied for the user's shell types it. Double quotes
+/// work in cmd.exe, PowerShell and the Unix shells alike; on Windows
+/// PowerShell 5.1 `curl` names Invoke-WebRequest, so the program is named.
+const CURL: &str = if cfg!(windows) { "curl.exe" } else { "curl" };
 
 #[cfg(test)]
 mod tests {

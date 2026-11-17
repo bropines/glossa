@@ -30,6 +30,7 @@ pub mod actions;
 pub mod assets;
 pub mod backoff;
 pub mod child;
+pub mod fs_retry;
 pub mod host_api;
 #[cfg(feature = "image")]
 pub mod image_ops;

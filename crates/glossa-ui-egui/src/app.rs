@@ -472,6 +472,16 @@ impl GlossaApp {
     /// user is in (for opening it alongside the popup).
     pub fn show_main_unfocused(&mut self) {
         self.main_visible = true;
+        // winit shows a window without activating it only the first time;
+        // after that `Visible(true)` activates it, and a Replace from the
+        // popup would then type into Glossa instead of the user's program.
+        let shown_quietly = cfg!(windows)
+            && glossa_platform::window::own_window_by_title("Glossa")
+                .is_some_and(glossa_platform::window::show_without_activating);
+        if shown_quietly {
+            self.ctx.request_repaint_of(egui::ViewportId::ROOT);
+            return;
+        }
         self.ctx.send_viewport_cmd_to(egui::ViewportId::ROOT, egui::ViewportCommand::Visible(true));
         self.ctx.send_viewport_cmd_to(egui::ViewportId::ROOT, egui::ViewportCommand::Minimized(false));
     }
@@ -498,15 +508,18 @@ impl GlossaApp {
     fn remember_main_geometry(&mut self) {
         let info = self.ctx.input(|i| i.viewport().clone());
         if let (Some(outer), Some(inner)) = (info.outer_rect, info.inner_rect) {
-            let ppp = info.native_pixels_per_point.unwrap_or(1.0).max(0.1);
-            let _ = ppp;
+            // The window is made again (`main.rs`) before the interface scale
+            // is applied, so its size and place are read there unscaled.
+            // Save them so: in points at a scale of 0.9 a window came back
+            // 11% larger at every start.
+            let z = self.ctx.zoom_factor();
             self.cfg.windows.insert(
                 "main".into(),
                 glossa_core::config::WindowGeometry {
-                    x: outer.min.x,
-                    y: outer.min.y,
-                    width: inner.width(),
-                    height: inner.height(),
+                    x: outer.min.x * z,
+                    y: outer.min.y * z,
+                    width: inner.width() * z,
+                    height: inner.height() * z,
                     maximized: info.maximized.unwrap_or(false),
                 },
             );

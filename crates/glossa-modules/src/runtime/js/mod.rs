@@ -44,10 +44,20 @@ pub fn load_glossa(dir: &Path, manifest: Manifest, ctx: &RuntimeContext) -> Resu
 pub fn load_embedded(
     manifest: &str,
     script: &str,
+    locales: &[(&str, &str)],
     label: &str,
     cache: Arc<crate::host_api::ModuleCache>,
 ) -> Result<Arc<dyn Provider>, String> {
-    let manifest = Manifest::parse(manifest).map_err(|e| format!("{label}: module.toml: {e}"))?;
+    let mut manifest = Manifest::parse(manifest).map_err(|e| format!("{label}: module.toml: {e}"))?;
+    // Its translations (`locales/<lang>.toml`), compiled in beside it.
+    for (lang, text) in locales {
+        let (strings, bad) =
+            crate::settings::strings::parse(text).map_err(|e| format!("{label}: locales/{lang}.toml: {}", e.trim()))?;
+        if let Some(key) = bad.first() {
+            return Err(format!("{label}: locales/{lang}.toml: `{key}` is not a string"));
+        }
+        manifest.strings.insert(lang, strings);
+    }
     if manifest.module.runtime != crate::manifest::Runtime::Js {
         return Err(format!("{label}: an embedded module must have runtime = \"js\""));
     }
