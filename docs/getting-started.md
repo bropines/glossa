@@ -4,8 +4,8 @@ From nothing to the first translation in a few minutes. The
 [user guide](guide.md) continues from here, task by task. По-русски:
 [ru/getting-started.md](ru/getting-started.md).
 
-Glossa is in beta: Windows is used daily, macOS is in early testing, and
-the Linux builds have not been tried on real hardware yet.
+Windows is used daily, macOS is in early testing, and the Linux builds
+have not been tried on real hardware yet.
 
 ## 1. Install
 

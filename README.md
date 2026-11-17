@@ -73,8 +73,8 @@
   </tr>
 </table>
 
-> **Beta.** Glossa 0.1.0-beta.2 is the second public build. The downloads
-> are not signed yet, so Windows and macOS warn on the first launch
+> **0.1.0** is the first stable release. The downloads are not signed
+> yet, so Windows and macOS warn on the first launch
 > ([how to open them](docs/install.md)). Windows is used daily, macOS is in
 > early testing, and Linux has not been tried on real hardware yet.
 
@@ -82,7 +82,7 @@
 
 - [Getting started](#getting-started): [download](#download),
   [first translation](#first-translation), [macOS permissions](#macos)
-- [Features](#features) · [Since the last release](#since-the-last-release)
+- [Features](#features) · [New in 0.1.0](#new-in-010)
 - [Coming from QTranslate](#coming-from-qtranslate)
 - [AI translators](#ai-translators) · [Text recognition](#text-recognition) ·
   [Modules](#modules) · [Command line](#command-line)
@@ -225,10 +225,10 @@ described in [Installing](docs/install.md#macos).
   45 seconds after the last window closes), one executable (14 MB on
   Apple silicon), no web engine, no runtime to install.
 
-### Since the last release
+### New in 0.1.0
 
-On `main` and in the next release, not in 0.1.0-beta.2 (the
-[changelog](CHANGELOG.md) has the full list under *Unreleased*):
+Added since 0.1.0-beta.2 (the [changelog](CHANGELOG.md) has the full
+list):
 
 - **Module approvals**: a module you install by hand does not run until
   you approve what its manifest asks for (hosts, programs, downloads,
@@ -243,7 +243,7 @@ On `main` and in the next release, not in 0.1.0-beta.2 (the
   installed (a managed Python and per-module environments).
 - **Offline engines as modules**: PaddleOCR for text recognition (its
   program is released), and a local language model on llama.cpp for
-  translation (in the repository; its program is not released yet).
+  translation (llama.cpp on your machine).
 - **Interface languages**: your own language packs, and switching the
   language without a restart.
 - **Errors you can act on**: messages in the interface language that name

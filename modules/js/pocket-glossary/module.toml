@@ -15,7 +15,7 @@ entry = "main.js"
 description = "A pocket glossary of translation terms, in a panel of its own."
 homepage = "https://github.com/bropines/glossa"
 license = "MIT"
-min_glossa = "0.1.0-beta.2"                # panels
+min_glossa = "0.1.0"                # panels
 ready_to_use = true
 # One term at a time.
 max_input_chars = 100

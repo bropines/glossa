@@ -249,7 +249,7 @@ What works on the machine alone:
 
 | for | use |
 |---|---|
-| Translation | An AI endpoint pointed at a model server on this machine (the *Ollama* and *LM Studio* presets, `localhost`), or a LibreTranslate server of your own. The Local LLM module is in the repository but its program is not released yet. |
+| Translation | An AI endpoint pointed at a model server on this machine (the *Ollama* and *LM Studio* presets, `localhost`), or a LibreTranslate server of your own. Or the Local LLM module (llama.cpp on this machine). |
 | Dictionaries | StarDict, DSL, XDXF and tab-separated files: *Options → Services → Dictionaries → Add dictionary...* |
 | Text recognition | Windows OCR or OneOCR on Windows, Apple Vision on macOS, Tesseract anywhere, or the PaddleOCR module once its files are downloaded: *Options → Text recognition → Provider* |
 | Listening | The system voices: *Options → Services → Speech* |

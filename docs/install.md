@@ -78,7 +78,7 @@ There are no 32-bit builds, and none for Windows 7 or 8.
   KStatusNotifierItem Support* extension. Under Wayland some features
   depend on the desktop's portals
   ([Troubleshooting](troubleshooting.md#linux-and-wayland)).
-- **Disk.** The downloads of 0.1.0-beta.2 are 8 to 17 MB each (the macOS
+- **Disk.** The downloads of 0.1.0 are 8 to 17 MB each (the macOS
   disk images the smallest, the Linux archives the largest). A release
   build for macOS on Apple silicon is 14 MB for `glossa` and 6.5 MB for
   `glossa-cli`; installed sizes on the other systems have not been
@@ -262,7 +262,7 @@ folder (if one was made already).
 
 ## Finding out about new versions
 
-Glossa does not update itself. From the release after 0.1.0-beta.2,
+Glossa does not update itself. From 0.1.0 on,
 *Options → Updates → Check now* asks GitHub
 for the list of releases, and *Automatically check for updates* (off by
 default) does that once a day; a new version only opens its release page

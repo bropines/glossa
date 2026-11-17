@@ -7,6 +7,8 @@ the notes of its GitHub release.
 
 ## [Unreleased]
 
+## [0.1.0] - 2026-11-17
+
 ### Security
 
 - **The control API token is no longer accepted in the address.**
@@ -193,8 +195,8 @@ the notes of its GitHub release.
   loaded model takes is given back. On a Mac a sentence takes 0.2–0.6 s,
   and a start with the model cached 0.3–0.5 s. The program, the official
   llama.cpp build and the model are downloaded as module files; the
-  program is built by a separate workflow (`local-llm-v*` tags) and is not
-  released yet.
+  program is built by a separate workflow (`local-llm-v*` tags) and is
+  released (`local-llm-v0.1.0`).
 - Module approvals. A module you install by hand (a folder, a zip, a
   `.potext`) no longer runs until you approve what it asks for: the hosts it
   reaches, whether it runs a program with your rights or a native library
