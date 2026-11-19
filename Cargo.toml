@@ -114,6 +114,12 @@ opt-level = 3
 [profile.release.package.read-fonts]
 opt-level = 3
 
+# Line numbers in backtraces, without the variables and types of full debug
+# info: a debug test binary for Windows took about 300 MB with it, and the
+# shared build cache grew past 100 GB. A debugger still steps by line.
+[profile.dev]
+debug = "line-tables-only"
+
 # QuickJS is C, compiled by rquickjs-sys's build script with the profile's
 # optimisation level. Unoptimised, its interpreter loop takes several KB of
 # stack per JavaScript call, so a debug build overflows the engine's stack
