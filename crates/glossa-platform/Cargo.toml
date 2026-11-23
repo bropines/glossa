@@ -69,6 +69,8 @@ objc2 = "0.6"
 objc2-foundation = { version = "0.3", default-features = false, features = ["std", "NSString", "NSUserDefaults", "NSArray", "NSGeometry", "NSRange"] }
 objc2-app-kit = { version = "0.3", default-features = false, features = [
     "std",
+    # pid_t, for NSRunningApplication's lookup by process id.
+    "libc",
     "NSAppearance",
     "NSApplication",
     "NSRunningApplication",
