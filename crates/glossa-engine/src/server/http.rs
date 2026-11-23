@@ -422,6 +422,18 @@ pub fn serve(
             let mut busy = plain_error(503, "too many requests at once; try again");
             busy.retry_after = Some(1);
             let _ = write_reply(&mut stream, &busy, false);
+            // Closing with the request still unread makes Windows reset
+            // the connection, and the client loses what it had not read
+            // of the reply. So say we are done and take what was sent,
+            // within a bound: this is the accept thread.
+            let _ = stream.shutdown(Shutdown::Write);
+            let _ = stream.set_read_timeout(Some(Duration::from_millis(100)));
+            let mut sink = [0u8; 4096];
+            for _ in 0..4 {
+                if !matches!(stream.read(&mut sink), Ok(n) if n == sink.len()) {
+                    break;
+                }
+            }
             continue;
         };
         let handler = handler.clone();

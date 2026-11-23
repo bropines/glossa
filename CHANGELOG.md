@@ -7,6 +7,13 @@ the notes of its GitHub release.
 
 ## [Unreleased]
 
+### Fixed
+
+- Windows: a control API request refused because too many are being
+  answered at once now receives the whole `503`, with its `Retry-After`.
+  The connection was closed with the request unread, which made Windows
+  reset it, and the client could lose most of the answer.
+
 ## [0.1.0] - 2026-11-17
 
 ### Security
