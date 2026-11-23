@@ -28,4 +28,12 @@ ignore = [
     { id = "RUSTSEC-2026-0368", reason = "paddle-ocr only: oar-ocr reads a named entry, never extract()" },
     { id = "RUSTSEC-2026-0369", reason = "paddle-ocr only: oar-ocr reads a named entry, never extract()" },
     { id = "RUSTSEC-2026-0429", reason = "paddle-ocr only: oar-ocr reads a named entry, never extract()" },
+    # Four more in zip before 9.0 (one before 9.0.5), in parts of it that
+    # build is without: oar-ocr turns on deflate alone, so there is no AES,
+    # no Shrink, Reduce or Implode decoder, and it uses neither `extract()`
+    # nor ZipStreamReader.
+    { id = "RUSTSEC-2026-0545", reason = "paddle-ocr only: zip is built with deflate alone and read by entry name" },
+    { id = "RUSTSEC-2026-0546", reason = "paddle-ocr only: zip is built with deflate alone and read by entry name" },
+    { id = "RUSTSEC-2026-0547", reason = "paddle-ocr only: zip is built with deflate alone and read by entry name" },
+    { id = "RUSTSEC-2026-0548", reason = "paddle-ocr only: zip is built with deflate alone and read by entry name" },
 ]
