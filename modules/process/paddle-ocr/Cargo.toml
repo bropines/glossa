@@ -16,7 +16,7 @@ publish = false
 # Default features off: no `download-binaries` (pyke's prebuilt ONNX
 # Runtime) and no `auto-download` (models fetched by the crate itself). The
 # models and ONNX Runtime come from the module's assets instead.
-oar-ocr = { version = "=0.10.2", default-features = false, features = ["simd"] }
+oar-ocr = { version = "=0.10.3", default-features = false, features = ["simd"] }
 # The version oar-ocr pins, with `load-dynamic`: ONNX Runtime is opened at
 # run time from the library shipped beside the binary, not linked in.
 ort = { version = "=2.0.0-rc.13", default-features = false, features = ["std", "load-dynamic"] }
