@@ -463,6 +463,7 @@ fn main() -> eframe::Result<()> {
                 }
             });
     let mut first = true;
+    let mut window_failed = false;
 
     loop {
         // Start in the tray with nothing loaded, and come back here whenever
@@ -524,13 +525,36 @@ fn main() -> eframe::Result<()> {
         let mut this_launch = launch.clone();
         this_launch.hidden = !start_visible;
         let app_slot = slot.clone();
-        let result = eframe::run_native(
-            "Glossa",
-            options,
-            Box::new(move |cc| Ok(Box::new(app::GlossaApp::new(cc, app_slot, this_launch)))),
-        );
-        if let Err(e) = result {
-            tracing::error!("the window system failed: {e}");
+        // The window toolkit panics rather than returns when a library it
+        // opens at run time is missing (libxkbcommon-x11 on X11). Either
+        // way the user is told: with the log in a file, leaving silently
+        // looks like a program that does not start.
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            eframe::run_native(
+                "Glossa",
+                options,
+                Box::new(move |cc| Ok(Box::new(app::GlossaApp::new(cc, app_slot, this_launch)))),
+            )
+        }));
+        let failure = match result {
+            Ok(Ok(())) => None,
+            Ok(Err(e)) => Some(e.to_string()),
+            Err(panic) => Some(panic_text(panic.as_ref())),
+        };
+        if let Some(why) = failure {
+            tracing::error!("the window system failed: {why}");
+            eprintln!("glossa: cannot open a window: {why}");
+            if launch.screenshot.is_none() {
+                let _ = rfd::MessageDialog::new()
+                    .set_title("Glossa")
+                    .set_description(format!(
+                        "Glossa cannot open a window:\n\n{why}\n\nThe log is {}",
+                        paths.log_file().display()
+                    ))
+                    .set_level(rfd::MessageLevel::Error)
+                    .show();
+            }
+            window_failed = true;
             break;
         }
         let quit = slot.borrow().as_ref().is_none_or(|s| s.quit);
@@ -560,6 +584,9 @@ fn main() -> eframe::Result<()> {
             Ok(Ok(_)) => tracing::info!("restarting"),
             Ok(Err(e)) | Err(e) => tracing::error!("could not restart: {e}"),
         }
+    }
+    if window_failed {
+        std::process::exit(1);
     }
     Ok(())
 }
@@ -899,6 +926,15 @@ fn choose_renderer(options: &mut eframe::NativeOptions, configured: glossa_core:
             options.wgpu_options.wgpu_setup = egui_wgpu::WgpuSetup::CreateNew(setup);
         }
     }
+}
+
+/// What a caught panic said, for a message to the user.
+fn panic_text(panic: &(dyn std::any::Any + Send)) -> String {
+    panic
+        .downcast_ref::<&str>()
+        .map(|s| (*s).to_owned())
+        .or_else(|| panic.downcast_ref::<String>().cloned())
+        .unwrap_or_else(|| "an internal error (see the log)".to_owned())
 }
 
 /// Development aid: `GLOSSA_CRASH_TEST=panic|native` crashes on purpose, to

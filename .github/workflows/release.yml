@@ -158,7 +158,8 @@ jobs:
       NAME: glossa-${{ needs.version.outputs.version }}-${{ matrix.arch }}-linux
     steps:
       # GTK 3 and ALSA are the only libraries linked at build time (see
-      # ci.yml); the rest is tooling the bare container lacks. For arm64:
+      # ci.yml); libxkbcommon-x11 (with libxcb-xkb) is copied into the
+      # AppImage; the rest is tooling the bare container lacks. For arm64:
       # the cross compiler, the arm64 builds of those libraries, and qemu to
       # run the result once.
       - name: Build dependencies
@@ -168,7 +169,8 @@ jobs:
             apt-get update
             apt-get install -y --no-install-recommends \
               build-essential pkg-config curl ca-certificates git file \
-              crossbuild-essential-arm64 libgtk-3-dev:arm64 libasound2-dev:arm64 qemu-user
+              crossbuild-essential-arm64 libgtk-3-dev:arm64 libasound2-dev:arm64 qemu-user \
+              libxkbcommon-x11-0:arm64
             {
               echo "CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER=aarch64-linux-gnu-gcc"
               echo "CC_aarch64_unknown_linux_gnu=aarch64-linux-gnu-gcc"
@@ -182,7 +184,7 @@ jobs:
             apt-get update
             apt-get install -y --no-install-recommends \
               build-essential pkg-config curl ca-certificates git file \
-              libgtk-3-dev libasound2-dev
+              libgtk-3-dev libasound2-dev libxkbcommon-x11-0
           fi
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
       # THIRD-PARTY-NOTICES-<target>.txt for every target, from the notices job.

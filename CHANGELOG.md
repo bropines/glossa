@@ -9,6 +9,13 @@ the notes of its GitHub release.
 
 ### Fixed
 
+- Linux: the AppImage starts on systems without `libxkbcommon-x11` (a plain
+  Ubuntu 22.04, for one). Glossa left at once there, with nothing on the
+  screen; the image now carries the library and uses it where the system
+  has none.
+- When no window can be opened (a missing system library, no usable
+  graphics), Glossa says so in a message and on the terminal instead of
+  leaving silently with the reason only in its log.
 - Windows: a control API request refused because too many are being
   answered at once now receives the whole `503`, with its `Retry-After`.
   The connection was closed with the request unread, which made Windows

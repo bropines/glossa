@@ -224,6 +224,19 @@ COMPONENTS = (
         "the licences of its parts are at the address above. The .deb and the portable archive "
         "do not contain it.",
     },
+    {
+        "name": "libxkbcommon-x11 and libxcb-xkb (the .AppImage file only)",
+        "crate": "glossa-ui-egui",
+        "targets": "linux",
+        "licence": "MIT and MIT-style notices (libxkbcommon); MIT (libxcb)",
+        "source": "https://xkbcommon.org and https://xcb.freedesktop.org",
+        "note": "Unmodified copies of Debian 12's libxkbcommon-x11.so.0 and libxcb-xkb.so.1 in "
+        "usr/lib/glossa-fallback, used only where the system has no libxkbcommon-x11; not linked "
+        "with Glossa. Their full copyright and licence notices are the files "
+        "copyright-libxkbcommon-x11-0 and copyright-libxcb-xkb1 beside this one. The .deb "
+        "depends on the system's package instead, and the portable archive does not contain "
+        "them.",
+    },
 )
 
 

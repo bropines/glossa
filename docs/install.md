@@ -246,9 +246,11 @@ chmod +x glossa-1.2.3-x86_64.AppImage
 ./glossa-1.2.3-x86_64.AppImage cli translate -t ru hello   # glossa-cli
 ```
 
-It holds only Glossa itself and uses the system's GTK 3, ALSA and glibc. It
-is built on Debian 12, like the `.deb`, so distributions of that age or
-newer run it (Ubuntu 22.04, Fedora 37 and later). Running it
+It holds Glossa itself and uses the system's GTK 3, ALSA and glibc. One
+small library that not every desktop has, `libxkbcommon-x11` (the keyboard
+on X11), is inside as a fallback and is used only where the system has
+none. It is built on Debian 12, like the `.deb`, so distributions of that
+age or newer run it (Ubuntu 22.04, Fedora 37 and later). Running it
 needs FUSE; without it, add `--appimage-extract-and-run`. Turning on *Start
 at login* registers the AppImage file, so keep it where it is afterwards.
 
@@ -256,7 +258,9 @@ at login* registers the AppImage file, so keep it where it is afterwards.
 
 Unpack the `-portable.tar.gz` anywhere and run `./glossa`; `./install.sh`
 adds it to your application menu. It needs the same libraries as the
-AppImage. As on Windows, `portable.txt` keeps the settings in `data/` next to
+AppImage, and `libxkbcommon-x11` from the system as well
+(`libxkbcommon-x11-0` on Debian and Ubuntu, `libxkbcommon-x11` on Fedora):
+without it Glossa says that it cannot open a window. As on Windows, `portable.txt` keeps the settings in `data/` next to
 the program; to use `~/.config/glossa` instead, delete it and the `data/`
 folder (if one was made already).
 
