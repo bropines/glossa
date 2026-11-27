@@ -144,7 +144,7 @@ impl Request {
         let head_only = self.method == Method::Head;
         let unread = self.declared > self.consumed;
         let mut stream = self.stream.into_inner();
-        if write_reply(&mut stream, &reply, head_only).is_ok() && unread {
+        if write_reply(&mut stream, &reply, head_only, WRITE_TIMEOUT).is_ok() && unread {
             // Closing with unread input makes the system reset the
             // connection, and the client may lose the answer it has not
             // read yet (a 413 above all). Say we are done, then let a
@@ -191,8 +191,9 @@ fn reason(status: u16) -> &'static str {
     }
 }
 
-fn write_reply(stream: &mut TcpStream, reply: &Reply, head_only: bool) -> std::io::Result<()> {
-    let _ = stream.set_write_timeout(Some(WRITE_TIMEOUT));
+/// Write `reply`, giving up after `timeout` of a client that does not read.
+fn write_reply(stream: &mut TcpStream, reply: &Reply, head_only: bool, timeout: Duration) -> std::io::Result<()> {
+    let _ = stream.set_write_timeout(Some(timeout));
     let mut head = format!(
         "HTTP/1.1 {} {}\r\nContent-Type: {}\r\nContent-Length: {}\r\nConnection: close\r\n",
         reply.status,
@@ -417,11 +418,12 @@ pub fn serve(
         }
         let Some(slot) = Slot::take(&active, max) else {
             // Answered here, without reading anything: the reply fits the
-            // socket's buffer, and the short timeout covers the rest.
-            let _ = stream.set_write_timeout(Some(Duration::from_millis(250)));
+            // socket's buffer, and the short timeout covers the rest (this
+            // is the accept thread; a client that does not read must not
+            // hold it for the 30 s an ordinary reply may take).
             let mut busy = plain_error(503, "too many requests at once; try again");
             busy.retry_after = Some(1);
-            let _ = write_reply(&mut stream, &busy, false);
+            let _ = write_reply(&mut stream, &busy, false, Duration::from_millis(250));
             // Closing with the request still unread makes Windows reset
             // the connection, and the client loses what it had not read
             // of the reply. So say we are done and take what was sent,
@@ -446,7 +448,7 @@ pub fn serve(
                     }
                 }
                 Err((mut stream, Some(reply))) => {
-                    let _ = write_reply(&mut stream, &reply, false);
+                    let _ = write_reply(&mut stream, &reply, false, WRITE_TIMEOUT);
                 }
                 Err((_, None)) => {}
             }
