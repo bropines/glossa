@@ -179,17 +179,18 @@ On Linux Glossa also offers a D-Bus service on the session bus.
 
 Things worth knowing before relying on "I switched that service off":
 
-- **Language detection may go to another service.** When the source
+- **Language detection may send the text to a service.** When the source
   language is *Auto-detect* and either the target is automatic or smart
-  direction is on (it is by default), or *always detect* is on, the text is
-  first sent for detection. The selected service is asked if it can detect
-  (Google, Microsoft, Yandex and LibreTranslate can; the others and AI
-  endpoints cannot), then the other enabled ones, and **if none of them
-  can, any installed service that can**, which in practice means Google
-  Translate even when it is switched off in the list. To prevent it, choose
-  the source language yourself and turn smart direction off, or remove the
-  service altogether with `[modules] disabled`
-  ([Working offline](#working-offline)).
+  direction is on (it is by default), or *always detect* is on, the
+  language is worked out first. By default (`[general] detect =
+  "offline_then_service"`) Glossa's built-in detector does it on the
+  computer when it is sure; for short or ambiguous text the text is sent
+  to the selected service if it can detect (Google, Microsoft, Yandex and
+  LibreTranslate can; the others and AI endpoints cannot), then to the
+  other enabled ones. A service switched off is never asked. To keep
+  detection on the computer always, choose *Options → Basics → Detect the
+  language with → Built-in detector only* (`detect = "offline"`), or set
+  the source language yourself.
 - **Text recognition falls over to other engines.** When the chosen OCR
   engine fails in a way another might not (it is not installed, not set up,
   or the network is down), the others are tried in turn: Google Lens, the
@@ -202,8 +203,9 @@ Things worth knowing before relying on "I switched that service off":
   service that can speak is used: with the system voice chosen and
   failing, the text goes to Google.
 - **The built-in *Private* preset is not offline.** It switches to Lingva
-  and MyMemory, Wiktionary and Wikipedia, and the system voice: fewer and
-  different parties, but the text still leaves the machine. With no
+  and MyMemory, Wiktionary and Wikipedia, the system voice and the
+  built-in language detector: fewer and different parties, but the text
+  still leaves the machine to be translated. With no
   instance of your own set, Lingva means the public `lingva.ml`.
 - **Fail-over** sends the same text to the next enabled service when the
   first one fails. Turn it off in *Options → Services* if each text should
