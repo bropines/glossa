@@ -7,6 +7,8 @@ the notes of its GitHub release.
 
 ## [Unreleased]
 
+## [0.1.1] - 2026-11-27
+
 ### Added
 
 - Windows, macOS: the popup can close when you click elsewhere instead of
