@@ -23,7 +23,7 @@ mod imp {
     pub fn unavailable() -> Option<String> {
         // SAFETY: these libraries' initialisers only register GObject types;
         // the handle is dropped at once and the indicator loads its own.
-        let found = NAMES.iter().any(|name| unsafe { libloading::Library::new(name) }.is_ok());
+        let found = NAMES.iter().any(|name| unsafe { libloading::Library::new(*name) }.is_ok());
         (!found).then(|| {
             "no AppIndicator library (libayatana-appindicator3 or libappindicator3) on this system; install one \
              for the tray icon"
