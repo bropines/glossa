@@ -10,6 +10,12 @@
 #   APPIMAGE_ARCH    the binaries' architecture: x86_64 (default) or aarch64.
 #                    appimagetool itself runs on the build machine, so an
 #                    aarch64 image can be made on x86-64
+#   APPIMAGE_UPDATE_INFO  update information to embed, e.g.
+#                    gh-releases-zsync|bropines|glossa|latest|glossa-*-x86_64.AppImage.zsync;
+#                    then <image>.zsync is written beside the image, for
+#                    AppImageUpdate and the like to fetch only what changed.
+#                    Needs zsyncmake (Debian: zsync); without it the script
+#                    stops rather than embed information nothing answers
 #   APPIMAGE_LIBDIR  where this machine keeps the target's libraries
 #                    (default: /usr/lib/<arch>-linux-gnu) and
 #   APPIMAGE_DOCDIR  their packages' copyright files (default:
@@ -100,7 +106,21 @@ chmod 0755 "$appdir/AppRun"
 image="$out/glossa-$version-$arch.AppImage"
 set -- --no-appstream
 [ -n "${APPIMAGE_RUNTIME:-}" ] && set -- "$@" --runtime-file "$APPIMAGE_RUNTIME"
+update=${APPIMAGE_UPDATE_INFO:-}
+if [ -n "$update" ]; then
+  # appimagetool leaves the .zsync to zsyncmake and only warns when it is
+  # missing; an image that points at a .zsync the release lacks would make
+  # updaters fail, so check first.
+  command -v zsyncmake >/dev/null || { echo "APPIMAGE_UPDATE_INFO needs zsyncmake (Debian: zsync)" >&2; exit 1; }
+  set -- "$@" -u "$update"
+fi
 # The tool is itself an AppImage; extracting it to run needs no FUSE, which
-# containers lack.
-APPIMAGE_EXTRACT_AND_RUN=1 ARCH=$arch "$tool" "$@" "$appdir" "$image"
+# containers lack. Run in the output folder: zsyncmake writes the .zsync to
+# the current one, and names the image inside it by its bare file name, so
+# the two must sit side by side in the release.
+(cd "$out" && APPIMAGE_EXTRACT_AND_RUN=1 ARCH=$arch "$tool" "$@" "$appdir" "$image")
+if [ -n "$update" ]; then
+  [ -s "$image.zsync" ] || { echo "$image.zsync was not written" >&2; exit 1; }
+  echo "$image.zsync"
+fi
 echo "$image"

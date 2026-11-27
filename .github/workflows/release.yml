@@ -23,6 +23,8 @@ name: release
 # Linux (x86_64, arm64), not tested on real hardware yet:
 #   glossa_1.2.3_<amd64|arm64>.deb            Debian 12, Ubuntu 22.04+
 #   glossa-1.2.3-<x86_64|aarch64>.AppImage    any distribution with GTK 3
+#   glossa-1.2.3-<x86_64|aarch64>.AppImage.zsync  for AppImageUpdate: the
+#                                              image embeds where to find it
 #   glossa-1.2.3-<arch>-linux-portable.tar.gz with portable.txt, as on Windows
 # Bropines.Glossa*.yaml, glossa.json          winget and Scoop manifests
 #                                              (packaging/fill-manifests.sh)
@@ -159,7 +161,7 @@ jobs:
     steps:
       # GTK 3 and ALSA are the only libraries linked at build time (see
       # ci.yml); libxkbcommon-x11 (with libxcb-xkb) is copied into the
-      # AppImage; the rest is tooling the bare container lacks. For arm64:
+      # AppImage and zsync makes its .zsync; the rest is tooling the bare container lacks. For arm64:
       # the cross compiler, the arm64 builds of those libraries, and qemu to
       # run the result once.
       - name: Build dependencies
@@ -170,7 +172,7 @@ jobs:
             apt-get install -y --no-install-recommends \
               build-essential pkg-config curl ca-certificates git file \
               crossbuild-essential-arm64 libgtk-3-dev:arm64 libasound2-dev:arm64 qemu-user \
-              libxkbcommon-x11-0:arm64
+              libxkbcommon-x11-0:arm64 zsync
             {
               echo "CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER=aarch64-linux-gnu-gcc"
               echo "CC_aarch64_unknown_linux_gnu=aarch64-linux-gnu-gcc"
@@ -184,7 +186,7 @@ jobs:
             apt-get update
             apt-get install -y --no-install-recommends \
               build-essential pkg-config curl ca-certificates git file \
-              libgtk-3-dev libasound2-dev libxkbcommon-x11-0
+              libgtk-3-dev libasound2-dev libxkbcommon-x11-0 zsync
           fi
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       # THIRD-PARTY-NOTICES-<target>.txt for every target, from the notices job.
@@ -271,6 +273,7 @@ jobs:
           APPIMAGETOOL="$RUNNER_TEMP/appimage/appimagetool" \
           APPIMAGE_RUNTIME="$RUNNER_TEMP/appimage/runtime-${{ matrix.appimage }}" \
           APPIMAGE_ARCH=${{ matrix.appimage }} \
+          APPIMAGE_UPDATE_INFO="gh-releases-zsync|${GITHUB_REPOSITORY%%/*}|${GITHUB_REPOSITORY#*/}|latest|glossa-*-${{ matrix.appimage }}.AppImage.zsync" \
             packaging/linux/build-appimage.sh "target/$TARGET/release" "$VERSION" dist
           image="dist/glossa-$VERSION-${{ matrix.appimage }}.AppImage"
           file "$image"
@@ -285,6 +288,7 @@ jobs:
             dist/*.tar.gz
             dist/*.deb
             dist/*.AppImage
+            dist/*.AppImage.zsync
           if-no-files-found: error
 
   windows:

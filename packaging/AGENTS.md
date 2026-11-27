@@ -13,7 +13,7 @@ what users download and how they install it is in
 | `portable.txt` | the marker put into portable archives: its name (`portable.*`) makes Glossa keep its data in `data/` beside the executable |
 | `linux/stage.sh` | the `usr/` tree a Linux package installs (binaries, menu entry, icon, AppStream metadata, docs with the third-party notices, `share/glossa/sdk/python`, examples) |
 | `linux/build-deb.sh` | `glossa_<version>_<arch>.deb` (amd64 or arm64) from that tree |
-| `linux/build-appimage.sh` | `glossa-<version>-<arch>.AppImage` (x86_64 or aarch64) |
+| `linux/build-appimage.sh` | `glossa-<version>-<arch>.AppImage` (x86_64 or aarch64), and its `.zsync` for AppImageUpdate when given update information |
 | `winget/`, `scoop/`, `fill-manifests.sh` | winget and Scoop manifests, filled with the release's URLs and checksums |
 
 ## Rules

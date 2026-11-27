@@ -254,6 +254,12 @@ age or newer run it (Ubuntu 22.04, Fedora 37 and later). Running it
 needs FUSE; without it, add `--appimage-extract-and-run`. Turning on *Start
 at login* registers the AppImage file, so keep it where it is afterwards.
 
+Starting with 0.1.2 the image knows where its updates are: tools such as
+[AppImageUpdate](https://github.com/AppImageCommunity/AppImageUpdate) (or
+the AppImage managers that use it) replace it with the latest release and
+download only the parts that changed, from the `.AppImage.zsync` file
+published beside it.
+
 ### The archive
 
 Unpack the `-portable.tar.gz` anywhere and run `./glossa`; `./install.sh`
@@ -394,7 +400,7 @@ a version tag. The scripts it calls work locally too:
 | script | makes | needs |
 |---|---|---|
 | `packaging/linux/build-deb.sh <bin-dir> <version> [out]` | `glossa_<version>_<arch>.deb` | `dpkg-deb`, `dpkg-shlibdeps` (dpkg-dev) |
-| `packaging/linux/build-appimage.sh <bin-dir> <version> [out]` | `glossa-<version>-<arch>.AppImage` | [appimagetool](https://github.com/AppImage/appimagetool) (`APPIMAGETOOL`, `APPIMAGE_RUNTIME`, `APPIMAGE_ARCH`: `x86_64` or `aarch64`) |
+| `packaging/linux/build-appimage.sh <bin-dir> <version> [out]` | `glossa-<version>-<arch>.AppImage`, and its `.zsync` with `APPIMAGE_UPDATE_INFO` | [appimagetool](https://github.com/AppImage/appimagetool) (`APPIMAGETOOL`, `APPIMAGE_RUNTIME`, `APPIMAGE_ARCH`: `x86_64` or `aarch64`); `zsyncmake` (Debian: `zsync`) for `APPIMAGE_UPDATE_INFO` |
 | `iscc /DMyAppVersion=<version> /DArch=<x64\|arm64> /DStageDir=<unpacked zip> packaging\windows\glossa.iss` | the Windows installer | Inno Setup 6.3+ |
 | `packaging/fill-manifests.sh <version> <dist>` | winget and Scoop manifests | the setup `.exe` and portable `.zip` of both architectures in `<dist>` |
 

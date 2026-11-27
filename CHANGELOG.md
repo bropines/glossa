@@ -7,6 +7,13 @@ the notes of its GitHub release.
 
 ## [Unreleased]
 
+### Added
+
+- Linux: the AppImage carries its update information, and each release
+  publishes a `.AppImage.zsync` beside it, so AppImageUpdate and the
+  AppImage managers built on it can update Glossa, downloading only what
+  changed. (Suggested by the AppImage catalogue's test.)
+
 ## [0.1.1] - 2026-11-27
 
 ### Added
