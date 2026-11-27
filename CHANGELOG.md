@@ -7,6 +7,8 @@ the notes of its GitHub release.
 
 ## [Unreleased]
 
+## [0.1.2] - 2026-11-28
+
 ### Added
 
 - Linux: the AppImage carries its update information, and each release
