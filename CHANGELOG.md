@@ -14,6 +14,12 @@ the notes of its GitHub release.
   AppImage managers built on it can update Glossa, downloading only what
   changed. (Suggested by the AppImage catalogue's test.)
 
+### Fixed
+
+- Linux: without an AppIndicator library, Glossa now notes in its log that
+  there is no tray icon and why, instead of logging a crash of its tray
+  thread. It went on working without the icon either way.
+
 ## [0.1.1] - 2026-11-27
 
 ### Added

@@ -43,6 +43,9 @@ arboard = { workspace = true, features = ["wayland-data-control"] }
 enigo = { version = "0.6", default-features = false, features = ["x11rb"] }
 x11rb = { version = "0.14", features = ["randr"] }
 xcap-linux = { package = "xcap", version = "0.9", optional = true }
+# `tray`: whether an AppIndicator library is there before tray-icon looks
+# (glossa-modules and tray-icon's loader bring libloading already).
+libloading = { workspace = true }
 
 # The desktop portals (`portal`): global shortcuts and screenshots on
 # Wayland. async-io and futures-lite come with zbus; they give a portal

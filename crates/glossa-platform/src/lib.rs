@@ -60,6 +60,7 @@ pub mod selection;
 pub mod session;
 pub mod shell;
 pub mod spell;
+pub mod tray;
 pub mod window;
 
 #[cfg(target_os = "macos")]

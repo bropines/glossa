@@ -378,6 +378,11 @@ impl Tray {
     pub fn new(wake: WakeFn, locale: &Arc<Locale>, clicks_cfg: &TrayConfig) -> Result<Tray, String> {
         // The indicator reports no clicks; the settings have nothing to do.
         let _ = clicks_cfg;
+        // Without an AppIndicator library the indicator's loader panics on
+        // the tray thread: say why instead (the caller logs it).
+        if let Some(why) = glossa_platform::tray::unavailable() {
+            return Err(why);
+        }
         let clicks = Arc::new(ClickSettings::default());
         let events = install_handlers(wake, clicks.clone());
         let built_for = locale.clone();
