@@ -100,7 +100,7 @@ Sources:
 - [PaddleOCR releases](https://github.com/PaddlePaddle/PaddleOCR/releases/tag/v3.7.0)
 - [PP-OCRv5 languages](https://www.paddleocr.ai/latest/en/version3.x/algorithm/PP-OCRv5/PP-OCRv5_multi_languages.html)
 - [RapidOCR model list](https://github.com/RapidAI/RapidOCR/blob/main/python/rapidocr/default_models.yaml)
-- [ONNX Runtime 1.31.1](https://github.com/microsoft/onnxruntime/releases/tag/v1.31.1)
+- [ONNX Runtime 1.31.1](https://www.nuget.org/packages/Microsoft.ML.OnnxRuntime/1.31.1) (NuGet; the GitHub repository went away in November 2026)
 - [tessdata_fast](https://github.com/tesseract-ocr/tessdata_fast)
 - [ocrs](https://github.com/robertknight/ocrs)
 - [Surya](https://huggingface.co/datalab-to/surya-ocr-2)

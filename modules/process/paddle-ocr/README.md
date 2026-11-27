@@ -98,7 +98,7 @@ Glossa stops the process, two minutes after the last call
 |---|---|---|
 | `paddle-ocr` (this folder) | MIT OR Apache-2.0, like Glossa | this repository |
 | its Rust dependencies (`oar-ocr`, `ort`, `image`…) | Apache-2.0, MIT, BSD, Zlib, Unicode-3.0; nothing copyleft. Every crate's licence and notice files are in `THIRD-PARTY-NOTICES.txt` in the archive, written by `third_party.py` | crates.io |
-| ONNX Runtime 1.31.1, packed in `bin` | MIT (`LICENSE-onnxruntime.txt`, `ThirdPartyNotices-onnxruntime.txt` in the archive) | [microsoft/onnxruntime](https://github.com/microsoft/onnxruntime/releases/tag/v1.31.1) |
+| ONNX Runtime 1.31.1, packed in `bin` | MIT (`LICENSE-onnxruntime.txt`, `ThirdPartyNotices-onnxruntime.txt` in the archive) | [Microsoft.ML.OnnxRuntime 1.31.1](https://www.nuget.org/packages/Microsoft.ML.OnnxRuntime/1.31.1) (NuGet) |
 | PP-OCRv5 models | Apache-2.0 | [PaddleOCR](https://github.com/PaddlePaddle/PaddleOCR), converted to ONNX by [RapidOCR](https://github.com/RapidAI/RapidOCR) (Apache-2.0) and published on [ModelScope](https://www.modelscope.cn/models/RapidAI/RapidOCR) (Apache-2.0), tag `v3.10.0` |
 
 The models are downloaded from ModelScope at the pinned tag; their SHA-256
@@ -167,9 +167,13 @@ try it with your own build (macOS or Linux):
 ```bash
 cd modules/process/paddle-ocr
 cargo build --release
-# an official ONNX Runtime for your system, unpacked:
-# https://github.com/microsoft/onnxruntime/releases/tag/v1.31.1
-./package.sh target/release/paddle-ocr ~/Downloads/onnxruntime-osx-arm64-1.31.1 /tmp/po/paddle-ocr-dev.tar.gz
+# ONNX Runtime from Microsoft's NuGet package, laid out as package.sh
+# expects (lib/, LICENSE, ThirdPartyNotices.txt); use linux-x64 or
+# linux-arm64 and libonnxruntime.so on Linux:
+curl -fsSLo /tmp/ort.nupkg https://api.nuget.org/v3-flatcontainer/microsoft.ml.onnxruntime/1.31.1/microsoft.ml.onnxruntime.1.31.1.nupkg
+mkdir -p /tmp/ort/lib && unzip -q -o /tmp/ort.nupkg runtimes/osx-arm64/native/libonnxruntime.dylib LICENSE ThirdPartyNotices.txt -d /tmp/ort
+mv /tmp/ort/runtimes/osx-arm64/native/libonnxruntime.dylib /tmp/ort/lib/
+./package.sh target/release/paddle-ocr /tmp/ort /tmp/po/paddle-ocr-dev.tar.gz
 ./dev-install.sh /tmp/glossa-test /tmp/po/paddle-ocr-dev.tar.gz 8765
 python3 -m http.server -b 127.0.0.1 -d /tmp/po 8765 &
 export GLOSSA_HOME=/tmp/glossa-test

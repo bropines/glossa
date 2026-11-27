@@ -8,8 +8,9 @@
 #   package.sh BINARY ORT_DIR OUT
 #
 # BINARY   the built paddle-ocr (or paddle-ocr.exe)
-# ORT_DIR  an unpacked official ONNX Runtime release
-#          (onnxruntime-<os>-<arch>-<version>, with lib/ and LICENSE)
+# ORT_DIR  ONNX Runtime laid out as its old release archives were: lib/
+#          with the library, LICENSE and ThirdPartyNotices.txt (the
+#          workflow takes them from the NuGet package)
 # OUT      the archive to write: *.tar.gz (macOS, Linux) or *.zip (Windows)
 #
 # Prints the archive's sha256 and size, the two values module.toml needs.

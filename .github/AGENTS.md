@@ -138,9 +138,11 @@ and its crates' licence notices into the module's `bin` archives
   Linux x64 job (tests, clippy, build, archive, smoke test). The macOS,
   Windows and arm64 runners are slow or scarce, and the code they would
   build is the same, so they wait for a tag or a manual run.
-- The toolchain is pinned to the module's `rust-version`, and each ONNX
-  Runtime archive is checked against the SHA-256 pinned beside
-  `ORT_VERSION`. A new ONNX Runtime version needs all five hashes updated.
+- The toolchain is pinned to the module's `rust-version`. ONNX Runtime
+  comes from Microsoft's NuGet package `Microsoft.ML.OnnxRuntime` (one
+  file with the native library for every platform), checked against the
+  SHA-256 pinned beside `ORT_VERSION`; the GitHub release archives used
+  before are gone. A new version needs that one hash updated.
 - The main release workflow (tags `v*`) does not build this program.
 
 ## local-llm.yml

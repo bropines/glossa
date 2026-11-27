@@ -36,15 +36,15 @@ concurrency:
 
 env:
   CARGO_TERM_COLOR: always
-  # The ONNX Runtime packed beside the program, and the SHA-256 of each
-  # official archive used (from the GitHub release's asset digests; the
-  # macOS one was also checked by hand). A new version needs all five.
+  # The ONNX Runtime packed beside the program. It comes from Microsoft's
+  # NuGet package, which holds the native library for every platform: the
+  # GitHub repository and its release archives went away in November 2026.
+  # Its Linux and Windows libraries are byte for byte those of the 1.31.1
+  # archives the 0.1.0 module shipped; the macOS one is the same build,
+  # signed by Microsoft (Developer ID) instead of ad hoc. A new version
+  # needs the package's SHA-256 updated.
   ORT_VERSION: 1.31.1
-  ORT_SHA256_osx_arm64: 2e1344a1926ee50eb25b38153cb6992c3567515aef0e677a1a520a1798896d6f
-  ORT_SHA256_linux_x64: c849e36a1ef3e22d4ff217b9d1ce4a3cf5b9467b975610913ae959ad5b16bdc9
-  ORT_SHA256_linux_aarch64: 5317505e2da99be65f8e2775ba3c2afd6d2961fd78aba1bd8f56159f48820c78
-  ORT_SHA256_win_x64: 5869e26bb25314375f2d5ef1877e3ea06b1543d6c710e6e4a1ec2f7177ab4b2c
-  ORT_SHA256_win_arm64: 817f4129073f84f81cde3ff92b1a4e06d007691e7208deed08a8b6d6df143f7f
+  ORT_NUPKG_SHA256: 6871ccbc97f3d5bdb4095a1dcec33aa78d56f6ed8de5980ef5fa1d9f2e7c679a
 
 jobs:
   matrix:
@@ -60,7 +60,7 @@ jobs:
           p() { printf '{"os":"%s","arch":"%s","runner":"%s","ort":"%s","ext":"%s"}' "$@"; }
           all=$(p linux x86_64 ubuntu-22.04 linux-x64 tar.gz)
           if [ "$EVENT" != pull_request ]; then
-            all="$all,$(p linux aarch64 ubuntu-22.04-arm linux-aarch64 tar.gz)"
+            all="$all,$(p linux aarch64 ubuntu-22.04-arm linux-arm64 tar.gz)"
             all="$all,$(p macos aarch64 macos-latest osx-arm64 tar.gz)"
             all="$all,$(p windows x86_64 windows-2022 win-x64 zip)"
             all="$all,$(p windows aarch64 windows-11-arm win-arm64 zip)"
@@ -109,21 +109,34 @@ jobs:
         run: cargo build --locked --release
       - name: ONNX Runtime
         env:
-          ORT: ${{ matrix.ort }}
-          EXT: ${{ matrix.ext }}
+          RID: ${{ matrix.ort }}
+          OS: ${{ matrix.os }}
+        # Laid out as the old release archives were (lib/, LICENSE,
+        # ThirdPartyNotices.txt), which is what package.sh reads.
         run: |
-          name=onnxruntime-$ORT-$ORT_VERSION
-          file=ort.$([ "$EXT" = zip ] && echo zip || echo tgz)
-          curl -fsSL -o "$file" "https://github.com/microsoft/onnxruntime/releases/download/v$ORT_VERSION/$name.${file#ort.}"
-          var=ORT_SHA256_${ORT//-/_}
-          want=${!var}
-          if command -v sha256sum >/dev/null; then got=$(sha256sum "$file" | cut -d' ' -f1)
-          else got=$(shasum -a 256 "$file" | cut -d' ' -f1); fi
-          if [ -z "$want" ] || [ "$got" != "$want" ]; then
-            echo "$name: sha256 $got, expected ${want:-nothing (add $var)}" >&2
+          pkg=microsoft.ml.onnxruntime.$ORT_VERSION.nupkg
+          curl -fsSL -o "$pkg" "https://api.nuget.org/v3-flatcontainer/microsoft.ml.onnxruntime/$ORT_VERSION/$pkg"
+          if command -v sha256sum >/dev/null; then got=$(sha256sum "$pkg" | cut -d' ' -f1)
+          else got=$(shasum -a 256 "$pkg" | cut -d' ' -f1); fi
+          if [ "$got" != "$ORT_NUPKG_SHA256" ]; then
+            echo "$pkg: sha256 $got, expected $ORT_NUPKG_SHA256" >&2
             exit 1
           fi
-          if [ "$EXT" = zip ]; then 7z x -y "$file" >/dev/null; else tar xzf "$file"; fi
+          case "$OS" in
+            windows) lib=onnxruntime.dll ;;
+            macos) lib=libonnxruntime.dylib ;;
+            *) lib=libonnxruntime.so ;;
+          esac
+          name=onnxruntime-$RID-$ORT_VERSION
+          mkdir -p unpacked "$name/lib"
+          if command -v unzip >/dev/null; then
+            unzip -q -o "$pkg" "runtimes/$RID/native/$lib" LICENSE ThirdPartyNotices.txt -d unpacked
+          else
+            7z x -y -ounpacked "$pkg" "runtimes/$RID/native/$lib" LICENSE ThirdPartyNotices.txt >/dev/null
+          fi
+          mv "unpacked/runtimes/$RID/native/$lib" "$name/lib/"
+          mv unpacked/LICENSE unpacked/ThirdPartyNotices.txt "$name/"
+          rm -rf unpacked "$pkg"
           echo "ORT_DIR=$PWD/$name" >> "$GITHUB_ENV"
       - name: Sign (macOS, ad hoc)
         if: matrix.os == 'macos'
