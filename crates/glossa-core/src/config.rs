@@ -885,6 +885,10 @@ pub struct PopupConfig {
     /// Hide after this many seconds without the pointer over it. 0 never
     /// hides.
     pub auto_hide_secs: u32,
+    /// Close on a mouse press outside Glossa's windows, instead of after
+    /// `auto_hide_secs` (Windows and macOS). Uses mouse mode's watcher,
+    /// which then runs even with mouse mode off.
+    pub close_on_outside_click: bool,
     /// 0 (opaque) to 90 percent transparent, as the classic slider went.
     pub transparency: u8,
     pub frame_thickness: f32,
@@ -931,6 +935,7 @@ impl Default for PopupConfig {
             open_main_too: false,
             show_border: true,
             auto_hide_secs: 5,
+            close_on_outside_click: false,
             transparency: 15,
             frame_thickness: 2.0,
             icons: PopupIcons::default(),
@@ -2366,6 +2371,17 @@ mod tests {
             d.sanitise();
             d
         });
+    }
+
+    #[test]
+    fn closing_the_popup_on_an_outside_click_is_opt_in_and_kept() {
+        let old = Config::from_toml("[appearance.popup]\nauto_hide_secs = 7\n").unwrap();
+        assert!(!old.appearance.popup.close_on_outside_click, "files from before keep the timer");
+        let mut c = old;
+        c.appearance.popup.close_on_outside_click = true;
+        let back = Config::from_toml(&c.to_toml()).unwrap();
+        assert!(back.appearance.popup.close_on_outside_click);
+        assert_eq!(back.appearance.popup.auto_hide_secs, 7);
     }
 
     #[test]

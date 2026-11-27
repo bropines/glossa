@@ -378,6 +378,7 @@ One table per endpoint. Each becomes a translator of its own; its settings
 | `open_main_too` | bool | `false` | Options → Appearance → Popup | Show the main window, with the same text, whenever the popup opens. It does not take the focus. |
 | `show_border` | bool | `true` | Options → Appearance → Popup | Draw the coloured border. |
 | `auto_hide_secs` | integer | `5` | Options → Appearance → Popup | Hide after this many seconds without the pointer over it, 0–600. `0` never hides. |
+| `close_on_outside_click` | bool | `false` | Options → Appearance → Popup (Windows, macOS) | Close the popup, unless pinned, and mouse mode's button on a mouse press outside Glossa's windows, instead of after `auto_hide_secs`. Mouse mode need not be on: its watcher then runs for this alone, and listens to presses only while the popup or the button is on screen. On macOS that needs the Accessibility (or Input Monitoring) permission, as mouse mode does; without it, the delay applies. The press is only observed: it still reaches the window clicked. |
 | `transparency` | integer | `15` | Options → Appearance → Popup | 0 (opaque) to 90 percent. |
 | `frame_thickness` | number | `2.0` | Options → Appearance → Popup | Border width, 0–10 (the slider offers 0–8). |
 | `min_width` | number | `350.0` | Options → Appearance → Popup | Narrowest popup, in logical pixels, 80 up to `max_width`. |

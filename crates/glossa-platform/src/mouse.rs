@@ -16,6 +16,11 @@
 //!   through Accessibility (`AXSelectedText`). The tap needs Accessibility
 //!   or Input Monitoring; without either, macOS refuses to create it.
 //!
+//! On request ([`MouseWatcher::report_presses`]), Windows and macOS also
+//! report every button press outside Glossa's own windows, so a popup can
+//! close when the user clicks elsewhere. The press is only observed, never
+//! held back.
+//!
 //! The callback runs on the watcher's thread and must return quickly: hand
 //! the gesture to a channel.
 
@@ -29,16 +34,33 @@ pub enum Gesture {
     Selected { at: (i32, i32), ctrl: bool },
     /// A new PRIMARY selection with its text (Linux).
     Text { text: String, at: Option<(i32, i32)> },
+    /// A mouse button went down outside Glossa's windows (Windows and
+    /// macOS, while [`MouseWatcher::report_presses`] is on).
+    Pressed,
 }
 
 /// Runs until dropped.
 pub struct MouseWatcher {
     imp: imp::Watcher,
+    presses: Arc<AtomicBool>,
 }
 
 impl MouseWatcher {
     pub fn start(on_gesture: impl Fn(Gesture) + Send + 'static) -> crate::Result<MouseWatcher> {
-        Ok(MouseWatcher { imp: imp::Watcher::start(Box::new(on_gesture))? })
+        let presses = Arc::new(AtomicBool::new(false));
+        Ok(MouseWatcher { imp: imp::Watcher::start(Box::new(on_gesture), presses.clone())?, presses })
+    }
+
+    /// Also report [`Gesture::Pressed`]. Off by default: with it on, every
+    /// click in the session wakes Glossa.
+    pub fn report_presses(&self, on: bool) {
+        self.presses.store(on, Ordering::Relaxed);
+    }
+
+    /// Whether this system can report presses at all. Linux watches the
+    /// PRIMARY selection, not the mouse.
+    pub fn can_report_presses() -> bool {
+        cfg!(any(windows, target_os = "macos"))
     }
 
     /// Whether mouse mode can work in this session (Windows, macOS, X11), so
@@ -78,10 +100,14 @@ fn is_double(prev: ((i32, i32), u32), now: ((i32, i32), u32), double_ms: u32) ->
 
 type Sink = Box<dyn Fn(Gesture) + Send>;
 
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
+
 #[cfg(windows)]
 mod imp {
     use std::cell::RefCell;
-    use std::sync::mpsc;
+    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::sync::{mpsc, Arc};
     use std::thread::JoinHandle;
 
     use windows::Win32::Foundation::{LPARAM, LRESULT, POINT, WPARAM};
@@ -91,7 +117,7 @@ mod imp {
     use windows::Win32::UI::WindowsAndMessaging::{
         CallNextHookEx, GetMessageW, GetWindowThreadProcessId, PostThreadMessageW, SetWindowsHookExW,
         UnhookWindowsHookEx, WindowFromPoint, MSG, MSLLHOOKSTRUCT, WH_MOUSE_LL, WM_APP, WM_LBUTTONDOWN, WM_LBUTTONUP,
-        WM_QUIT,
+        WM_MBUTTONDOWN, WM_QUIT, WM_RBUTTONDOWN, WM_XBUTTONDOWN,
     };
 
     use super::{is_double, is_drag, Gesture, Sink};
@@ -102,6 +128,8 @@ mod imp {
         double_ms: u32,
         /// Gestures seen by the hook, handed to the sink by the message loop.
         pending: Vec<Gesture>,
+        /// Report presses outside Glossa too ([`super::MouseWatcher::report_presses`]).
+        presses: Arc<AtomicBool>,
     }
 
     /// Posted by the hook to its own thread: "gestures are pending".
@@ -135,15 +163,27 @@ mod imp {
             // valid for the duration of the call.
             let info = unsafe { &*(lparam.0 as *const MSLLHOOKSTRUCT) };
             let msg = wparam.0 as u32;
-            if msg == WM_LBUTTONDOWN || msg == WM_LBUTTONUP {
+            let press = matches!(msg, WM_LBUTTONDOWN | WM_RBUTTONDOWN | WM_MBUTTONDOWN | WM_XBUTTONDOWN);
+            if press || msg == WM_LBUTTONUP {
                 let at = (info.pt.x, info.pt.y);
                 STATE.with(|s| {
                     // Re-entered (the loop is draining): skip this event
                     // rather than panic on a second borrow.
                     let Ok(mut s) = s.try_borrow_mut() else { return };
                     let Some(st) = s.as_mut() else { return };
-                    if msg == WM_LBUTTONDOWN {
-                        st.down = Some(at);
+                    if press {
+                        if msg == WM_LBUTTONDOWN {
+                            st.down = Some(at);
+                        }
+                        // The same two quick queries as on release; only
+                        // while someone asked for presses.
+                        if st.presses.load(Ordering::Relaxed) && !own_window_at(info.pt) {
+                            st.pending.push(Gesture::Pressed);
+                            // SAFETY: posting to this very thread's queue.
+                            unsafe {
+                                let _ = PostThreadMessageW(GetCurrentThreadId(), WM_GESTURE, WPARAM(0), LPARAM(0));
+                            }
+                        }
                         return;
                     }
                     let Some(down) = st.down.take() else { return };
@@ -178,7 +218,7 @@ mod imp {
     }
 
     impl Watcher {
-        pub fn start(sink: Sink) -> crate::Result<Watcher> {
+        pub fn start(sink: Sink, presses: Arc<AtomicBool>) -> crate::Result<Watcher> {
             let (ready_tx, ready_rx) = mpsc::channel::<Result<u32, String>>();
             let thread = std::thread::Builder::new()
                 .name("glossa-mouse".into())
@@ -193,6 +233,7 @@ mod imp {
                                 last_click: None,
                                 double_ms: GetDoubleClickTime(),
                                 pending: Vec::new(),
+                                presses,
                             })
                         });
                         let module = GetModuleHandleW(None).ok();
@@ -258,7 +299,8 @@ mod imp {
     }
 
     impl Watcher {
-        pub fn start(sink: Sink) -> crate::Result<Watcher> {
+        /// `_presses`: the PRIMARY selection says nothing about clicks.
+        pub fn start(sink: Sink, _presses: Arc<AtomicBool>) -> crate::Result<Watcher> {
             let mut probe = crate::Clipboard::new()?;
             let mut last = probe.get_primary();
             drop(probe);
@@ -321,11 +363,22 @@ mod imp {
         y: f64,
     }
 
+    #[repr(C)]
+    #[derive(Clone, Copy, Default)]
+    struct CGRect {
+        x: f64,
+        y: f64,
+        width: f64,
+        height: f64,
+    }
+
     const SESSION_EVENT_TAP: u32 = 1; // kCGSessionEventTap
     const HEAD_INSERT_EVENT_TAP: u32 = 0; // kCGHeadInsertEventTap
     const TAP_LISTEN_ONLY: u32 = 1; // kCGEventTapOptionListenOnly
     const LEFT_MOUSE_DOWN: u32 = 1; // kCGEventLeftMouseDown
     const LEFT_MOUSE_UP: u32 = 2; // kCGEventLeftMouseUp
+    const RIGHT_MOUSE_DOWN: u32 = 3; // kCGEventRightMouseDown
+    const OTHER_MOUSE_DOWN: u32 = 25; // kCGEventOtherMouseDown
     const TAP_DISABLED_BY_TIMEOUT: u32 = 0xFFFF_FFFE;
     const TAP_DISABLED_BY_USER_INPUT: u32 = 0xFFFF_FFFF;
     const FIELD_CLICK_STATE: u32 = 1; // kCGMouseEventClickState
@@ -333,7 +386,13 @@ mod imp {
     const FLAG_CONTROL: u64 = 0x0004_0000; // kCGEventFlagMaskControl
     const FLAG_COMMAND: u64 = 0x0010_0000; // kCGEventFlagMaskCommand
     const WINDOW_LIST_INCLUDING_WINDOW: u32 = 1 << 3; // kCGWindowListOptionIncludingWindow
+    const WINDOW_LIST_ON_SCREEN_ONLY: u32 = 1 << 0; // kCGWindowListOptionOnScreenOnly
+    const WINDOW_LIST_EXCLUDE_DESKTOP: u32 = 1 << 4; // kCGWindowListExcludeDesktopElements
     const CF_NUMBER_SINT64: isize = 4; // kCFNumberSInt64Type
+    const CF_NUMBER_FLOAT64: isize = 6; // kCFNumberFloat64Type
+    /// Windows at this level and above are the screen saver, the cursor and
+    /// overlays, not something a click lands on.
+    const SCREEN_SAVER_LAYER: i64 = 1000;
     const RUN_LOOP_FINISHED: i32 = 1; // kCFRunLoopRunFinished
 
     #[link(name = "CoreGraphics", kind = "framework")]
@@ -351,7 +410,11 @@ mod imp {
         fn CGEventGetIntegerValueField(event: CGEventRef, field: u32) -> i64;
         fn CGEventGetFlags(event: CGEventRef) -> u64;
         fn CGWindowListCopyWindowInfo(option: u32, relative_to: u32) -> CFArrayRef;
+        fn CGRectMakeWithDictionaryRepresentation(dict: *const c_void, rect: *mut CGRect) -> bool;
         static kCGWindowOwnerPID: CFStringRef;
+        static kCGWindowBounds: CFStringRef;
+        static kCGWindowLayer: CFStringRef;
+        static kCGWindowAlpha: CFStringRef;
     }
 
     #[link(name = "CoreFoundation", kind = "framework")]
@@ -378,6 +441,7 @@ mod imp {
         tap: Cell<CFMachPortRef>,
         down: Cell<Option<(i32, i32)>>,
         sink: Sink,
+        presses: Arc<AtomicBool>,
     }
 
     /// The process that owns window number `window`, if any. Window owners
@@ -409,6 +473,66 @@ mod imp {
         }
     }
 
+    /// A number from a window's info dictionary.
+    ///
+    /// # Safety
+    /// `info` is a live CFDictionary from `CGWindowListCopyWindowInfo`.
+    unsafe fn number<T: Default>(info: *const c_void, key: CFStringRef, kind: isize) -> Option<T> {
+        // SAFETY: as the caller promises; the value is borrowed from `info`.
+        unsafe {
+            let n = CFDictionaryGetValue(info, key);
+            let mut value = T::default();
+            (!n.is_null() && CFNumberGetValue(n, kind, (&mut value as *mut T).cast()) != 0).then_some(value)
+        }
+    }
+
+    /// The process owning the frontmost window at `at` (global points, as
+    /// event locations are), from the window list: what is under the
+    /// pointer when the event does not say.
+    fn owner_at(at: CGPoint) -> Option<i64> {
+        // SAFETY: the copied array is ours and released below; the values
+        // read from it are borrowed from it while it lives.
+        unsafe {
+            let list = CGWindowListCopyWindowInfo(WINDOW_LIST_ON_SCREEN_ONLY | WINDOW_LIST_EXCLUDE_DESKTOP, 0);
+            if list.is_null() {
+                return None;
+            }
+            let mut owner = None;
+            // Front to back.
+            for i in 0..CFArrayGetCount(list) {
+                let info = CFArrayGetValueAtIndex(list, i);
+                let layer: i64 = number(info, kCGWindowLayer, CF_NUMBER_SINT64).unwrap_or(0);
+                let alpha: f64 = number(info, kCGWindowAlpha, CF_NUMBER_FLOAT64).unwrap_or(1.0);
+                if layer >= SCREEN_SAVER_LAYER || alpha <= 0.0 {
+                    continue;
+                }
+                let bounds = CFDictionaryGetValue(info, kCGWindowBounds);
+                let mut r = CGRect::default();
+                if bounds.is_null() || !CGRectMakeWithDictionaryRepresentation(bounds, &mut r) {
+                    continue;
+                }
+                if at.x >= r.x && at.x < r.x + r.width && at.y >= r.y && at.y < r.y + r.height {
+                    owner = number(info, kCGWindowOwnerPID, CF_NUMBER_SINT64);
+                    break;
+                }
+            }
+            CFRelease(list);
+            owner
+        }
+    }
+
+    /// Whether the event happened over one of Glossa's own windows. The
+    /// event names the window under the pointer, but not always (it is 0
+    /// for posted events, from accessibility and remote-control tools):
+    /// then the window list says.
+    fn over_own_window(event: CGEventRef) -> bool {
+        // SAFETY: plain reads from the live event.
+        let (window, at) =
+            unsafe { (CGEventGetIntegerValueField(event, FIELD_WINDOW_UNDER_POINTER), CGEventGetLocation(event)) };
+        let owner = if window != 0 { owner_pid(window as u32) } else { owner_at(at) };
+        owner == Some(i64::from(std::process::id()))
+    }
+
     fn point(event: CGEventRef) -> (i32, i32) {
         // SAFETY: `event` is the live event the tap was called with.
         let p = unsafe { CGEventGetLocation(event) };
@@ -425,23 +549,25 @@ mod imp {
                     unsafe { CGEventTapEnable(tap, true) };
                 }
             }
-            LEFT_MOUSE_DOWN => st.down.set(Some(point(event))),
+            LEFT_MOUSE_DOWN | RIGHT_MOUSE_DOWN | OTHER_MOUSE_DOWN => {
+                if kind == LEFT_MOUSE_DOWN {
+                    st.down.set(Some(point(event)));
+                }
+                if st.presses.load(Ordering::Relaxed) && !over_own_window(event) {
+                    (st.sink)(Gesture::Pressed);
+                }
+            }
             LEFT_MOUSE_UP => {
                 let Some(down) = st.down.take() else { return };
                 let at = point(event);
                 // SAFETY: plain field reads from the live event.
-                let (clicks, flags, window) = unsafe {
-                    (
-                        CGEventGetIntegerValueField(event, FIELD_CLICK_STATE),
-                        CGEventGetFlags(event),
-                        CGEventGetIntegerValueField(event, FIELD_WINDOW_UNDER_POINTER),
-                    )
-                };
+                let (clicks, flags) =
+                    unsafe { (CGEventGetIntegerValueField(event, FIELD_CLICK_STATE), CGEventGetFlags(event)) };
                 // The system counts clicks with the user's double-click speed.
                 if !is_drag(down, at) && clicks < 2 {
                     return;
                 }
-                if owner_pid(window as u32) == Some(i64::from(std::process::id())) {
+                if over_own_window(event) {
                     return;
                 }
                 (st.sink)(Gesture::Selected { at, ctrl: flags & (FLAG_CONTROL | FLAG_COMMAND) != 0 });
@@ -475,15 +601,18 @@ mod imp {
     }
 
     impl Watcher {
-        pub fn start(sink: Sink) -> crate::Result<Watcher> {
+        pub fn start(sink: Sink, presses: Arc<AtomicBool>) -> crate::Result<Watcher> {
             let stop = Arc::new(AtomicBool::new(false));
             let flag = stop.clone();
             let (ready_tx, ready_rx) = mpsc::channel::<Option<usize>>();
             let thread = std::thread::Builder::new()
                 .name("glossa-mouse".into())
                 .spawn(move || {
-                    let state = TapState { tap: Cell::new(std::ptr::null_mut()), down: Cell::new(None), sink };
-                    let mask = (1u64 << LEFT_MOUSE_DOWN) | (1u64 << LEFT_MOUSE_UP);
+                    let state = TapState { tap: Cell::new(std::ptr::null_mut()), down: Cell::new(None), sink, presses };
+                    let mask = (1u64 << LEFT_MOUSE_DOWN)
+                        | (1u64 << LEFT_MOUSE_UP)
+                        | (1u64 << RIGHT_MOUSE_DOWN)
+                        | (1u64 << OTHER_MOUSE_DOWN);
                     // SAFETY: `state` outlives the tap, which is disabled,
                     // invalidated and released below before `state` drops;
                     // every CF object created here is released here.
@@ -565,12 +694,15 @@ mod imp {
 
 #[cfg(not(any(windows, target_os = "linux", target_os = "macos")))]
 mod imp {
+    use std::sync::atomic::AtomicBool;
+    use std::sync::Arc;
+
     use super::Sink;
 
     pub struct Watcher;
 
     impl Watcher {
-        pub fn start(_sink: Sink) -> crate::Result<Watcher> {
+        pub fn start(_sink: Sink, _presses: Arc<AtomicBool>) -> crate::Result<Watcher> {
             Err(crate::platform_err("mouse mode is not available on this system yet"))
         }
 

@@ -91,6 +91,9 @@ pub struct GlossaApp {
     pub mouse_icon: Option<crate::mouse::MouseIcon>,
     /// The last text mouse mode acted on, to ignore repeats.
     pub last_mouse_text: Option<(String, Instant)>,
+    /// The last press outside Glossa that closed the popup
+    /// (`close_on_outside_click`).
+    pub last_outside_press: Option<Instant>,
     server: Option<glossa_engine::server::ServerHandle>,
     pub server_error: Option<String>,
     /// Where the long-lived parts go back when the GUI unloads.
@@ -232,6 +235,7 @@ impl GlossaApp {
             mouse: Some(shell.mouse),
             mouse_icon: None,
             last_mouse_text: None,
+            last_outside_press: None,
             server: shell.server,
             server_error: shell.server_error,
             slot,
@@ -826,7 +830,7 @@ impl GlossaApp {
         self.fonts.install_base(&self.ctx, &self.cfg.appearance.font_family, &self.look.theme);
         self.backdrop_dirty = true;
         self.backdrop_generation += 1;
-        let mouse_failed = self.mouse.as_mut().and_then(|m| m.sync(self.cfg.mouse_mode.enabled));
+        let mouse_failed = self.mouse.as_mut().and_then(|m| m.sync(&self.cfg));
         if let Some(e) = mouse_failed {
             let m = self.locale.fmt("mouse.failed", &e);
             self.notify(m, true);
@@ -1002,6 +1006,12 @@ impl GlossaApp {
         self.mouse.as_ref().is_some_and(|m| m.running())
     }
 
+    /// Whether a click outside Glossa closes the popup and mouse mode's
+    /// button now, instead of their timers.
+    pub fn closes_on_outside_click(&self) -> bool {
+        self.mouse.as_ref().is_some_and(|m| m.closes_on_outside_click())
+    }
+
     /// Why mouse mode is switched on but not running, if it failed to start.
     pub fn mouse_error(&self) -> Option<String> {
         self.mouse.as_ref().and_then(|m| m.error()).map(str::to_owned)
@@ -1162,10 +1172,14 @@ impl eframe::App for GlossaApp {
             crate::tray::handle(self, e);
         }
         // Mouse mode: read the selection on a worker, as the hotkeys do.
-        for g in self.mouse.as_ref().map(|m| m.poll()).unwrap_or_default() {
+        for (g, seen) in self.mouse.as_ref().map(|m| m.poll()).unwrap_or_default() {
+            if g == glossa_platform::mouse::Gesture::Pressed {
+                crate::mouse::on_press(self, seen);
+                continue;
+            }
             let (cfg, tx, ctx) = (self.cfg.clone(), self.tasks_tx.clone(), self.ctx.clone());
             std::thread::spawn(move || {
-                if let Some(task) = crate::mouse::selection_task(&cfg, g) {
+                if let Some(task) = crate::mouse::selection_task(&cfg, g, seen) {
                     let _ = tx.send(task);
                     ctx.request_repaint();
                 }
@@ -1286,6 +1300,11 @@ impl eframe::App for GlossaApp {
         crate::popup::show(self, &ctx);
         phase("mouse icon");
         crate::mouse::show_icon(self, &ctx);
+        // Presses outside are wanted only while one of these is up.
+        let showing = self.popup.is_some() || self.mouse_icon.is_some();
+        if let Some(m) = self.mouse.as_mut() {
+            m.set_showing(showing);
+        }
         phase("ocr");
         crate::notice::draw(self, &ctx);
         crate::ocr::show(self, &ctx);

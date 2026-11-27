@@ -314,11 +314,13 @@ fn popup_radius(look: &crate::style::Look) -> f32 {
     look.theme.metrics.overlay_radius.max(look.theme.metrics.button_radius).clamp(0.0, 12.0)
 }
 
-/// Auto-hide.
+/// Auto-hide. A press outside closes it instead when that is on
+/// (`mouse::on_press`).
 pub fn tick(app: &mut GlossaApp) {
     let Some(p) = app.popup.as_ref() else { return };
     let delay = app.cfg.appearance.popup.auto_hide_secs;
-    if p.pinned || p.hovered || p.busy || delay == 0 {
+    let by_click = app.closes_on_outside_click();
+    if p.pinned || p.hovered || p.busy || delay == 0 || by_click {
         return;
     }
     let left = Duration::from_secs(delay as u64).saturating_sub(p.last_hover.elapsed());

@@ -2033,6 +2033,10 @@ fn appearance(app: &mut GlossaApp, ui: &mut egui::Ui, st: &mut OptionsState) {
             ui.label(app.t("options.appearance.seconds"));
             ui.add(egui::DragValue::new(&mut p.auto_hide_secs).range(0..=600));
         });
+        if crate::mouse::MouseHub::can_close_on_outside_click() {
+            ui.checkbox(&mut p.close_on_outside_click, app.t("options.appearance.close_on_outside_click"));
+            hint(ui, &look, &app.t("options.appearance.close_on_outside_click_hint"));
+        }
         row(ui, &app.t("options.appearance.transparency"), |ui| {
             ui.add(egui::Slider::new(&mut p.transparency, 0..=90));
         });

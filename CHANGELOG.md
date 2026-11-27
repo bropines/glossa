@@ -7,6 +7,16 @@ the notes of its GitHub release.
 
 ## [Unreleased]
 
+### Added
+
+- Windows, macOS: the popup can close when you click elsewhere instead of
+  after a delay: *Options → Appearance → Popup → Close on a click
+  elsewhere instead* (`appearance.popup.close_on_outside_click`). Mouse
+  mode's button goes the same way, and a pinned popup stays. Mouse mode
+  need not be on. The click itself still reaches the window it was meant
+  for. Idea and first version by
+  [@Sergey-git1](https://github.com/Sergey-git1).
+
 ### Fixed
 
 - Linux: the AppImage starts on systems without `libxkbcommon-x11` (a plain

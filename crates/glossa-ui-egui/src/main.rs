@@ -621,14 +621,14 @@ fn toggle_mouse_mode(shell: &mut Shell) {
     }
     let on = !shell.engine.config().mouse_mode.enabled;
     let _ = shell.engine.update_config(move |c| c.mouse_mode.enabled = on);
-    sync_mouse_mode(shell, on);
+    sync_mouse_mode(shell);
     refresh_tray_look(shell);
 }
 
 /// Start or stop mouse mode's watcher; a failure is queued for the GUI to
 /// show.
-fn sync_mouse_mode(shell: &mut Shell, on: bool) {
-    if let Some(e) = shell.mouse.sync(on) {
+fn sync_mouse_mode(shell: &mut Shell) {
+    if let Some(e) = shell.mouse.sync(&shell.engine.config()) {
         let message = shell.engine.locale().fmt("mouse.failed", &e);
         shell.pending.push(tray::Pending::Task(actions::Task::Done { message, error: true }));
     }
@@ -696,7 +696,7 @@ fn build_shell(engine: Engine, wake: Arc<Wake>) -> Shell {
     };
     shell.startup_warnings = engine_startup_warnings(&shell.engine);
     register_hotkeys(&mut shell);
-    sync_mouse_mode(&mut shell, cfg.mouse_mode.enabled);
+    sync_mouse_mode(&mut shell);
     refresh_tray_look(&shell);
     shell
 }
@@ -836,9 +836,10 @@ fn collect_wake_events(shell: &mut Shell, events: &std::sync::mpsc::Receiver<glo
             }
         }
     }
-    for g in shell.mouse.poll() {
-        // Read now, before any window exists (see `read_selection`).
-        if let Some(task) = mouse::selection_task(&shell.engine.config(), g) {
+    for (g, seen) in shell.mouse.poll() {
+        // Read now, before any window exists (see `read_selection`). A
+        // press has no popup to close here; `selection_task` skips it.
+        if let Some(task) = mouse::selection_task(&shell.engine.config(), g, seen) {
             shell.pending.push(tray::Pending::Task(task));
         }
     }

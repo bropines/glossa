@@ -334,6 +334,8 @@
     "options.appearance.frame_thickness": "Толщина рамки:",
     "options.appearance.auto_hide": "Скрывать через:",
     "options.appearance.seconds": "с",
+    "options.appearance.close_on_outside_click": "Вместо этого закрывать щелчком мимо",
+    "options.appearance.close_on_outside_click_hint": "Вместо задержки выше всплывающее окно (если оно не закреплено) и кнопка режима мыши закрываются, когда вы щёлкаете вне Glossa.",
     "options.appearance.icons": "Значки:",
     "options.appearance.icon_dictionary": "Показывать значок словаря",
     "options.appearance.icon_listen": "Показывать значок прослушивания",

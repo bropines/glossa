@@ -10,6 +10,11 @@
 //! Like the hotkeys, the watcher lives as long as the process ([`MouseHub`]
 //! moves between the shell and the GUI), so it works while the graphics are
 //! unloaded.
+//!
+//! With `appearance.popup.close_on_outside_click` the watcher also reports
+//! presses outside Glossa's windows, and such a press closes the popup and
+//! the button instead of their timers. That works with mouse mode off too:
+//! the watcher then runs for the presses alone.
 
 use std::sync::mpsc::{self, Receiver, Sender};
 use std::time::{Duration, Instant};
@@ -24,23 +29,33 @@ use crate::app::GlossaApp;
 use crate::tray::WakeFn;
 
 /// The watcher and the channel its gestures arrive on.
+///
+/// The watcher runs for mouse mode, for `close_on_outside_click`, or for
+/// both. Selections are passed on only with mouse mode on, and presses only
+/// while a popup or the button is on screen, so clicking about with nothing
+/// of Glossa's showing never wakes it.
 pub struct MouseHub {
     watcher: Option<MouseWatcher>,
-    tx: Sender<Gesture>,
-    rx: Receiver<Gesture>,
+    /// Each gesture with the moment the watcher saw it.
+    tx: Sender<(Gesture, Instant)>,
+    rx: Receiver<(Gesture, Instant)>,
     wake: WakeFn,
     /// Why the watcher did not start, the last time it was asked to; shown
     /// in Options → Advanced until it starts.
     error: Option<String>,
-    /// The setting the watcher was last synced to, so a failure is reported
-    /// once per attempt rather than on every settings change.
+    /// Mouse mode as last synced, so a failure is reported once per attempt
+    /// rather than on every settings change.
     wanted: bool,
+    /// `close_on_outside_click`, where the system can do it, as last synced.
+    outside: bool,
+    /// A popup or the button is on screen.
+    showing: bool,
 }
 
 impl MouseHub {
     pub fn new(wake: WakeFn) -> MouseHub {
         let (tx, rx) = mpsc::channel();
-        MouseHub { watcher: None, tx, rx, wake, error: None, wanted: false }
+        MouseHub { watcher: None, tx, rx, wake, error: None, wanted: false, outside: false, showing: false }
     }
 
     /// Whether mouse mode can work on this system at all.
@@ -48,9 +63,20 @@ impl MouseHub {
         MouseWatcher::supported()
     }
 
-    /// Whether the watcher is running: what the tray's check mark shows.
+    /// Whether this system can close the popup on a click elsewhere.
+    pub fn can_close_on_outside_click() -> bool {
+        MouseWatcher::supported() && MouseWatcher::can_report_presses()
+    }
+
+    /// Whether mouse mode is running: what the tray's check mark shows.
     pub fn running(&self) -> bool {
-        self.watcher.is_some()
+        self.wanted && self.watcher.is_some()
+    }
+
+    /// Whether a press outside closes the popup right now: the setting is
+    /// on, the system can tell, and the watcher runs.
+    pub fn closes_on_outside_click(&self) -> bool {
+        self.outside && self.watcher.is_some()
     }
 
     /// Why mouse mode is not running though it is switched on, if it failed.
@@ -58,17 +84,35 @@ impl MouseHub {
         self.error.as_deref()
     }
 
-    /// Start or stop watching to match the setting. Returns the reason when
-    /// it was switched on just now and could not start, for the caller to
-    /// tell the user.
-    pub fn sync(&mut self, enabled: bool) -> Option<String> {
+    /// Tell the watcher whether a popup or the button is on screen: presses
+    /// are only wanted then.
+    pub fn set_showing(&mut self, showing: bool) {
+        if showing != self.showing {
+            self.showing = showing;
+            self.apply_presses();
+        }
+    }
+
+    fn apply_presses(&self) {
+        if let Some(w) = &self.watcher {
+            w.report_presses(self.outside && self.showing);
+        }
+    }
+
+    /// Start or stop watching to match the settings. Returns the reason when
+    /// mouse mode was switched on just now and could not start, for the
+    /// caller to tell the user.
+    pub fn sync(&mut self, cfg: &Config) -> Option<String> {
+        let enabled = cfg.mouse_mode.enabled;
+        self.outside = cfg.appearance.popup.close_on_outside_click && Self::can_close_on_outside_click();
         let newly = enabled && !self.wanted;
         self.wanted = enabled;
-        match (enabled, self.watcher.is_some()) {
+        let needed = enabled || self.outside;
+        let failed = match (needed, self.watcher.is_some()) {
             (true, false) => {
                 let (tx, wake) = (self.tx.clone(), self.wake.clone());
                 match MouseWatcher::start(move |g| {
-                    let _ = tx.send(g);
+                    let _ = tx.send((g, Instant::now()));
                     wake();
                 }) {
                     Ok(w) => {
@@ -77,9 +121,11 @@ impl MouseHub {
                         None
                     }
                     Err(e) => {
-                        tracing::warn!("mouse mode: {e}");
-                        self.error = Some(e.to_string());
-                        newly.then(|| e.to_string())
+                        tracing::warn!("mouse watcher: {e}");
+                        // Without mouse mode only the popup's closing is
+                        // lost, and its timer still works: no message.
+                        self.error = enabled.then(|| e.to_string());
+                        (newly).then(|| e.to_string())
                     }
                 }
             }
@@ -92,20 +138,47 @@ impl MouseHub {
                 None
             }
             (true, true) => None,
+        };
+        if !enabled {
+            self.error = None;
         }
+        self.apply_presses();
+        failed
     }
 
-    pub fn poll(&self) -> Vec<Gesture> {
-        self.rx.try_iter().collect()
+    /// What arrived since the last call: selections only with mouse mode
+    /// on (the watcher may be running for the popup alone).
+    pub fn poll(&self) -> Vec<(Gesture, Instant)> {
+        self.rx.try_iter().filter(|(g, _)| self.wanted || *g == Gesture::Pressed).collect()
     }
+}
+
+/// A press outside Glossa's windows: the popup and the button go, unless
+/// the popup is pinned. A selection still being read from before the press
+/// is dropped when it arrives (see `actions::on_task`), so the popup does
+/// not come back after the user has clicked away.
+pub fn on_press(app: &mut GlossaApp, at: Instant) {
+    if !app.closes_on_outside_click() {
+        return;
+    }
+    app.last_outside_press = Some(at);
+    app.mouse_icon = None;
+    if app.popup.as_ref().is_some_and(|p| !p.pinned) {
+        tracing::debug!("popup closed by a click outside");
+        app.popup = None;
+    }
+    app.ctx.request_repaint();
 }
 
 /// Turn a gesture into the selected text, or nothing. Blocks for a moment
 /// (the application finishes updating its selection after the button comes
 /// up); call it off the UI thread.
-pub fn selection_task(cfg: &Config, gesture: Gesture) -> Option<Task> {
+///
+/// `seen`: when the watcher reported the gesture, carried into the task.
+pub fn selection_task(cfg: &Config, gesture: Gesture, seen: Instant) -> Option<Task> {
     let m = &cfg.mouse_mode;
     let (text, cursor) = match gesture {
+        Gesture::Pressed => return None,
         Gesture::Selected { at, ctrl } => {
             if m.ctrl_only && !ctrl {
                 return None;
@@ -131,7 +204,7 @@ pub fn selection_task(cfg: &Config, gesture: Gesture) -> Option<Task> {
     if text.is_empty() || text.chars().count() > 5000 {
         return None;
     }
-    Some(Task::Mouse { text, cursor })
+    Some(Task::Mouse { text, cursor, seen })
 }
 
 /// A small button by the pointer that opens the translation when clicked.
@@ -169,14 +242,18 @@ pub fn on_selection(app: &mut GlossaApp, text: String, cursor: Option<(i32, i32)
     }
 }
 
-/// Draw the button while there is one; it goes away after a few seconds.
+/// Draw the button while there is one; it goes away after a few seconds,
+/// or at the next press outside it with `close_on_outside_click`.
 pub fn show_icon(app: &mut GlossaApp, ctx: &egui::Context) {
     let Some(icon) = app.mouse_icon.take() else { return };
     let life = Duration::from_secs(4);
-    if icon.shown.elapsed() > life {
-        return;
+    let timed = !app.closes_on_outside_click();
+    if timed {
+        if icon.shown.elapsed() > life {
+            return;
+        }
+        ctx.request_repaint_after(life.saturating_sub(icon.shown.elapsed()));
     }
-    ctx.request_repaint_after(life.saturating_sub(icon.shown.elapsed()));
     let builder = egui::ViewportBuilder::default()
         .with_title(ICON_TITLE)
         .with_decorations(false)

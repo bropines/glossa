@@ -959,6 +959,12 @@ pub static STRINGS: &[(&str, &str, Option<&str>)] = &[
     ("options.appearance.frame_thickness", "Frame thickness:", Some("w:14:1146")),
     ("options.appearance.auto_hide", "Auto-hide delay:", Some("w:14:1147")),
     ("options.appearance.seconds", "seconds", Some("w:14:1194")),
+    ("options.appearance.close_on_outside_click", "Close on a click elsewhere instead", None),
+    (
+        "options.appearance.close_on_outside_click_hint",
+        "Instead of the delay above, the popup (unless pinned) and mouse mode's button close when you click outside Glossa.",
+        None,
+    ),
     ("options.appearance.icons", "Icons:", Some("w:14:1137")),
     ("options.appearance.icon_dictionary", "Show open dictionary icon", Some("w:14:1138")),
     ("options.appearance.icon_listen", "Show listen to selected text icon", Some("w:14:1139")),

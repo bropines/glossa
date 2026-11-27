@@ -5,7 +5,7 @@
 //! runs on a short-lived thread and reports back as a [`Task`], so the UI
 //! never stalls for the hundreds of milliseconds those take.
 
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use glossa_core::{Action, LangId, LangPair};
 use glossa_engine::TranslateOptions;
@@ -26,7 +26,8 @@ pub enum Task {
     /// A step failed; the error is put in words where it is shown.
     Failed(glossa_core::Error),
     /// Text selected with the mouse in mouse mode.
-    Mouse { text: String, cursor: Option<(i32, i32)> },
+    /// `seen`: when the watcher reported the gesture.
+    Mouse { text: String, cursor: Option<(i32, i32)>, seen: Instant },
 }
 
 pub fn perform(app: &mut GlossaApp, action: Action, text: Option<String>) {
@@ -323,7 +324,13 @@ pub fn on_task(app: &mut GlossaApp, task: Task) {
         }
         Task::Done { message, error } => app.notify(message, error),
         Task::Failed(e) => app.report(&e),
-        Task::Mouse { text, cursor } => crate::mouse::on_selection(app, text, cursor),
+        Task::Mouse { text, cursor, seen } => {
+            // Read from before a press that closed the popup: the user has
+            // moved on.
+            if app.last_outside_press.is_none_or(|at| seen > at) {
+                crate::mouse::on_selection(app, text, cursor);
+            }
+        }
     }
 }
 
